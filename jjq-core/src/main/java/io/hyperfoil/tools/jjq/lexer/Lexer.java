@@ -34,6 +34,7 @@ public final class Lexer {
     private int line;
     private int column;
     private int interpDepth;
+    private int parenDepth;
 
     public Lexer(String input) {
         this.input = input;
@@ -41,6 +42,7 @@ public final class Lexer {
         this.line = 1;
         this.column = 1;
         this.interpDepth = 0;
+        this.parenDepth = 0;
     }
 
     public List<Token> tokenize() {
@@ -77,13 +79,18 @@ public final class Lexer {
             case ',' -> { advance(); yield new Token(TokenType.COMMA, startPos, startLine, startCol); }
             case ':' -> { advance(); yield new Token(TokenType.COLON, startPos, startLine, startCol); }
             case ';' -> { advance(); yield new Token(TokenType.SEMICOLON, startPos, startLine, startCol); }
-            case '(' -> { advance(); yield new Token(TokenType.LPAREN, startPos, startLine, startCol); }
+            case '(' -> {
+                advance();
+                if (interpDepth > 0) parenDepth++;
+                yield new Token(TokenType.LPAREN, startPos, startLine, startCol);
+            }
             case ')' -> {
                 advance();
-                if (interpDepth > 0 && pos < input.length() && peekIsStringContinuation()) {
+                if (interpDepth > 0 && parenDepth == 0) {
                     interpDepth--;
                     yield lexStringAfterInterp(startPos, startLine, startCol);
                 }
+                if (interpDepth > 0) parenDepth--;
                 yield new Token(TokenType.RPAREN, startPos, startLine, startCol);
             }
             case '[' -> { advance(); yield new Token(TokenType.LBRACKET, startPos, startLine, startCol); }
@@ -255,6 +262,7 @@ public final class Lexer {
                     // String interpolation: \( ... )
                     advance();
                     interpDepth++;
+                    parenDepth = 0;
                     return new Token(TokenType.STRING_INTERP_START, sb.toString(), startPos, startLine, startCol);
                 }
                 sb.append(switch (esc) {
@@ -286,11 +294,6 @@ public final class Lexer {
         throw new LexerException("Unterminated string", startLine, startCol);
     }
 
-    private boolean peekIsStringContinuation() {
-        // After closing ) of interpolation, we continue reading the string
-        return true; // simplified: always treat ) in interp context as string continuation
-    }
-
     private Token lexStringAfterInterp(int startPos, int startLine, int startCol) {
         // Continue reading string after \(expr)
         var sb = new StringBuilder();
@@ -309,6 +312,7 @@ public final class Lexer {
                 if (esc == '(') {
                     advance();
                     interpDepth++;
+                    parenDepth = 0;
                     return new Token(TokenType.STRING_INTERP_START, sb.toString(), startPos, startLine, startCol);
                 }
                 sb.append(switch (esc) {

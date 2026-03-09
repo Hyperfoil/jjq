@@ -301,6 +301,10 @@ public final class Compiler {
             }
 
             case VariableBindExpr vb -> {
+                boolean exprModifiesInput = modifiesInput(vb.expr());
+                if (exprModifiesInput) {
+                    emit(LOAD_INPUT); // save current input on stack
+                }
                 compileExpr(vb.expr());
                 int slot = allocSlot(vb.variable());
                 boolean needsEnv = bodyUsesTreeWalker(vb.body());
@@ -311,6 +315,10 @@ public final class Compiler {
                     emit(STORE_VAR, addName(vb.variable()));
                 } else {
                     emit(STORE_SLOT, slot);
+                }
+                if (exprModifiesInput) {
+                    // saved input is now on top of stack (expr result was consumed by STORE_SLOT/STORE_VAR)
+                    emit(SET_INPUT); // restore original input
                 }
                 compileExpr(vb.body());
                 if (needsEnv) {
@@ -502,8 +510,10 @@ public final class Compiler {
             case VariableRefExpr _ -> false;
             case DotFieldExpr _ -> false;
             case NegateExpr n -> bodyUsesTreeWalker(n.expr());
-            case ArithmeticExpr a -> bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
-            case ComparisonExpr c -> bodyUsesTreeWalker(c.left()) || bodyUsesTreeWalker(c.right());
+            case ArithmeticExpr a -> modifiesInput(a.left()) || modifiesInput(a.right())
+                    || bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
+            case ComparisonExpr c -> modifiesInput(c.left()) || modifiesInput(c.right())
+                    || bodyUsesTreeWalker(c.left()) || bodyUsesTreeWalker(c.right());
             case PipeExpr p -> bodyUsesTreeWalker(p.left()) || bodyUsesTreeWalker(p.right());
             case ArrayConstructExpr a -> a.body() != null && bodyUsesTreeWalker(a.body());
             case IterateExpr i -> bodyUsesTreeWalker(i.expr());
@@ -511,13 +521,16 @@ public final class Compiler {
             case IfExpr i -> bodyUsesTreeWalker(i.condition()) || bodyUsesTreeWalker(i.thenBranch())
                     || (i.elseBranch() != null && bodyUsesTreeWalker(i.elseBranch()));
             case NotExpr n -> bodyUsesTreeWalker(n.expr());
-            case LogicalExpr l -> bodyUsesTreeWalker(l.left()) || bodyUsesTreeWalker(l.right());
+            case LogicalExpr l -> modifiesInput(l.left()) || modifiesInput(l.right())
+                    || bodyUsesTreeWalker(l.left()) || bodyUsesTreeWalker(l.right());
             case ReduceExpr r -> bodyUsesTreeWalker(r.source()) || bodyUsesTreeWalker(r.init()) || bodyUsesTreeWalker(r.update());
             case VariableBindExpr vb -> bodyUsesTreeWalker(vb.expr()) || bodyUsesTreeWalker(vb.body());
             case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) != null ? false : true;
             case TryCatchExpr tc -> bodyUsesTreeWalker(tc.tryExpr()) || (tc.catchExpr() != null && bodyUsesTreeWalker(tc.catchExpr()));
-            case AlternativeExpr a -> bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
-            case IndexExpr i -> bodyUsesTreeWalker(i.expr()) || bodyUsesTreeWalker(i.index());
+            case AlternativeExpr a -> modifiesInput(a.left()) || modifiesInput(a.right())
+                    || bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
+            case IndexExpr i -> modifiesInput(i.expr()) || modifiesInput(i.index())
+                    || bodyUsesTreeWalker(i.expr()) || bodyUsesTreeWalker(i.index());
             default -> true; // EVAL_AST, CALL_FUNC, etc.
         };
     }

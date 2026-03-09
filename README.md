@@ -19,7 +19,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 |--------|-------------|
 | `jjq-core` | Lexer, parser, AST, evaluator, bytecode VM, builtins (zero external dependencies) |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
-| `jjq-cli` | Command-line interface (aesh-based) |
+| `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests run against both interpreter and VM |
 | `jjq-benchmark` | JMH benchmarks comparing tree-walker, VM, and jackson-jq |
 
@@ -219,6 +219,12 @@ mvn test
 
 # Build CLI
 mvn package -pl jjq-cli
+
+# Build native binary (requires GraalVM 21+)
+mvn package -pl jjq-core,jjq-cli -Pnative -DskipTests
+
+# The native binary is at:
+./jjq-cli/target/jjq '.name' <<< '{"name":"Alice"}'
 
 # Run benchmarks
 mvn package -pl jjq-benchmark -DskipTests

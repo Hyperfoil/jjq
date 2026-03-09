@@ -52,6 +52,26 @@ You can create a shell alias for convenience:
 alias jjq='java -jar /path/to/jjq-cli-0.1.0-SNAPSHOT.jar'
 ```
 
+#### Native Binary (GraalVM)
+
+For instant startup (~3ms vs ~100ms on JVM), build a native binary using GraalVM:
+
+```bash
+# Requires GraalVM 21+ (or any JDK with native-image installed)
+mvn package -pl jjq-core,jjq-cli -Pnative -DskipTests
+
+# The native binary is at jjq-cli/target/jjq
+./jjq-cli/target/jjq '.name' <<< '{"name":"Alice"}'
+```
+
+The native binary is a self-contained ~17MB executable with no JVM dependency. Copy it anywhere on your `PATH`:
+
+```bash
+cp jjq-cli/target/jjq ~/.local/bin/jjq
+```
+
+The CLI module has zero external dependencies (only `jjq-core`), so native-image compilation requires no reflection configuration or resource bundles.
+
 ### Basic Usage
 
 ```

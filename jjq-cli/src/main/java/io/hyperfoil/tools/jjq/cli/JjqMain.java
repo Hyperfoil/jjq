@@ -2,7 +2,6 @@ package io.hyperfoil.tools.jjq.cli;
 
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.evaluator.Environment;
-import io.hyperfoil.tools.jjq.fastjson2.FastjsonEngine;
 import io.hyperfoil.tools.jjq.value.*;
 
 import java.io.*;
@@ -112,8 +111,7 @@ public final class JjqMain {
 
     private int run() {
         try {
-            FastjsonEngine engine = new FastjsonEngine();
-            JqProgram program = engine.compile(filter);
+            JqProgram program = JqProgram.compile(filter);
 
             // Build environment with --arg and --argjson variables
             Environment env = new Environment();
@@ -121,7 +119,7 @@ public final class JjqMain {
                 env.setVariable(entry.getKey(), JqString.of(entry.getValue()));
             }
             for (var entry : argJsonVars.entrySet()) {
-                env.setVariable(entry.getKey(), FastjsonEngine.fromJson(entry.getValue()));
+                env.setVariable(entry.getKey(), JqValues.parse(entry.getValue()));
             }
 
             List<JqValue> inputs = readInputs();
@@ -182,11 +180,11 @@ public final class JjqMain {
                 sb.append(jsonInputs.get(i));
             }
             sb.append("]");
-            return List.of(FastjsonEngine.fromJson(sb.toString()));
+            return List.of(JqValues.parse(sb.toString()));
         }
 
         return jsonInputs.stream()
-                .map(FastjsonEngine::fromJson)
+                .map(JqValues::parse)
                 .toList();
     }
 
