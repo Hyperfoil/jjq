@@ -1,0 +1,2117 @@
+# jq conformance test file
+# Format: lines of filter/input/expected_output (blank lines separate groups)
+# Lines starting with # are comments
+# Lines starting with %% mark section headers
+
+%% Identity
+.
+null
+null
+
+.
+42
+42
+
+.
+"hello"
+"hello"
+
+.
+[1,2,3]
+[1,2,3]
+
+.
+{"a":1}
+{"a":1}
+
+%% Field access
+.a
+{"a":1,"b":2}
+1
+
+.b
+{"a":1,"b":2}
+2
+
+.a.b
+{"a":{"b":3}}
+3
+
+.missing
+{"a":1}
+null
+
+%% Array index
+.[0]
+[1,2,3]
+1
+
+.[2]
+[1,2,3]
+3
+
+.[-1]
+[1,2,3]
+3
+
+.[-2]
+[1,2,3]
+2
+
+%% Array slice
+.[1:3]
+[0,1,2,3,4]
+[1,2]
+
+.[2:]
+[0,1,2,3]
+[2,3]
+
+.[:2]
+[0,1,2,3]
+[0,1]
+
+%% Iteration
+.[]
+[1,2,3]
+1
+2
+3
+
+.[]
+{"a":1,"b":2}
+1
+2
+
+%% Pipe
+.a | . + 1
+{"a":2}
+3
+
+.[] | . * 2
+[1,2,3]
+2
+4
+6
+
+%% Comma
+.a, .b
+{"a":1,"b":2}
+1
+2
+
+%% Array construction
+[.a, .b]
+{"a":1,"b":2}
+[1,2]
+
+[.[] | . * 2]
+[1,2,3]
+[2,4,6]
+
+[]
+null
+[]
+
+%% Object construction
+{a: .x, b: .y}
+{"x":1,"y":2}
+{"a":1,"b":2}
+
+{name}
+{"name":"Alice","age":30}
+{"name":"Alice"}
+
+{name, age}
+{"name":"Alice","age":30}
+{"name":"Alice","age":30}
+
+%% Arithmetic
+. + 1
+1
+2
+
+. - 1
+5
+4
+
+. * 3
+4
+12
+
+. / 2
+10
+5
+
+. % 3
+7
+1
+
+-.
+5
+-5
+
+%% String operations
+. + " world"
+"hello"
+"hello world"
+
+. / ","
+"a,b,c"
+["a","b","c"]
+
+. * 3
+"ab"
+"ababab"
+
+%% Array operations
+. + [4,5]
+[1,2,3]
+[1,2,3,4,5]
+
+. - [2,3]
+[1,2,3,4]
+[1,4]
+
+%% Comparison
+. == 1
+1
+true
+
+. == 1
+2
+false
+
+. != 1
+2
+true
+
+. < 2
+1
+true
+
+. > 2
+1
+false
+
+. <= 1
+1
+true
+
+. >= 2
+1
+false
+
+%% Boolean
+true and true
+null
+true
+
+true and false
+null
+false
+
+false and true
+null
+false
+
+true or false
+null
+true
+
+false or false
+null
+false
+
+true | not
+null
+false
+
+false | not
+null
+true
+
+%% Alternative
+.a // 42
+{"a":1}
+1
+
+.a // 42
+{"b":1}
+42
+
+null // 42
+null
+42
+
+false // 42
+null
+42
+
+%% If-then-else
+if true then "yes" else "no" end
+null
+"yes"
+
+if false then "yes" else "no" end
+null
+"no"
+
+if . == 1 then "one" elif . == 2 then "two" else "other" end
+1
+"one"
+
+if . == 1 then "one" elif . == 2 then "two" else "other" end
+2
+"two"
+
+if . == 1 then "one" elif . == 2 then "two" else "other" end
+3
+"other"
+
+%% Try-catch
+try error catch "caught"
+null
+"caught"
+
+try .foo catch "err"
+42
+"err"
+
+%% Length
+length
+[1,2,3]
+3
+
+length
+"hello"
+5
+
+length
+{"a":1,"b":2}
+2
+
+length
+null
+0
+
+%% Type
+type
+1
+"number"
+
+type
+"hello"
+"string"
+
+type
+true
+"boolean"
+
+type
+null
+"null"
+
+type
+[1]
+"array"
+
+type
+{"a":1}
+"object"
+
+%% Keys/Values
+keys
+{"b":2,"a":1}
+["a","b"]
+
+values
+{"a":1,"b":2}
+[1,2]
+
+%% Has/In
+has("a")
+{"a":1}
+true
+
+has("b")
+{"a":1}
+false
+
+has(0)
+[1,2]
+true
+
+has(5)
+[1,2]
+false
+
+%% Map/Select
+map(. + 1)
+[1,2,3]
+[2,3,4]
+
+map(. * 2)
+[1,2,3]
+[2,4,6]
+
+[.[] | select(. > 2)]
+[1,2,3,4]
+[3,4]
+
+%% Add
+add
+[1,2,3]
+6
+
+add
+["a","b","c"]
+"abc"
+
+add
+[[1],[2],[3]]
+[1,2,3]
+
+add
+[]
+null
+
+%% Flatten
+flatten
+[[1,2],[3,[4]]]
+[1,2,3,4]
+
+flatten(1)
+[[1,[2]],[3]]
+[1,[2],3]
+
+%% Sort/Unique
+sort
+[3,1,2]
+[1,2,3]
+
+unique
+[1,2,1,3,2]
+[1,2,3]
+
+reverse
+[1,2,3]
+[3,2,1]
+
+%% Min/Max
+min
+[3,1,2]
+1
+
+max
+[3,1,2]
+3
+
+%% Range
+[range(3)]
+null
+[0,1,2]
+
+[range(1;4)]
+null
+[1,2,3]
+
+%% String builtins
+split(",")
+"a,b,c"
+["a","b","c"]
+
+join(",")
+["a","b","c"]
+"a,b,c"
+
+ascii_upcase
+"hello"
+"HELLO"
+
+ascii_downcase
+"HELLO"
+"hello"
+
+startswith("he")
+"hello"
+true
+
+endswith("lo")
+"hello"
+true
+
+ltrimstr("he")
+"hello"
+"llo"
+
+rtrimstr("lo")
+"hello"
+"hel"
+
+test("oo")
+"foo"
+true
+
+test("^oo")
+"foo"
+false
+
+%% Math
+floor
+3.7
+3
+
+ceil
+3.2
+4
+
+round
+3.5
+4
+
+%% To/From string
+tostring
+42
+"42"
+
+tostring
+"hello"
+"hello"
+
+tonumber
+"42"
+42
+
+%% Contains
+contains("ell")
+"hello"
+true
+
+contains([2,3])
+[1,2,3,4]
+true
+
+contains([5])
+[1,2,3]
+false
+
+%% Entries
+to_entries
+{"a":1}
+[{"key":"a","value":1}]
+
+from_entries
+[{"key":"a","value":1}]
+{"a":1}
+
+%% Reduce
+reduce .[] as $x (0; . + $x)
+[1,2,3]
+6
+
+reduce .[] as $x (""; . + $x)
+["a","b","c"]
+"abc"
+
+%% Def
+def double: . * 2; double
+3
+6
+
+def addN(n): . + n; addN(10)
+5
+15
+
+%% Getpath/Setpath
+getpath(["a"])
+{"a":1}
+1
+
+getpath(["a","b"])
+{"a":{"b":2}}
+2
+
+setpath(["a"]; 42)
+{"a":1}
+{"a":42}
+
+%% Update
+.a |= . + 1
+{"a":1,"b":2}
+{"a":2,"b":2}
+
+.a = 42
+{"a":1,"b":2}
+{"a":42,"b":2}
+
+.a += 10
+{"a":5}
+{"a":15}
+
+%% Del
+del(.a)
+{"a":1,"b":2}
+{"b":2}
+
+del(.[1])
+[1,2,3]
+[1,3]
+
+%% Paths
+[leaf_paths]
+{"a":1,"b":{"c":2}}
+[["a"],["b","c"]]
+
+%% Format
+@base64
+"hello"
+"aGVsbG8="
+
+@base64d
+"aGVsbG8="
+"hello"
+
+@html
+"<b>"
+"&lt;b&gt;"
+
+@uri
+"hello world"
+"hello%20world"
+
+tojson
+42
+"42"
+
+tojson
+[1,2]
+"[1,2]"
+
+fromjson
+"42"
+42
+
+%% Walk
+walk(if type == "number" then . * 2 else . end)
+{"a":1,"b":{"c":2}}
+{"a":2,"b":{"c":4}}
+
+%% Isempty
+isempty(empty)
+null
+true
+
+isempty(.[]?)
+[]
+true
+
+isempty(.[]?)
+[1]
+false
+
+%% Any/All
+any
+[false,true]
+true
+
+any
+[false,false]
+false
+
+all
+[true,true]
+true
+
+all
+[true,false]
+false
+
+%% Abs
+abs
+-5
+5
+
+abs
+5
+5
+
+%% With_entries
+with_entries(select(.value > 1))
+{"a":1,"b":2,"c":3}
+{"b":2,"c":3}
+
+%% Recurse
+[recurse(.+1; . < 5)]
+0
+[0,1,2,3,4]
+
+%% Object merge
+. + {"c":3}
+{"a":1,"b":2}
+{"a":1,"b":2,"c":3}
+
+. * {"b":20}
+{"a":1,"b":2}
+{"a":1,"b":20}
+
+%% Null operations
+null + 1
+null
+1
+
+null + "a"
+null
+"a"
+
+null * 5
+null
+null
+
+%% String interpolation
+"hello \(.name)"
+{"name":"world"}
+"hello world"
+
+"sum = \(. + 1)"
+41
+"sum = 42"
+
+%% Indices
+indices(",")
+"a,b,c,d"
+[1,3,5]
+
+index(",")
+"a,b,c"
+1
+
+%% Map values
+map_values(. + 1)
+{"a":1,"b":2}
+{"a":2,"b":3}
+
+%% Optional operator
+.foo?
+42
+
+
+.foo?
+{"foo":1}
+1
+
+.[]?
+null
+
+.[]?
+"hello"
+
+.[5]?
+[1,2,3]
+
+.a?
+[1,2,3]
+
+.a.b?
+{"a":1}
+
+%% Alternative operator extended
+.a // .b // "default"
+{"b":2}
+2
+
+.a // .b // "default"
+{"c":3}
+"default"
+
+null // null // "fallback"
+null
+"fallback"
+
+%% Assignment operators extended
+.a -= 3
+{"a":10}
+{"a":7}
+
+.a *= 4
+{"a":3}
+{"a":12}
+
+.a /= 2
+{"a":10}
+{"a":5}
+
+.a %= 3
+{"a":10}
+{"a":1}
+
+.a //= 42
+{"a":null}
+{"a":42}
+
+.a //= 42
+{"a":5}
+{"a":5}
+
+.[] |= . + 1
+[1,2,3]
+[2,3,4]
+
+.[0] |= . * 10
+[1,2,3]
+[10,2,3]
+
+%% Object construction extended
+{(.key): .value}
+{"key":"name","value":"Alice"}
+{"name":"Alice"}
+
+{a: 1, b: 2}
+null
+{"a":1,"b":2}
+
+{("a","b"): 1}
+null
+{"a":1}
+{"b":1}
+
+[.[] | {name, age}]
+[{"name":"Alice","age":30,"city":"NYC"},{"name":"Bob","age":25,"city":"LA"}]
+[{"name":"Alice","age":30},{"name":"Bob","age":25}]
+
+{x: .a, y: (.b + 1)}
+{"a":1,"b":2}
+{"x":1,"y":3}
+
+%% Advanced string operations
+test("^[a-z]+$")
+"hello"
+true
+
+test("^[a-z]+$")
+"Hello"
+false
+
+test("[0-9]+")
+"abc123"
+true
+
+match("[0-9]+")
+"abc123def"
+{"offset":3,"length":3,"string":"123","captures":[]}
+
+capture("(?<first>[a-z]+)-(?<second>[0-9]+)")
+"abc-123"
+{"1":"abc","2":"123"}
+
+[scan("[0-9]+")]
+"a1b22c333"
+["1","22","333"]
+
+sub("[0-9]+"; "X")
+"abc123def456"
+"abcXdef456"
+
+gsub("[0-9]+"; "X")
+"abc123def456"
+"abcXdefX"
+
+%% Advanced iteration
+[limit(3; range(10))]
+null
+[0,1,2]
+
+first(range(5))
+null
+0
+
+last(range(5))
+null
+4
+
+[limit(2; .[])]
+[10,20,30,40]
+[10,20]
+
+nth(2; range(5))
+null
+2
+
+[until(. > 3; . + 1)]
+0
+[4]
+
+[while(. < 5; . + 1)]
+0
+[0,1,2,3,4]
+
+%% Path operations extended
+path(.a)
+{"a":1}
+["a"]
+
+getpath(["a","b","c"])
+{"a":{"b":{"c":42}}}
+42
+
+getpath(["missing"])
+{"a":1}
+null
+
+setpath(["a","b"]; 42)
+{}
+{"a":{"b":42}}
+
+setpath(["a"]; {"x":1})
+{"a":1,"b":2}
+{"a":{"x":1},"b":2}
+
+delpaths([["a"]])
+{"a":1,"b":2}
+{"b":2}
+
+delpaths([["a"],["c"]])
+{"a":1,"b":2,"c":3}
+{"b":2}
+
+[leaf_paths]
+{"a":1,"b":[2,3]}
+[["a"],["b",0],["b",1]]
+
+%% Streaming
+[tostream]
+{"a":1,"b":2}
+[[["a"],1],[["b"],2],[[],true]]
+
+%% Multiple outputs
+[.,.]
+1
+[1,1]
+
+[.[] | ., . * 2]
+[1,2]
+[1,2,2,4]
+
+.[] | . * 2, . * 3
+[10]
+20
+30
+
+[range(3) | . * 2]
+null
+[0,2,4]
+
+[.[] | select(. > 2) | . * 10]
+[1,2,3,4,5]
+[30,40,50]
+
+%% Try without catch
+try error
+null
+
+%% Recursive descent
+[.. | numbers]
+{"a":1,"b":{"c":2,"d":[3,4]}}
+[1,2,3,4]
+
+[.. | strings]
+{"a":"hello","b":{"c":"world"}}
+["hello","world"]
+
+%% Nested reduce
+reduce .[] as $x (0; . + reduce range($x) as $y (0; . + $y))
+[3,4]
+9
+
+%% Function definitions
+def double: . * 2; [.[] | double]
+[1,2,3]
+[2,4,6]
+
+def addN(n): . + n; addN(10) | addN(5)
+0
+15
+
+def factorial: if . <= 1 then 1 else . * ((. - 1) | factorial) end; factorial
+5
+120
+
+def f(x): x | x; f(. + 1)
+1
+3
+
+def sum: reduce .[] as $x (0; . + $x); sum
+[1,2,3,4,5]
+15
+
+%% Complex pipes
+.[] | {v: ., sq: (. * .)}
+[1,2,3]
+{"v":1,"sq":1}
+{"v":2,"sq":4}
+{"v":3,"sq":9}
+
+%% Variable binding
+1 as $x | 2 as $y | $x + $y
+null
+3
+
+.[] as $x | $x * $x
+[2,3,4]
+4
+9
+16
+
+%% Foreach
+[foreach .[] as $x (0; . + $x)]
+[1,2,3]
+[1,3,6]
+
+%% Sort_by and group_by
+sort_by(.age)
+[{"name":"Bob","age":25},{"name":"Alice","age":30},{"name":"Eve","age":20}]
+[{"name":"Eve","age":20},{"name":"Bob","age":25},{"name":"Alice","age":30}]
+
+group_by(.a)
+[{"a":1,"b":"x"},{"a":2,"b":"y"},{"a":1,"b":"z"}]
+[[{"a":1,"b":"x"},{"a":1,"b":"z"}],[{"a":2,"b":"y"}]]
+
+unique_by(.a)
+[{"a":1,"b":"x"},{"a":2,"b":"y"},{"a":1,"b":"z"}]
+[{"a":1,"b":"x"},{"a":2,"b":"y"}]
+
+%% Min_by / Max_by
+min_by(.age)
+[{"name":"Alice","age":30},{"name":"Bob","age":20}]
+{"name":"Bob","age":20}
+
+max_by(.age)
+[{"name":"Alice","age":30},{"name":"Bob","age":20}]
+{"name":"Alice","age":30}
+
+%% Type checking builtins
+[.[] | numbers]
+[1,"a",null,2,true,3]
+[1,2,3]
+
+[.[] | strings]
+[1,"a",null,"b",true]
+["a","b"]
+
+[.[] | booleans]
+[1,"a",null,true,false]
+[true,false]
+
+[.[] | nulls]
+[1,null,"a",null]
+[null,null]
+
+[.[] | arrays]
+[1,[2],{"a":3},[4,5]]
+[[2],[4,5]]
+
+[.[] | objects]
+[1,[2],{"a":3},{"b":4}]
+[{"a":3},{"b":4}]
+
+[.[] | scalars]
+[1,"a",[2],{"b":3},null,true]
+[1,"a",null,true]
+
+%% String explode/implode
+explode
+"AB"
+[65,66]
+
+implode
+[72,101,108,108,111]
+"Hello"
+
+%% Combinations
+[combinations]
+[[1,2],[3,4]]
+[[1,3],[1,4],[2,3],[2,4]]
+
+%% Any/All with condition
+any(. > 3)
+[1,2,3,4,5]
+true
+
+any(. > 10)
+[1,2,3]
+false
+
+all(. > 0)
+[1,2,3]
+true
+
+all(. > 2)
+[1,2,3]
+false
+
+%% Range with step
+[range(0;10;3)]
+null
+[0,3,6,9]
+
+[range(5;0;-1)]
+null
+[5,4,3,2,1]
+
+%% Del extended
+del(.a,.b)
+{"a":1,"b":2,"c":3}
+{"c":3}
+
+%% More with_entries
+with_entries(.value |= . + 1)
+{"a":1,"b":2}
+{"a":2,"b":3}
+
+with_entries(.key |= "prefix_" + .)
+{"a":1,"b":2}
+{"prefix_a":1,"prefix_b":2}
+
+%% Paths
+[paths]
+{"a":1,"b":{"c":2}}
+[["a"],["b"],["b","c"]]
+
+[paths(type == "number")]
+{"a":1,"b":{"c":"hello","d":2}}
+[["a"],["b","d"]]
+
+%% Transpose
+transpose
+[[1,2],[3,4],[5,6]]
+[[1,3,5],[2,4,6]]
+
+%% Inside
+inside([1,2,3])
+[1,2]
+true
+
+inside("foobar")
+"bar"
+true
+
+%% Rindex
+rindex(",")
+"a,b,c,d"
+5
+
+%% UTF8 byte length
+utf8bytelength
+"hello"
+5
+
+%% Recurse zero-arg
+[.a | recurse(.b?; . != null)]
+{"a":{"b":{"b":{"b":1}}}}
+[{"b":{"b":{"b":1}}},{"b":{"b":1}},{"b":1},1]
+
+%% If without else
+if . > 0 then "positive" else "non-positive" end
+1
+"positive"
+
+if . > 0 then "positive" else "non-positive" end
+-1
+"non-positive"
+
+%% Multiple elif
+if . == 1 then "one" elif . == 2 then "two" elif . == 3 then "three" else "other" end
+3
+"three"
+
+%% Recursive descent operator
+[.. | .a? // empty]
+{"a":1,"b":{"a":2}}
+[1,2]
+
+%% String multiplication and null
+null + [1,2]
+null
+[1,2]
+
+null + {"a":1}
+null
+{"a":1}
+
+%% Abs of float
+abs
+-3.5
+3.5
+
+%% Math builtins
+sqrt
+9
+3
+
+floor
+-3.2
+-4
+
+ceil
+-3.2
+-3
+
+round
+3.4
+3
+
+%% Walk with arrays
+walk(if type == "array" then sort else . end)
+{"a":[3,1,2],"b":{"c":[6,4,5]}}
+{"a":[1,2,3],"b":{"c":[4,5,6]}}
+
+%% Map with select
+[.[] | select(. != null)]
+[1,null,2,null,3]
+[1,2,3]
+
+map(select(. >= 3))
+[1,2,3,4,5]
+[3,4,5]
+
+%% Repeat with limit
+[limit(5; repeat(. * 2))]
+1
+[1,2,4,8,16]
+
+%% Keys of array
+keys
+[10,20,30]
+[0,1,2]
+
+%% Has on nested
+has("a")
+{"a":null}
+true
+
+%% Flatten deeply nested
+flatten
+[1,[2,[3,[4]]]]
+[1,2,3,4]
+
+%% Add objects
+add
+[{"a":1},{"b":2},{"a":3}]
+{"a":3,"b":2}
+
+%% Reduce with object
+reduce .[] as $x ({}; . + {($x): ($x | length)})
+["a","bb","ccc"]
+{"a":1,"bb":2,"ccc":3}
+
+%% String interpolation complex
+"Items: \(.[] | tostring | . + " ")"
+[1,2,3]
+"Items: 1 "
+"Items: 2 "
+"Items: 3 "
+
+%% Format strings
+@csv
+["a","b","c"]
+"\"a\",\"b\",\"c\""
+
+@tsv
+["a","b","c"]
+"a\tb\tc"
+
+%% Ascii_downcase/upcase
+ascii_downcase
+"Hello World"
+"hello world"
+
+ascii_upcase
+"Hello World"
+"HELLO WORLD"
+
+%% Negative index on string
+.[-1:]
+"hello"
+"o"
+
+%% String slicing
+.[2:4]
+"hello"
+"ll"
+
+.[:3]
+"hello"
+"hel"
+
+%% Destructuring bind
+. as {a: $a, b: $b} | [$a, $b]
+{"a":1,"b":2}
+[1,2]
+
+. as [$a, $b] | [$b, $a]
+[1,2]
+[2,1]
+
+. as [$a, $b, $c] | $a + $b + $c
+[10,20,30]
+60
+
+%% Label-break
+[(label $here | .[] | if . > 1 then break $here else . end), "hi!"]
+[0,1,2]
+[0,1,"hi!"]
+
+[(label $here | .[] | if . > 1 then break $here else . end), "hi!"]
+[0,2,1]
+[0,"hi!"]
+
+%% Try-catch extended
+try (1/0) catch "division by zero"
+null
+"division by zero"
+
+try error("custom") catch .
+null
+"custom"
+
+try error catch .
+"foo"
+"foo"
+
+try (try error catch "inner \(.)") catch "outer"
+"bar"
+"inner bar"
+
+%% Error handling - type errors
+try (.+1) catch "err"
+"hello"
+"err"
+
+try (.[0]) catch "err"
+42
+"err"
+
+%% Negation
+-.
+5
+-5
+
+-.
+-3
+3
+
+-.
+0
+0
+
+%% Modulo extended
+[.[] % 7]
+[-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7]
+[0,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,0]
+
+%% Contains extended
+[("foo" | contains("foo")), ("foobar" | contains("foo")), ("foo" | contains("foobar"))]
+{}
+[true,true,false]
+
+map(.[1] as $needle | .[0] | contains($needle))
+[[[],[]], [[1,2,3], [1,2]], [[1,2,3], [3,1]], [[1,2,3], [4]], [[1,2,3], [1,4]]]
+[true,true,true,false,false]
+
+%% Has extended
+map(has("foo"))
+[{"foo":42},{}]
+[true,false]
+
+map(has(2))
+[[0,1],["a","b","c"]]
+[false,true]
+
+has("a")
+{"a":null}
+true
+
+%% From_entries extended - accepts Key/Value/name forms
+from_entries
+[{"key":"a","value":1},{"Key":"b","Value":2},{"name":"c","value":3}]
+{"a":1,"b":2,"c":3}
+
+%% Flatten extended
+flatten(0)
+[0,[1],[[2]],[[[3]]]]
+[0,[1],[[2]],[[[3]]]]
+
+flatten(2)
+[0,[1],[[2]],[[[3]]]]
+[0,1,2,[3]]
+
+%% Transpose extended
+transpose
+[[1],[2,3]]
+[[1,2],[null,3]]
+
+transpose
+[]
+[]
+
+%% Sort extended
+sort
+[null,false,true,1,"a",[],{}]
+[null,false,true,1,"a",[],{}]
+
+%% Unique extended
+unique
+[1,2,5,3,5,3,1,3]
+[1,2,3,5]
+
+%% Recursive merge (object multiplication)
+{"k":{"a":1,"b":2}} * .
+{"k":{"a":0,"c":3}}
+{"k":{"a":0,"b":2,"c":3}}
+
+%% If-then truthiness
+[.[] | if .foo then "yep" else "nope" end]
+[{"foo":0},{"foo":1},{"foo":[]},{"foo":true},{"foo":false},{"foo":null},{"foo":"foo"},{}]
+["yep","yep","yep","yep","nope","nope","yep","nope"]
+
+%% If with multiple outputs
+[if 1,null,2 then 3 else 4 end]
+null
+[3,4,3]
+
+%% Negative if
+[-if true then 1 else 2 end]
+null
+[-1]
+
+%% Optional operator extended
+[.[]|.foo?]
+[1,[2],{"foo":3,"bar":4},{},{"foo":5}]
+[3,null,5]
+
+%% Ascii_upcase preserves non-ASCII
+ascii_upcase
+"useful but not for é"
+"USEFUL BUT NOT FOR é"
+
+%% Update assignment extended
+.foo = .bar
+{"bar":42}
+{"bar":42,"foo":42}
+
+.foo |= .+1
+{"foo":42}
+{"foo":43}
+
+.foo += .foo
+{"foo":2}
+{"foo":4}
+
+%% Update with select - filter elements
+.[] |= select(. % 2 == 0)
+[0,1,2,3,4,5]
+[0,2,4]
+
+%% Complex object construction
+{a: 1, b: 2}
+null
+{"a":1,"b":2}
+
+{(.key): .value}
+{"key":"name","value":"Alice"}
+{"name":"Alice"}
+
+%% Startswith/endswith extended
+[.[]|startswith("foo")]
+["fo","foo","barfoo","foobar","barfoob"]
+[false,true,false,true,false]
+
+[.[]|endswith("foo")]
+["fo","foo","barfoo","foobar","barfoob"]
+[false,true,true,false,false]
+
+%% Ltrimstr/rtrimstr extended
+[.[]|ltrimstr("foo")]
+["fo","foo","barfoo","foobar","afoo"]
+["fo","","barfoo","bar","afoo"]
+
+[.[]|rtrimstr("foo")]
+["fo","foo","barfoo","foobar","foob"]
+["fo","","bar","foobar","foob"]
+
+%% Indices extended
+[(index(","), rindex(",")), indices(",")]
+"a,bc,def,ghij,klmno"
+[1,13,[1,4,8,13]]
+
+[index("aba"), rindex("aba"), indices("aba")]
+"xababababax"
+[1,7,[1,3,5,7]]
+
+%% Path expressions
+path(.foo[0,1])
+null
+["foo",0]
+["foo",1]
+
+[paths]
+[1,[[],{"a":2}]]
+[[0],[1],[1,0],[1,1],[1,1,"a"]]
+
+%% Paths (object only)
+[paths]
+{"a":1,"b":{"c":2}}
+[["a"],["b"],["b","c"]]
+
+%% Getpath/setpath extended
+setpath(["a","b"]; 42)
+{}
+{"a":{"b":42}}
+
+setpath(["a"]; {"x":1})
+{"a":1,"b":2}
+{"a":{"x":1},"b":2}
+
+getpath(["a","b","c"])
+{"a":{"b":{"c":42}}}
+42
+
+getpath(["missing"])
+{"a":1}
+null
+
+%% Limit/first/last extended
+[limit(3; .[])]
+[11,22,33,44,55,66,77,88,99]
+[11,22,33]
+
+[limit(0; error)]
+"badness"
+[]
+
+[first(range(.)), last(range(.))]
+10
+[0,9]
+
+%% While extended
+[while(.<100; .*2)]
+1
+[1,2,4,8,16,32,64]
+
+%% Until extended
+[.[]|[.,1]|until(.[0] < 1; [.[0] - 1, .[1] * .[0]])|.[1]]
+[1,2,3,4,5]
+[1,2,6,24,120]
+
+%% Foreach with destructuring
+[foreach .[] as [$i, $j] (0; . + $i - $j)]
+[[2,1],[5,3],[6,4]]
+[1,3,5]
+
+%% Reduce with destructuring
+reduce .[] as [$i, $j] (0; . + $i - $j)
+[[2,1],[5,3],[6,4]]
+5
+
+%% Reduce edge cases
+reduce . as $n (.; .)
+null
+null
+
+%% Function definitions extended
+def f(a;b;c;d;e;f): [a+1,b,c,d,e,f]; f(.[0];.[1];.[0];.[0];.[0];.[0])
+[1,2]
+[2,2,1,1,1,1]
+
+def f: . + 1; def g: def g: . + 100; f | g | f; (f | g), g
+3
+106
+105
+
+def inc(x): x |= .+1; inc(.[].a)
+[{"a":1,"b":2},{"a":2,"b":4},{"a":7,"b":8}]
+[{"a":2,"b":2},{"a":3,"b":4},{"a":8,"b":8}]
+
+%% Any/All extended
+. as $dot|any($dot[];not)
+[1,2,3,4,true,false,1,2,3,4,5]
+true
+
+. as $dot|any($dot[];not)
+[1,2,3,4,true]
+false
+
+. as $dot|all($dot[];.)
+[1,2,3,4,true]
+true
+
+. as $dot|all($dot[];.)
+[1,2,3,4,true,false,1,2,3,4,5]
+false
+
+any(not)
+[]
+false
+
+all(not)
+[]
+true
+
+%% Isempty extended
+isempty(empty)
+null
+true
+
+isempty(range(3))
+null
+false
+
+%% Walk extended
+walk(.)
+{"x":0}
+{"x":0}
+
+walk(1)
+{"x":0}
+1
+
+%% Bsearch
+bsearch(0),bsearch(1),bsearch(2),bsearch(3),bsearch(4)
+[1,2,3]
+-1
+0
+1
+2
+-4
+
+%% Math extended
+sqrt
+4
+2
+
+sqrt
+16
+4
+
+fabs
+-5
+5
+
+fabs
+5
+5
+
+pow(2;10)
+null
+1024
+
+pow(3;3)
+null
+27
+
+%% Nan and infinity
+nan | isnan
+null
+true
+
+infinite | isinfinite
+null
+true
+
+infinite | isnan
+null
+false
+
+nan | isinfinite
+null
+false
+
+nan | isnan
+null
+true
+
+null | isnormal
+null
+false
+
+1 | isnormal
+null
+true
+
+1 | isnan
+null
+false
+
+1 | isinfinite
+null
+false
+
+%% Ascii
+[65,66,67] | implode
+null
+"ABC"
+
+"ABC" | explode
+null
+[65,66,67]
+
+%% Combinations extended
+[combinations(2)]
+[0,1]
+[[0,0],[0,1],[1,0],[1,1]]
+
+%% Tojson/fromjson extended
+tojson
+{"a":1,"b":[2,3]}
+"{\"a\":1,\"b\":[2,3]}"
+
+fromjson
+"{\"a\":1}"
+{"a":1}
+
+%% @base64 extended
+@base64
+"Man"
+"TWFu"
+
+@base64d
+"TWFu"
+"Man"
+
+%% @uri extended
+@uri
+"hello world"
+"hello%20world"
+
+%% @html extended
+@html
+"<script>alert('xss')</script>"
+"&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"
+
+%% @csv extended
+@csv
+[1,"two",3]
+"1,\"two\",3"
+
+@csv
+[1,2,3]
+"1,2,3"
+
+%% @tsv extended
+@tsv
+[1,"two",3]
+"1\ttwo\t3"
+
+%% Foreach with extract expression
+[foreach .[] as $x (0; . + $x; . * 2)]
+[1,2,3]
+[2,6,12]
+
+%% Skip function
+[skip(3; .[])]
+[1,2,3,4,5,6,7,8,9]
+[4,5,6,7,8,9]
+
+%% Multiple outputs with pipe
+.[] | . * 2, . * 3
+[10]
+20
+30
+
+%% Complex nested expression
+[.[] | {v: ., sq: (. * .)}]
+[1,2,3]
+[{"v":1,"sq":1},{"v":2,"sq":4},{"v":3,"sq":9}]
+
+%% Recursive function - factorial
+def fac: if . <= 1 then 1 else . * ((. - 1) | fac) end; [.[] | fac]
+[1,2,3,4,5]
+[1,2,6,24,120]
+
+%% Variable scoping
+def f: . + 1; def g: f; def f: . + 100; def f(a): a + . + 11; [(g | f(20)), f]
+1
+[33,101]
+
+%% Nested array construction
+[[.[]]]
+[1,2,3]
+[[1,2,3]]
+
+%% Empty array/object operations
+keys
+{}
+[]
+
+values
+{}
+[]
+
+length
+{}
+0
+
+length
+[]
+0
+
+%% Null propagation
+null | .foo
+null
+null
+
+null | .foo.bar
+null
+null
+
+null | .[0]
+null
+null
+
+%% Boolean edge cases
+null | not
+null
+true
+
+0 | not
+null
+false
+
+"" | not
+null
+false
+
+[] | not
+null
+false
+
+false | not
+null
+true
+
+%% Comparison operators with different types
+null == false
+null
+false
+
+null == null
+null
+true
+
+"" == false
+null
+false
+
+0 == false
+null
+false
+
+0 == null
+null
+false
+
+%% Complex reduce
+reduce .[] as $x ({}; .[$x] = ((.[$x] // 0) + 1))
+["a","b","a","c","b","a"]
+{"a":3,"b":2,"c":1}
+
+%% Complex with_entries
+with_entries(select(.key | test("^a")))
+{"apple":1,"banana":2,"avocado":3}
+{"apple":1,"avocado":3}
+
+%% Map with complex expression
+map(if . > 3 then . * 10 else . end)
+[1,2,3,4,5]
+[1,2,3,40,50]
+
+%% Nested object access and update
+.a.b.c
+{"a":{"b":{"c":42}}}
+42
+
+.a.b.c = 99
+{"a":{"b":{"c":42}}}
+{"a":{"b":{"c":99}}}
+
+.a.b |= . + {"d":4}
+{"a":{"b":{"c":3}}}
+{"a":{"b":{"c":3,"d":4}}}
+
+%% Del extended
+del(.[] | select(. < 3))
+[1,2,3,4,5]
+[3,4,5]
+
+%% Group_by extended
+group_by(. % 2)
+[1,2,3,4,5]
+[[2,4],[1,3,5]]
+
+%% Sort_by extended
+sort_by(-.)
+[3,1,4,1,5,9]
+[9,5,4,3,1,1]
+
+%% Unique_by extended
+[unique_by(length)]
+["a","bc","def","ab","d"]
+[["a","bc","def"]]
+
+%% Min_by/Max_by extended
+min_by(.)
+[3,1,4,1,5]
+1
+
+max_by(.)
+[3,1,4,1,5]
+5
+
+%% Ascii values
+"a" < "b"
+null
+true
+
+"z" > "a"
+null
+true
+
+"abc" < "abd"
+null
+true
+
+%% Input as variable in complex expression
+. as $input | [.[] | . * 2] | map(. + $input[0])
+[10,20,30]
+[30,50,70]
+
+%% Foreach as generator
+[foreach range(5) as $x (0; . + $x)]
+null
+[0,1,3,6,10]
+
+%% String operations - split with regex
+[split(",") | .[]]
+"a,b,,c"
+["a","b","","c"]
+
+%% Empty and error
+[empty]
+null
+[]
+
+[1, empty, 2]
+null
+[1,2]
+
+%% Recursive paths
+[path(..)]
+{"a":{"b":1},"c":2}
+[[],["a"],["a","b"],["c"]]
+
+%% INDEX builtin
+INDEX(.[];.)
+["a","b","c"]
+{"a":"a","b":"b","c":"c"}
+
+INDEX(.[];.name)
+[{"name":"a","val":1},{"name":"b","val":2}]
+{"a":{"name":"a","val":1},"b":{"name":"b","val":2}}
+
+%% Env/debug
+1 | debug | . + 1
+null
+2
+
+%% Repeat with limit
+[limit(5; repeat(. * 2))]
+1
+[1,2,4,8,16]
+
+%% Nested string interpolation
+"a \("b \("c")")"
+null
+"a b c"
+
+%% Complex pipe chains
+.[] | select(. > 2) | . * 10 | tostring | "val: " + .
+[1,2,3,4]
+"val: 30"
+"val: 40"
+
+%% Object construction with computed keys
+[.[] | {(tostring): .}]
+[1,2,3]
+[{"1":1},{"2":2},{"3":3}]
+
+%% Reduce building array
+reduce .[] as $x ([]; . + [$x * $x])
+[1,2,3,4]
+[1,4,9,16]
+
+%% Getpath/setpath with array indices
+getpath([1])
+[10,20,30]
+20
+
+setpath([1]; 99)
+[10,20,30]
+[10,99,30]
+
+%% Delpaths extended
+delpaths([["a"],["c"]])
+{"a":1,"b":2,"c":3}
+{"b":2}
+
+%% Builtins existence check
+builtins | length > 10
+null
+true
+
+%% Complex truthiness in conditions
+if null then "yes" else "no" end
+null
+"no"
+
+if false then "yes" else "no" end
+null
+"no"
+
+if 0 then "yes" else "no" end
+null
+"yes"
+
+if "" then "yes" else "no" end
+null
+"yes"
+
+if [] then "yes" else "no" end
+null
+"yes"
+
+%% String comparison
+"abc" == "abc"
+null
+true
+
+"abc" != "def"
+null
+true
+
+"abc" < "def"
+null
+true
+
+%% Array comparison
+[1,2] == [1,2]
+null
+true
+
+[1,2] < [1,3]
+null
+true
+
+[1,2] < [1,2,3]
+null
+true
+
+%% Nested foreach - extract expression
+[foreach .[] as $x (0; . + $x; . * -1)]
+[1,2,3]
+[-1,-3,-6]
+
+%% Type conversions
+[.[] | type]
+[1,"a",null,true,[],{}]
+["number","string","null","boolean","array","object"]
+
+%% Keys_unsorted
+keys_unsorted
+{"z":1,"a":2,"m":3}
+["z","a","m"]
+
+%% To_entries/from_entries roundtrip
+to_entries | from_entries
+{"a":1,"b":2,"c":3}
+{"a":1,"b":2,"c":3}
+
+%% With_entries complex
+with_entries(.value |= . * 2)
+{"a":1,"b":2,"c":3}
+{"a":2,"b":4,"c":6}
+
+%% Map_values on array
+map_values(. * 2)
+[1,2,3]
+[2,4,6]
+
+%% Ascii codepoints
+explode
+"hello"
+[104,101,108,108,111]
+
+implode
+[104,101,108,108,111]
+"hello"
+
+%% Limit with empty
+[limit(0; .[])]
+[1,2,3]
+[]
+
+%% First/last on arrays
+first
+[1,2,3]
+1
+
+last
+[1,2,3]
+3
+
+%% Nth
+nth(0; .[]?)
+[10,20,30]
+10
+
+nth(2; .[]?)
+[10,20,30]
+30
+
+%% Range negative step
+[range(5;0;-1)]
+null
+[5,4,3,2,1]
+
+%% Range float
+[range(0;2;0.5)]
+null
+[0,0.5,1,1.5]
+
+%% Null arithmetic
+null - null
+null
+0
+
+%% Nested def
+def a: def b: . + 1; b | b; a
+1
+3
+
+%% Try with optional
+try .foo catch "err"
+null
+null
+
+try .foo catch "err"
+42
+"err"
+
+%% Env variables (basic)
+env.HOME | length > 0
+null
+true
+
+%% Complex string interpolation
+"\(1+1) is \("tw" + "o")"
+null
+"2 is two"

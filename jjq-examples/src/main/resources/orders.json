@@ -1,0 +1,7 @@
+[
+  {"id": 1001, "customer": "Alice", "items": [{"product": "Widget", "qty": 3, "price": 9.99}, {"product": "Gadget", "qty": 1, "price": 24.99}]},
+  {"id": 1002, "customer": "Bob", "items": [{"product": "Widget", "qty": 5, "price": 9.99}]},
+  {"id": 1003, "customer": "Alice", "items": [{"product": "Doohickey", "qty": 2, "price": 14.50}, {"product": "Widget", "qty": 1, "price": 9.99}]},
+  {"id": 1004, "customer": "Carol", "items": [{"product": "Gadget", "qty": 2, "price": 24.99}, {"product": "Thingamajig", "qty": 1, "price": 49.99}]},
+  {"id": 1005, "customer": "Bob", "items": [{"product": "Doohickey", "qty": 1, "price": 14.50}]}
+]

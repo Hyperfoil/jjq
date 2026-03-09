@@ -1,0 +1,9 @@
+{
+  "users": [
+    {"name": "Alice", "email": "alice@example.com", "age": 30, "role": "admin", "scores": [95, 87, 92]},
+    {"name": "Bob", "email": "bob@example.com", "age": 25, "role": "user", "scores": [78, 82, 90]},
+    {"name": "Carol", "email": "carol@example.com", "age": 35, "role": "admin", "scores": [88, 91, 95]},
+    {"name": "Dave", "email": "dave@example.com", "age": 28, "role": "user", "scores": [72, 68, 75]},
+    {"name": "Eve", "email": "eve@example.com", "age": 32, "role": "moderator", "scores": [90, 93, 88]}
+  ]
+}
