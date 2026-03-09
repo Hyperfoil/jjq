@@ -108,6 +108,11 @@ class VirtualMachineTest {
             JqValue result = vmOne("[.[] | . * 2]", "[1,2,3]");
             assertEquals(JqValues.parse("[2,4,6]"), result);
         }
+
+        @Test void arrayWithSelectAndMap() {
+            JqValue result = vmOne("[.[] | select(. > 5) | . * 2]", "[1,3,6,8,10]");
+            assertEquals(JqValues.parse("[12,16,20]"), result);
+        }
     }
 
     @Nested

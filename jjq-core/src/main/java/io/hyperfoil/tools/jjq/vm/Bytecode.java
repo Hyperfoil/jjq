@@ -7,9 +7,9 @@ import java.util.List;
 
 public final class Bytecode {
 
-    public record Instruction(Opcode op, int arg1, int arg2) {
-        public Instruction(Opcode op) { this(op, 0, 0); }
-        public Instruction(Opcode op, int arg1) { this(op, arg1, 0); }
+    public record Instruction(int op, int arg1, int arg2) {
+        public Instruction(int op) { this(op, 0, 0); }
+        public Instruction(int op, int arg1) { this(op, arg1, 0); }
     }
 
     public record CallInfo(String name, int arity, List<JqExpr> args) {}
@@ -48,21 +48,20 @@ public final class Bytecode {
         var sb = new StringBuilder();
         for (int i = 0; i < code.length; i++) {
             var inst = code[i];
-            sb.append(String.format("%4d: %-16s", i, inst.op()));
+            sb.append(String.format("%4d: %-24s", i, Opcode.name(inst.op())));
             switch (inst.op()) {
-                case PUSH_CONST -> sb.append(" ").append(constants[inst.arg1()].toJsonString());
-                case DOT_FIELD, LOAD_VAR, STORE_VAR -> sb.append(" ").append(names[inst.arg1()]);
-                case LOAD_SLOT, STORE_SLOT -> sb.append(" slot[").append(inst.arg1()).append("]");
-                case COLLECT_ITERATE -> sb.append(" bodyLen=").append(inst.arg1());
-                case REDUCE_ITERATE -> sb.append(" init=").append(constants[inst.arg1()].toJsonString()).append(" op=").append(inst.arg2());
-                case SET_INPUT_PEEK -> {}
-                case DOT_FIELD2 -> sb.append(" ").append(names[inst.arg1()]).append(".").append(names[inst.arg2()]);
-                case FORK, JUMP, JUMP_IF_TRUE, JUMP_IF_FALSE, TRY_BEGIN -> sb.append(" -> ").append(inst.arg1());
-                case CALL_FUNC -> {
+                case Opcode.PUSH_CONST -> sb.append(" ").append(constants[inst.arg1()].toJsonString());
+                case Opcode.DOT_FIELD, Opcode.LOAD_VAR, Opcode.STORE_VAR -> sb.append(" ").append(names[inst.arg1()]);
+                case Opcode.LOAD_SLOT, Opcode.STORE_SLOT -> sb.append(" slot[").append(inst.arg1()).append("]");
+                case Opcode.COLLECT_ITERATE, Opcode.COLLECT_SELECT_ITERATE -> sb.append(" bodyLen=").append(inst.arg1());
+                case Opcode.REDUCE_ITERATE -> sb.append(" init=").append(constants[inst.arg1()].toJsonString()).append(" op=").append(inst.arg2());
+                case Opcode.DOT_FIELD2 -> sb.append(" ").append(names[inst.arg1()]).append(".").append(names[inst.arg2()]);
+                case Opcode.FORK, Opcode.JUMP, Opcode.JUMP_IF_TRUE, Opcode.JUMP_IF_FALSE, Opcode.TRY_BEGIN -> sb.append(" -> ").append(inst.arg1());
+                case Opcode.CALL_FUNC -> {
                     var ci = callInfos[inst.arg1()];
                     sb.append(" ").append(ci.name()).append("/").append(ci.arity());
                 }
-                case EVAL_AST -> sb.append(" [").append(inst.arg1()).append("]");
+                case Opcode.EVAL_AST -> sb.append(" [").append(inst.arg1()).append("]");
                 default -> {}
             }
             sb.append("\n");

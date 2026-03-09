@@ -248,6 +248,45 @@ public class JjqVsJacksonJqBenchmark {
     }
 
     // ======================================================================
+    //  executeOne() variants — zero-allocation path for single-output programs
+    // ======================================================================
+
+    @Benchmark
+    public JqValue jjq_vm_identity_one() {
+        return vmIdentity.executeOne(jjqSimpleObj);
+    }
+
+    @Benchmark
+    public JqValue jjq_vm_fieldAccess_one() {
+        return vmFieldAccess.executeOne(jjqSimpleObj);
+    }
+
+    @Benchmark
+    public JqValue jjq_vm_pipeArith_one() {
+        return vmPipeArith.executeOne(jjqSimpleObj);
+    }
+
+    @Benchmark
+    public JqValue jjq_vm_iterateMap_one() {
+        return vmIterateMap.executeOne(jjqSmallArray);
+    }
+
+    @Benchmark
+    public JqValue jjq_vm_complexFilter_one() {
+        return vmComplexFilter.executeOne(jjqSmallArray);
+    }
+
+    @Benchmark
+    public JqValue jjq_vm_reduce_one() {
+        return vmReduce.executeOne(jjqSmallArray);
+    }
+
+    @Benchmark
+    public JqValue jjq_vm_iterateMap_medium_one() {
+        return vmIterateMedium.executeOne(jjqMediumArray);
+    }
+
+    // ======================================================================
     //  Parse benchmarks (compile time)
     // ======================================================================
 

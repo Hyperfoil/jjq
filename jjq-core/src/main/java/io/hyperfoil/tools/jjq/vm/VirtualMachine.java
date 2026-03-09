@@ -8,6 +8,8 @@ import io.hyperfoil.tools.jjq.value.*;
 import java.util.ArrayList;
 import java.util.List;
 
+import static io.hyperfoil.tools.jjq.vm.Opcode.*;
+
 public final class VirtualMachine {
     private static final int INIT_STACK = 64;
     private static final int INIT_BT = 64;
@@ -620,6 +622,21 @@ public final class VirtualMachine {
                         }
                     }
 
+                    // Fused collect-select-iterate: [.[] | select(cond) | expr]
+                    case COLLECT_SELECT_ITERATE -> {
+                        JqValue val = pop();
+                        int bodyLen = inst.arg1();
+                        int bodyStart = pc;
+                        pc = bodyStart + bodyLen; // skip body in main loop
+                        if (val instanceof JqArray arr) {
+                            push(collectSelectIterateArray(arr, bodyStart, bodyLen));
+                        } else if (val instanceof JqNull) {
+                            push(JqArray.EMPTY);
+                        } else {
+                            throw new JqException("Cannot iterate over " + val.type().jqName());
+                        }
+                    }
+
                     // Fused reduce-iterate: reduce .[] as $x (init; . op $x)
                     case REDUCE_ITERATE -> {
                         JqValue val = pop(); // the array to iterate
@@ -779,18 +796,18 @@ public final class VirtualMachine {
                 // For integer * integer, use raw long math
                 if (b2.op() == Opcode.MUL && constVal instanceof JqNumber cn && cn.isIntegral()) {
                     long multiplier = cn.longValue();
-                    var result = new JqValue[size];
+                    var result = new ArrayList<JqValue>(size);
                     boolean allIntegral = true;
                     for (int i = 0; i < size; i++) {
                         JqValue item = items.get(i);
                         if (item instanceof JqNumber n && n.isIntegral()) {
-                            result[i] = JqNumber.of(Math.multiplyExact(n.longValue(), multiplier));
+                            result.add(JqNumber.of(Math.multiplyExact(n.longValue(), multiplier)));
                         } else {
                             allIntegral = false;
                             break;
                         }
                     }
-                    if (allIntegral) return JqArray.ofTrusted(java.util.Arrays.asList(result));
+                    if (allIntegral) return JqArray.ofTrusted(result);
                 }
                 // General arith: apply via JqValue methods (no stack needed)
                 var result = new ArrayList<JqValue>(size);
@@ -833,6 +850,30 @@ public final class VirtualMachine {
         sp = savedSp;
         input = savedInput;
         return result;
+    }
+
+    private JqArray collectSelectIterateArray(JqArray arr, int bodyStart, int bodyLen) {
+        var items = arr.arrayValue();
+        int size = items.size();
+        if (size == 0) return JqArray.EMPTY;
+
+        var result = new ArrayList<JqValue>();
+        int savedSp = sp;
+        JqValue savedInput = input;
+        for (int i = 0; i < size; i++) {
+            input = items.get(i);
+            sp = savedSp;
+            // Execute body: condition check + JUMP_IF_FALSE + map expr
+            // Body contains: <cond>, JUMP_IF_FALSE <bodyEnd>, <mapExpr>
+            collectIterateBody(bodyStart, bodyLen);
+            // If JUMP_IF_FALSE jumped past bodyEnd, sp == savedSp (nothing pushed)
+            if (sp > savedSp) {
+                result.add(pop());
+            }
+        }
+        sp = savedSp;
+        input = savedInput;
+        return JqArray.ofTrusted(result);
     }
 
     private void collectIterateBody(int bodyStart, int bodyLen) {
@@ -891,6 +932,8 @@ public final class VirtualMachine {
                 case SWAP -> { JqValue a = pop(); JqValue b = pop(); push(a); push(b); }
                 case POP -> pop();
                 case JUMP -> bodyPc = bodyInst.arg1();
+                case JUMP_IF_TRUE -> { if (pop().isTruthy()) bodyPc = bodyInst.arg1(); }
+                case JUMP_IF_FALSE -> { if (!pop().isTruthy()) bodyPc = bodyInst.arg1(); }
                 case SET_INPUT_PEEK -> input = peek();
                 case LOAD_SLOT -> push(varSlots[bodyInst.arg1()]);
                 case STORE_SLOT -> varSlots[bodyInst.arg1()] = pop();

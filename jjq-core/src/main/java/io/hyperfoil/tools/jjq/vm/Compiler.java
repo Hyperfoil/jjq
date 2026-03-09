@@ -70,19 +70,19 @@ public final class Compiler {
         return callInfos.size() - 1;
     }
 
-    private void emit(Opcode op) {
+    private void emit(int op) {
         code.add(new Bytecode.Instruction(op));
     }
 
-    private void emit(Opcode op, int arg1) {
+    private void emit(int op, int arg1) {
         code.add(new Bytecode.Instruction(op, arg1));
     }
 
-    private void emit(Opcode op, int arg1, int arg2) {
+    private void emit(int op, int arg1, int arg2) {
         code.add(new Bytecode.Instruction(op, arg1, arg2));
     }
 
-    private int emitPlaceholder(Opcode op) {
+    private int emitPlaceholder(int op) {
         int pc = currentPc();
         code.add(new Bytecode.Instruction(op, 0));
         return pc;
@@ -153,6 +153,8 @@ public final class Compiler {
             case ArrayConstructExpr arr -> {
                 if (arr.body() == null) {
                     emit(PUSH_CONST, addConstant(io.hyperfoil.tools.jjq.value.JqArray.EMPTY));
+                } else if (tryEmitCollectSelectIterate(arr)) {
+                    // Fused collect-select-iterate emitted
                 } else if (tryEmitCollectIterate(arr)) {
                     // Fused collect-iterate emitted
                 } else {
@@ -369,8 +371,8 @@ public final class Compiler {
             case FuncCallExpr fc -> {
                 // Inline common zero-arg builtins
                 if (fc.args().isEmpty()) {
-                    Opcode inlined = inlineBuiltin(fc.name());
-                    if (inlined != null) {
+                    int inlined = inlineBuiltin(fc.name());
+                    if (inlined >= 0) {
                         emit(LOAD_INPUT);
                         emit(inlined);
                         break;
@@ -458,6 +460,44 @@ public final class Compiler {
     }
 
     /**
+     * Try to emit a fused COLLECT_SELECT_ITERATE for [.[] | select(cond) | expr].
+     * Pattern: ArrayConstructExpr body is PipeExpr chain with IterateExpr, select, and single-output expr.
+     */
+    private boolean tryEmitCollectSelectIterate(ArrayConstructExpr arr) {
+        JqExpr body = arr.body();
+        // Match: .[] | select(cond) | expr  — a PipeExpr chain
+        // After parsing, this is PipeExpr(PipeExpr(.[] , select(cond)), expr)
+        if (!(body instanceof PipeExpr outerPipe)) return false;
+        if (!(outerPipe.left() instanceof PipeExpr innerPipe)) return false;
+        if (!(innerPipe.left() instanceof IterateExpr iter)) return false;
+        if (!(iter.expr() instanceof IdentityExpr)) return false;
+        // innerPipe.right() must be select(cond)
+        if (!(innerPipe.right() instanceof FuncCallExpr selectCall)) return false;
+        if (!"select".equals(selectCall.name()) || selectCall.args().size() != 1) return false;
+        JqExpr cond = selectCall.args().getFirst();
+        JqExpr mapExpr = outerPipe.right();
+        // Both condition and map expression must be single-output and not modify input
+        if (!isSingleOutputExpr(cond) || modifiesInput(cond)) return false;
+        if (!isSingleOutputExpr(mapExpr) || modifiesInput(mapExpr)) return false;
+
+        // Emit: LOAD_INPUT, COLLECT_SELECT_ITERATE <bodyLen>, <cond bytecode>, JUMP_IF_FALSE <skip>, <mapExpr bytecode>
+        emit(LOAD_INPUT);
+        int collectPc = currentPc();
+        emitPlaceholder(COLLECT_SELECT_ITERATE);
+        int bodyStart = currentPc();
+        // Compile condition
+        compileExpr(cond);
+        int jumpFalsePc = emitPlaceholder(JUMP_IF_FALSE);
+        // Compile map expression
+        compileExpr(mapExpr);
+        int bodyLen = currentPc() - bodyStart;
+        patch(collectPc, bodyLen);
+        // Patch JUMP_IF_FALSE to point to end of body (bodyStart + bodyLen)
+        patch(jumpFalsePc, bodyStart + bodyLen);
+        return true;
+    }
+
+    /**
      * Try to emit a fused REDUCE_ITERATE for reduce .[] as $x (INIT; . OP $x)
      * where INIT is a literal and OP is +, -, or *.
      */
@@ -498,7 +538,7 @@ public final class Compiler {
             case ArithmeticExpr a -> isSingleOutputExpr(a.left()) && isSingleOutputExpr(a.right());
             case ComparisonExpr c -> isSingleOutputExpr(c.left()) && isSingleOutputExpr(c.right());
             case NotExpr n -> isSingleOutputExpr(n.expr());
-            case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) != null;
+            case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) >= 0;
             default -> false;
         };
     }
@@ -525,7 +565,7 @@ public final class Compiler {
                     || bodyUsesTreeWalker(l.left()) || bodyUsesTreeWalker(l.right());
             case ReduceExpr r -> bodyUsesTreeWalker(r.source()) || bodyUsesTreeWalker(r.init()) || bodyUsesTreeWalker(r.update());
             case VariableBindExpr vb -> bodyUsesTreeWalker(vb.expr()) || bodyUsesTreeWalker(vb.body());
-            case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) != null ? false : true;
+            case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) >= 0 ? false : true;
             case TryCatchExpr tc -> bodyUsesTreeWalker(tc.tryExpr()) || (tc.catchExpr() != null && bodyUsesTreeWalker(tc.catchExpr()));
             case AlternativeExpr a -> modifiesInput(a.left()) || modifiesInput(a.right())
                     || bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
@@ -610,30 +650,30 @@ public final class Compiler {
         return false;
     }
 
-    private Opcode inlineBuiltin(String name) {
+    private int inlineBuiltin(String name) {
         return switch (name) {
-            case "length" -> Opcode.BUILTIN_LENGTH;
-            case "type" -> Opcode.BUILTIN_TYPE;
-            case "keys" -> Opcode.BUILTIN_KEYS;
-            case "values" -> Opcode.BUILTIN_VALUES;
-            case "not" -> Opcode.BUILTIN_NOT;
-            case "empty" -> Opcode.BUILTIN_EMPTY;
-            case "tostring" -> Opcode.BUILTIN_TOSTRING;
-            case "tonumber" -> Opcode.BUILTIN_TONUMBER;
-            case "add" -> Opcode.BUILTIN_ADD;
-            case "reverse" -> Opcode.BUILTIN_REVERSE;
-            case "sort" -> Opcode.BUILTIN_SORT;
-            case "min" -> Opcode.BUILTIN_MIN;
-            case "max" -> Opcode.BUILTIN_MAX;
-            case "flatten" -> Opcode.BUILTIN_FLATTEN;
-            case "unique" -> Opcode.BUILTIN_UNIQUE;
-            case "floor" -> Opcode.BUILTIN_FLOOR;
-            case "ceil" -> Opcode.BUILTIN_CEIL;
-            case "round" -> Opcode.BUILTIN_ROUND;
-            case "abs" -> Opcode.BUILTIN_ABS;
-            case "tojson" -> Opcode.BUILTIN_TOJSON;
-            case "fromjson" -> Opcode.BUILTIN_FROMJSON;
-            default -> null;
+            case "length" -> BUILTIN_LENGTH;
+            case "type" -> BUILTIN_TYPE;
+            case "keys" -> BUILTIN_KEYS;
+            case "values" -> BUILTIN_VALUES;
+            case "not" -> BUILTIN_NOT;
+            case "empty" -> BUILTIN_EMPTY;
+            case "tostring" -> BUILTIN_TOSTRING;
+            case "tonumber" -> BUILTIN_TONUMBER;
+            case "add" -> BUILTIN_ADD;
+            case "reverse" -> BUILTIN_REVERSE;
+            case "sort" -> BUILTIN_SORT;
+            case "min" -> BUILTIN_MIN;
+            case "max" -> BUILTIN_MAX;
+            case "flatten" -> BUILTIN_FLATTEN;
+            case "unique" -> BUILTIN_UNIQUE;
+            case "floor" -> BUILTIN_FLOOR;
+            case "ceil" -> BUILTIN_CEIL;
+            case "round" -> BUILTIN_ROUND;
+            case "abs" -> BUILTIN_ABS;
+            case "tojson" -> BUILTIN_TOJSON;
+            case "fromjson" -> BUILTIN_FROMJSON;
+            default -> -1;
         };
     }
 
