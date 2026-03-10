@@ -18,9 +18,9 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Head-to-head comparison of jjq (tree-walker + VM) vs jackson-jq.
+ * Head-to-head comparison of jjq VM vs jackson-jq.
  *
- * <p>All three engines execute the same jq filters on the same input data.
+ * <p>Both engines execute the same jq filters on the same input data.
  * Programs are pre-compiled; this measures pure execution throughput.
  *
  * <p>Run with:
@@ -40,7 +40,6 @@ public class JjqVsJacksonJqBenchmark {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     // --- jjq state ---
-    private JqProgram jjqIdentity, jjqFieldAccess, jjqPipeArith, jjqIterateMap, jjqComplexFilter, jjqReduce, jjqIterateMedium;
     private VirtualMachine vmIdentity, vmFieldAccess, vmPipeArith, vmIterateMap, vmComplexFilter, vmReduce, vmIterateMedium;
     private JqValue jjqSimpleObj, jjqSmallArray, jjqMediumArray;
 
@@ -53,13 +52,13 @@ public class JjqVsJacksonJqBenchmark {
     public void setup() throws Exception {
         // --- jjq setup ---
         BuiltinRegistry builtins = new BuiltinRegistry();
-        jjqIdentity = JqProgram.compile(".", builtins);
-        jjqFieldAccess = JqProgram.compile(".name", builtins);
-        jjqPipeArith = JqProgram.compile(".a | . + 1", builtins);
-        jjqIterateMap = JqProgram.compile("[.[] | . * 2]", builtins);
-        jjqComplexFilter = JqProgram.compile("[.[] | select(. > 5) | . * 2]", builtins);
-        jjqReduce = JqProgram.compile("reduce .[] as $x (0; . + $x)", builtins);
-        jjqIterateMedium = JqProgram.compile("[.[] | . * 2]", builtins);
+        JqProgram jjqIdentity = JqProgram.compile(".", builtins);
+        JqProgram jjqFieldAccess = JqProgram.compile(".name", builtins);
+        JqProgram jjqPipeArith = JqProgram.compile(".a | . + 1", builtins);
+        JqProgram jjqIterateMap = JqProgram.compile("[.[] | . * 2]", builtins);
+        JqProgram jjqComplexFilter = JqProgram.compile("[.[] | select(. > 5) | . * 2]", builtins);
+        JqProgram jjqReduce = JqProgram.compile("reduce .[] as $x (0; . + $x)", builtins);
+        JqProgram jjqIterateMedium = JqProgram.compile("[.[] | . * 2]", builtins);
 
         vmIdentity = new VirtualMachine(jjqIdentity.getBytecode(), builtins);
         vmFieldAccess = new VirtualMachine(jjqFieldAccess.getBytecode(), builtins);
@@ -105,11 +104,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
 
     @Benchmark
-    public List<JqValue> jjq_tree_identity() {
-        return jjqIdentity.applyTreeWalker(jjqSimpleObj);
-    }
-
-    @Benchmark
     public List<JqValue> jjq_vm_identity() {
         return vmIdentity.execute(jjqSimpleObj);
     }
@@ -124,11 +118,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
     //  Field access: .name
     // ======================================================================
-
-    @Benchmark
-    public List<JqValue> jjq_tree_fieldAccess() {
-        return jjqFieldAccess.applyTreeWalker(jjqSimpleObj);
-    }
 
     @Benchmark
     public List<JqValue> jjq_vm_fieldAccess() {
@@ -147,11 +136,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
 
     @Benchmark
-    public List<JqValue> jjq_tree_pipeArith() {
-        return jjqPipeArith.applyTreeWalker(jjqSimpleObj);
-    }
-
-    @Benchmark
     public List<JqValue> jjq_vm_pipeArith() {
         return vmPipeArith.execute(jjqSimpleObj);
     }
@@ -166,11 +150,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
     //  Iterate + map (small): [.[] | . * 2]  on 10-element array
     // ======================================================================
-
-    @Benchmark
-    public List<JqValue> jjq_tree_iterateMap() {
-        return jjqIterateMap.applyTreeWalker(jjqSmallArray);
-    }
 
     @Benchmark
     public List<JqValue> jjq_vm_iterateMap() {
@@ -189,11 +168,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
 
     @Benchmark
-    public List<JqValue> jjq_tree_complexFilter() {
-        return jjqComplexFilter.applyTreeWalker(jjqSmallArray);
-    }
-
-    @Benchmark
     public List<JqValue> jjq_vm_complexFilter() {
         return vmComplexFilter.execute(jjqSmallArray);
     }
@@ -210,11 +184,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
 
     @Benchmark
-    public List<JqValue> jjq_tree_reduce() {
-        return jjqReduce.applyTreeWalker(jjqSmallArray);
-    }
-
-    @Benchmark
     public List<JqValue> jjq_vm_reduce() {
         return vmReduce.execute(jjqSmallArray);
     }
@@ -229,11 +198,6 @@ public class JjqVsJacksonJqBenchmark {
     // ======================================================================
     //  Iterate + map (medium): [.[] | . * 2]  on 100-element array
     // ======================================================================
-
-    @Benchmark
-    public List<JqValue> jjq_tree_iterateMap_medium() {
-        return jjqIterateMedium.applyTreeWalker(jjqMediumArray);
-    }
 
     @Benchmark
     public List<JqValue> jjq_vm_iterateMap_medium() {

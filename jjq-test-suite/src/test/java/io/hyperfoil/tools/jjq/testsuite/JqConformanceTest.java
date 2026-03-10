@@ -88,7 +88,7 @@ public class JqConformanceTest {
         List<JqValue> results;
         try {
             JqProgram program = JqProgram.compile(tc.filter());
-            results = program.applyTreeWalker(input);
+            results = program.applyAll(input);
         } catch (Exception e) {
             fail("Filter '%s' with input '%s' threw: %s".formatted(tc.filter(), tc.input(), e.getMessage()));
             return;

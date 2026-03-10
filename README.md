@@ -2,13 +2,13 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation backed by [fastjson2](https://github.com/alibaba/fastjson2).
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It includes both a tree-walking interpreter and a bytecode-compiled VM for optimal performance.
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It uses a bytecode-compiled VM for optimal performance.
 
 ## Features
 
 - **Full jq syntax** — pipes, field access, iteration, array/object construction, string interpolation, reduce, foreach, try-catch, label-break, destructuring bind, function definitions, and more
 - **179 builtin functions** — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
-- **Dual execution engines** — tree-walking interpreter for correctness and a bytecode VM (up to 15x faster than jackson-jq) with constant folding and peephole optimizations
+- **Bytecode VM** — up to 15x faster than jackson-jq with constant folding and peephole optimizations
 - **fastjson2 integration** — lazy zero-copy conversion, byte buffer processing, and JSON stream support
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
 - **Java 21+** — leverages sealed classes, records, and pattern matching
@@ -20,8 +20,8 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-core` | Lexer, parser, AST, evaluator, bytecode VM, builtins (zero external dependencies) |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
-| `jjq-test-suite` | 466 conformance tests run against both interpreter and VM |
-| `jjq-benchmark` | JMH benchmarks comparing tree-walker, VM, and jackson-jq |
+| `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests |
+| `jjq-benchmark` | JMH benchmarks comparing jjq VM and jackson-jq |
 
 ## Quick Start
 
@@ -199,13 +199,15 @@ jq expression string
         |
    +-----------+-----------+
    |                       |
-   [Tree-walker]      [Compiler]
-   Interpreter         AST -> Bytecode
-        |                   |
-   Generator          [VM]
-   <JqValue>          Stack-based with
-        |             FORK/BACKTRACK
-   Output             for generators
+   [Compiler]
+   AST -> Bytecode
+        |
+   [VM]
+   Stack-based with
+   FORK/BACKTRACK
+   for generators
+        |
+   Output
 ```
 
 ### Bytecode VM
@@ -267,7 +269,7 @@ jjq VM vs [jackson-jq](https://github.com/eiiches/jackson-jq) throughput (ops/μ
 | complexFilter | 0.50 | 1.93 | **3.9x** |
 | reduce (`reduce .[] as $x (0; . + $x)`) | 2.89 | 44.65 | **15.5x** |
 
-Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations. The tree-walker interpreter is also available and is competitive with jackson-jq on most benchmarks.
+Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 
 ## Supported jq Features
 

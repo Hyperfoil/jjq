@@ -326,7 +326,6 @@ List<JqValue> all = program.applyAll(input);   // all results
 | **`apply(input)`** | VM | First `JqValue` | Single-output filters (field access, arithmetic, reduce, object construction). **Zero-allocation** for simple programs. |
 | **`applyAll(input)`** | VM | `List<JqValue>` | Multi-output filters (`.[]`, generators, comma expressions) |
 | **`apply(input, output)`** | VM | void (streams to `Consumer`) | Processing results without collecting into a list |
-| `applyTreeWalker(input)` | Tree-walker | `List<JqValue>` | Fallback if VM has issues; supports all features |
 
 **Use `apply()` by default.** It returns a single `JqValue` with zero allocation overhead for programs that produce exactly one output. This covers the vast majority of use cases: field access, arithmetic, object construction, `reduce`, array construction (`[...]`), and any filter wrapped in `[...]`.
 
@@ -1120,10 +1119,6 @@ List<JqValue> applyAll(Iterable<JqValue> inputs)   // all inputs, all results
 List<JqValue> applyAll(Iterable<JqValue> inputs, Environment env)
 void applyAll(Iterable<JqValue> inputs, Consumer<JqValue> output)
 Stream<JqValue> stream(Iterable<JqValue> inputs)   // stream of results
-
-// Tree-walker (alternative engine)
-List<JqValue> applyTreeWalker(JqValue input)
-List<JqValue> applyTreeWalker(JqValue input, Environment env)
 
 // Utilities
 String expression()                                // original filter string

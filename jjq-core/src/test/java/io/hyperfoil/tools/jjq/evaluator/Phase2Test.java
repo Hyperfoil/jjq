@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class Phase2Test {
 
     private List<JqValue> eval(String expr, JqValue input) {
-        return JqProgram.compile(expr).applyTreeWalker(input);
+        return JqProgram.compile(expr).applyAll(input);
     }
 
     private List<JqValue> eval(String expr, String json) {

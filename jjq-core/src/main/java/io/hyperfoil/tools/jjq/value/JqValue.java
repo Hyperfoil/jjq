@@ -119,6 +119,10 @@ public sealed interface JqValue extends Comparable<JqValue>
             // "ab" * 3 = "ababab"
             int count = (int) n.longValue();
             if (count <= 0) return JqNull.NULL;
+            long resultLen = (long) s.stringValue().length() * count;
+            if (resultLen > 100_000_000) {
+                throw new JqTypeError("Repeat string result too long");
+            }
             return JqString.of(s.stringValue().repeat(count));
         }
         if (this instanceof JqString s && other instanceof JqObject) {

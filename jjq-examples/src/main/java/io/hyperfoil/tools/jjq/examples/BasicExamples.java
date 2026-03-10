@@ -214,13 +214,8 @@ public class BasicExamples {
         JqProgram program = JqProgram.compile("[.[] | . * 2 + 1]");
         JqValue input = JqValues.parse("[1,2,3,4,5]");
 
-        // Tree-walker
-        List<JqValue> treeResult = program.applyTreeWalker(input);
-        System.out.println("  Tree-walker: " + treeResult.getFirst().toJsonString());
-
-        // Bytecode VM (faster for repeated execution)
-        List<JqValue> vmResult = program.applyAll(input);
-        System.out.println("  Bytecode VM: " + vmResult.getFirst().toJsonString());
+        List<JqValue> results = program.applyAll(input);
+        System.out.println("  Result: " + results.getFirst().toJsonString());
 
         // Inspect the compiled bytecode
         System.out.println("  Bytecode disassembly:");

@@ -3,7 +3,7 @@ package io.hyperfoil.tools.jjq;
 import io.hyperfoil.tools.jjq.ast.JqExpr;
 import io.hyperfoil.tools.jjq.builtin.BuiltinRegistry;
 import io.hyperfoil.tools.jjq.evaluator.Environment;
-import io.hyperfoil.tools.jjq.evaluator.Evaluator;
+
 import io.hyperfoil.tools.jjq.parser.Parser;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.vm.Bytecode;
@@ -25,7 +25,6 @@ import java.util.stream.Stream;
  *   <li>{@link #applyAll(JqValue)} — returns all results as a list</li>
  * </ul>
  *
- * <p>The tree-walker evaluator is available via {@link #applyTreeWalker(JqValue)} for compatibility.
  */
 public final class JqProgram {
     private final String expression;
@@ -150,25 +149,6 @@ public final class JqProgram {
             }
         }
         return builder.build();
-    }
-
-    // ========================================================================
-    //  Tree-walker evaluator (alternative engine)
-    // ========================================================================
-
-    public List<JqValue> applyTreeWalker(JqValue input) {
-        var evaluator = new Evaluator(builtins);
-        return evaluator.eval(ast, input);
-    }
-
-    public List<JqValue> applyTreeWalker(JqValue input, Environment env) {
-        var evaluator = new Evaluator(builtins);
-        return evaluator.eval(ast, input, env);
-    }
-
-    public void applyTreeWalker(JqValue input, Consumer<JqValue> output) {
-        var evaluator = new Evaluator(builtins);
-        evaluator.eval(ast, input, new Environment(), output);
     }
 
     public Bytecode getBytecode() {

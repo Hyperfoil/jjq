@@ -18,18 +18,6 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class JjqBenchmark {
 
-    // Pre-compiled programs
-    private JqProgram identityProg;
-    private JqProgram fieldAccessProg;
-    private JqProgram pipeAndArithProg;
-    private JqProgram iterateMapProg;
-    private JqProgram complexFilterProg;
-    private JqProgram reduceProg;
-    private JqProgram chainedFieldProg;
-    private JqProgram builtinLengthProg;
-    private JqProgram builtinSortProg;
-    private JqProgram builtinAddProg;
-
     // Pre-compiled VMs (reuse across invocations)
     private VirtualMachine identityVM;
     private VirtualMachine fieldAccessVM;
@@ -51,28 +39,17 @@ public class JjqBenchmark {
     @Setup
     public void setup() {
         BuiltinRegistry builtins = new BuiltinRegistry();
-        identityProg = JqProgram.compile(".", builtins);
-        fieldAccessProg = JqProgram.compile(".name", builtins);
-        pipeAndArithProg = JqProgram.compile(".a | . + 1", builtins);
-        iterateMapProg = JqProgram.compile("[.[] | . * 2]", builtins);
-        complexFilterProg = JqProgram.compile("[.[] | select(. > 5) | . * 2]", builtins);
-        reduceProg = JqProgram.compile("reduce .[] as $x (0; . + $x)", builtins);
-        chainedFieldProg = JqProgram.compile(".a.b", builtins);
-        builtinLengthProg = JqProgram.compile("length", builtins);
-        builtinSortProg = JqProgram.compile("sort", builtins);
-        builtinAddProg = JqProgram.compile("add", builtins);
 
-        // Pre-create VMs (they pre-allocate stacks)
-        identityVM = new VirtualMachine(identityProg.getBytecode(), builtins);
-        fieldAccessVM = new VirtualMachine(fieldAccessProg.getBytecode(), builtins);
-        pipeAndArithVM = new VirtualMachine(pipeAndArithProg.getBytecode(), builtins);
-        iterateMapVM = new VirtualMachine(iterateMapProg.getBytecode(), builtins);
-        complexFilterVM = new VirtualMachine(complexFilterProg.getBytecode(), builtins);
-        reduceVM = new VirtualMachine(reduceProg.getBytecode(), builtins);
-        chainedFieldVM = new VirtualMachine(chainedFieldProg.getBytecode(), builtins);
-        builtinLengthVM = new VirtualMachine(builtinLengthProg.getBytecode(), builtins);
-        builtinSortVM = new VirtualMachine(builtinSortProg.getBytecode(), builtins);
-        builtinAddVM = new VirtualMachine(builtinAddProg.getBytecode(), builtins);
+        identityVM = new VirtualMachine(JqProgram.compile(".", builtins).getBytecode(), builtins);
+        fieldAccessVM = new VirtualMachine(JqProgram.compile(".name", builtins).getBytecode(), builtins);
+        pipeAndArithVM = new VirtualMachine(JqProgram.compile(".a | . + 1", builtins).getBytecode(), builtins);
+        iterateMapVM = new VirtualMachine(JqProgram.compile("[.[] | . * 2]", builtins).getBytecode(), builtins);
+        complexFilterVM = new VirtualMachine(JqProgram.compile("[.[] | select(. > 5) | . * 2]", builtins).getBytecode(), builtins);
+        reduceVM = new VirtualMachine(JqProgram.compile("reduce .[] as $x (0; . + $x)", builtins).getBytecode(), builtins);
+        chainedFieldVM = new VirtualMachine(JqProgram.compile(".a.b", builtins).getBytecode(), builtins);
+        builtinLengthVM = new VirtualMachine(JqProgram.compile("length", builtins).getBytecode(), builtins);
+        builtinSortVM = new VirtualMachine(JqProgram.compile("sort", builtins).getBytecode(), builtins);
+        builtinAddVM = new VirtualMachine(JqProgram.compile("add", builtins).getBytecode(), builtins);
 
         simpleObj = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"a\":42}");
         nestedObj = JqValues.parse("{\"a\":{\"b\":42,\"c\":\"hello\"}}");
@@ -85,43 +62,6 @@ public class JjqBenchmark {
         }
         sb.append("]");
         mediumArray = JqValues.parse(sb.toString());
-    }
-
-    // --- Tree-walker benchmarks ---
-
-    @Benchmark
-    public List<JqValue> treeWalker_identity() {
-        return identityProg.applyTreeWalker(simpleObj);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_fieldAccess() {
-        return fieldAccessProg.applyTreeWalker(simpleObj);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_pipeAndArith() {
-        return pipeAndArithProg.applyTreeWalker(simpleObj);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_iterateMap() {
-        return iterateMapProg.applyTreeWalker(smallArray);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_complexFilter() {
-        return complexFilterProg.applyTreeWalker(smallArray);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_reduce() {
-        return reduceProg.applyTreeWalker(smallArray);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_iterateMap_medium() {
-        return iterateMapProg.applyTreeWalker(mediumArray);
     }
 
     // --- VM benchmarks ---
@@ -181,28 +121,6 @@ public class JjqBenchmark {
     @Benchmark
     public List<JqValue> vm_builtinAdd() {
         return builtinAddVM.execute(smallArray);
-    }
-
-    // --- Tree-walker benchmarks: same ops for comparison ---
-
-    @Benchmark
-    public List<JqValue> treeWalker_chainedField() {
-        return chainedFieldProg.applyTreeWalker(nestedObj);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_builtinLength() {
-        return builtinLengthProg.applyTreeWalker(smallArray);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_builtinSort() {
-        return builtinSortProg.applyTreeWalker(smallArray);
-    }
-
-    @Benchmark
-    public List<JqValue> treeWalker_builtinAdd() {
-        return builtinAddProg.applyTreeWalker(smallArray);
     }
 
     // --- Parse benchmarks ---
