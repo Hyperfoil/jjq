@@ -18,6 +18,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | Module | Description |
 |--------|-------------|
 | `jjq-core` | Lexer, parser, AST, evaluator, bytecode VM, builtins (zero external dependencies) |
+| `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests |
@@ -31,6 +32,13 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-core</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</dependency>
+
+<!-- For Jackson integration (Quarkus, Spring, etc.) -->
+<dependency>
+    <groupId>io.hyperfoil.tools</groupId>
+    <artifactId>jjq-jackson</artifactId>
     <version>0.1.0-SNAPSHOT</version>
 </dependency>
 
@@ -65,6 +73,27 @@ List<JqValue> results = program.apply(input);
 results.forEach(r -> System.out.println(r.toJsonString()));
 // {"name":"Alice","email":"alice@example.com"}
 // {"name":"Bob","email":"bob@example.com"}
+```
+
+**Jackson integration (for Quarkus / REST APIs):**
+
+```java
+import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+ObjectMapper mapper = new ObjectMapper();
+JacksonJqEngine engine = new JacksonJqEngine(mapper);
+
+// Pre-compile filter (thread-safe, reuse across requests)
+JqProgram program = engine.compile(".users[] | {name, email}");
+
+// Apply to Jackson JsonNode — input and output are both JsonNode
+JsonNode input = mapper.readTree(requestBody);
+List<JsonNode> results = engine.apply(program, input);
+
+// Or get the first result directly
+JsonNode first = engine.applyFirst(program, input);
 ```
 
 **With variables:**

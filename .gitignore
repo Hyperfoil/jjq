@@ -1,5 +1,9 @@
 target/
 *.iml
 .idea/
+.project
+.classpath
+.factorypath
+.settings/
 profile-*/
 io.hyperfoil.tools.jjq.benchmark.*/
