@@ -80,10 +80,23 @@ env.setVariable("target", JqString.of("Alice"));
 List<JqValue> results = program.apply(input, env);
 ```
 
-**Bytecode VM (faster execution):**
+**Processing multiple inputs (JSONL-style):**
 
 ```java
-List<JqValue> results = program.applyVM(input);
+// Parse a JSONL / NDJSON string into multiple values
+List<JqValue> inputs = JqValues.parseAll("""
+    {"name":"Alice","age":30}
+    {"name":"Bob","age":25}
+    {"name":"Charlie","age":35}
+    """);
+
+// Process all inputs through one filter — reuses a single VM for efficiency
+JqProgram program = JqProgram.compile(".name");
+List<JqValue> names = program.applyAll(inputs);
+// "Alice", "Bob", "Charlie"
+
+// Or stream results
+program.stream(inputs).forEach(name -> System.out.println(name.toJsonString()));
 ```
 
 **FastjsonEngine (high-level API with fastjson2):**
@@ -160,6 +173,15 @@ echo '{"items":[1,2,3]}' | jjq --arg name items '.[$name]'
 
 # Read filter from file
 jjq -f filter.jq data.json
+
+# Process JSONL / NDJSON (one JSON value per line)
+printf '{"name":"Alice"}\n{"name":"Bob"}\n' | jjq '.name'
+# "Alice"
+# "Bob"
+
+# Slurp JSONL into array
+printf '1\n2\n3\n' | jjq -s 'add'
+# 6
 ```
 
 ## Architecture

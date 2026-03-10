@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.value;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 
 /**
  * Utility for parsing JSON strings into JqValue without external dependencies.
@@ -14,6 +15,21 @@ public final class JqValues {
     public static JqValue parse(String json) {
         json = json.trim();
         return parseValue(json, new int[]{0});
+    }
+
+    /**
+     * Parse a stream of whitespace-separated JSON values (JSONL / NDJSON / JSON stream).
+     * Behaves like jq: each top-level JSON value is parsed independently.
+     */
+    public static List<JqValue> parseAll(String json) {
+        var results = new ArrayList<JqValue>();
+        int[] pos = {0};
+        while (true) {
+            skipWs(json, pos);
+            if (pos[0] >= json.length()) break;
+            results.add(parseValue(json, pos));
+        }
+        return results;
     }
 
     private static JqValue parseValue(String json, int[] pos) {

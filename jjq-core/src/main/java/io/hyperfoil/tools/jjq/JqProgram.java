@@ -10,8 +10,10 @@ import io.hyperfoil.tools.jjq.vm.Bytecode;
 import io.hyperfoil.tools.jjq.vm.Compiler;
 import io.hyperfoil.tools.jjq.vm.VirtualMachine;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 /**
  * A compiled jq program. Thread-safe: the AST is immutable.
@@ -90,6 +92,64 @@ public final class JqProgram {
         for (JqValue v : applyAll(input)) {
             output.accept(v);
         }
+    }
+
+    // ========================================================================
+    //  Multi-input API — process a stream of inputs (JSONL-style)
+    // ========================================================================
+
+    /**
+     * Process multiple inputs through the same filter, like jq processes JSONL.
+     * Each input is evaluated independently; results are concatenated in order.
+     * Reuses a single VM instance across all inputs for efficiency.
+     *
+     * <pre>{@code
+     * var program = JqProgram.compile(".name");
+     * List<JqValue> results = program.applyAll(List.of(obj1, obj2, obj3));
+     * }</pre>
+     */
+    public List<JqValue> applyAll(Iterable<JqValue> inputs) {
+        return applyAll(inputs, (Environment) null);
+    }
+
+    public List<JqValue> applyAll(Iterable<JqValue> inputs, Environment env) {
+        Bytecode bc = getBytecode();
+        var vm = new VirtualMachine(bc, builtins);
+        var results = new ArrayList<JqValue>();
+        for (JqValue input : inputs) {
+            results.addAll(env != null ? vm.execute(input, env) : vm.execute(input));
+        }
+        return results;
+    }
+
+    /**
+     * Process multiple inputs, streaming each result to a consumer.
+     * Reuses a single VM instance across all inputs for efficiency.
+     */
+    public void applyAll(Iterable<JqValue> inputs, Consumer<JqValue> output) {
+        Bytecode bc = getBytecode();
+        var vm = new VirtualMachine(bc, builtins);
+        for (JqValue input : inputs) {
+            for (JqValue v : vm.execute(input)) {
+                output.accept(v);
+            }
+        }
+    }
+
+    /**
+     * Process a stream of inputs through the same filter.
+     * Returns a stream of results. Reuses a single VM instance.
+     */
+    public Stream<JqValue> stream(Iterable<JqValue> inputs) {
+        Bytecode bc = getBytecode();
+        var vm = new VirtualMachine(bc, builtins);
+        var builder = Stream.<JqValue>builder();
+        for (JqValue input : inputs) {
+            for (JqValue v : vm.execute(input)) {
+                builder.accept(v);
+            }
+        }
+        return builder.build();
     }
 
     // ========================================================================

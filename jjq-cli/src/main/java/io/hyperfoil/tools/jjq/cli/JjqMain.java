@@ -126,16 +126,11 @@ public final class JjqMain {
             boolean anyOutput = false;
             boolean firstOutput = true;
 
-            for (JqValue input : inputs) {
-                List<JqValue> results = program.applyAll(input, env);
-                for (JqValue result : results) {
-                    anyOutput = true;
-                    if (joinOutput && !firstOutput) {
-                        // no separator between outputs
-                    }
-                    printValue(result, firstOutput);
-                    firstOutput = false;
-                }
+            List<JqValue> results = program.applyAll(inputs, env);
+            for (JqValue result : results) {
+                anyOutput = true;
+                printValue(result, firstOutput);
+                firstOutput = false;
             }
 
             if (exitStatus && !anyOutput) return 4;
@@ -148,60 +143,47 @@ public final class JjqMain {
 
     private List<JqValue> readInputs() throws IOException {
         if (nullInput) {
-            return List.of(io.hyperfoil.tools.jjq.value.JqNull.NULL);
+            return List.of(JqNull.NULL);
         }
 
-        List<String> jsonInputs = new ArrayList<>();
+        var inputs = new ArrayList<JqValue>();
 
         if (files.isEmpty()) {
-            // Read from stdin
-            jsonInputs.addAll(readJsonFromStream(System.in));
+            inputs.addAll(readValuesFromStream(System.in));
         } else {
             for (String file : files) {
                 if (file.equals("-")) {
-                    jsonInputs.addAll(readJsonFromStream(System.in));
+                    inputs.addAll(readValuesFromStream(System.in));
                 } else {
                     String content = Files.readString(Path.of(file), StandardCharsets.UTF_8);
                     if (rawInput) {
                         for (String line : content.split("\n", -1)) {
-                            jsonInputs.add("\"" + escapeJson(line) + "\"");
+                            inputs.add(JqString.of(line));
                         }
                     } else {
-                        jsonInputs.add(content.trim());
+                        inputs.addAll(JqValues.parseAll(content));
                     }
                 }
             }
         }
 
         if (slurp) {
-            var sb = new StringBuilder("[");
-            for (int i = 0; i < jsonInputs.size(); i++) {
-                if (i > 0) sb.append(",");
-                sb.append(jsonInputs.get(i));
-            }
-            sb.append("]");
-            return List.of(JqValues.parse(sb.toString()));
+            return List.of(JqArray.of(inputs));
         }
 
-        return jsonInputs.stream()
-                .map(JqValues::parse)
-                .toList();
+        return inputs;
     }
 
-    private List<String> readJsonFromStream(InputStream in) throws IOException {
-        String content = new String(in.readAllBytes(), StandardCharsets.UTF_8).trim();
+    private List<JqValue> readValuesFromStream(InputStream in) throws IOException {
+        String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         if (rawInput) {
-            var result = new ArrayList<String>();
+            var result = new ArrayList<JqValue>();
             for (String line : content.split("\n", -1)) {
-                result.add("\"" + escapeJson(line) + "\"");
+                result.add(JqString.of(line));
             }
             return result;
         }
-        // Handle JSON stream (multiple values)
-        var results = new ArrayList<String>();
-        if (content.isEmpty()) return results;
-        results.add(content);
-        return results;
+        return JqValues.parseAll(content);
     }
 
     private void printValue(JqValue value, boolean firstOutput) {
@@ -295,14 +277,6 @@ public final class JjqMain {
             }
             default -> color ? colorizeScalar(value) : value.toJsonString();
         };
-    }
-
-    private static String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
     }
 
     private void printHelp() {

@@ -78,7 +78,7 @@ The CLI module has zero external dependencies (only `jjq-core`), so native-image
 jjq [OPTIONS] FILTER [FILE...]
 ```
 
-jjq reads JSON from files or stdin, applies the filter expression, and writes results to stdout.
+jjq reads JSON from files or stdin, applies the filter expression, and writes results to stdout. Like `jq`, it supports **JSONL / NDJSON** — multiple whitespace-separated JSON values are each processed independently through the filter.
 
 ```bash
 # From stdin
@@ -90,6 +90,18 @@ jjq '.users[]' data.json
 
 # From multiple files
 jjq '.status' server1.json server2.json server3.json
+
+# JSONL / NDJSON (one JSON value per line)
+printf '{"name":"Alice"}\n{"name":"Bob"}\n{"name":"Charlie"}\n' | jjq '.name'
+# "Alice"
+# "Bob"
+# "Charlie"
+
+# Whitespace-separated values also work (not just newlines)
+echo '1 2 3' | jjq '. * 10'
+# 10
+# 20
+# 30
 ```
 
 ### Options Reference
@@ -207,6 +219,32 @@ echo '[1,2,3,4,5]' | jjq --argjson min 3 '[.[] | select(. >= $min)]'
 # [3,4,5]
 ```
 
+**Working with JSONL / NDJSON:**
+
+```bash
+# Process a JSONL file (one JSON object per line)
+printf '{"name":"Alice","score":90}\n{"name":"Bob","score":75}\n{"name":"Charlie","score":85}\n' > data.jsonl
+jjq 'select(.score >= 80) | .name' data.jsonl
+# "Alice"
+# "Charlie"
+
+# Slurp JSONL into an array for aggregation
+jjq -s 'map(.score) | add / length' data.jsonl
+# 83.33333333333333
+
+# Multi-line JSON values in a stream (not just single-line)
+printf '{\n  "a": 1\n}\n{\n  "b": 2\n}\n' | jjq -c '.'
+# {"a":1}
+# {"b":2}
+
+# Mixed types in a stream
+printf '"hello"\n42\ntrue\n[1,2]\n' | jjq -c 'type'
+# "string"
+# "number"
+# "boolean"
+# "array"
+```
+
 **Working with files and streams:**
 
 ```bash
@@ -312,6 +350,67 @@ stream.apply(input, event -> processEvent(event));
 - Filters like `.field`, `.a.b.c`, `. + 1`, `reduce`, `{key: .val}` produce one output — use `apply()`.
 - Filters like `.[]`, `.a, .b`, `range(n)` produce multiple outputs — use `applyAll()`.
 - When in doubt, use `applyAll()` — it works for any number of outputs.
+
+### Processing Multiple Inputs (JSONL-style)
+
+In enterprise applications, you often have multiple JSON objects in memory — from a message queue, database results, or API responses — that you want to process through the same filter. jjq supports this natively with multi-input methods that reuse a single VM instance for efficiency.
+
+**Parsing JSONL strings:**
+
+```java
+// Parse a JSONL / NDJSON string into multiple values
+List<JqValue> inputs = JqValues.parseAll("""
+    {"name":"Alice","age":30}
+    {"name":"Bob","age":25}
+    {"name":"Charlie","age":35}
+    """);
+// Returns 3 separate JqValue objects
+```
+
+**Processing multiple in-memory values:**
+
+```java
+JqProgram program = JqProgram.compile("select(.age >= 30) | .name");
+
+// Option 1: Collect all results into a list
+List<JqValue> inputs = List.of(user1, user2, user3);
+List<JqValue> results = program.applyAll(inputs);
+
+// Option 2: Stream results lazily
+program.stream(inputs).forEach(name ->
+    System.out.println(name.stringValue())
+);
+
+// Option 3: Callback for each result
+program.applyAll(inputs, result ->
+    sendToDownstream(result)
+);
+```
+
+**With variables:**
+
+```java
+Environment env = new Environment();
+env.setVariable("minAge", JqNumber.of(30));
+
+JqProgram program = JqProgram.compile("select(.age >= $minAge)");
+List<JqValue> results = program.applyAll(inputs, env);
+```
+
+**Why use `applyAll(Iterable)` instead of looping with `apply()`?**
+
+The multi-input methods create **one** `VirtualMachine` and reuse it across all inputs. Calling `apply()` or `applyAll(singleInput)` in a loop creates a new VM each time, re-allocating stacks and re-analyzing the program. For high-throughput processing (thousands of records), the multi-input API is measurably faster.
+
+```java
+// GOOD: single VM reused across all inputs
+List<JqValue> results = program.applyAll(inputs);
+
+// ALSO FINE but slower: new VM per input
+List<JqValue> results = new ArrayList<>();
+for (JqValue input : inputs) {
+    results.addAll(program.applyAll(input));  // new VM each time
+}
+```
 
 ### Working with Values
 
@@ -863,7 +962,7 @@ public class DataPipeline {
 
 ### Batch Processing
 
-Process large numbers of records efficiently with pre-compiled programs:
+Process large numbers of records efficiently using the multi-input API, which reuses a single VM across all inputs:
 
 ```java
 public class BatchProcessor {
@@ -874,11 +973,14 @@ public class BatchProcessor {
         this.transform = JqProgram.compile(expression);
     }
 
-    // Process records sequentially
+    // Process all records through a single VM (most efficient)
     public List<JqValue> processAll(List<JqValue> records) {
-        return records.stream()
-            .map(transform::apply)
-            .toList();
+        return transform.applyAll(records);
+    }
+
+    // Stream results without collecting
+    public void processAll(List<JqValue> records, Consumer<JqValue> handler) {
+        transform.applyAll(records, handler);
     }
 
     // Process records in parallel (JqProgram is thread-safe)
@@ -886,6 +988,12 @@ public class BatchProcessor {
         return records.parallelStream()
             .map(transform::apply)
             .toList();
+    }
+
+    // Parse and process a JSONL string
+    public List<JqValue> processJsonl(String jsonlContent) {
+        List<JqValue> inputs = JqValues.parseAll(jsonlContent);
+        return transform.applyAll(inputs);
     }
 
     // Stream processing with fastjson2
@@ -1007,6 +1115,12 @@ List<JqValue> applyAll(JqValue input)              // all results
 List<JqValue> applyAll(JqValue input, Environment env)
 void apply(JqValue input, Consumer<JqValue> output) // streaming
 
+// Multi-input API (JSONL-style, reuses single VM)
+List<JqValue> applyAll(Iterable<JqValue> inputs)   // all inputs, all results
+List<JqValue> applyAll(Iterable<JqValue> inputs, Environment env)
+void applyAll(Iterable<JqValue> inputs, Consumer<JqValue> output)
+Stream<JqValue> stream(Iterable<JqValue> inputs)   // stream of results
+
 // Tree-walker (alternative engine)
 List<JqValue> applyTreeWalker(JqValue input)
 List<JqValue> applyTreeWalker(JqValue input, Environment env)
@@ -1014,6 +1128,13 @@ List<JqValue> applyTreeWalker(JqValue input, Environment env)
 // Utilities
 String expression()                                // original filter string
 Bytecode getBytecode()                             // compiled bytecode
+```
+
+### JqValues
+
+```java
+static JqValue parse(String json)              // parse a single JSON value
+static List<JqValue> parseAll(String json)     // parse JSONL / whitespace-separated JSON values
 ```
 
 ### JqValue
