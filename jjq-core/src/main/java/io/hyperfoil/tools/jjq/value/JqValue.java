@@ -36,6 +36,50 @@ public sealed interface JqValue extends Comparable<JqValue>
     default List<JqValue> arrayValue() { throw new JqTypeError("Cannot get array from " + type()); }
     default Map<String, JqValue> objectValue() { throw new JqTypeError("Cannot get object from " + type()); }
 
+    // Safe accessors with defaults — avoid instanceof checks and JqTypeError for optional access
+
+    /**
+     * Return the string value, or the default if this is not a string.
+     */
+    default String asString(String defaultValue) {
+        return isString() ? stringValue() : defaultValue;
+    }
+
+    /**
+     * Return the long value, or the default if this is not a number.
+     */
+    default long asLong(long defaultValue) {
+        return isNumber() ? longValue() : defaultValue;
+    }
+
+    /**
+     * Return the double value, or the default if this is not a number.
+     */
+    default double asDouble(double defaultValue) {
+        return isNumber() ? doubleValue() : defaultValue;
+    }
+
+    /**
+     * Return the boolean value, or the default if this is not a boolean.
+     */
+    default boolean asBoolean(boolean defaultValue) {
+        return isBoolean() ? booleanValue() : defaultValue;
+    }
+
+    /**
+     * Return the array elements, or an empty list if this is not an array.
+     */
+    default List<JqValue> asList() {
+        return isArray() ? arrayValue() : List.of();
+    }
+
+    /**
+     * Return the object entries, or an empty map if this is not an object.
+     */
+    default Map<String, JqValue> asMap() {
+        return isObject() ? objectValue() : Map.of();
+    }
+
     default int length() {
         return switch (this) {
             case JqNull ignored -> 0;

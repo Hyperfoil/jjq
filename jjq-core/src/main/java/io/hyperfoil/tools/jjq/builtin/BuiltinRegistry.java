@@ -1031,11 +1031,23 @@ public final class BuiltinRegistry {
         });
 
         register("input", 0, (input, args, env, eval, out) -> {
-            // Placeholder - will be implemented in CLI context
+            if (env.hasInputs()) {
+                JqValue next = env.nextInput();
+                if (next != null) {
+                    out.accept(next);
+                    return;
+                }
+            }
             throw new JqException("input not available in this context");
         });
 
         register("inputs", 0, (input, args, env, eval, out) -> {
+            if (env.hasInputs()) {
+                for (JqValue v : env.remainingInputs()) {
+                    out.accept(v);
+                }
+                return;
+            }
             throw new JqException("inputs not available in this context");
         });
 

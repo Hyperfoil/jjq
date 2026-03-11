@@ -13,6 +13,8 @@ public final class Environment {
     private final Map<String, JqValue> variables;
     private Map<String, FuncDef> functions;
     private Map<String, FilterClosure> filterArgs;
+    private List<JqValue> inputs;
+    private int inputIndex;
 
     public record FuncDef(String name, List<String> params, JqExpr body, Environment closureEnv) {}
 
@@ -32,6 +34,22 @@ public final class Environment {
         this.parent = parent;
         this.depth = depth;
         this.variables = new HashMap<>(4);
+    }
+
+    /**
+     * Create an Environment with an input stream pre-configured.
+     * This is a convenience for the common null-input pattern where
+     * {@code input} and {@code inputs} builtins read from a list of values.
+     *
+     * <pre>{@code
+     * var env = Environment.withInputs(List.of(val1, val2, val3));
+     * var results = program.applyAll(JqNull.NULL, env);
+     * }</pre>
+     */
+    public static Environment withInputs(List<JqValue> inputs) {
+        Environment env = new Environment();
+        env.setInputs(inputs);
+        return env;
     }
 
     public Environment child() {
@@ -55,6 +73,17 @@ public final class Environment {
         if (val != null) return val;
         if (parent != null) return parent.getVariable(name);
         throw new JqException("Undefined variable: $" + name);
+    }
+
+    /**
+     * Look up a variable, returning null if not defined.
+     * Unlike {@link #getVariable(String)}, this does not throw for undefined variables.
+     */
+    public JqValue findVariable(String name) {
+        JqValue val = variables.get(name);
+        if (val != null) return val;
+        if (parent != null) return parent.findVariable(name);
+        return null;
     }
 
     public boolean hasVariable(String name) {
@@ -89,5 +118,54 @@ public final class Environment {
         }
         if (parent != null) return parent.getFilterArg(name);
         return null;
+    }
+
+    /**
+     * Set the input stream for {@code input} and {@code inputs} builtins.
+     * This provides the list of values that {@code input} reads one-at-a-time
+     * and {@code inputs} reads all-at-once, matching jq's {@code --null-input}
+     * with multi-file semantics.
+     */
+    public void setInputs(List<JqValue> inputs) {
+        this.inputs = inputs;
+        this.inputIndex = 0;
+    }
+
+    /**
+     * Returns true if an input stream has been configured via {@link #setInputs(List)}.
+     */
+    public boolean hasInputs() {
+        if (inputs != null) return true;
+        if (parent != null) return parent.hasInputs();
+        return false;
+    }
+
+    /**
+     * Read the next value from the input stream (for the {@code input} builtin).
+     * Returns null if no more inputs are available.
+     */
+    public JqValue nextInput() {
+        if (inputs != null) {
+            if (inputIndex < inputs.size()) {
+                return inputs.get(inputIndex++);
+            }
+            return null;
+        }
+        if (parent != null) return parent.nextInput();
+        return null;
+    }
+
+    /**
+     * Return all remaining values from the input stream (for the {@code inputs} builtin).
+     * After this call, the input stream is fully consumed.
+     */
+    public List<JqValue> remainingInputs() {
+        if (inputs != null) {
+            List<JqValue> remaining = inputs.subList(inputIndex, inputs.size());
+            inputIndex = inputs.size();
+            return remaining;
+        }
+        if (parent != null) return parent.remainingInputs();
+        return List.of();
     }
 }

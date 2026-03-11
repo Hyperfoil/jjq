@@ -638,4 +638,223 @@ class Phase2Test {
             assertEquals("{\"a\":1,\"b\":2,\"c\":3}", result.toJsonString());
         }
     }
+
+    // =========================================================================
+    // Input Stream API — input/inputs builtins with Environment.setInputs()
+    // =========================================================================
+
+    @Nested
+    class InputStreamApi {
+
+        @Test
+        void testInputsReadsAllValues() {
+            // null-input mode: [inputs] collects all input values
+            JqProgram program = JqProgram.compile("[inputs]");
+            Environment env = new Environment();
+            env.setInputs(List.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3)));
+            List<JqValue> results = program.applyAll(JqNull.NULL, env);
+            assertEquals(1, results.size());
+            assertEquals("[1,2,3]", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testInputReadsOneAtATime() {
+            // input reads the next value each time it's called
+            JqProgram program = JqProgram.compile("[input, input]");
+            Environment env = new Environment();
+            env.setInputs(List.of(JqString.of("a"), JqString.of("b"), JqString.of("c")));
+            List<JqValue> results = program.applyAll(JqNull.NULL, env);
+            assertEquals(1, results.size());
+            assertEquals("[\"a\",\"b\"]", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testInputsWithTransform() {
+            // [inputs | .name] — extract field from each input
+            JqProgram program = JqProgram.compile("[inputs | .name]");
+            Environment env = new Environment();
+            env.setInputs(List.of(
+                    JqValues.parse("{\"name\":\"alice\"}"),
+                    JqValues.parse("{\"name\":\"bob\"}")
+            ));
+            List<JqValue> results = program.applyAll(JqNull.NULL, env);
+            assertEquals("[\"alice\",\"bob\"]", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testInputsEmptyStream() {
+            // [inputs] with no inputs produces empty array
+            JqProgram program = JqProgram.compile("[inputs]");
+            Environment env = new Environment();
+            env.setInputs(List.of());
+            List<JqValue> results = program.applyAll(JqNull.NULL, env);
+            assertEquals("[]", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testInputWithoutSetInputsThrows() {
+            // input without setInputs should throw
+            JqProgram program = JqProgram.compile("input");
+            assertThrows(Exception.class, () -> program.applyAll(JqNull.NULL));
+        }
+
+        @Test
+        void testFirstInputThenInputs() {
+            // first(input), then [inputs] for remaining
+            JqProgram program = JqProgram.compile("{first: input, rest: [inputs]}");
+            Environment env = new Environment();
+            env.setInputs(List.of(JqNumber.of(10), JqNumber.of(20), JqNumber.of(30)));
+            List<JqValue> results = program.applyAll(JqNull.NULL, env);
+            assertEquals(1, results.size());
+            assertEquals("{\"first\":10,\"rest\":[20,30]}", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testWithInputsFactory() {
+            // Environment.withInputs() convenience factory
+            JqProgram program = JqProgram.compile("[inputs]");
+            var env = Environment.withInputs(List.of(JqNumber.of(1), JqNumber.of(2)));
+            List<JqValue> results = program.applyAll(JqNull.NULL, env);
+            assertEquals("[1,2]", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testApplyNullInput() {
+            // JqProgram.applyNullInput() convenience method
+            JqProgram program = JqProgram.compile("[inputs | . * 2]");
+            List<JqValue> results = program.applyNullInput(
+                    List.of(JqNumber.of(3), JqNumber.of(5), JqNumber.of(7)));
+            assertEquals(1, results.size());
+            assertEquals("[6,10,14]", results.getFirst().toJsonString());
+        }
+
+        @Test
+        void testApplyNullInputWithTransform() {
+            // applyNullInput with object extraction
+            JqProgram program = JqProgram.compile("[inputs | {name: .name, upper: (.name | ascii_upcase)}]");
+            List<JqValue> results = program.applyNullInput(List.of(
+                    JqValues.parse("{\"name\":\"alice\",\"age\":30}"),
+                    JqValues.parse("{\"name\":\"bob\",\"age\":25}")
+            ));
+            assertEquals(1, results.size());
+            assertEquals("[{\"name\":\"alice\",\"upper\":\"ALICE\"},{\"name\":\"bob\",\"upper\":\"BOB\"}]",
+                    results.getFirst().toJsonString());
+        }
+    }
+
+    // =========================================================================
+    // Environment API — findVariable, withInputs
+    // =========================================================================
+
+    @Nested
+    class EnvironmentApi {
+
+        @Test
+        void testFindVariableReturnsNullWhenUndefined() {
+            Environment env = new Environment();
+            assertNull(env.findVariable("missing"));
+        }
+
+        @Test
+        void testFindVariableReturnsValueWhenDefined() {
+            Environment env = new Environment();
+            env.setVariable("x", JqNumber.of(42));
+            assertEquals(JqNumber.of(42), env.findVariable("x"));
+        }
+
+        @Test
+        void testFindVariableSearchesParent() {
+            Environment parent = new Environment();
+            parent.setVariable("x", JqString.of("hello"));
+            Environment child = parent.child();
+            assertEquals(JqString.of("hello"), child.findVariable("x"));
+            assertNull(child.findVariable("y"));
+        }
+
+        @Test
+        void testGetVariableThrowsWhenUndefined() {
+            Environment env = new Environment();
+            assertThrows(Exception.class, () -> env.getVariable("missing"));
+        }
+    }
+
+    // =========================================================================
+    // JqValue safe accessors
+    // =========================================================================
+
+    @Nested
+    class SafeAccessors {
+
+        @Test
+        void testAsStringReturnsValueForString() {
+            assertEquals("hello", JqString.of("hello").asString("default"));
+        }
+
+        @Test
+        void testAsStringReturnsDefaultForNonString() {
+            assertEquals("default", JqNumber.of(42).asString("default"));
+            assertEquals("default", JqNull.NULL.asString("default"));
+            assertEquals("default", JqBoolean.TRUE.asString("default"));
+        }
+
+        @Test
+        void testAsLongReturnsValueForNumber() {
+            assertEquals(42, JqNumber.of(42).asLong(0));
+        }
+
+        @Test
+        void testAsLongReturnsDefaultForNonNumber() {
+            assertEquals(-1, JqString.of("hello").asLong(-1));
+            assertEquals(0, JqNull.NULL.asLong(0));
+        }
+
+        @Test
+        void testAsDoubleReturnsValueForNumber() {
+            assertEquals(3.14, JqNumber.of(3.14).asDouble(0.0), 0.001);
+        }
+
+        @Test
+        void testAsDoubleReturnsDefaultForNonNumber() {
+            assertEquals(0.0, JqNull.NULL.asDouble(0.0), 0.001);
+        }
+
+        @Test
+        void testAsBooleanReturnsValueForBoolean() {
+            assertTrue(JqBoolean.TRUE.asBoolean(false));
+            assertFalse(JqBoolean.FALSE.asBoolean(true));
+        }
+
+        @Test
+        void testAsBooleanReturnsDefaultForNonBoolean() {
+            assertTrue(JqNull.NULL.asBoolean(true));
+            assertFalse(JqNumber.of(1).asBoolean(false));
+        }
+
+        @Test
+        void testAsListReturnsElementsForArray() {
+            JqArray arr = JqArray.of(List.of(JqNumber.of(1), JqNumber.of(2)));
+            assertEquals(2, arr.asList().size());
+            assertEquals(JqNumber.of(1), arr.asList().get(0));
+        }
+
+        @Test
+        void testAsListReturnsEmptyForNonArray() {
+            assertEquals(List.of(), JqNull.NULL.asList());
+            assertEquals(List.of(), JqString.of("hello").asList());
+            assertEquals(List.of(), JqNumber.of(42).asList());
+        }
+
+        @Test
+        void testAsMapReturnsEntriesForObject() {
+            JqObject obj = JqObject.of(java.util.Map.of("a", JqNumber.of(1)));
+            assertEquals(1, obj.asMap().size());
+            assertEquals(JqNumber.of(1), obj.asMap().get("a"));
+        }
+
+        @Test
+        void testAsMapReturnsEmptyForNonObject() {
+            assertEquals(java.util.Map.of(), JqNull.NULL.asMap());
+            assertEquals(java.util.Map.of(), JqArray.of(List.of()).asMap());
+        }
+    }
 }

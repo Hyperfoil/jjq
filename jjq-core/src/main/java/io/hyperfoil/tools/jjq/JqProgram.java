@@ -5,6 +5,7 @@ import io.hyperfoil.tools.jjq.builtin.BuiltinRegistry;
 import io.hyperfoil.tools.jjq.evaluator.Environment;
 
 import io.hyperfoil.tools.jjq.parser.Parser;
+import io.hyperfoil.tools.jjq.value.JqNull;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.vm.Bytecode;
 import io.hyperfoil.tools.jjq.vm.Compiler;
@@ -91,6 +92,25 @@ public final class JqProgram {
         for (JqValue v : applyAll(input)) {
             output.accept(v);
         }
+    }
+
+    // ========================================================================
+    //  Null-input API — jq's --null-input mode
+    // ========================================================================
+
+    /**
+     * Execute with null input, making the given values available via the
+     * {@code input} and {@code inputs} builtins. This is equivalent to
+     * jq's {@code --null-input} flag when processing multiple files.
+     *
+     * <pre>{@code
+     * var program = JqProgram.compile("[inputs | .name]");
+     * List<JqValue> results = program.applyNullInput(List.of(obj1, obj2, obj3));
+     * // results: [["alice", "bob", "charlie"]]
+     * }</pre>
+     */
+    public List<JqValue> applyNullInput(List<JqValue> inputs) {
+        return applyAll(JqNull.NULL, Environment.withInputs(inputs));
     }
 
     // ========================================================================
