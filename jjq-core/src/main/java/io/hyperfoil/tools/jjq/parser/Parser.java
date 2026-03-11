@@ -176,7 +176,19 @@ public final class Parser {
                         var loc = SourceLocation.from(t);
                         expr = new PipeExpr(expr, new DotFieldExpr(t.value(), loc), loc);
                     } else {
-                        break;
+                        // bare dot — check for ."string" field access or .[...] iteration/indexing
+                        var loc = SourceLocation.from(t);
+                        Token next = tokens.get(pos + 1);
+                        if (next.type() == TokenType.STRING) {
+                            advance(); // consume bare dot
+                            advance(); // consume string
+                            expr = new PipeExpr(expr, new DotFieldExpr(next.value(), loc), loc);
+                        } else if (next.type() == TokenType.LBRACKET) {
+                            advance(); // consume bare dot
+                            // let the LBRACKET case handle the rest on next iteration
+                        } else {
+                            return expr;
+                        }
                     }
                 }
                 case LBRACKET -> {
@@ -227,6 +239,11 @@ public final class Parser {
             return new DotFieldExpr(t.value(), loc);
         }
         // bare .
+        if (peek().type() == TokenType.STRING) {
+            // ."string-field" — field access with quoted string key
+            Token strToken = advance();
+            return new DotFieldExpr(strToken.value(), loc);
+        }
         if (peek().type() == TokenType.LBRACKET) {
             var bracketLoc = SourceLocation.from(peek());
             advance();
