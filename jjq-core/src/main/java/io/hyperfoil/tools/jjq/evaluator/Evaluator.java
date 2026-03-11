@@ -89,7 +89,7 @@ public final class Evaluator {
                             output.accept(v);
                         }
                     } else if (base instanceof JqNull) {
-                        // null | .[] produces nothing (empty)
+                        throw new JqException("Cannot iterate over null (null)");
                     } else {
                         throw new JqException("Cannot iterate over " + base.type().jqName());
                     }
@@ -711,6 +711,10 @@ public final class Evaluator {
                         output.accept(JqArray.of(new ArrayList<>(prefix)));
                         prefix.removeLast();
                     }
+                } else if (base instanceof JqNull) {
+                    throw new JqException("Cannot iterate over null (null)");
+                } else {
+                    throw new JqException("Cannot iterate over " + base.type().jqName());
                 }
             }
             case PipeExpr pipe -> {

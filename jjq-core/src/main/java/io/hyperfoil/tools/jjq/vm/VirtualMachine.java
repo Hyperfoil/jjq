@@ -290,7 +290,7 @@ public final class VirtualMachine {
                                 doBacktrack();
                             }
                         } else if (val instanceof JqNull) {
-                            doBacktrack();
+                            throw new JqException("Cannot iterate over null (null)");
                         } else {
                             throw new JqException("Cannot iterate over " + val.type().jqName());
                         }
