@@ -112,7 +112,10 @@ public final class Opcode {
     // Fused select-iterate: [.[] | select(cond) | expr]
     public static final int COLLECT_SELECT_ITERATE = 70;
 
-    public static final int COUNT = 71;
+    // No-op (replaces dead JUMP-to-next instructions)
+    public static final int NOP = 71;
+
+    public static final int COUNT = 72;
 
     private static final String[] NAMES = new String[COUNT];
     static {
@@ -187,6 +190,7 @@ public final class Opcode {
         NAMES[CALL_FUNC] = "CALL_FUNC";
         NAMES[EVAL_AST] = "EVAL_AST";
         NAMES[COLLECT_SELECT_ITERATE] = "COLLECT_SELECT_ITERATE";
+        NAMES[NOP] = "NOP";
     }
 
     public static String name(int op) {

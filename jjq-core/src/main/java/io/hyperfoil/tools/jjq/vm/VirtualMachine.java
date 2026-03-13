@@ -16,15 +16,17 @@ public final class VirtualMachine {
     private static final int INIT_TRY = 16;
     private static final int INIT_COLLECT = 16;
 
-    private enum ProgramShape { IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, GENERAL }
+    private enum ProgramShape { IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, PIPE_FIELD_ARITH, GENERAL }
 
     private final Bytecode bytecode;
     private final BuiltinRegistry builtins;
     private final Evaluator treeWalker;
     private final ProgramShape shape;
     private final boolean needsEnv;
-    private final String fastField1;  // cached for FIELD_ACCESS / FIELD_ACCESS2
+    private final String fastField1;  // cached for FIELD_ACCESS / FIELD_ACCESS2 / PIPE_FIELD_ARITH
     private final String fastField2;  // cached for FIELD_ACCESS2
+    private final JqValue fastConst;  // cached for PIPE_FIELD_ARITH
+    private final int fastArithOp;    // cached for PIPE_FIELD_ARITH
 
     // Pre-allocated VM state (reused across executions)
     private JqValue[] stack;
@@ -88,13 +90,25 @@ public final class VirtualMachine {
         if (shape == ProgramShape.FIELD_ACCESS) {
             fastField1 = bytecode.name(bytecode.get(1).arg1());
             fastField2 = null;
+            fastConst = null;
+            fastArithOp = 0;
         } else if (shape == ProgramShape.FIELD_ACCESS2) {
             var inst = bytecode.get(1);
             fastField1 = bytecode.name(inst.arg1());
             fastField2 = bytecode.name(inst.arg2());
+            fastConst = null;
+            fastArithOp = 0;
+        } else if (shape == ProgramShape.PIPE_FIELD_ARITH) {
+            // Pattern: LOAD_INPUT(0) DOT_FIELD(1) SET_INPUT_PEEK(2) NOP(3) PUSH_CONST(4) ARITH(5) OUTPUT(6) HALT(7)
+            fastField1 = bytecode.name(bytecode.arg1s()[1]);
+            fastField2 = null;
+            fastConst = bytecode.constant(bytecode.arg1s()[4]);
+            fastArithOp = bytecode.ops()[5];
         } else {
             fastField1 = null;
             fastField2 = null;
+            fastConst = null;
+            fastArithOp = 0;
         }
     }
 
@@ -123,7 +137,22 @@ public final class VirtualMachine {
             }
         }
 
+        // Pipe field arith: LOAD_INPUT, DOT_FIELD, SET_INPUT_PEEK, NOP, PUSH_CONST, ARITH, OUTPUT, HALT
+        if (bytecode.size() == 8) {
+            int[] ops = bytecode.ops();
+            if (ops[0] == Opcode.LOAD_INPUT && ops[1] == Opcode.DOT_FIELD
+                    && ops[2] == Opcode.SET_INPUT_PEEK && ops[3] == Opcode.NOP
+                    && ops[4] == Opcode.PUSH_CONST && isArithOp(ops[5])
+                    && ops[6] == Opcode.OUTPUT && ops[7] == Opcode.HALT) {
+                return ProgramShape.PIPE_FIELD_ARITH;
+            }
+        }
+
         return ProgramShape.GENERAL;
+    }
+
+    private static boolean isArithOp(int op) {
+        return op == Opcode.ADD || op == Opcode.SUB || op == Opcode.MUL || op == Opcode.DIV || op == Opcode.MOD;
     }
 
     private boolean detectNeedsEnv() {
@@ -149,6 +178,8 @@ public final class VirtualMachine {
                 JqValue mid = fieldAccess(inputValue, fastField1);
                 return List.of(fieldAccess(mid, fastField2));
             }
+            case PIPE_FIELD_ARITH:
+                return List.of(applyArith(fieldAccess(inputValue, fastField1), fastConst, fastArithOp));
             default:
                 break;
         }
@@ -170,6 +201,8 @@ public final class VirtualMachine {
                 JqValue mid = fieldAccess(inputValue, fastField1);
                 return fieldAccess(mid, fastField2);
             }
+            case PIPE_FIELD_ARITH:
+                return applyArith(fieldAccess(inputValue, fastField1), fastConst, fastArithOp);
             default:
                 break;
         }
@@ -192,6 +225,17 @@ public final class VirtualMachine {
         runLoop();
 
         return firstOutput != null ? firstOutput : JqNull.NULL;
+    }
+
+    private static JqValue applyArith(JqValue left, JqValue right, int op) {
+        return switch (op) {
+            case Opcode.ADD -> left.add(right);
+            case Opcode.SUB -> left.subtract(right);
+            case Opcode.MUL -> left.multiply(right);
+            case Opcode.DIV -> left.divide(right);
+            case Opcode.MOD -> left.modulo(right);
+            default -> throw new JqException("Unsupported arithmetic op: " + op);
+        };
     }
 
     private static JqValue fieldAccess(JqValue val, String field) {
@@ -222,15 +266,23 @@ public final class VirtualMachine {
     }
 
     private void runLoop() {
-        // Inlined dispatch loop (avoids per-instruction method call overhead)
-        while (!halted && pc < bytecode.size()) {
-            var inst = bytecode.get(pc);
+        // Extract arrays to locals for zero-overhead dispatch
+        final int[] ops = bytecode.ops();
+        final int[] arg1s = bytecode.arg1s();
+        final int[] arg2s = bytecode.arg2s();
+        final JqValue[] consts = bytecode.constants();
+        final String[] names = bytecode.names();
+        final int codeSize = ops.length;
+
+        while (!halted && pc < codeSize) {
+            final int curPc = pc;
             pc++;
 
             try {
-                switch (inst.op()) {
+                switch (ops[curPc]) {
+                    case NOP -> {}
                     // Constants & Stack
-                    case PUSH_CONST -> push(bytecode.constant(inst.arg1()));
+                    case PUSH_CONST -> push(consts[arg1s[curPc]]);
                     case PUSH_NULL -> push(JqNull.NULL);
                     case PUSH_TRUE -> push(JqBoolean.TRUE);
                     case PUSH_FALSE -> push(JqBoolean.FALSE);
@@ -251,7 +303,7 @@ public final class VirtualMachine {
                     // Field access
                     case DOT_FIELD -> {
                         JqValue val = pop();
-                        String field = bytecode.name(inst.arg1());
+                        String field = names[arg1s[curPc]];
                         if (val instanceof JqObject obj) {
                             push(obj.get(field));
                         } else if (val instanceof JqNull) {
@@ -299,8 +351,8 @@ public final class VirtualMachine {
                     // Compound field access
                     case DOT_FIELD2 -> {
                         JqValue val = pop();
-                        String f1 = bytecode.name(inst.arg1());
-                        String f2 = bytecode.name(inst.arg2());
+                        String f1 = names[arg1s[curPc]];
+                        String f2 = names[arg2s[curPc]];
                         JqValue mid;
                         if (val instanceof JqObject obj) mid = obj.get(f1);
                         else if (val instanceof JqNull) mid = JqNull.NULL;
@@ -544,13 +596,13 @@ public final class VirtualMachine {
                     case NOT -> push(JqBoolean.of(!pop().isTruthy()));
 
                     // Control flow
-                    case FORK -> btPush(inst.arg1(), sp, input, env, null);
+                    case FORK -> btPush(arg1s[curPc], sp, input, env, null);
 
-                    case JUMP -> pc = inst.arg1();
+                    case JUMP -> pc = arg1s[curPc];
 
-                    case JUMP_IF_TRUE -> { if (pop().isTruthy()) pc = inst.arg1(); }
+                    case JUMP_IF_TRUE -> { if (pop().isTruthy()) pc = arg1s[curPc]; }
 
-                    case JUMP_IF_FALSE -> { if (!pop().isTruthy()) pc = inst.arg1(); }
+                    case JUMP_IF_FALSE -> { if (!pop().isTruthy()) pc = arg1s[curPc]; }
 
                     case BACKTRACK -> doBacktrack();
 
@@ -577,7 +629,7 @@ public final class VirtualMachine {
 
                     // Variables
                     case LOAD_VAR -> {
-                        String name = bytecode.name(inst.arg1());
+                        String name = names[arg1s[curPc]];
                         if ("ENV".equals(name)) {
                             var map = new java.util.LinkedHashMap<String, JqValue>();
                             System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
@@ -593,13 +645,13 @@ public final class VirtualMachine {
                     }
 
                     case STORE_VAR -> {
-                        String name = bytecode.name(inst.arg1());
+                        String name = names[arg1s[curPc]];
                         env.setVariable(name, pop());
                     }
 
                     // Indexed variable slots
-                    case LOAD_SLOT -> { JqValue sv = varSlots[inst.arg1()]; push(sv != null ? sv : JqNull.NULL); }
-                    case STORE_SLOT -> varSlots[inst.arg1()] = pop();
+                    case LOAD_SLOT -> { JqValue sv = varSlots[arg1s[curPc]]; push(sv != null ? sv : JqNull.NULL); }
+                    case STORE_SLOT -> varSlots[arg1s[curPc]] = pop();
 
                     // Scope
                     case PUSH_SCOPE -> env = env.child();
@@ -624,7 +676,7 @@ public final class VirtualMachine {
                     // Fused collect-iterate: [.[] | simple-expr]
                     case COLLECT_ITERATE -> {
                         JqValue val = pop(); // the array to iterate
-                        int bodyLen = inst.arg1();
+                        int bodyLen = arg1s[curPc];
                         int bodyStart = pc;
                         pc = bodyStart + bodyLen; // skip body in main loop
                         if (val instanceof JqArray arr) {
@@ -639,7 +691,7 @@ public final class VirtualMachine {
                     // Fused collect-select-iterate: [.[] | select(cond) | expr]
                     case COLLECT_SELECT_ITERATE -> {
                         JqValue val = pop();
-                        int bodyLen = inst.arg1();
+                        int bodyLen = arg1s[curPc];
                         int bodyStart = pc;
                         pc = bodyStart + bodyLen; // skip body in main loop
                         if (val instanceof JqArray arr) {
@@ -654,8 +706,8 @@ public final class VirtualMachine {
                     // Fused reduce-iterate: reduce .[] as $x (init; . op $x)
                     case REDUCE_ITERATE -> {
                         JqValue val = pop(); // the array to iterate
-                        JqValue initVal = bytecode.constant(inst.arg1());
-                        int op = inst.arg2();
+                        JqValue initVal = consts[arg1s[curPc]];
+                        int op = arg2s[curPc];
                         if (val instanceof JqArray arr) {
                             push(reduceIterateArray(arr, initVal, op));
                         } else if (val instanceof JqNull) {
@@ -666,19 +718,19 @@ public final class VirtualMachine {
                     }
 
                     // Try-catch
-                    case TRY_BEGIN -> tryStack[tp++] = new TryPoint(inst.arg1(), btp);
+                    case TRY_BEGIN -> tryStack[tp++] = new TryPoint(arg1s[curPc], btp);
 
                     case TRY_END -> tp--;
 
                     // Function calls (delegate to tree-walker)
                     case CALL_FUNC -> {
-                        var ci = bytecode.callInfo(inst.arg1());
+                        var ci = bytecode.callInfo(arg1s[curPc]);
                         evalViaTreeWalker(ci.name(), ci.arity(), ci.args());
                     }
 
                     // Sub-expression evaluation (delegate to tree-walker)
                     case EVAL_AST -> {
-                        JqExpr subExpr = bytecode.subExpr(inst.arg1());
+                        JqExpr subExpr = bytecode.subExpr(arg1s[curPc]);
                         evalSubExpr(subExpr);
                     }
                 }
@@ -810,13 +862,13 @@ public final class VirtualMachine {
         // Fast path: detect common body patterns to avoid stack/dispatch overhead
         // Pattern: LOAD_INPUT, PUSH_CONST <c>, <arith-op> (bodyLen == 3)
         if (bodyLen == 3) {
-            var b0 = bytecode.get(bodyStart);
-            var b1 = bytecode.get(bodyStart + 1);
-            var b2 = bytecode.get(bodyStart + 2);
-            if (b0.op() == Opcode.LOAD_INPUT && b1.op() == Opcode.PUSH_CONST) {
-                JqValue constVal = bytecode.constant(b1.arg1());
+            final int[] ops = bytecode.ops();
+            final int[] arg1s = bytecode.arg1s();
+            final JqValue[] consts = bytecode.constants();
+            if (ops[bodyStart] == Opcode.LOAD_INPUT && ops[bodyStart + 1] == Opcode.PUSH_CONST) {
+                JqValue constVal = consts[arg1s[bodyStart + 1]];
                 // For integer * integer, use raw long math
-                if (b2.op() == Opcode.MUL && constVal instanceof JqNumber cn && cn.isIntegral()) {
+                if (ops[bodyStart + 2] == Opcode.MUL && constVal instanceof JqNumber cn && cn.isIntegral()) {
                     long multiplier = cn.longValue();
                     var result = new ArrayList<JqValue>(size);
                     boolean allIntegral = true;
@@ -835,7 +887,7 @@ public final class VirtualMachine {
                 var result = new ArrayList<JqValue>(size);
                 for (int i = 0; i < size; i++) {
                     JqValue item = items.get(i);
-                    result.add(switch (b2.op()) {
+                    result.add(switch (ops[bodyStart + 2]) {
                         case ADD -> item.add(constVal);
                         case SUB -> item.subtract(constVal);
                         case MUL -> item.multiply(constVal);
@@ -899,14 +951,20 @@ public final class VirtualMachine {
     }
 
     private void collectIterateBody(int bodyStart, int bodyLen) {
+        final int[] ops = bytecode.ops();
+        final int[] arg1s = bytecode.arg1s();
+        final int[] arg2s = bytecode.arg2s();
+        final JqValue[] consts = bytecode.constants();
+        final String[] names = bytecode.names();
         int bodyPc = bodyStart;
         int bodyEnd = bodyStart + bodyLen;
         while (bodyPc < bodyEnd) {
-            var bodyInst = bytecode.get(bodyPc);
+            int bpc = bodyPc;
             bodyPc++;
-            switch (bodyInst.op()) {
+            switch (ops[bpc]) {
+                case NOP -> {}
                 case LOAD_INPUT -> push(input);
-                case PUSH_CONST -> push(bytecode.constant(bodyInst.arg1()));
+                case PUSH_CONST -> push(consts[arg1s[bpc]]);
                 case PUSH_NULL -> push(JqNull.NULL);
                 case PUSH_TRUE -> push(JqBoolean.TRUE);
                 case PUSH_FALSE -> push(JqBoolean.FALSE);
@@ -918,15 +976,15 @@ public final class VirtualMachine {
                 case NEGATE -> push(pop().negate());
                 case DOT_FIELD -> {
                     JqValue v = pop();
-                    String field = bytecode.name(bodyInst.arg1());
+                    String field = names[arg1s[bpc]];
                     if (v instanceof JqObject obj) push(obj.get(field));
                     else if (v instanceof JqNull) push(JqNull.NULL);
                     else throw new JqException("Cannot index " + v.type().jqName() + " with string (\"" + field + "\")");
                 }
                 case DOT_FIELD2 -> {
                     JqValue v = pop();
-                    String f1 = bytecode.name(bodyInst.arg1());
-                    String f2 = bytecode.name(bodyInst.arg2());
+                    String f1 = names[arg1s[bpc]];
+                    String f2 = names[arg2s[bpc]];
                     JqValue mid;
                     if (v instanceof JqObject obj) mid = obj.get(f1);
                     else if (v instanceof JqNull) mid = JqNull.NULL;
@@ -960,12 +1018,12 @@ public final class VirtualMachine {
                 case DUP -> push(peek());
                 case SWAP -> { JqValue a = pop(); JqValue b = pop(); push(a); push(b); }
                 case POP -> pop();
-                case JUMP -> bodyPc = bodyInst.arg1();
-                case JUMP_IF_TRUE -> { if (pop().isTruthy()) bodyPc = bodyInst.arg1(); }
-                case JUMP_IF_FALSE -> { if (!pop().isTruthy()) bodyPc = bodyInst.arg1(); }
+                case JUMP -> bodyPc = arg1s[bpc];
+                case JUMP_IF_TRUE -> { if (pop().isTruthy()) bodyPc = arg1s[bpc]; }
+                case JUMP_IF_FALSE -> { if (!pop().isTruthy()) bodyPc = arg1s[bpc]; }
                 case SET_INPUT_PEEK -> input = peek();
-                case LOAD_SLOT -> { JqValue sv2 = varSlots[bodyInst.arg1()]; push(sv2 != null ? sv2 : JqNull.NULL); }
-                case STORE_SLOT -> varSlots[bodyInst.arg1()] = pop();
+                case LOAD_SLOT -> { JqValue sv2 = varSlots[arg1s[bpc]]; push(sv2 != null ? sv2 : JqNull.NULL); }
+                case STORE_SLOT -> varSlots[arg1s[bpc]] = pop();
                 case BUILTIN_FLOOR -> {
                     JqValue v = pop();
                     if (v instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
@@ -973,7 +1031,7 @@ public final class VirtualMachine {
                 }
                 case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(indexValue(base, idx)); }
                 case SET_INPUT -> input = pop();
-                default -> throw new JqException("Unsupported opcode in COLLECT_ITERATE body: " + bodyInst.op());
+                default -> throw new JqException("Unsupported opcode in COLLECT_ITERATE body: " + ops[bpc]);
             }
         }
     }

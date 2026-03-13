@@ -633,8 +633,8 @@ public final class Compiler {
             // LOAD_INPUT followed by SET_INPUT is a no-op (sets input to itself)
             if (curr.op() == LOAD_INPUT && next.op() == SET_INPUT) {
                 if (!isJumpTarget(i) && !isJumpTarget(i + 1)) {
-                    code.set(i, new Bytecode.Instruction(Opcode.JUMP, i + 2));
-                    code.set(i + 1, new Bytecode.Instruction(Opcode.JUMP, i + 2));
+                    code.set(i, new Bytecode.Instruction(NOP));
+                    code.set(i + 1, new Bytecode.Instruction(NOP));
                 }
             }
 
@@ -642,7 +642,7 @@ public final class Compiler {
             if (curr.op() == SET_INPUT && next.op() == LOAD_INPUT) {
                 if (!isJumpTarget(i) && !isJumpTarget(i + 1)) {
                     code.set(i, new Bytecode.Instruction(SET_INPUT_PEEK));
-                    code.set(i + 1, new Bytecode.Instruction(Opcode.JUMP, i + 2));
+                    code.set(i + 1, new Bytecode.Instruction(NOP));
                 }
             }
         }

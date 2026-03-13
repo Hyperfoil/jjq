@@ -15,6 +15,10 @@ public final class Bytecode {
     public record CallInfo(String name, int arity, List<JqExpr> args) {}
 
     private final Instruction[] code;
+    // Parallel arrays for zero-overhead dispatch (avoids record accessor calls in hot loop)
+    private final int[] ops;
+    private final int[] arg1s;
+    private final int[] arg2s;
     private final JqValue[] constants;
     private final String[] names;
     private final JqExpr[] subExprs;
@@ -34,15 +38,31 @@ public final class Bytecode {
         this.subExprs = subExprs;
         this.callInfos = callInfos;
         this.varSlotCount = varSlotCount;
+        // Build parallel arrays from instruction records
+        this.ops = new int[code.length];
+        this.arg1s = new int[code.length];
+        this.arg2s = new int[code.length];
+        for (int i = 0; i < code.length; i++) {
+            ops[i] = code[i].op();
+            arg1s[i] = code[i].arg1();
+            arg2s[i] = code[i].arg2();
+        }
     }
 
-    public int size() { return code.length; }
+    public int size() { return ops.length; }
     public Instruction get(int pc) { return code[pc]; }
     public JqValue constant(int idx) { return constants[idx]; }
     public String name(int idx) { return names[idx]; }
     public JqExpr subExpr(int idx) { return subExprs[idx]; }
     public CallInfo callInfo(int idx) { return callInfos[idx]; }
     public int varSlotCount() { return varSlotCount; }
+
+    // Direct array accessors for hot-loop dispatch
+    public int[] ops() { return ops; }
+    public int[] arg1s() { return arg1s; }
+    public int[] arg2s() { return arg2s; }
+    public JqValue[] constants() { return constants; }
+    public String[] names() { return names; }
 
     public String disassemble() {
         var sb = new StringBuilder();
