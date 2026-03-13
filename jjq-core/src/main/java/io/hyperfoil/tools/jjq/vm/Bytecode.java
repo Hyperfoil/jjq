@@ -23,20 +23,22 @@ public final class Bytecode {
     private final String[] names;
     private final JqExpr[] subExprs;
     private final CallInfo[] callInfos;
+    private final int[][] objectLayouts;
     private final int varSlotCount;
 
     public Bytecode(Instruction[] code, JqValue[] constants, String[] names,
                     JqExpr[] subExprs, CallInfo[] callInfos) {
-        this(code, constants, names, subExprs, callInfos, 0);
+        this(code, constants, names, subExprs, callInfos, new int[0][], 0);
     }
 
     public Bytecode(Instruction[] code, JqValue[] constants, String[] names,
-                    JqExpr[] subExprs, CallInfo[] callInfos, int varSlotCount) {
+                    JqExpr[] subExprs, CallInfo[] callInfos, int[][] objectLayouts, int varSlotCount) {
         this.code = code;
         this.constants = constants;
         this.names = names;
         this.subExprs = subExprs;
         this.callInfos = callInfos;
+        this.objectLayouts = objectLayouts;
         this.varSlotCount = varSlotCount;
         // Build parallel arrays from instruction records
         this.ops = new int[code.length];
@@ -55,6 +57,8 @@ public final class Bytecode {
     public String name(int idx) { return names[idx]; }
     public JqExpr subExpr(int idx) { return subExprs[idx]; }
     public CallInfo callInfo(int idx) { return callInfos[idx]; }
+    public int[] objectLayout(int idx) { return objectLayouts[idx]; }
+    public int[][] objectLayouts() { return objectLayouts; }
     public int varSlotCount() { return varSlotCount; }
 
     // Direct array accessors for hot-loop dispatch
@@ -82,6 +86,18 @@ public final class Bytecode {
                     sb.append(" ").append(ci.name()).append("/").append(ci.arity());
                 }
                 case Opcode.EVAL_AST -> sb.append(" [").append(inst.arg1()).append("]");
+                case Opcode.BUILD_OBJECT -> {
+                    int count = inst.arg1();
+                    int layoutIdx = inst.arg2();
+                    sb.append(" {");
+                    int[] layout = objectLayouts[layoutIdx];
+                    for (int j = 0; j < count; j++) {
+                        if (j > 0) sb.append(", ");
+                        sb.append(names[layout[j]]);
+                    }
+                    sb.append("}");
+                }
+                case Opcode.STRING_CONCAT -> sb.append(" parts=").append(inst.arg1());
                 default -> {}
             }
             sb.append("\n");

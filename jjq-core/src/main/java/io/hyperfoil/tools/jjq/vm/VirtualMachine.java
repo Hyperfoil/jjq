@@ -272,6 +272,7 @@ public final class VirtualMachine {
         final int[] arg2s = bytecode.arg2s();
         final JqValue[] consts = bytecode.constants();
         final String[] names = bytecode.names();
+        final int[][] objLayouts = bytecode.objectLayouts();
         final int codeSize = ops.length;
 
         while (!halted && pc < codeSize) {
@@ -717,6 +718,40 @@ public final class VirtualMachine {
                         }
                     }
 
+                    // Object construction
+                    case BUILD_OBJECT -> {
+                        int count = arg1s[curPc];
+                        int[] layout = objLayouts[arg2s[curPc]];
+                        var map = new java.util.LinkedHashMap<String, JqValue>(count * 2);
+                        // Values are on stack with first field's value deepest.
+                        // Pop all values (reverse order), then insert in layout order.
+                        JqValue[] vals = new JqValue[count];
+                        for (int i = count - 1; i >= 0; i--) {
+                            vals[i] = pop();
+                        }
+                        for (int i = 0; i < count; i++) {
+                            map.put(names[layout[i]], vals[i]);
+                        }
+                        push(JqObject.ofTrusted(map));
+                    }
+
+                    // String interpolation
+                    case STRING_CONCAT -> {
+                        int partCount = arg1s[curPc];
+                        // Parts are on stack with first part deepest
+                        JqValue[] parts = new JqValue[partCount];
+                        for (int i = partCount - 1; i >= 0; i--) {
+                            parts[i] = pop();
+                        }
+                        var sb = new StringBuilder();
+                        for (int i = 0; i < partCount; i++) {
+                            JqValue v = parts[i];
+                            if (v instanceof JqString s) sb.append(s.stringValue());
+                            else sb.append(v.toJsonString());
+                        }
+                        push(JqString.of(sb.toString()));
+                    }
+
                     // Try-catch
                     case TRY_BEGIN -> tryStack[tp++] = new TryPoint(arg1s[curPc], btp);
 
@@ -1031,6 +1066,27 @@ public final class VirtualMachine {
                 }
                 case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(indexValue(base, idx)); }
                 case SET_INPUT -> input = pop();
+                case BUILD_OBJECT -> {
+                    int count = arg1s[bpc];
+                    int[] layout = bytecode.objectLayout(arg2s[bpc]);
+                    var map = new java.util.LinkedHashMap<String, JqValue>(count * 2);
+                    JqValue[] vals = new JqValue[count];
+                    for (int j = count - 1; j >= 0; j--) vals[j] = pop();
+                    for (int j = 0; j < count; j++) map.put(names[layout[j]], vals[j]);
+                    push(JqObject.ofTrusted(map));
+                }
+                case STRING_CONCAT -> {
+                    int partCount = arg1s[bpc];
+                    JqValue[] parts = new JqValue[partCount];
+                    for (int j = partCount - 1; j >= 0; j--) parts[j] = pop();
+                    var sb = new StringBuilder();
+                    for (int j = 0; j < partCount; j++) {
+                        JqValue v = parts[j];
+                        if (v instanceof JqString s) sb.append(s.stringValue());
+                        else sb.append(v.toJsonString());
+                    }
+                    push(JqString.of(sb.toString()));
+                }
                 default -> throw new JqException("Unsupported opcode in COLLECT_ITERATE body: " + ops[bpc]);
             }
         }

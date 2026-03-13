@@ -115,7 +115,13 @@ public final class Opcode {
     // No-op (replaces dead JUMP-to-next instructions)
     public static final int NOP = 71;
 
-    public static final int COUNT = 72;
+    // Object construction: BUILD_OBJECT arg1=fieldCount, arg2=layoutIdx
+    public static final int BUILD_OBJECT = 72;
+
+    // String concatenation: STRING_CONCAT arg1=partCount
+    public static final int STRING_CONCAT = 73;
+
+    public static final int COUNT = 74;
 
     private static final String[] NAMES = new String[COUNT];
     static {
@@ -191,6 +197,8 @@ public final class Opcode {
         NAMES[EVAL_AST] = "EVAL_AST";
         NAMES[COLLECT_SELECT_ITERATE] = "COLLECT_SELECT_ITERATE";
         NAMES[NOP] = "NOP";
+        NAMES[BUILD_OBJECT] = "BUILD_OBJECT";
+        NAMES[STRING_CONCAT] = "STRING_CONCAT";
     }
 
     public static String name(int op) {

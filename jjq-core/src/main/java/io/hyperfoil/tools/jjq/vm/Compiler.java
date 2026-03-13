@@ -18,6 +18,7 @@ public final class Compiler {
     private final Map<String, Integer> nameIndex = new HashMap<>();
     private final List<JqExpr> subExprs = new ArrayList<>();
     private final List<Bytecode.CallInfo> callInfos = new ArrayList<>();
+    private final List<int[]> objectLayouts = new ArrayList<>();
     // Indexed variable slots (replaces HashMap access for compiler-known variables)
     private final Map<String, Integer> varSlots = new HashMap<>();
     private int nextVarSlot = 0;
@@ -38,8 +39,14 @@ public final class Compiler {
                 names.toArray(new String[0]),
                 subExprs.toArray(new JqExpr[0]),
                 callInfos.toArray(new Bytecode.CallInfo[0]),
+                objectLayouts.toArray(new int[0][]),
                 nextVarSlot
         );
+    }
+
+    private int addObjectLayout(int[] nameIndices) {
+        objectLayouts.add(nameIndices);
+        return objectLayouts.size() - 1;
     }
 
     private int allocSlot(String name) {
@@ -178,7 +185,7 @@ public final class Compiler {
                 JqValue folded = tryFoldArithmetic(arith);
                 if (folded != null) {
                     emit(PUSH_CONST, addConstant(folded));
-                } else if (!modifiesInput(arith.left()) && !modifiesInput(arith.right())
+                } else if (!modifiesInput(arith.left())
                         && !containsGenerator(arith.left()) && !containsGenerator(arith.right())) {
                     compileExpr(arith.left());
                     compileExpr(arith.right());
@@ -199,7 +206,7 @@ public final class Compiler {
                 if (folded != null) {
                     if (folded.equals(JqBoolean.TRUE)) emit(PUSH_TRUE);
                     else emit(PUSH_FALSE);
-                } else if (!modifiesInput(comp.left()) && !modifiesInput(comp.right())
+                } else if (!modifiesInput(comp.left())
                         && !containsGenerator(comp.left()) && !containsGenerator(comp.right())) {
                     compileExpr(comp.left());
                     compileExpr(comp.right());
@@ -400,7 +407,42 @@ public final class Compiler {
 
             case FuncDefExpr _ -> emitEvalAst(expr);
 
-            case StringInterpolationExpr _ -> emitEvalAst(expr);
+            case StringInterpolationExpr si -> {
+                boolean canCompile = true;
+                for (var part : si.parts()) {
+                    if (containsGenerator(part)) {
+                        canCompile = false;
+                        break;
+                    }
+                }
+                if (canCompile) {
+                    int n = si.parts().size();
+                    // Check if any part (except last) modifies input
+                    boolean needsInputSave = false;
+                    if (n > 1) {
+                        for (int i = 0; i < n - 1; i++) {
+                            if (modifiesInput(si.parts().get(i))) {
+                                needsInputSave = true;
+                                break;
+                            }
+                        }
+                    }
+                    for (int i = 0; i < n; i++) {
+                        boolean isLast = (i == n - 1);
+                        if (needsInputSave && !isLast) {
+                            emit(LOAD_INPUT);
+                        }
+                        compileExpr(si.parts().get(i));
+                        if (needsInputSave && !isLast) {
+                            emit(SWAP);
+                            emit(SET_INPUT);
+                        }
+                    }
+                    emit(STRING_CONCAT, n);
+                } else {
+                    emitEvalAst(expr);
+                }
+            }
 
             case AlternativeExpr alt -> {
                 if (isSingleOutputExpr(alt.left()) && isSingleOutputExpr(alt.right())
@@ -420,7 +462,55 @@ public final class Compiler {
 
             case SliceExpr _ -> emitEvalAst(expr);
 
-            case ObjectConstructExpr _ -> emitEvalAst(expr);
+            case ObjectConstructExpr obj -> {
+                // Check if all entries have literal string keys and no generators
+                boolean canCompile = true;
+                for (var entry : obj.entries()) {
+                    if (!(entry.key() instanceof LiteralExpr lit && lit.value() instanceof JqString)) {
+                        canCompile = false;
+                        break;
+                    }
+                    if (containsGenerator(entry.value())) {
+                        canCompile = false;
+                        break;
+                    }
+                }
+                if (canCompile && !obj.entries().isEmpty()) {
+                    // Check if any value expression (except the last) modifies input
+                    boolean needsInputSave = false;
+                    if (obj.entries().size() > 1) {
+                        for (int i = 0; i < obj.entries().size() - 1; i++) {
+                            if (modifiesInput(obj.entries().get(i).value())) {
+                                needsInputSave = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Compile each value expression
+                    int n = obj.entries().size();
+                    for (int i = 0; i < n; i++) {
+                        boolean isLast = (i == n - 1);
+                        if (needsInputSave && !isLast) {
+                            emit(LOAD_INPUT);  // save input on stack
+                        }
+                        compileExpr(obj.entries().get(i).value());
+                        if (needsInputSave && !isLast) {
+                            emit(SWAP);        // move saved input above value
+                            emit(SET_INPUT);   // restore input, pop saved copy
+                        }
+                    }
+                    // Build the name layout
+                    int[] nameIndices = new int[obj.entries().size()];
+                    for (int i = 0; i < obj.entries().size(); i++) {
+                        String key = ((JqString) ((LiteralExpr) obj.entries().get(i).key()).value()).stringValue();
+                        nameIndices[i] = addName(key);
+                    }
+                    int layoutIdx = addObjectLayout(nameIndices);
+                    emit(BUILD_OBJECT, obj.entries().size(), layoutIdx);
+                } else {
+                    emitEvalAst(expr);
+                }
+            }
 
             case UpdateExpr _ -> emitEvalAst(expr);
             case AssignExpr _ -> emitEvalAst(expr);
@@ -470,17 +560,32 @@ public final class Compiler {
      */
     private boolean tryEmitCollectSelectIterate(ArrayConstructExpr arr) {
         JqExpr body = arr.body();
-        // Match: .[] | select(cond) | expr  — a PipeExpr chain
-        // After parsing, this is PipeExpr(PipeExpr(.[] , select(cond)), expr)
+        // Match: .[] | select(cond) | expr
+        // Parser may produce either:
+        //   A) PipeExpr(PipeExpr(.[], select(cond)), expr)  — left-assoc
+        //   B) PipeExpr(.[], PipeExpr(select(cond), expr))  — right-assoc
         if (!(body instanceof PipeExpr outerPipe)) return false;
-        if (!(outerPipe.left() instanceof PipeExpr innerPipe)) return false;
-        if (!(innerPipe.left() instanceof IterateExpr iter)) return false;
-        if (!(iter.expr() instanceof IdentityExpr)) return false;
-        // innerPipe.right() must be select(cond)
-        if (!(innerPipe.right() instanceof FuncCallExpr selectCall)) return false;
-        if (!"select".equals(selectCall.name()) || selectCall.args().size() != 1) return false;
-        JqExpr cond = selectCall.args().getFirst();
-        JqExpr mapExpr = outerPipe.right();
+        JqExpr cond;
+        JqExpr mapExpr;
+        if (outerPipe.left() instanceof PipeExpr innerPipe
+                && innerPipe.left() instanceof IterateExpr iter
+                && iter.expr() instanceof IdentityExpr
+                && innerPipe.right() instanceof FuncCallExpr selectCall
+                && "select".equals(selectCall.name()) && selectCall.args().size() == 1) {
+            // Pattern A: left-associative
+            cond = selectCall.args().getFirst();
+            mapExpr = outerPipe.right();
+        } else if (outerPipe.left() instanceof IterateExpr iter2
+                && iter2.expr() instanceof IdentityExpr
+                && outerPipe.right() instanceof PipeExpr rightPipe
+                && rightPipe.left() instanceof FuncCallExpr selectCall2
+                && "select".equals(selectCall2.name()) && selectCall2.args().size() == 1) {
+            // Pattern B: right-associative
+            cond = selectCall2.args().getFirst();
+            mapExpr = rightPipe.right();
+        } else {
+            return false;
+        }
         // Both condition and map expression must be single-output and not modify input
         if (!isSingleOutputExpr(cond) || modifiesInput(cond)) return false;
         if (!isSingleOutputExpr(mapExpr) || modifiesInput(mapExpr)) return false;
@@ -542,9 +647,33 @@ public final class Compiler {
             case NegateExpr n -> isSingleOutputExpr(n.expr());
             case ArithmeticExpr a -> isSingleOutputExpr(a.left()) && isSingleOutputExpr(a.right());
             case ComparisonExpr c -> isSingleOutputExpr(c.left()) && isSingleOutputExpr(c.right());
+            case LogicalExpr l -> isSingleOutputExpr(l.left()) && isSingleOutputExpr(l.right());
             case NotExpr n -> isSingleOutputExpr(n.expr());
             case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) >= 0
                     && !isFilterBuiltin(fc.name());
+            case ObjectConstructExpr obj -> {
+                boolean allSingle = true;
+                for (var entry : obj.entries()) {
+                    if (!(entry.key() instanceof LiteralExpr lit && lit.value() instanceof JqString)) {
+                        allSingle = false; break;
+                    }
+                    if (!isSingleOutputExpr(entry.value())) {
+                        allSingle = false; break;
+                    }
+                }
+                yield allSingle;
+            }
+            case StringInterpolationExpr si -> {
+                boolean allSingle = true;
+                for (var part : si.parts()) {
+                    if (!isSingleOutputExpr(part)) { allSingle = false; break; }
+                }
+                yield allSingle;
+            }
+            case PipeExpr p -> isSingleOutputExpr(p.left()) && isSingleOutputExpr(p.right());
+            case IndexExpr i -> isSingleOutputExpr(i.expr()) && isSingleOutputExpr(i.index());
+            case IfExpr ifE -> isSingleOutputExpr(ifE.condition()) && isSingleOutputExpr(ifE.thenBranch())
+                    && (ifE.elseBranch() == null || isSingleOutputExpr(ifE.elseBranch()));
             default -> false;
         };
     }
@@ -580,6 +709,27 @@ public final class Compiler {
                     || bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
             case IndexExpr i -> modifiesInput(i.expr()) || modifiesInput(i.index())
                     || bodyUsesTreeWalker(i.expr()) || bodyUsesTreeWalker(i.index());
+            case ObjectConstructExpr obj -> {
+                boolean usesTreeWalker = false;
+                for (var entry : obj.entries()) {
+                    if (!(entry.key() instanceof LiteralExpr lit && lit.value() instanceof JqString)) {
+                        usesTreeWalker = true; break;
+                    }
+                    if (containsGenerator(entry.value()) || bodyUsesTreeWalker(entry.value())) {
+                        usesTreeWalker = true; break;
+                    }
+                }
+                yield usesTreeWalker;
+            }
+            case StringInterpolationExpr si -> {
+                boolean usesTreeWalker = false;
+                for (var part : si.parts()) {
+                    if (containsGenerator(part) || bodyUsesTreeWalker(part)) {
+                        usesTreeWalker = true; break;
+                    }
+                }
+                yield usesTreeWalker;
+            }
             default -> true; // EVAL_AST, CALL_FUNC, etc.
         };
     }
@@ -714,7 +864,26 @@ public final class Compiler {
             case CommaExpr c -> modifiesInput(c.left()) || modifiesInput(c.right());
             case ArithmeticExpr a -> modifiesInput(a.left()) || modifiesInput(a.right());
             case ComparisonExpr c -> modifiesInput(c.left()) || modifiesInput(c.right());
+            case LogicalExpr l -> modifiesInput(l.left()) || modifiesInput(l.right());
+            case NotExpr n -> modifiesInput(n.expr());
+            case FuncCallExpr fc -> !fc.args().isEmpty(); // no-arg builtins don't modify input
             case ArrayConstructExpr a -> a.body() != null && modifiesInput(a.body());
+            case ObjectConstructExpr obj -> {
+                boolean modifies = false;
+                for (var entry : obj.entries()) {
+                    if (modifiesInput(entry.key()) || modifiesInput(entry.value())) {
+                        modifies = true; break;
+                    }
+                }
+                yield modifies;
+            }
+            case StringInterpolationExpr si -> {
+                boolean modifies = false;
+                for (var part : si.parts()) {
+                    if (modifiesInput(part)) { modifies = true; break; }
+                }
+                yield modifies;
+            }
             case PipeExpr _ -> true;
             default -> true;
         };
