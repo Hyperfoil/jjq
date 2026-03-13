@@ -51,17 +51,24 @@ public final class Parser {
 
     private JqExpr parseExpr(int minPrec) {
         JqExpr left = parsePrefixExpr();
+        outer:
         while (true) {
+            // Handle postfix ? and continued postfix operations before checking infix
+            while (peek().type() == TokenType.QUESTION
+                    || (peek().type() == TokenType.DOT && peekIsPostfixDot())
+                    || peek().type() == TokenType.LBRACKET) {
+                if (peek().type() == TokenType.QUESTION) {
+                    advance();
+                    left = new OptionalExpr(left);
+                } else {
+                    left = parsePostfix(left);
+                }
+            }
             Token t = peek();
             int prec = infixPrecedence(t);
             if (prec < minPrec) break;
 
             left = parseInfixExpr(left, prec, t);
-        }
-        // Postfix: ? (optional operator)
-        while (peek().type() == TokenType.QUESTION) {
-            advance();
-            left = new OptionalExpr(left);
         }
         return left;
     }
@@ -77,10 +84,10 @@ public final class Parser {
             case EQ, NEQ, LT, GT, LE, GE -> PREC_COMPARISON;
             case PLUS, MINUS -> PREC_ADD;
             case STAR, SLASH, PERCENT -> PREC_MUL;
-            case ASSIGN -> PREC_PIPE; // = binds like pipe
-            case UPDATE_ASSIGN -> PREC_PIPE;
+            case ASSIGN -> PREC_COMMA; // = binds like comma (tighter than pipe, same as comma)
+            case UPDATE_ASSIGN -> PREC_COMMA;
             case PLUS_ASSIGN, MINUS_ASSIGN, STAR_ASSIGN, SLASH_ASSIGN,
-                 PERCENT_ASSIGN, ALTERNATIVE_ASSIGN -> PREC_PIPE;
+                 PERCENT_ASSIGN, ALTERNATIVE_ASSIGN -> PREC_COMMA;
             default -> -1;
         };
     }
@@ -93,9 +100,16 @@ public final class Parser {
             case AS -> {
                 advance();
                 if (peek().type() == TokenType.VARIABLE) {
-                    // Simple: expr as $var | body
+                    // Simple: expr as $var | body  OR  expr as $var ?// ...
                     advance();
                     String var = previous().value();
+                    if (peek().type() == TokenType.QUESTION && peekAhead(1) != null
+                            && peekAhead(1).type() == TokenType.ALTERNATIVE) {
+                        // ?// alternative destructuring
+                        var patterns = new ArrayList<DestructurePattern>();
+                        patterns.add(new SimplePattern(var));
+                        yield parseAlternativeDestructure(left, patterns, loc);
+                    }
                     expect(TokenType.PIPE);
                     yield new VariableBindExpr(left, var, parseExpr(PREC_PIPE), loc);
                 } else if (peek().type() == TokenType.LBRACKET || peek().type() == TokenType.LBRACE) {
@@ -119,14 +133,14 @@ public final class Parser {
             case STAR -> { advance(); yield new ArithmeticExpr(left, ArithmeticExpr.Op.MUL, parseExpr(PREC_MUL + 1), loc); }
             case SLASH -> { advance(); yield new ArithmeticExpr(left, ArithmeticExpr.Op.DIV, parseExpr(PREC_MUL + 1), loc); }
             case PERCENT -> { advance(); yield new ArithmeticExpr(left, ArithmeticExpr.Op.MOD, parseExpr(PREC_MUL + 1), loc); }
-            case ASSIGN -> { advance(); yield new AssignExpr(left, parseExpr(PREC_PIPE)); }
-            case UPDATE_ASSIGN -> { advance(); yield new UpdateExpr(left, parseExpr(PREC_PIPE)); }
-            case PLUS_ASSIGN -> { advance(); yield new AddAssignExpr(left, parseExpr(PREC_PIPE)); }
-            case MINUS_ASSIGN -> { advance(); yield new SubAssignExpr(left, parseExpr(PREC_PIPE)); }
-            case STAR_ASSIGN -> { advance(); yield new MulAssignExpr(left, parseExpr(PREC_PIPE)); }
-            case SLASH_ASSIGN -> { advance(); yield new DivAssignExpr(left, parseExpr(PREC_PIPE)); }
-            case PERCENT_ASSIGN -> { advance(); yield new ModAssignExpr(left, parseExpr(PREC_PIPE)); }
-            case ALTERNATIVE_ASSIGN -> { advance(); yield new AlternativeAssignExpr(left, parseExpr(PREC_PIPE)); }
+            case ASSIGN -> { advance(); yield new AssignExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case UPDATE_ASSIGN -> { advance(); yield new UpdateExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case PLUS_ASSIGN -> { advance(); yield new AddAssignExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case MINUS_ASSIGN -> { advance(); yield new SubAssignExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case STAR_ASSIGN -> { advance(); yield new MulAssignExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case SLASH_ASSIGN -> { advance(); yield new DivAssignExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case PERCENT_ASSIGN -> { advance(); yield new ModAssignExpr(left, parseExpr(PREC_COMMA + 1)); }
+            case ALTERNATIVE_ASSIGN -> { advance(); yield new AlternativeAssignExpr(left, parseExpr(PREC_COMMA + 1)); }
             default -> throw new ParseException("Unexpected token in infix position: " + t.type(), t);
         };
     }
@@ -160,9 +174,25 @@ public final class Parser {
             default -> throw new ParseException("Unexpected token: " + t.type(), t);
         };
 
-        // Parse postfix operations: .field, [index], .[], [start:end]
+        // Parse postfix operations: .field, [index], .[], [start:end], ?
         expr = parsePostfix(expr);
+        while (peek().type() == TokenType.QUESTION) {
+            advance();
+            expr = new OptionalExpr(expr);
+        }
         return expr;
+    }
+
+    private boolean peekIsPostfixDot() {
+        Token t = peek();
+        if (t.type() != TokenType.DOT) return false;
+        if (t.value() != null) return true; // .field
+        // bare dot — check next token
+        if (pos + 1 < tokens.size()) {
+            Token next = tokens.get(pos + 1);
+            return next.type() == TokenType.STRING || next.type() == TokenType.LBRACKET;
+        }
+        return false;
     }
 
     private JqExpr parsePostfix(JqExpr expr) {
@@ -311,7 +341,7 @@ public final class Parser {
             JqExpr key = parseExpr(0);
             expect(TokenType.RPAREN);
             expect(TokenType.COLON);
-            JqExpr value = parseExpr(PREC_COMMA + 1);
+            JqExpr value = parseObjectValue();
             return new ObjectConstructExpr.ObjectEntry(key, value);
         }
 
@@ -320,8 +350,9 @@ public final class Parser {
             String varName = t.value();
             if (peek().type() == TokenType.COLON) {
                 advance();
-                JqExpr value = parseExpr(PREC_COMMA + 1);
-                return new ObjectConstructExpr.ObjectEntry(new LiteralExpr(JqString.of(varName)), value);
+                JqExpr value = parseObjectValue();
+                return new ObjectConstructExpr.ObjectEntry(
+                        new VariableRefExpr(varName, SourceLocation.from(t)), value);
             }
             // Shorthand: {$var} -> {($var|tostring): $var}
             return new ObjectConstructExpr.ObjectEntry(
@@ -334,7 +365,7 @@ public final class Parser {
             String keyName = t.value();
             if (peek().type() == TokenType.COLON) {
                 advance();
-                JqExpr value = parseExpr(PREC_COMMA + 1);
+                JqExpr value = parseObjectValue();
                 return new ObjectConstructExpr.ObjectEntry(new LiteralExpr(JqString.of(keyName)), value);
             }
             // Shorthand: {name} -> {"name": .name}
@@ -349,7 +380,7 @@ public final class Parser {
             String keyName = t.value();
             if (peek().type() == TokenType.COLON) {
                 advance();
-                JqExpr value = parseExpr(PREC_COMMA + 1);
+                JqExpr value = parseObjectValue();
                 return new ObjectConstructExpr.ObjectEntry(new LiteralExpr(JqString.of(keyName)), value);
             }
             return new ObjectConstructExpr.ObjectEntry(
@@ -361,11 +392,39 @@ public final class Parser {
             advance();
             String format = t.value();
             expect(TokenType.COLON);
-            JqExpr value = parseExpr(PREC_COMMA + 1);
+            JqExpr value = parseObjectValue();
             return new ObjectConstructExpr.ObjectEntry(new LiteralExpr(JqString.of("@" + format)), value);
         }
 
+        if (t.type() == TokenType.STRING_INTERP_START) {
+            // Interpolated string as key: {"a$\(1+1)"} shorthand or {"a$\(1+1)": value}
+            JqExpr keyExpr = parseStringInterpolation();
+            if (peek().type() == TokenType.COLON) {
+                advance();
+                JqExpr value = parseObjectValue();
+                return new ObjectConstructExpr.ObjectEntry(keyExpr, value);
+            }
+            // Shorthand: {"\(expr)"} → {("\(expr)"): .["\(expr)"]}
+            // Desugar to computed key with dynamic field access
+            JqExpr value = new IndexExpr(new IdentityExpr(), keyExpr, SourceLocation.UNKNOWN);
+            return new ObjectConstructExpr.ObjectEntry(keyExpr, value);
+        }
+
         throw new ParseException("Expected object key", t);
+    }
+
+    /**
+     * Parse an object value expression: allows pipe but not comma or as.
+     * In jq, {a: f | g, b: h} means entry a=(f|g), entry b=h.
+     */
+    private JqExpr parseObjectValue() {
+        JqExpr expr = parseExpr(PREC_COMMA + 1);
+        while (peek().type() == TokenType.PIPE) {
+            advance();
+            JqExpr right = parseExpr(PREC_COMMA + 1);
+            expr = new PipeExpr(expr, right, SourceLocation.UNKNOWN);
+        }
+        return expr;
     }
 
     private boolean isKeywordToken(Token t) {
@@ -414,7 +473,7 @@ public final class Parser {
 
     private JqExpr parseReduce() {
         advance(); // skip 'reduce'
-        JqExpr source = parsePrefixExpr();
+        JqExpr source = parseExpr(PREC_AS + 1);
         expect(TokenType.AS);
         var loc = SourceLocation.from(peek());
         DestructurePattern pat = parseBindingPattern();
@@ -429,13 +488,13 @@ public final class Parser {
         // Desugar: reduce src as [$a,$b] (init; update)
         // → reduce src as $_tmp (init; $_tmp as [$a,$b] | update)
         String tmpVar = "$_d" + (destrCounter++);
-        JqExpr wrappedUpdate = pat.wrapBody(tmpVar, update, loc);
+        JqExpr wrappedUpdate = pat.wrapBody(tmpVar, update, loc, this);
         return new ReduceExpr(source, tmpVar, init, wrappedUpdate);
     }
 
     private JqExpr parseForeach() {
         advance(); // skip 'foreach'
-        JqExpr source = parsePrefixExpr();
+        JqExpr source = parseExpr(PREC_AS + 1);
         expect(TokenType.AS);
         var loc = SourceLocation.from(peek());
         DestructurePattern pat = parseBindingPattern();
@@ -454,78 +513,166 @@ public final class Parser {
         }
         // Desugar: foreach src as [$a,$b] (init; update; extract)
         String tmpVar = "$_d" + (destrCounter++);
-        JqExpr wrappedUpdate = pat.wrapBody(tmpVar, update, loc);
-        JqExpr wrappedExtract = extract != null ? pat.wrapBody(tmpVar, extract, loc) : null;
+        JqExpr wrappedUpdate = pat.wrapBody(tmpVar, update, loc, this);
+        JqExpr wrappedExtract = extract != null ? pat.wrapBody(tmpVar, extract, loc, this) : null;
         return new ForeachExpr(source, tmpVar, init, wrappedUpdate, wrappedExtract);
     }
 
     /** Represents a binding pattern: simple variable or array/object destructuring */
-    private record DestructurePattern(String variable, List<String[]> bindings, boolean isArray) {
-        boolean isSimple() { return bindings == null; }
-        JqExpr wrapBody(String tmpVar, JqExpr body, SourceLocation loc) {
+    private sealed interface DestructurePattern {
+        boolean isSimple();
+        String variable();
+        JqExpr wrapBody(String tmpVar, JqExpr body, SourceLocation loc, Parser parser);
+        default void collectVariables(java.util.Set<String> vars) {
+            if (isSimple() && variable() != null) vars.add(variable());
+        }
+    }
+
+    private record SimplePattern(String variable) implements DestructurePattern {
+        @Override public boolean isSimple() { return true; }
+        @Override public JqExpr wrapBody(String t, JqExpr body, SourceLocation loc, Parser parser) { return body; }
+    }
+
+    private record ArrayPattern(List<PatternBinding> elements) implements DestructurePattern {
+        @Override public boolean isSimple() { return false; }
+        @Override public String variable() { return null; }
+        @Override public void collectVariables(java.util.Set<String> vars) {
+            for (var elem : elements) elem.pattern().collectVariables(vars);
+        }
+        @Override public JqExpr wrapBody(String tmpVar, JqExpr body, SourceLocation loc, Parser parser) {
             JqExpr result = body;
-            for (int i = bindings.size() - 1; i >= 0; i--) {
-                String[] binding = bindings.get(i);
-                JqExpr extractExpr;
-                if (isArray) {
-                    extractExpr = new PipeExpr(
-                            new VariableRefExpr(tmpVar, loc),
-                            new IndexExpr(new IdentityExpr(), new LiteralExpr(JqNumber.of(Integer.parseInt(binding[0]))), loc),
-                            loc);
-                } else {
-                    extractExpr = new PipeExpr(
-                            new VariableRefExpr(tmpVar, loc),
-                            new DotFieldExpr(binding[0], loc),
-                            loc);
-                }
-                result = new VariableBindExpr(extractExpr, binding[1], result, loc);
+            for (int i = elements.size() - 1; i >= 0; i--) {
+                var elem = elements.get(i);
+                JqExpr extractExpr = new PipeExpr(
+                        new VariableRefExpr(tmpVar, loc),
+                        new IndexExpr(new IdentityExpr(), new LiteralExpr(JqNumber.of(i)), loc),
+                        loc);
+                result = bindPattern(elem.pattern(), extractExpr, result, loc, parser);
             }
             return result;
         }
     }
 
-    /** Parse a binding pattern: $var, [$a, $b, ...], or {a: $a, b: $b, ...} */
+    private record ObjectPattern(List<ObjectPatternBinding> fields) implements DestructurePattern {
+        @Override public boolean isSimple() { return false; }
+        @Override public String variable() { return null; }
+        @Override public void collectVariables(java.util.Set<String> vars) {
+            for (var field : fields) field.pattern().collectVariables(vars);
+        }
+        @Override public JqExpr wrapBody(String tmpVar, JqExpr body, SourceLocation loc, Parser parser) {
+            JqExpr result = body;
+            for (int i = fields.size() - 1; i >= 0; i--) {
+                var field = fields.get(i);
+                JqExpr extractExpr;
+                if (field.computedKey() != null) {
+                    // Computed key: $tmp | .[computed_expr]
+                    extractExpr = new PipeExpr(
+                            new VariableRefExpr(tmpVar, loc),
+                            new IndexExpr(new IdentityExpr(), field.computedKey(), loc),
+                            loc);
+                } else {
+                    extractExpr = new PipeExpr(
+                            new VariableRefExpr(tmpVar, loc),
+                            new DotFieldExpr(field.fieldName(), loc),
+                            loc);
+                }
+                result = bindPattern(field.pattern(), extractExpr, result, loc, parser);
+            }
+            return result;
+        }
+    }
+
+    /** Binds a variable AND applies a nested destructuring pattern */
+    private record VarAndPattern(String variable, DestructurePattern nested) implements DestructurePattern {
+        @Override public boolean isSimple() { return false; }
+        @Override public void collectVariables(java.util.Set<String> vars) {
+            if (variable != null) vars.add(variable);
+            nested.collectVariables(vars);
+        }
+        @Override public JqExpr wrapBody(String tmpVar, JqExpr body, SourceLocation loc, Parser parser) {
+            // First apply nested destructuring, then bind the variable
+            JqExpr result = nested.wrapBody(tmpVar, body, loc, parser);
+            // Also bind $var to the same value
+            return new VariableBindExpr(new VariableRefExpr(tmpVar, loc), variable, result, loc);
+        }
+    }
+
+    private record PatternBinding(DestructurePattern pattern) {}
+    private record ObjectPatternBinding(String fieldName, JqExpr computedKey, DestructurePattern pattern) {
+        ObjectPatternBinding(String fieldName, DestructurePattern pattern) {
+            this(fieldName, null, pattern);
+        }
+    }
+
+    private static JqExpr bindPattern(DestructurePattern pat, JqExpr extractExpr,
+                                       JqExpr body, SourceLocation loc, Parser parser) {
+        if (pat.isSimple()) {
+            return new VariableBindExpr(extractExpr, pat.variable(), body, loc);
+        }
+        // Nested pattern: bind to temp var, then destructure
+        String tmpVar = "$_d" + (parser.destrCounter++);
+        JqExpr wrappedBody = pat.wrapBody(tmpVar, body, loc, parser);
+        return new VariableBindExpr(extractExpr, tmpVar, wrappedBody, loc);
+    }
+
+    /** Parse a binding pattern: $var, [$a, $b, ...], or {a: $a, b: $b, ...} (recursive) */
     private DestructurePattern parseBindingPattern() {
         if (peek().type() == TokenType.VARIABLE) {
             advance();
-            return new DestructurePattern(previous().value(), null, false);
+            return new SimplePattern(previous().value());
         } else if (peek().type() == TokenType.LBRACKET) {
             advance(); // skip [
-            var bindings = new ArrayList<String[]>();
-            int idx = 0;
+            var elements = new ArrayList<PatternBinding>();
             while (peek().type() != TokenType.RBRACKET) {
-                expect(TokenType.VARIABLE);
-                bindings.add(new String[]{String.valueOf(idx++), previous().value()});
+                elements.add(new PatternBinding(parseBindingPattern()));
                 if (peek().type() == TokenType.COMMA) advance();
             }
             expect(TokenType.RBRACKET);
-            return new DestructurePattern(null, bindings, true);
+            return new ArrayPattern(elements);
         } else if (peek().type() == TokenType.LBRACE) {
             advance(); // skip {
-            var bindings = new ArrayList<String[]>();
+            var fields = new ArrayList<ObjectPatternBinding>();
             while (peek().type() != TokenType.RBRACE) {
                 if (peek().type() == TokenType.VARIABLE) {
                     advance();
                     String varName = previous().value();
                     String fieldName = varName.startsWith("$") ? varName.substring(1) : varName;
-                    bindings.add(new String[]{fieldName, varName});
+                    if (peek().type() == TokenType.COLON) {
+                        // $var: pattern — field "var", value bound to $var AND destructured by nested pattern
+                        advance();
+                        DestructurePattern nested = parseBindingPattern();
+                        fields.add(new ObjectPatternBinding(fieldName, new VarAndPattern(varName, nested)));
+                    } else {
+                        // Shorthand: {$a} means {a: $a}
+                        fields.add(new ObjectPatternBinding(fieldName, new SimplePattern(varName)));
+                    }
+                } else if (peek().type() == TokenType.LPAREN) {
+                    // Computed key: (expr): pattern
+                    advance(); // skip (
+                    JqExpr keyExpr = parseExpr(0);
+                    expect(TokenType.RPAREN);
+                    expect(TokenType.COLON);
+                    DestructurePattern nested = parseBindingPattern();
+                    fields.add(new ObjectPatternBinding(null, keyExpr, nested));
                 } else {
                     String fieldName;
                     if (peek().type() == TokenType.IDENT) {
                         advance(); fieldName = previous().value();
                     } else if (peek().type() == TokenType.STRING) {
                         advance(); fieldName = previous().value();
+                    } else if (isKeywordToken(peek())) {
+                        advance(); fieldName = previous().value();
                     } else {
                         throw new ParseException("Expected field name in object destructuring", peek());
                     }
                     expect(TokenType.COLON);
-                    expect(TokenType.VARIABLE);
-                    bindings.add(new String[]{fieldName, previous().value()});
+                    DestructurePattern nested = parseBindingPattern();
+                    fields.add(new ObjectPatternBinding(fieldName, nested));
                 }
                 if (peek().type() == TokenType.COMMA) advance();
             }
             expect(TokenType.RBRACE);
-            return new DestructurePattern(null, bindings, false);
+            return new ObjectPattern(fields);
         } else {
             throw new ParseException("Expected variable or destructuring pattern", peek());
         }
@@ -537,21 +684,50 @@ public final class Parser {
         String name = previous().value();
         var params = new ArrayList<String>();
 
+        boolean hasVarParams = false;
         if (peek().type() == TokenType.LPAREN) {
             advance();
             if (peek().type() != TokenType.RPAREN) {
-                expect(TokenType.IDENT);
-                params.add(previous().value());
+                if (peek().type() == TokenType.VARIABLE) {
+                    hasVarParams = true;
+                    advance();
+                    params.add(previous().value());
+                } else {
+                    expect(TokenType.IDENT);
+                    params.add(previous().value());
+                }
                 while (peek().type() == TokenType.SEMICOLON) {
                     advance();
-                    expect(TokenType.IDENT);
+                    if (hasVarParams) {
+                        expect(TokenType.VARIABLE);
+                    } else {
+                        expect(TokenType.IDENT);
+                    }
                     params.add(previous().value());
                 }
             }
             expect(TokenType.RPAREN);
         }
         expect(TokenType.COLON);
-        JqExpr body = parseExpr(0);
+        JqExpr body;
+        if (hasVarParams) {
+            // def f($a; $b): body  =>  def f(a; b): a as $a | b as $b | body
+            JqExpr rawBody = parseExpr(0);
+            // Wrap body with variable bindings for each $param
+            JqExpr wrappedBody = rawBody;
+            for (int i = params.size() - 1; i >= 0; i--) {
+                String param = params.get(i);
+                // The function arg reference uses the param name without $
+                String argName = param.startsWith("$") ? param.substring(1) : param;
+                wrappedBody = new VariableBindExpr(
+                        new FuncCallExpr(argName, List.of(), SourceLocation.UNKNOWN),
+                        param, wrappedBody, SourceLocation.UNKNOWN);
+                params.set(i, argName);
+            }
+            body = wrappedBody;
+        } else {
+            body = parseExpr(0);
+        }
         expect(TokenType.SEMICOLON);
 
         JqExpr next = parseExpr(0);
@@ -573,12 +749,82 @@ public final class Parser {
      */
     private JqExpr parseDestructureAs(JqExpr source, SourceLocation loc) {
         DestructurePattern pat = parseBindingPattern();
+
+        // Check for ?// alternative destructuring
+        if (peek().type() == TokenType.QUESTION && peekAhead(1) != null
+                && peekAhead(1).type() == TokenType.ALTERNATIVE) {
+            var patterns = new ArrayList<DestructurePattern>();
+            patterns.add(pat);
+            return parseAlternativeDestructure(source, patterns, loc);
+        }
+
         expect(TokenType.PIPE);
         JqExpr body = parseExpr(PREC_PIPE);
 
         String tmpVar = "$_d" + (destrCounter++);
-        JqExpr wrappedBody = pat.wrapBody(tmpVar, body, loc);
+        JqExpr wrappedBody = pat.wrapBody(tmpVar, body, loc, this);
         return new VariableBindExpr(source, tmpVar, wrappedBody, loc);
+    }
+
+    /**
+     * Parse and desugar ?// alternative destructuring.
+     * expr as pat1 ?// pat2 ?// pat3 | body
+     * Desugars to type-checking if/elif/else chain.
+     */
+    private JqExpr parseAlternativeDestructure(JqExpr source, List<DestructurePattern> patterns,
+                                                SourceLocation loc) {
+        // Consume ?// and additional patterns
+        while (peek().type() == TokenType.QUESTION && peekAhead(1) != null
+                && peekAhead(1).type() == TokenType.ALTERNATIVE) {
+            advance(); // skip ?
+            advance(); // skip //
+            patterns.add(parseBindingPattern());
+        }
+        expect(TokenType.PIPE);
+        JqExpr body = parseExpr(PREC_PIPE);
+
+        // Collect all variables from all patterns
+        var allVars = new java.util.LinkedHashSet<String>();
+        for (DestructurePattern p : patterns) p.collectVariables(allVars);
+
+        // Desugar: source as $tmp |
+        //   null as $v1 | null as $v2 | ... |  (initialize all vars to null)
+        //   try ($tmp as pat1 | body) catch
+        //   try ($tmp as pat2 | body) catch
+        //   ($tmp as patN | body)
+        String tmpVar = "$_d" + (destrCounter++);
+
+        // Build from last to first
+        JqExpr result = null;
+        for (int i = patterns.size() - 1; i >= 0; i--) {
+            DestructurePattern pat = patterns.get(i);
+            JqExpr branch;
+            if (pat.isSimple()) {
+                branch = new VariableBindExpr(
+                        new VariableRefExpr(tmpVar, loc), pat.variable(), body, loc);
+            } else {
+                String innerTmp = "$_d" + (destrCounter++);
+                JqExpr patBody = pat.wrapBody(innerTmp, body, loc, this);
+                branch = new VariableBindExpr(
+                        new VariableRefExpr(tmpVar, loc), innerTmp, patBody, loc);
+            }
+            if (result == null) {
+                // Last pattern: no try/catch, errors propagate
+                result = branch;
+            } else {
+                // Wrap in try/catch: on failure, fall through to next pattern
+                result = new TryCatchExpr(branch, result);
+            }
+        }
+
+        // Wrap with null initializations for all pattern variables
+        // so unmatched variables default to null instead of being undefined
+        JqExpr initResult = result;
+        for (String var : allVars) {
+            initResult = new VariableBindExpr(new LiteralExpr(JqNull.NULL), var, initResult, loc);
+        }
+
+        return new VariableBindExpr(source, tmpVar, initResult, loc);
     }
 
     private JqExpr parseFuncCallOrIdent() {
@@ -633,9 +879,13 @@ public final class Parser {
     private JqExpr parseFormatExpr(String format) {
         // @base64, @uri, etc. Can be followed by a string for format strings
         if (peek().type() == TokenType.STRING) {
-            // @base64 "string" -- format string (rare, but supported)
             Token strTok = advance();
             return new FormatExpr(format, new LiteralExpr(JqString.of(strTok.value())));
+        }
+        if (peek().type() == TokenType.STRING_INTERP_START) {
+            // @html "\(expr)..." -- format string with interpolation
+            JqExpr interpStr = parseStringInterpolation();
+            return new FormatExpr(format, interpStr);
         }
         return new FormatExpr(format, null);
     }
@@ -643,17 +893,30 @@ public final class Parser {
     private JqNumber parseNumber(Token t) {
         String val = t.value();
         if (val.contains(".") || val.contains("e") || val.contains("E")) {
-            return JqNumber.of(new BigDecimal(val));
+            try {
+                return JqNumber.of(new BigDecimal(val));
+            } catch (NumberFormatException | ArithmeticException e) {
+                return JqNumber.of(Double.parseDouble(val));
+            }
         }
         try {
             return JqNumber.of(Long.parseLong(val));
         } catch (NumberFormatException e) {
-            return JqNumber.of(new BigDecimal(val));
+            try {
+                return JqNumber.of(new BigDecimal(val));
+            } catch (NumberFormatException | ArithmeticException e2) {
+                return JqNumber.of(Double.parseDouble(val));
+            }
         }
     }
 
     private Token peek() {
         return tokens.get(pos);
+    }
+
+    private Token peekAhead(int offset) {
+        int idx = pos + offset;
+        return idx < tokens.size() ? tokens.get(idx) : null;
     }
 
     private Token advance() {

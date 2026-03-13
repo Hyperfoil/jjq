@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.evaluator;
 
 import io.hyperfoil.tools.jjq.ast.JqExpr;
 import io.hyperfoil.tools.jjq.ast.JqExpr.*;
+import io.hyperfoil.tools.jjq.ast.SourceLocation;
 import io.hyperfoil.tools.jjq.builtin.BuiltinRegistry;
 import io.hyperfoil.tools.jjq.value.*;
 
@@ -47,7 +48,7 @@ public final class Evaluator {
                 } else if (input instanceof JqNull) {
                     output.accept(JqNull.NULL);
                 } else {
-                    throw new JqException("Cannot index " + input.type().jqName() + " with string \"" + df.field() + "\"");
+                    throw new JqException("Cannot index " + input.type().jqName() + " with string (\"" + df.field() + "\")");
                 }
             }
 
@@ -62,8 +63,8 @@ public final class Evaluator {
 
             case SliceExpr sl -> {
                 for (JqValue base : eval(sl.expr(), input, env)) {
-                    Integer from = sl.from() != null ? (int) eval(sl.from(), input, env).getFirst().longValue() : null;
-                    Integer to = sl.to() != null ? (int) eval(sl.to(), input, env).getFirst().longValue() : null;
+                    Integer from = sl.from() != null ? sliceIndexOrNull(eval(sl.from(), input, env).getFirst(), true) : null;
+                    Integer to = sl.to() != null ? sliceIndexOrNull(eval(sl.to(), input, env).getFirst(), false) : null;
                     if (base instanceof JqArray arr) {
                         output.accept(arr.slice(from, to));
                     } else if (base instanceof JqString s) {
@@ -72,6 +73,8 @@ public final class Evaluator {
                         int start = from == null ? 0 : (from < 0 ? Math.max(0, len + from) : from);
                         int end = to == null ? len : (to < 0 ? Math.max(0, len + to) : Math.min(to, len));
                         output.accept(JqString.of(start < end ? str.substring(start, end) : ""));
+                    } else if (base instanceof JqNull) {
+                        output.accept(JqNull.NULL);
                     } else {
                         throw new JqException("Cannot slice " + base.type().jqName());
                     }
@@ -91,7 +94,7 @@ public final class Evaluator {
                     } else if (base instanceof JqNull) {
                         throw new JqException("Cannot iterate over null (null)");
                     } else {
-                        throw new JqException("Cannot iterate over " + base.type().jqName());
+                        throw new JqException("Cannot iterate over " + base.type().jqName() + " (" + base.toJsonString() + ")");
                     }
                 }
             }
@@ -250,8 +253,10 @@ public final class Evaluator {
                     eval(tc.tryExpr(), input, env, output);
                 } catch (JqException | JqTypeError e) {
                     if (tc.catchExpr() != null) {
-                        JqValue errorMsg = JqString.of(e.getMessage());
-                        eval(tc.catchExpr(), errorMsg, env, output);
+                        JqValue errorVal = (e instanceof JqException je && je.jqValue() != null)
+                                ? je.jqValue()
+                                : JqString.of(e.getMessage());
+                        eval(tc.catchExpr(), errorVal, env, output);
                     }
                     // If no catch, silently swallow (try without catch = optional)
                 }
@@ -276,16 +281,18 @@ public final class Evaluator {
             }
 
             case ForeachExpr fe -> {
-                var childEnv = env.child();
-                var accumulator = new JqValue[]{ eval(fe.init(), input, env).getFirst() };
-                eval(fe.source(), input, env, val -> {
-                    childEnv.setVariable(fe.variable(), val);
-                    accumulator[0] = eval(fe.update(), accumulator[0], childEnv).getFirst();
-                    if (fe.extract() != null) {
-                        eval(fe.extract(), accumulator[0], childEnv, output);
-                    } else {
-                        output.accept(accumulator[0]);
-                    }
+                eval(fe.init(), input, env, initVal -> {
+                    var childEnv = env.child();
+                    var accumulator = new JqValue[]{ initVal };
+                    eval(fe.source(), input, env, val -> {
+                        childEnv.setVariable(fe.variable(), val);
+                        accumulator[0] = eval(fe.update(), accumulator[0], childEnv).getFirst();
+                        if (fe.extract() != null) {
+                            eval(fe.extract(), accumulator[0], childEnv, output);
+                        } else {
+                            output.accept(accumulator[0]);
+                        }
+                    });
                 });
             }
 
@@ -313,7 +320,7 @@ public final class Evaluator {
                     output.accept(JqObject.of(map));
                 } else if ("__loc__".equals(vr.name())) {
                     var map = new java.util.LinkedHashMap<String, JqValue>();
-                    map.put("file", JqString.of("<stdin>"));
+                    map.put("file", JqString.of("<top-level>"));
                     map.put("line", JqNumber.of(1));
                     output.accept(JqObject.of(map));
                 } else {
@@ -322,13 +329,16 @@ public final class Evaluator {
             }
 
             case UpdateExpr upd -> {
-                output.accept(updatePath(upd.path(), input, env, old ->
-                        eval(upd.update(), old.getFirst(), env)));
+                JqValue result = updatePath(upd.path(), input, env, old ->
+                        eval(upd.update(), old.getFirst(), env));
+                if (result != null) output.accept(result);
             }
 
             case AssignExpr assign -> {
                 List<JqValue> newVals = eval(assign.value(), input, env);
-                output.accept(updatePath(assign.path(), input, env, old -> newVals));
+                for (JqValue newVal : newVals) {
+                    output.accept(updatePath(assign.path(), input, env, old -> List.of(newVal)));
+                }
             }
 
             case AddAssignExpr aa -> {
@@ -463,12 +473,36 @@ public final class Evaluator {
         }
     }
 
+    /** Convert a JqValue to an integer slice index. Floor for start, ceil for end. */
+    /** Returns null for NaN (treat as unbounded), otherwise converts to int with clamping */
+    private Integer sliceIndexOrNull(JqValue val, boolean isStart) {
+        long l;
+        if (val instanceof JqNumber n) {
+            if (n.isNaN()) return null; // NaN → treat as unbounded
+            if (n.isIntegral()) {
+                l = n.longValue();
+            } else {
+                double d = n.doubleValue();
+                l = isStart ? (long) Math.floor(d) : (long) Math.ceil(d);
+            }
+        } else {
+            l = val.longValue();
+        }
+        // Clamp to int range to avoid overflow
+        if (l > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        if (l < Integer.MIN_VALUE) return Integer.MIN_VALUE;
+        return (int) l;
+    }
+
     private JqValue indexValue(JqValue base, JqValue index) {
         return switch (base) {
-            case JqArray arr when index instanceof JqNumber n -> arr.get((int) n.longValue());
+            case JqArray arr when index instanceof JqNumber n -> {
+                if (n.isNaN()) yield JqNull.NULL;
+                yield arr.get((int) n.longValue());
+            }
             case JqObject obj when index instanceof JqString s -> obj.get(s.stringValue());
             case JqNull ignored -> JqNull.NULL;
-            default -> throw new JqException("Cannot index " + base.type().jqName() + " with " + index.type().jqName());
+            default -> throw new JqException("Cannot index " + base.type().jqName() + " with " + index.type().jqName() + " (" + index.toJsonString() + ")");
         };
     }
 
@@ -512,7 +546,7 @@ public final class Evaluator {
         }
     }
 
-    private JqValue updatePath(JqExpr pathExpr, JqValue input, Environment env,
+    public JqValue updatePath(JqExpr pathExpr, JqValue input, Environment env,
                                 java.util.function.Function<List<JqValue>, List<JqValue>> updater) {
         return switch (pathExpr) {
             case IdentityExpr ignored -> updater.apply(List.of(input)).getFirst();
@@ -533,32 +567,57 @@ public final class Evaluator {
                 }
             }
             case IndexExpr idx -> {
-                List<JqValue> bases = eval(idx.expr(), input, env);
-                JqValue base = bases.isEmpty() ? input : bases.getFirst();
-                List<JqValue> indices = eval(idx.index(), input, env);
-                JqValue index = indices.getFirst();
-                if (base instanceof JqArray arr && index instanceof JqNumber n) {
-                    int i = (int) n.longValue();
-                    var list = new ArrayList<>(arr.arrayValue());
-                    if (i < 0) i = list.size() + i;
-                    while (list.size() <= i) list.add(JqNull.NULL);
-                    JqValue oldVal = list.get(i);
-                    JqValue newVal = updater.apply(List.of(oldVal)).getFirst();
-                    list.set(i, newVal);
-                    yield JqArray.of(list);
-                } else if (base instanceof JqObject obj && index instanceof JqString s) {
-                    var map = new LinkedHashMap<>(obj.objectValue());
-                    JqValue oldVal = map.getOrDefault(s.stringValue(), JqNull.NULL);
-                    JqValue newVal = updater.apply(List.of(oldVal)).getFirst();
-                    map.put(s.stringValue(), newVal);
-                    yield JqObject.of(map);
-                } else {
-                    throw new JqException("Cannot update index on " + base.type().jqName());
+                // For nested index like .[2][3], we need to recurse into idx.expr()
+                // so the update propagates back to the root
+                if (!(idx.expr() instanceof IdentityExpr)) {
+                    yield updatePath(idx.expr(), input, env, old -> {
+                        JqValue base = old.getFirst();
+                        List<JqValue> indices = eval(idx.index(), input, env);
+                        return List.of(multiIndexUpdate(base, indices, updater));
+                    });
                 }
+                List<JqValue> indices = eval(idx.index(), input, env);
+                yield multiIndexUpdate(input, indices, updater);
             }
             case IterateExpr iter -> {
-                List<JqValue> bases = eval(iter.expr(), input, env);
-                JqValue base = bases.isEmpty() ? input : bases.getFirst();
+                if (!(iter.expr() instanceof IdentityExpr)) {
+                    // Nested iterate like map(select(...))[]: validate inner path first
+                    try {
+                        yield updatePath(iter.expr(), input, env, old -> {
+                            JqValue base2 = old.getFirst();
+                            if (base2 instanceof JqArray arr2) {
+                                var list2 = new ArrayList<JqValue>();
+                                for (JqValue elem : arr2.arrayValue()) {
+                                    List<JqValue> r = updater.apply(List.of(elem));
+                                    if (!r.isEmpty()) list2.add(r.getFirst());
+                                }
+                                return List.of(JqArray.of(list2));
+                            } else if (base2 instanceof JqObject obj2) {
+                                var map2 = new LinkedHashMap<String, JqValue>();
+                                for (var entry : obj2.objectValue().entrySet()) {
+                                    List<JqValue> r = updater.apply(List.of(entry.getValue()));
+                                    if (!r.isEmpty()) map2.put(entry.getKey(), r.getFirst());
+                                }
+                                return List.of(JqObject.of(map2));
+                            } else {
+                                throw new JqException("Cannot iterate over " + base2.type().jqName());
+                            }
+                        });
+                    } catch (JqException e) {
+                        if (e.getMessage().startsWith("Invalid path expression with result ")) {
+                            // Add iterate context
+                            JqValue[] innerResult = {null};
+                            try {
+                                eval(iter.expr(), input, env, val -> innerResult[0] = val);
+                            } catch (EmptyException ignored) {}
+                            if (innerResult[0] != null) {
+                                throw new JqException("Invalid path expression near attempt to iterate through " + innerResult[0].toJsonString());
+                            }
+                        }
+                        throw e;
+                    }
+                }
+                JqValue base = input;
                 if (base instanceof JqArray arr) {
                     var list = new ArrayList<JqValue>();
                     for (JqValue elem : arr.arrayValue()) {
@@ -575,13 +634,81 @@ public final class Evaluator {
                     }
                     yield JqObject.of(map);
                 } else {
-                    throw new JqException("Cannot iterate over " + base.type().jqName());
+                    throw new JqException("Cannot iterate over " + base.type().jqName() + " (" + base.toJsonString() + ")");
                 }
+            }
+            case SliceExpr sl -> {
+                // Slice assignment: .[2:4] = newVal or .[2:4] |= expr
+                JqValue base = sl.expr() instanceof IdentityExpr ? input :
+                        eval(sl.expr(), input, env).getFirst();
+                JqArray arr;
+                if (base instanceof JqArray a) {
+                    arr = a;
+                } else if (base instanceof JqNull) {
+                    arr = JqArray.of(List.of());
+                } else {
+                    throw new JqException("Cannot update " + base.type().jqName() + " slices");
+                }
+                int len = arr.arrayValue().size();
+                Integer fromIdx = sl.from() != null ? sliceIndexOrNull(eval(sl.from(), input, env).getFirst(), true) : null;
+                Integer toIdx = sl.to() != null ? sliceIndexOrNull(eval(sl.to(), input, env).getFirst(), false) : null;
+                int start = fromIdx == null ? 0 : (fromIdx < 0 ? Math.max(0, len + fromIdx) : Math.min(fromIdx, len));
+                int end = toIdx == null ? len : (toIdx < 0 ? Math.max(0, len + toIdx) : Math.min(toIdx, len));
+                if (start > end) start = end;
+
+                JqValue oldSlice = arr.slice(fromIdx, toIdx);
+                List<JqValue> updated = updater.apply(List.of(oldSlice));
+
+                var result = new ArrayList<JqValue>();
+                for (int i = 0; i < start; i++) result.add(arr.arrayValue().get(i));
+                if (!updated.isEmpty()) {
+                    JqValue newSlice = updated.getFirst();
+                    if (newSlice instanceof JqArray newArr) {
+                        result.addAll(newArr.arrayValue());
+                    } else {
+                        result.add(newSlice);
+                    }
+                }
+                // else: empty = delete (e.g., del(.[2:4]))
+                for (int i = end; i < len; i++) result.add(arr.arrayValue().get(i));
+
+                if (!(sl.expr() instanceof IdentityExpr)) {
+                    yield updatePath(sl.expr(), input, env, old -> List.of(JqArray.of(result)));
+                }
+                yield JqArray.of(result);
             }
             case PipeExpr pipe -> {
                 // .foo | .bar |= expr  =>  update .foo, then within that update .bar
-                yield updatePath(pipe.left(), input, env, old ->
-                        List.of(updatePath(pipe.right(), old.getFirst(), env, updater)));
+                yield updatePath(pipe.left(), input, env, old -> {
+                    JqValue result = updatePath(pipe.right(), old.getFirst(), env, updater);
+                    return result == null ? List.of() : List.of(result);
+                });
+            }
+            case VariableBindExpr vb -> {
+                // .a as $x | .b — bind the variable and continue with the body path
+                var childEnv = env.child();
+                var vals = eval(vb.expr(), input, env);
+                if (!vals.isEmpty()) {
+                    childEnv.setVariable(vb.variable(), vals.getFirst());
+                }
+                yield updatePath(vb.body(), input, childEnv, updater);
+            }
+            case FuncCallExpr fc when fc.name().equals("getpath") && fc.args().size() == 1 -> {
+                // getpath(["a",0,"b"]) |= expr  =>  update value at the given path
+                JqValue pathArr = eval(fc.args().getFirst(), input, env).getFirst();
+                if (!(pathArr instanceof JqArray pathList)) {
+                    throw new JqException("Path must be an array");
+                }
+                yield updateAtPath(input, pathList.arrayValue(), 0, updater);
+            }
+            case FuncCallExpr fc when fc.name().equals("select") && fc.args().size() == 1 -> {
+                // select(cond) in path context: only update if condition is truthy
+                var condResults = eval(fc.args().getFirst(), input, env);
+                if (!condResults.isEmpty() && condResults.getFirst().isTruthy()) {
+                    var result = updater.apply(List.of(input));
+                    yield result.isEmpty() ? null : result.getFirst();
+                }
+                yield input; // not selected, keep unchanged
             }
             case FuncCallExpr fc when fc.args().isEmpty() -> {
                 // Zero-arg call might be a filter argument reference (e.g., x in def inc(x): x |= .+1)
@@ -590,30 +717,192 @@ public final class Evaluator {
                     // Resolve to the actual argument expression and recurse
                     yield updatePath(filterArg.expr(), input, filterArg.capturedEnv(), updater);
                 }
-                throw new JqException("Invalid path expression for update: " + fc.name());
+                // Also check user-defined functions
+                Environment.FuncDef funcDef = env.getFunction(fc.name(), 0);
+                if (funcDef != null && funcDef.params().isEmpty()) {
+                    yield updatePath(funcDef.body(), input, funcDef.closureEnv() != null ? funcDef.closureEnv() : env, updater);
+                }
+                // Fall through to default case for path-based fallback
+                yield updatePathFallback(pathExpr, input, env, updater);
             }
-            default -> throw new JqException("Invalid path expression for update");
+            default -> {
+                yield updatePathFallback(pathExpr, input, env, updater);
+            }
         };
     }
 
+    private JqValue updatePathFallback(JqExpr pathExpr, JqValue input, Environment env,
+                                        java.util.function.Function<List<JqValue>, List<JqValue>> updater) {
+        // General fallback: compute paths via path() and update each one
+        var paths = new ArrayList<List<JqValue>>();
+        try {
+            evalPath(pathExpr, input, env, pathVal -> {
+                if (pathVal instanceof JqArray arr) {
+                    paths.add(arr.arrayValue());
+                }
+            });
+        } catch (JqException e) {
+            // Path evaluation failed — show result in error message like jq does
+            String resultStr = null;
+            try {
+                var results = eval(pathExpr, input, env);
+                if (!results.isEmpty()) {
+                    resultStr = results.getFirst().toJsonString();
+                }
+            } catch (JqException | EmptyException ignored) {}
+            if (resultStr != null) {
+                throw new JqException("Invalid path expression with result " + resultStr);
+            }
+            throw new JqException("Invalid path expression for update");
+        }
+        if (paths.isEmpty()) return input;
+        // Sort paths deepest-first, higher indices first (to avoid index shifting)
+        paths.sort((a, b) -> {
+            int lenCmp = Integer.compare(b.size(), a.size());
+            if (lenCmp != 0) return lenCmp;
+            for (int i = 0; i < a.size(); i++) {
+                if (a.get(i) instanceof JqNumber na && b.get(i) instanceof JqNumber nb) {
+                    int cmp = Long.compare(nb.longValue(), na.longValue());
+                    if (cmp != 0) return cmp;
+                }
+            }
+            return 0;
+        });
+        JqValue result = input;
+        for (List<JqValue> path : paths) {
+            result = updateAtPath(result, path, 0, updater);
+        }
+        return result;
+    }
+
+    private JqValue multiIndexUpdate(JqValue base, List<JqValue> indices,
+                                      java.util.function.Function<List<JqValue>, List<JqValue>> updater) {
+        if (indices.size() > 1 && base instanceof JqArray arr) {
+            // Multi-index: resolve all against original, apply all at once
+            var list = new ArrayList<>(arr.arrayValue());
+            int len = list.size();
+            var toRemove = new java.util.TreeSet<Integer>(java.util.Collections.reverseOrder());
+            for (JqValue index : indices) {
+                if (!(index instanceof JqNumber n)) continue;
+                int i = (int) n.longValue();
+                if (i < 0) i = len + i;
+                if (i >= 0 && i < len) {
+                    List<JqValue> newVals = updater.apply(List.of(list.get(i)));
+                    if (newVals.isEmpty()) {
+                        toRemove.add(i);
+                    } else {
+                        list.set(i, newVals.getFirst());
+                    }
+                }
+            }
+            for (int ri : toRemove) list.remove(ri);
+            return JqArray.of(list);
+        }
+        JqValue result = base;
+        for (JqValue index : indices) {
+            result = updateAtIndex(result, index, updater);
+        }
+        return result;
+    }
+
+    private JqValue updateAtPath(JqValue input, List<JqValue> path, int idx,
+                                  java.util.function.Function<List<JqValue>, List<JqValue>> updater) {
+        if (idx >= path.size()) {
+            var result = updater.apply(List.of(input));
+            return result.isEmpty() ? input : result.getFirst();
+        }
+        JqValue key = path.get(idx);
+        return updateAtIndex(input, key, old -> List.of(updateAtPath(old.getFirst(), path, idx + 1, updater)));
+    }
+
+    private JqValue updateAtIndex(JqValue base, JqValue index,
+                                   java.util.function.Function<List<JqValue>, List<JqValue>> updater) {
+        if ((base instanceof JqArray || base instanceof JqNull) && index instanceof JqNumber n) {
+            if (n.isNaN()) throw new JqException("Cannot set array element at NaN index");
+            int i = (int) n.longValue();
+            var list = base instanceof JqArray arr
+                    ? new ArrayList<>(arr.arrayValue())
+                    : new ArrayList<JqValue>();
+            if (i < 0) {
+                i = list.size() + i;
+                if (i < 0) throw new JqException("Out of bounds negative array index");
+            }
+            if (i > 536870911) throw new JqException("Array index too large");
+            while (list.size() <= i) list.add(JqNull.NULL);
+            JqValue oldVal = list.get(i);
+            List<JqValue> newVals = updater.apply(List.of(oldVal));
+            if (newVals.isEmpty()) {
+                // empty = remove element
+                list.remove(i);
+            } else {
+                list.set(i, newVals.getFirst());
+            }
+            return JqArray.of(list);
+        } else if (base instanceof JqObject obj && index instanceof JqString s) {
+            var map = new LinkedHashMap<>(obj.objectValue());
+            JqValue oldVal = map.getOrDefault(s.stringValue(), JqNull.NULL);
+            List<JqValue> newVals = updater.apply(List.of(oldVal));
+            if (newVals.isEmpty()) {
+                map.remove(s.stringValue());
+            } else {
+                map.put(s.stringValue(), newVals.getFirst());
+            }
+            return JqObject.of(map);
+        } else if (base instanceof JqNull && index instanceof JqString s) {
+            var map = new LinkedHashMap<String, JqValue>();
+            List<JqValue> newVals = updater.apply(List.of(JqNull.NULL));
+            if (!newVals.isEmpty()) {
+                map.put(s.stringValue(), newVals.getFirst());
+            }
+            return JqObject.of(map);
+        } else {
+            String indexType = index instanceof JqNumber ? "number" : "string";
+            String indexStr = index instanceof JqNumber n ? String.valueOf((int) n.longValue())
+                    : "\"" + ((JqString) index).stringValue() + "\"";
+            throw new JqException("Cannot index " + base.type().jqName()
+                    + " with " + indexType + " (" + indexStr + ")");
+        }
+    }
+
     private void evalFormat(FormatExpr fmt, JqValue input, Environment env, Consumer<JqValue> output) {
+        // Format string with interpolation: @html "<b>\(.)</b>"
+        // Apply format to each interpolated expression, keep literal parts as-is
+        if (fmt.input() instanceof StringInterpolationExpr interp) {
+            var sb = new StringBuilder();
+            for (JqExpr part : interp.parts()) {
+                if (part instanceof LiteralExpr lit && lit.value() instanceof JqString s) {
+                    sb.append(s.stringValue());
+                } else {
+                    JqValue val = eval(part, input, env).getFirst();
+                    String str = val instanceof JqString s ? s.stringValue() : val.toJsonString();
+                    sb.append(applyFormat(fmt.format(), val, str));
+                }
+            }
+            output.accept(JqString.of(sb.toString()));
+            return;
+        }
+
         JqValue val = fmt.input() != null ? eval(fmt.input(), input, env).getFirst() : input;
         String str = val instanceof JqString s ? s.stringValue() : val.toJsonString();
-        String result = switch (fmt.format()) {
+        output.accept(JqString.of(applyFormat(fmt.format(), val, str)));
+    }
+
+    private String applyFormat(String format, JqValue val, String str) {
+        return switch (format) {
             case "json" -> val.toJsonString();
             case "text" -> str;
             case "csv" -> formatCsv(val);
             case "tsv" -> formatTsv(val);
             case "html" -> escapeHtml(str);
             case "uri" -> encodeUri(str);
+            case "urid" -> decodeUri(str);
             case "base64" -> java.util.Base64.getEncoder().encodeToString(str.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             case "base64d" -> new String(java.util.Base64.getDecoder().decode(str), java.nio.charset.StandardCharsets.UTF_8);
             case "base32" -> base32Encode(str.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             case "base32d" -> new String(base32Decode(str), java.nio.charset.StandardCharsets.UTF_8);
             case "sh" -> shellQuote(str);
-            default -> throw new JqException("Unknown format: @" + fmt.format());
+            default -> throw new JqException("Unknown format: @" + format);
         };
-        output.accept(JqString.of(result));
     }
 
     private String formatCsv(JqValue val) {
@@ -649,7 +938,7 @@ public final class Evaluator {
         return s.replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
-                .replace("'", "&#39;")
+                .replace("'", "&apos;")
                 .replace("\"", "&quot;");
     }
 
@@ -659,6 +948,14 @@ public final class Evaluator {
                     .replace("+", "%20");
         } catch (Exception e) {
             throw new JqException("URI encoding failed: " + e.getMessage());
+        }
+    }
+
+    private String decodeUri(String s) {
+        try {
+            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new JqException("URI decoding failed: " + e.getMessage());
         }
     }
 
@@ -714,23 +1011,48 @@ public final class Evaluator {
                 } else if (base instanceof JqNull) {
                     throw new JqException("Cannot iterate over null (null)");
                 } else {
-                    throw new JqException("Cannot iterate over " + base.type().jqName());
+                    throw new JqException("Cannot iterate over " + base.type().jqName() + " (" + base.toJsonString() + ")");
                 }
             }
             case PipeExpr pipe -> {
                 // path(.foo[0,1]) = path(.foo | .[0,1])
                 // For each path component in left, evaluate right
-                evalPathComponents(pipe.left(), input, env, prefix, leftPath -> {
-                    // Get value at left path
-                    JqValue leftVal = getAtPath(input, ((JqArray) leftPath).arrayValue());
-                    // Clear prefix and set to left path components
-                    var newPrefix = new ArrayList<>(((JqArray) leftPath).arrayValue());
-                    evalPathComponents(pipe.right(), leftVal, env, newPrefix, output);
-                });
+                try {
+                    evalPathComponents(pipe.left(), input, env, prefix, leftPath -> {
+                        JqValue leftVal = getAtPath(input, ((JqArray) leftPath).arrayValue());
+                        var newPrefix = new ArrayList<>(((JqArray) leftPath).arrayValue());
+                        evalPathComponents(pipe.right(), leftVal, env, newPrefix, output);
+                    });
+                } catch (JqException e) {
+                    if (e.getMessage().startsWith("Invalid path expression near ")) {
+                        // Already has specific context — propagate as-is
+                        throw e;
+                    }
+                    if (e.getMessage().startsWith("Invalid path expression")) {
+                        // Sub-expression failed — evaluate left to get result value, then
+                        // generate "near attempt to ..." context from the right side
+                        JqValue[] leftResult = {null};
+                        try {
+                            eval(pipe.left(), input, env, val -> leftResult[0] = val);
+                        } catch (EmptyException ignored) {}
+                        if (leftResult[0] != null) {
+                            String context = describePathAttempt(pipe.right(), leftResult[0]);
+                            if (context != null) {
+                                throw new JqException("Invalid path expression near " + context);
+                            }
+                            throw new JqException("Invalid path expression with result " + leftResult[0].toJsonString());
+                        }
+                    }
+                    throw e;
+                }
             }
             case RecurseExpr ignored -> {
                 // path(..) outputs all paths
                 allPathsRecursive(input, new ArrayList<>(prefix), output);
+            }
+            case CommaExpr comma -> {
+                evalPathComponents(comma.left(), input, env, prefix, output);
+                evalPathComponents(comma.right(), input, env, prefix, output);
             }
             case FuncCallExpr fc when fc.name().equals("select") -> {
                 // path(select(f)) outputs the current path if f is truthy
@@ -739,8 +1061,85 @@ public final class Evaluator {
                     output.accept(JqArray.of(new ArrayList<>(prefix)));
                 }
             }
-            default -> throw new JqException("Invalid path expression");
+            case FuncCallExpr fc -> {
+                // Special handling for first/0 and last/0 — desugar to .[0] and .[-1]
+                if (fc.args().isEmpty() && fc.name().equals("first")) {
+                    evalPathComponents(
+                            new IndexExpr(new IdentityExpr(), new LiteralExpr(JqNumber.of(0)), SourceLocation.UNKNOWN),
+                            input, env, prefix, output);
+                    break;
+                }
+                if (fc.args().isEmpty() && fc.name().equals("last")) {
+                    evalPathComponents(
+                            new IndexExpr(new IdentityExpr(), new LiteralExpr(JqNumber.of(-1)), SourceLocation.UNKNOWN),
+                            input, env, prefix, output);
+                    break;
+                }
+                // Try to resolve function definition and evaluate its body as a path
+                Environment.FuncDef funcDef = env.getFunction(fc.name(), fc.args().size());
+                if (funcDef != null) {
+                    var callEnv = funcDef.closureEnv().child();
+                    for (int i = 0; i < funcDef.params().size(); i++) {
+                        callEnv.setFilterArg(funcDef.params().get(i),
+                                new Environment.FilterClosure(fc.args().get(i), env));
+                    }
+                    evalPathComponents(funcDef.body(), input, callEnv, prefix, output);
+                } else {
+                    // Builtin function — evaluate and check if it produces output
+                    JqValue[] result = {null};
+                    try {
+                        eval(expr, input, env, val -> result[0] = val);
+                    } catch (EmptyException ignored) {}
+                    if (result[0] != null) {
+                        throw new JqException("Invalid path expression with result " + result[0].toJsonString());
+                    }
+                    // No outputs (like empty) — valid for path(empty)
+                }
+            }
+            default -> {
+                // For other expressions: evaluate and check if they produce output.
+                // If no outputs, that's valid (like path(empty)).
+                JqValue[] result = {null};
+                try {
+                    eval(expr, input, env, val -> result[0] = val);
+                } catch (EmptyException ignored) {}
+                if (result[0] != null) {
+                    throw new JqException("Invalid path expression with result " + result[0].toJsonString());
+                }
+            }
         }
+    }
+
+    /**
+     * Describes what path operation was attempted on a value, for error messages.
+     * Returns null if the expression doesn't represent a recognizable path operation.
+     */
+    private String describePathAttempt(JqExpr expr, JqValue value) {
+        // For pipe expressions, describe the first (leftmost) path operation
+        if (expr instanceof JqExpr.PipeExpr pipe) {
+            return describePathAttempt(pipe.left(), value);
+        }
+        if (expr instanceof JqExpr.IndexExpr idx) {
+            if (idx.index() == null) {
+                // .[] — iterate
+                return "attempt to iterate through " + value.toJsonString();
+            }
+            // .[N] or .field
+            try {
+                var results = eval(idx.index(), value, new Environment());
+                if (!results.isEmpty()) {
+                    JqValue indexVal = results.getFirst();
+                    return "attempt to access element " + indexVal.toJsonString() + " of " + value.toJsonString();
+                }
+            } catch (Exception ignored) {}
+        }
+        if (expr instanceof JqExpr.DotFieldExpr df) {
+            return "attempt to access element \"" + df.field() + "\" of " + value.toJsonString();
+        }
+        if (expr instanceof JqExpr.IterateExpr) {
+            return "attempt to iterate through " + value.toJsonString();
+        }
+        return null;
     }
 
     private void allPathsRecursive(JqValue value, List<JqValue> currentPath, Consumer<JqValue> output) {

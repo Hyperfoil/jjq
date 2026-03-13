@@ -51,6 +51,14 @@ public final class JqNumber implements JqValue {
         }
     }
 
+    public boolean isNaN() {
+        return !isLong && decimalVal == null && Double.isNaN(rawDouble);
+    }
+
+    public boolean isInfinite() {
+        return !isLong && decimalVal == null && Double.isInfinite(rawDouble);
+    }
+
     public boolean isIntegral() {
         if (isLong) return true;
         if (decimalVal == null) return false; // NaN/Infinity
@@ -95,7 +103,15 @@ public final class JqNumber implements JqValue {
         }
         BigDecimal stripped = decimalVal.stripTrailingZeros();
         if (stripped.scale() <= 0) {
+            // Guard against extremely large scales that would create huge BigIntegers
+            if (stripped.scale() < -20) {
+                return stripped.toString(); // Scientific notation (e.g. 9E+999999999)
+            }
             return stripped.toBigInteger().toString();
+        }
+        // Guard against extremely small numbers with very large scale
+        if (stripped.scale() > 20) {
+            return stripped.toString(); // Scientific notation (e.g. 1E-999999999)
         }
         return stripped.toPlainString();
     }

@@ -361,7 +361,8 @@ class Phase2Test {
 
         @Test
         void testStringMultiplyZero() {
-            assertEquals(JqNull.NULL,
+            // jq 1.7+: "ab" * 0 = "" (empty string, not null)
+            assertEquals(JqString.of(""),
                     first(". * 0", JqString.of("ab")));
         }
 

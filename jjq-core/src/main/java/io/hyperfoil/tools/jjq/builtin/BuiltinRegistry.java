@@ -52,13 +52,19 @@ public final class BuiltinRegistry {
 
     private void registerDefaults() {
         // Core
-        register("length", 0, (input, args, env, eval, out) -> out.accept(JqNumber.of(input.length())));
+        register("length", 0, (input, args, env, eval, out) -> {
+            if (input instanceof JqNumber n) {
+                out.accept((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
+            } else {
+                out.accept(JqNumber.of(input.length()));
+            }
+        });
 
         register("utf8bytelength", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqString s) {
                 out.accept(JqNumber.of(s.stringValue().getBytes(java.nio.charset.StandardCharsets.UTF_8).length));
             } else {
-                throw new JqException("utf8bytelength requires string input");
+                throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") only strings have UTF-8 byte length");
             }
         });
 
@@ -94,10 +100,9 @@ public final class BuiltinRegistry {
         });
 
         register("values", 0, (input, args, env, eval, out) -> {
-            switch (input) {
-                case JqObject obj -> out.accept(JqArray.of(new ArrayList<>(obj.objectValue().values())));
-                case JqArray arr -> out.accept(arr);
-                default -> throw new JqException("values requires object or array input");
+            // values is a type-selector filter: passes through non-null values
+            if (!(input instanceof JqNull)) {
+                out.accept(input);
             }
         });
 
@@ -109,14 +114,12 @@ public final class BuiltinRegistry {
         });
 
         register("error", 0, (input, args, env, eval, out) -> {
-            String msg = input instanceof JqString s ? s.stringValue() : input.toJsonString();
-            throw new JqException(msg);
+            throw new JqException(input);
         });
 
         register("error", 1, (input, args, env, eval, out) -> {
             List<JqValue> msgVals = eval.eval(args.getFirst(), input, env);
-            String msg = msgVals.getFirst() instanceof JqString s ? s.stringValue() : msgVals.getFirst().toJsonString();
-            throw new JqException(msg);
+            throw new JqException(msgVals.getFirst());
         });
 
         register("has", 1, (input, args, env, eval, out) -> {
@@ -124,6 +127,7 @@ public final class BuiltinRegistry {
                 boolean result = switch (input) {
                     case JqObject obj -> obj.has(key instanceof JqString s ? s.stringValue() : key.toJsonString());
                     case JqArray arr -> {
+                        if (key instanceof JqNumber n && n.isNaN()) yield false;
                         int idx = (int) key.longValue();
                         yield idx >= 0 && idx < arr.arrayValue().size();
                     }
@@ -223,6 +227,25 @@ public final class BuiltinRegistry {
             out.accept(result);
         });
 
+        // add(f) — collect outputs of f, then add them
+        register("add", 1, (input, args, env, eval, out) -> {
+            var collected = new ArrayList<JqValue>();
+            try {
+                eval.eval(args.getFirst(), input, env, collected::add);
+            } catch (EmptyException _) {
+                // empty produces no outputs
+            }
+            if (collected.isEmpty()) {
+                out.accept(JqNull.NULL);
+                return;
+            }
+            JqValue result = collected.getFirst();
+            for (int i = 1; i < collected.size(); i++) {
+                result = result.add(collected.get(i));
+            }
+            out.accept(result);
+        });
+
         register("any", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr)) throw new JqException("any requires array input");
             out.accept(JqBoolean.of(arr.arrayValue().stream().anyMatch(JqValue::isTruthy)));
@@ -266,10 +289,13 @@ public final class BuiltinRegistry {
 
         register("flatten", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr)) throw new JqException("flatten requires array input");
-            int depth = (int) eval.eval(args.getFirst(), input, env).getFirst().longValue();
-            var result = new ArrayList<JqValue>();
-            flattenArray(arr, result, depth);
-            out.accept(JqArray.of(result));
+            eval.eval(args.getFirst(), input, env, depthVal -> {
+                int depth = (int) depthVal.longValue();
+                if (depth < 0) throw new JqException("flatten depth must not be negative");
+                var result = new ArrayList<JqValue>();
+                flattenArray(arr, result, depth);
+                out.accept(JqArray.of(result));
+            });
         });
 
         register("sort", 0, (input, args, env, eval, out) -> {
@@ -283,9 +309,13 @@ public final class BuiltinRegistry {
             if (!(input instanceof JqArray arr)) throw new JqException("sort_by requires array input");
             var list = new ArrayList<>(arr.arrayValue());
             list.sort((a, b) -> {
-                JqValue ka = eval.eval(args.getFirst(), a, env).getFirst();
-                JqValue kb = eval.eval(args.getFirst(), b, env).getFirst();
-                return ka.compareTo(kb);
+                var keysA = eval.eval(args.getFirst(), a, env);
+                var keysB = eval.eval(args.getFirst(), b, env);
+                for (int i = 0; i < Math.min(keysA.size(), keysB.size()); i++) {
+                    int cmp = keysA.get(i).compareTo(keysB.get(i));
+                    if (cmp != 0) return cmp;
+                }
+                return Integer.compare(keysA.size(), keysB.size());
             });
             out.accept(JqArray.of(list));
         });
@@ -380,10 +410,18 @@ public final class BuiltinRegistry {
                 out.accept(JqNull.NULL);
                 return;
             }
-            out.accept(arr.arrayValue().stream()
-                    .max((a, b) -> eval.eval(args.getFirst(), a, env).getFirst()
-                            .compareTo(eval.eval(args.getFirst(), b, env).getFirst()))
-                    .orElse(JqNull.NULL));
+            // jq's max_by returns the LAST element with the max key
+            JqValue maxElem = arr.arrayValue().getFirst();
+            JqValue maxKey = eval.eval(args.getFirst(), maxElem, env).getFirst();
+            for (int i = 1; i < arr.arrayValue().size(); i++) {
+                JqValue elem = arr.arrayValue().get(i);
+                JqValue key = eval.eval(args.getFirst(), elem, env).getFirst();
+                if (key.compareTo(maxKey) >= 0) {
+                    maxElem = elem;
+                    maxKey = key;
+                }
+            }
+            out.accept(maxElem);
         });
 
         register("transpose", 0, (input, args, env, eval, out) -> {
@@ -409,57 +447,70 @@ public final class BuiltinRegistry {
 
         // Iteration
         register("range", 1, (input, args, env, eval, out) -> {
-            long end = eval.eval(args.getFirst(), input, env).getFirst().longValue();
-            for (long i = 0; i < end; i++) {
-                out.accept(JqNumber.of(i));
-            }
+            eval.eval(args.getFirst(), input, env, endVal -> {
+                long end = endVal.longValue();
+                for (long i = 0; i < end; i++) {
+                    out.accept(JqNumber.of(i));
+                }
+            });
         });
 
         register("range", 2, (input, args, env, eval, out) -> {
-            long start = eval.eval(args.get(0), input, env).getFirst().longValue();
-            long end = eval.eval(args.get(1), input, env).getFirst().longValue();
-            for (long i = start; i < end; i++) {
-                out.accept(JqNumber.of(i));
-            }
+            eval.eval(args.get(0), input, env, startVal -> {
+                eval.eval(args.get(1), input, env, endVal -> {
+                    long start = startVal.longValue();
+                    long end = endVal.longValue();
+                    for (long i = start; i < end; i++) {
+                        out.accept(JqNumber.of(i));
+                    }
+                });
+            });
         });
 
         register("range", 3, (input, args, env, eval, out) -> {
-            JqValue startVal = eval.eval(args.get(0), input, env).getFirst();
-            JqValue endVal = eval.eval(args.get(1), input, env).getFirst();
-            JqValue stepVal = eval.eval(args.get(2), input, env).getFirst();
-            boolean useDouble = !(startVal instanceof JqNumber sn && sn.isIntegral())
-                    || !(endVal instanceof JqNumber en && en.isIntegral())
-                    || !(stepVal instanceof JqNumber tn && tn.isIntegral());
-            if (useDouble) {
-                double start = startVal.doubleValue(), end = endVal.doubleValue(), step = stepVal.doubleValue();
-                if (step > 0) {
-                    for (double i = start; i < end; i += step) out.accept(JqNumber.of(i));
-                } else if (step < 0) {
-                    for (double i = start; i > end; i += step) out.accept(JqNumber.of(i));
-                }
-            } else {
-                long start = startVal.longValue(), end = endVal.longValue(), step = stepVal.longValue();
-                if (step > 0) {
-                    for (long i = start; i < end; i += step) out.accept(JqNumber.of(i));
-                } else if (step < 0) {
-                    for (long i = start; i > end; i += step) out.accept(JqNumber.of(i));
-                }
-            }
+            eval.eval(args.get(0), input, env, startVal -> {
+                eval.eval(args.get(1), input, env, endVal -> {
+                    eval.eval(args.get(2), input, env, stepVal -> {
+                        boolean useDouble = !(startVal instanceof JqNumber sn && sn.isIntegral())
+                                || !(endVal instanceof JqNumber en && en.isIntegral())
+                                || !(stepVal instanceof JqNumber tn && tn.isIntegral());
+                        if (useDouble) {
+                            double start = startVal.doubleValue(), end = endVal.doubleValue(), step = stepVal.doubleValue();
+                            if (step > 0) {
+                                for (double i = start; i < end; i += step) out.accept(JqNumber.of(i));
+                            } else if (step < 0) {
+                                for (double i = start; i > end; i += step) out.accept(JqNumber.of(i));
+                            }
+                        } else {
+                            long start = startVal.longValue(), end = endVal.longValue(), step = stepVal.longValue();
+                            if (step > 0) {
+                                for (long i = start; i < end; i += step) out.accept(JqNumber.of(i));
+                            } else if (step < 0) {
+                                for (long i = start; i > end; i += step) out.accept(JqNumber.of(i));
+                            }
+                        }
+                    });
+                });
+            });
         });
 
         register("limit", 2, (input, args, env, eval, out) -> {
-            int n = (int) eval.eval(args.get(0), input, env).getFirst().longValue();
-            if (n <= 0) return;
-            int[] count = {0};
-            try {
-                eval.eval(args.get(1), input, env, val -> {
-                    if (count[0] < n) {
+            eval.eval(args.get(0), input, env, nVal -> {
+                long n = nVal.longValue();
+                if (n < 0) throw new JqException("limit doesn't support negative count");
+                if (n == 0) return;
+                long[] count = {0};
+                try {
+                    eval.eval(args.get(1), input, env, val -> {
                         out.accept(val);
                         count[0]++;
                         if (count[0] >= n) throw EmptyException.INSTANCE;
-                    }
-                });
-            } catch (EmptyException ignored) {}
+                    });
+                } catch (EmptyException ignored) {
+                } catch (JqException | JqTypeError e) {
+                    if (count[0] < n) throw e;
+                }
+            });
         });
 
         register("first", 1, (input, args, env, eval, out) -> {
@@ -469,10 +520,12 @@ public final class BuiltinRegistry {
                     if (!found[0]) {
                         found[0] = true;
                         out.accept(val);
-                        throw EmptyException.INSTANCE;
                     }
                 });
-            } catch (EmptyException ignored) {}
+            } catch (EmptyException ignored) {
+            } catch (JqException | JqTypeError e) {
+                if (!found[0]) throw e; // propagate error if no value found yet
+            }
         });
 
         register("last", 1, (input, args, env, eval, out) -> {
@@ -561,9 +614,9 @@ public final class BuiltinRegistry {
                 out.accept(input);
             } else if (input instanceof JqString s) {
                 try {
-                    out.accept(JqNumber.of(new BigDecimal(s.stringValue().trim())));
+                    out.accept(JqNumber.of(new BigDecimal(s.stringValue())));
                 } catch (NumberFormatException e) {
-                    throw new JqException("Cannot convert to number: " + s.stringValue());
+                    throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be parsed as a number");
                 }
             } else {
                 throw new JqException("Cannot convert " + input.type().jqName() + " to number");
@@ -584,22 +637,42 @@ public final class BuiltinRegistry {
             if (!(input instanceof JqString s)) throw new JqException("split requires string input");
             JqValue sep = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(sep instanceof JqString sepStr)) throw new JqException("split separator must be string");
-            String[] parts = s.stringValue().split(Pattern.quote(sepStr.stringValue()), -1);
-            var result = Arrays.stream(parts).map(p -> (JqValue) JqString.of(p)).toList();
+            String str = s.stringValue();
+            String sepVal = sepStr.stringValue();
+            List<JqValue> result;
+            if (sepVal.isEmpty()) {
+                // split("") splits into individual characters (codepoints)
+                result = str.codePoints()
+                        .mapToObj(cp -> (JqValue) JqString.of(new String(Character.toChars(cp))))
+                        .toList();
+            } else {
+                String[] parts = str.split(Pattern.quote(sepVal), -1);
+                result = Arrays.stream(parts).map(p -> (JqValue) JqString.of(p)).toList();
+            }
             out.accept(JqArray.of(result));
         });
 
         register("join", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr)) throw new JqException("join requires array input");
-            JqValue sep = eval.eval(args.getFirst(), input, env).getFirst();
-            String sepStr = sep instanceof JqString s ? s.stringValue() : sep.toJsonString();
-            var sb = new StringBuilder();
-            for (int i = 0; i < arr.arrayValue().size(); i++) {
-                if (i > 0) sb.append(sepStr);
-                JqValue elem = arr.arrayValue().get(i);
-                sb.append(elem instanceof JqString s ? s.stringValue() : elem.toJsonString());
-            }
-            out.accept(JqString.of(sb.toString()));
+            eval.eval(args.getFirst(), input, env, sep -> {
+                String sepStr = sep instanceof JqString s ? s.stringValue() : sep.toJsonString();
+                var sb = new StringBuilder();
+                for (int i = 0; i < arr.arrayValue().size(); i++) {
+                    if (i > 0) sb.append(sepStr);
+                    JqValue elem = arr.arrayValue().get(i);
+                    if (elem instanceof JqNull) continue; // null treated as empty in join
+                    if (elem instanceof JqString s) {
+                        sb.append(s.stringValue());
+                    } else if (elem instanceof JqNumber || elem instanceof JqBoolean) {
+                        sb.append(elem.toJsonString());
+                    } else {
+                        // jq errors when adding string to array/object
+                        throw new JqException("string (\"" + truncateValue(sb.toString()) + "\") and "
+                                + elem.type().jqName() + " (" + truncateValue(elem.toJsonString()) + ") cannot be added");
+                    }
+                }
+                out.accept(JqString.of(sb.toString()));
+            });
         });
 
         register("test", 1, (input, args, env, eval, out) -> {
@@ -691,29 +764,39 @@ public final class BuiltinRegistry {
         });
 
         register("startswith", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqString s)) throw new JqException("startswith requires string");
-            String prefix = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
-            out.accept(JqBoolean.of(s.stringValue().startsWith(prefix)));
+            JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
+            if (!(input instanceof JqString s) || !(arg instanceof JqString prefix)) {
+                throw new JqException("startswith() requires string inputs");
+            }
+            out.accept(JqBoolean.of(s.stringValue().startsWith(prefix.stringValue())));
         });
 
         register("endswith", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqString s)) throw new JqException("endswith requires string");
-            String suffix = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
-            out.accept(JqBoolean.of(s.stringValue().endsWith(suffix)));
+            JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
+            if (!(input instanceof JqString s) || !(arg instanceof JqString suffix)) {
+                throw new JqException("endswith() requires string inputs");
+            }
+            out.accept(JqBoolean.of(s.stringValue().endsWith(suffix.stringValue())));
         });
 
         register("ltrimstr", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqString s)) throw new JqException("ltrimstr requires string");
-            String prefix = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
+            JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
+            if (!(input instanceof JqString s) || !(arg instanceof JqString prefix)) {
+                throw new JqException("startswith() requires string inputs");
+            }
             String str = s.stringValue();
-            out.accept(JqString.of(str.startsWith(prefix) ? str.substring(prefix.length()) : str));
+            String p = prefix.stringValue();
+            out.accept(JqString.of(str.startsWith(p) ? str.substring(p.length()) : str));
         });
 
         register("rtrimstr", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqString s)) throw new JqException("rtrimstr requires string");
-            String suffix = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
+            JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
+            if (!(input instanceof JqString s) || !(arg instanceof JqString suffix)) {
+                throw new JqException("endswith() requires string inputs");
+            }
             String str = s.stringValue();
-            out.accept(JqString.of(str.endsWith(suffix) ? str.substring(0, str.length() - suffix.length()) : str));
+            String sfx = suffix.stringValue();
+            out.accept(JqString.of(str.endsWith(sfx) ? str.substring(0, str.length() - sfx.length()) : str));
         });
 
         register("explode", 0, (input, args, env, eval, out) -> {
@@ -725,71 +808,148 @@ public final class BuiltinRegistry {
         });
 
         register("implode", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("implode requires array");
+            if (!(input instanceof JqArray arr)) throw new JqException("implode input must be an array");
             var sb = new StringBuilder();
             for (JqValue v : arr.arrayValue()) {
-                sb.appendCodePoint((int) v.longValue());
+                if (!(v instanceof JqNumber n)) {
+                    throw new JqException(v.type().jqName() + " (" + v.toJsonString() + ") can't be imploded, unicode codepoint needs to be numeric");
+                }
+                if (n.isNaN()) {
+                    throw new JqException("number (null) can't be imploded, unicode codepoint needs to be numeric");
+                }
+                int cp = (int) n.longValue();
+                // jq replaces invalid codepoints (negative, > 0x10FFFF, surrogates 0xD800-0xDFFF) with U+FFFD
+                if (cp < 0 || !Character.isValidCodePoint(cp)
+                        || (cp >= 0xD800 && cp <= 0xDFFF)) {
+                    cp = 0xFFFD; // replacement character
+                }
+                sb.appendCodePoint(cp);
             }
             out.accept(JqString.of(sb.toString()));
         });
 
         register("indices", 1, (input, args, env, eval, out) -> {
-            JqValue target = eval.eval(args.getFirst(), input, env).getFirst();
-            if (input instanceof JqString s && target instanceof JqString t) {
-                var indices = new ArrayList<JqValue>();
-                int idx = 0;
-                while ((idx = s.stringValue().indexOf(t.stringValue(), idx)) >= 0) {
-                    indices.add(JqNumber.of(idx));
-                    idx++;
-                }
-                out.accept(JqArray.of(indices));
-            } else if (input instanceof JqArray arr) {
-                var indices = new ArrayList<JqValue>();
-                for (int i = 0; i < arr.arrayValue().size(); i++) {
-                    if (arr.arrayValue().get(i).equals(target)) {
-                        indices.add(JqNumber.of(i));
+            eval.eval(args.getFirst(), input, env, target -> {
+                if (input instanceof JqString s && target instanceof JqString t) {
+                    var indices = new ArrayList<JqValue>();
+                    String str = s.stringValue();
+                    String sub = t.stringValue();
+                    int idx = 0;
+                    while ((idx = str.indexOf(sub, idx)) >= 0) {
+                        // Convert UTF-16 char offset to codepoint offset
+                        int cpIdx = str.codePointCount(0, idx);
+                        indices.add(JqNumber.of(cpIdx));
+                        idx++;
                     }
+                    out.accept(JqArray.of(indices));
+                } else if (input instanceof JqArray arr) {
+                    var indices = new ArrayList<JqValue>();
+                    if (target instanceof JqArray sub) {
+                        // Subsequence matching
+                        List<JqValue> subList = sub.arrayValue();
+                        List<JqValue> arrList = arr.arrayValue();
+                        for (int i = 0; i <= arrList.size() - subList.size(); i++) {
+                            boolean match = true;
+                            for (int j = 0; j < subList.size(); j++) {
+                                if (!arrList.get(i + j).equals(subList.get(j))) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) indices.add(JqNumber.of(i));
+                        }
+                    } else {
+                        for (int i = 0; i < arr.arrayValue().size(); i++) {
+                            if (arr.arrayValue().get(i).equals(target)) {
+                                indices.add(JqNumber.of(i));
+                            }
+                        }
+                    }
+                    out.accept(JqArray.of(indices));
+                } else {
+                    throw new JqException("indices requires string or array");
                 }
-                out.accept(JqArray.of(indices));
-            } else {
-                throw new JqException("indices requires string or array");
-            }
+            });
         });
 
         register("index", 1, (input, args, env, eval, out) -> {
-            JqValue target = eval.eval(args.getFirst(), input, env).getFirst();
-            if (input instanceof JqString s && target instanceof JqString t) {
-                int idx = s.stringValue().indexOf(t.stringValue());
-                out.accept(idx >= 0 ? JqNumber.of(idx) : JqNull.NULL);
-            } else if (input instanceof JqArray arr) {
-                for (int i = 0; i < arr.arrayValue().size(); i++) {
-                    if (arr.arrayValue().get(i).equals(target)) {
-                        out.accept(JqNumber.of(i));
-                        return;
+            eval.eval(args.getFirst(), input, env, target -> {
+                if (input instanceof JqString s && target instanceof JqString t) {
+                    if (t.stringValue().isEmpty()) {
+                        out.accept(JqNull.NULL);
+                    } else {
+                        String str = s.stringValue();
+                        int idx = str.indexOf(t.stringValue());
+                        if (idx >= 0) {
+                            out.accept(JqNumber.of(str.codePointCount(0, idx)));
+                        } else {
+                            out.accept(JqNull.NULL);
+                        }
                     }
+                } else if (input instanceof JqArray arr) {
+                    if (target instanceof JqArray sub) {
+                        List<JqValue> subList = sub.arrayValue();
+                        List<JqValue> arrList = arr.arrayValue();
+                        for (int i = 0; i <= arrList.size() - subList.size(); i++) {
+                            boolean match = true;
+                            for (int j = 0; j < subList.size(); j++) {
+                                if (!arrList.get(i + j).equals(subList.get(j))) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) { out.accept(JqNumber.of(i)); return; }
+                        }
+                        out.accept(JqNull.NULL);
+                    } else {
+                        for (int i = 0; i < arr.arrayValue().size(); i++) {
+                            if (arr.arrayValue().get(i).equals(target)) {
+                                out.accept(JqNumber.of(i));
+                                return;
+                            }
+                        }
+                        out.accept(JqNull.NULL);
+                    }
+                } else {
+                    throw new JqException("index requires string or array");
                 }
-                out.accept(JqNull.NULL);
-            } else {
-                throw new JqException("index requires string or array");
-            }
+            });
         });
 
         register("rindex", 1, (input, args, env, eval, out) -> {
-            JqValue target = eval.eval(args.getFirst(), input, env).getFirst();
-            if (input instanceof JqString s && target instanceof JqString t) {
-                int idx = s.stringValue().lastIndexOf(t.stringValue());
-                out.accept(idx >= 0 ? JqNumber.of(idx) : JqNull.NULL);
-            } else if (input instanceof JqArray arr) {
-                for (int i = arr.arrayValue().size() - 1; i >= 0; i--) {
-                    if (arr.arrayValue().get(i).equals(target)) {
-                        out.accept(JqNumber.of(i));
-                        return;
+            eval.eval(args.getFirst(), input, env, target -> {
+                if (input instanceof JqString s && target instanceof JqString t) {
+                    String str = s.stringValue();
+                    int idx = str.lastIndexOf(t.stringValue());
+                    out.accept(idx >= 0 ? JqNumber.of(str.codePointCount(0, idx)) : JqNull.NULL);
+                } else if (input instanceof JqArray arr) {
+                    if (target instanceof JqArray sub) {
+                        List<JqValue> subList = sub.arrayValue();
+                        List<JqValue> arrList = arr.arrayValue();
+                        for (int i = arrList.size() - subList.size(); i >= 0; i--) {
+                            boolean match = true;
+                            for (int j = 0; j < subList.size(); j++) {
+                                if (!arrList.get(i + j).equals(subList.get(j))) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) { out.accept(JqNumber.of(i)); return; }
+                        }
+                        out.accept(JqNull.NULL);
+                    } else {
+                        for (int i = arr.arrayValue().size() - 1; i >= 0; i--) {
+                            if (arr.arrayValue().get(i).equals(target)) {
+                                out.accept(JqNumber.of(i));
+                                return;
+                            }
+                        }
+                        out.accept(JqNull.NULL);
                     }
+                } else {
+                    throw new JqException("rindex requires string or array");
                 }
-                out.accept(JqNull.NULL);
-            } else {
-                throw new JqException("rindex requires string or array");
-            }
+            });
         });
 
         // Math builtins
@@ -901,7 +1061,7 @@ public final class BuiltinRegistry {
 
         register("delpaths", 1, (input, args, env, eval, out) -> {
             JqValue pathsArr = eval.eval(args.getFirst(), input, env).getFirst();
-            if (!(pathsArr instanceof JqArray paths)) throw new JqException("delpaths requires array");
+            if (!(pathsArr instanceof JqArray paths)) throw new JqException("Paths must be specified as an array");
             JqValue result = input;
             // Delete paths in reverse order to maintain indices
             var pathList = new ArrayList<>(paths.arrayValue());
@@ -930,7 +1090,11 @@ public final class BuiltinRegistry {
 
         register("fromjson", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("fromjson requires string");
-            out.accept(parseJson(s.stringValue()));
+            try {
+                out.accept(JqValues.parseStrict(s.stringValue()));
+            } catch (IllegalArgumentException e) {
+                throw new JqException(e.getMessage());
+            }
         });
 
         register("ascii", 0, (input, args, env, eval, out) -> {
@@ -1024,6 +1188,11 @@ public final class BuiltinRegistry {
             out.accept(JqArray.of(names));
         });
 
+        // have_decnum — jjq uses BigDecimal internally, so decimal number support is available
+        register("have_decnum", 0, (input, args, env, eval, out) -> {
+            out.accept(JqBoolean.TRUE);
+        });
+
         register("env", 0, (input, args, env, eval, out) -> {
             var map = new LinkedHashMap<String, JqValue>();
             System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
@@ -1055,16 +1224,60 @@ public final class BuiltinRegistry {
 
         // del(path_expr) - delete elements at the given paths
         register("del", 1, (input, args, env, eval, out) -> {
-            // Collect paths, then delete them
+            JqExpr pathExpr = args.getFirst();
+            // Flatten comma expressions and collect all deletion targets
+            var subExprs = new ArrayList<JqExpr>();
+            flattenComma(pathExpr, subExprs);
+
+            // For flat array deletions (mix of indices and slices), collect all indices to remove
+            boolean allFlat = input instanceof JqArray && subExprs.stream().allMatch(
+                    e -> e instanceof JqExpr.IndexExpr || e instanceof JqExpr.SliceExpr
+                            || e instanceof JqExpr.IterateExpr);
+            if (allFlat) {
+                JqArray arr = (JqArray) input;
+                int len = arr.arrayValue().size();
+                var toRemove = new java.util.TreeSet<Integer>();
+                for (JqExpr sub : subExprs) {
+                    if (sub instanceof JqExpr.IndexExpr idx) {
+                        for (JqValue index : eval.eval(idx.index(), input, env)) {
+                            if (index instanceof JqNumber n && n.isNaN()) continue;
+                            int i = (int) ((JqNumber) index).longValue();
+                            if (i < 0) i += len;
+                            if (i >= 0 && i < len) toRemove.add(i);
+                        }
+                    } else if (sub instanceof JqExpr.SliceExpr sl) {
+                        Integer fromIdx = sl.from() != null ? (int) ((JqNumber) eval.eval(sl.from(), input, env).getFirst()).longValue() : null;
+                        Integer toIdx = sl.to() != null ? (int) ((JqNumber) eval.eval(sl.to(), input, env).getFirst()).longValue() : null;
+                        int start = fromIdx == null ? 0 : (fromIdx < 0 ? Math.max(0, len + fromIdx) : Math.min(fromIdx, len));
+                        int end = toIdx == null ? len : (toIdx < 0 ? Math.max(0, len + toIdx) : Math.min(toIdx, len));
+                        for (int i = start; i < end; i++) toRemove.add(i);
+                    } else if (sub instanceof JqExpr.IterateExpr) {
+                        for (int i = 0; i < len; i++) toRemove.add(i);
+                    }
+                }
+                var result = new ArrayList<JqValue>();
+                for (int i = 0; i < len; i++) {
+                    if (!toRemove.contains(i)) result.add(arr.arrayValue().get(i));
+                }
+                out.accept(JqArray.of(result));
+                return;
+            }
+
+            // General case: collect paths, sort, and delete
             var paths = new ArrayList<List<JqValue>>();
-            collectPaths(args.getFirst(), input, env, eval, paths);
+            for (JqExpr sub : subExprs) {
+                if (containsSlice(sub)) {
+                    // For slice in non-flat context, handle via updatePath
+                    input = eval.updatePath(sub, input, env, old -> List.of());
+                } else {
+                    collectPaths(sub, input, env, eval, paths);
+                }
+            }
             JqValue result = input;
-            // Sort paths in reverse order: deeper paths first, and for same-depth
-            // array indices, higher indices first (so deletion doesn't shift later indices)
+            // Sort paths: deeper first, higher array indices first
             paths.sort((a, b) -> {
                 int lenCmp = Integer.compare(b.size(), a.size());
                 if (lenCmp != 0) return lenCmp;
-                // Same length: compare element by element in reverse (higher index first)
                 for (int i = 0; i < a.size(); i++) {
                     if (a.get(i) instanceof JqNumber na && b.get(i) instanceof JqNumber nb) {
                         int cmp = Long.compare(nb.longValue(), na.longValue());
@@ -1118,26 +1331,17 @@ public final class BuiltinRegistry {
         register("iterables", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqArray || input instanceof JqObject) out.accept(input);
         });
-        register("values", 0, (input, args, env, eval, out) -> {
-            // Note: values/0 is already registered for object/array .values
-            // This won't be reached since it's registered above, but the type selector
-            // version filters non-null values
-            switch (input) {
-                case JqObject obj -> out.accept(JqArray.of(new ArrayList<>(obj.objectValue().values())));
-                case JqArray arr -> out.accept(arr);
-                default -> throw new JqException("values requires object or array input");
-            }
-        });
+        // values/0 already registered above as a type-selector filter
 
         // isempty(expr) - true if expr produces no output
         register("isempty", 1, (input, args, env, eval, out) -> {
             boolean[] found = {false};
             try {
-                eval.eval(args.getFirst(), input, env, val -> {
-                    found[0] = true;
-                    throw EmptyException.INSTANCE;
-                });
-            } catch (EmptyException ignored) {}
+                eval.eval(args.getFirst(), input, env, val -> found[0] = true);
+            } catch (EmptyException ignored) {
+            } catch (JqException | JqTypeError e) {
+                if (!found[0]) throw e;
+            }
             out.accept(JqBoolean.of(!found[0]));
         });
 
@@ -1149,26 +1353,32 @@ public final class BuiltinRegistry {
                     var conds = eval.eval(args.get(1), val, env);
                     if (conds.stream().anyMatch(JqValue::isTruthy)) {
                         found[0] = true;
-                        throw EmptyException.INSTANCE;
                     }
                 });
-            } catch (EmptyException ignored) {}
+            } catch (EmptyException ignored) {
+            } catch (JqException | JqTypeError e) {
+                if (!found[0]) throw e;
+            }
             out.accept(JqBoolean.of(found[0]));
         });
 
         // all(generator; condition) - two-arg all
         register("all", 2, (input, args, env, eval, out) -> {
-            boolean[] allTrue = {true};
+            boolean[] allMatch = {true};
+            boolean[] foundFalse = {false};
             try {
                 eval.eval(args.get(0), input, env, val -> {
                     var conds = eval.eval(args.get(1), val, env);
                     if (conds.stream().noneMatch(JqValue::isTruthy)) {
-                        allTrue[0] = false;
-                        throw EmptyException.INSTANCE;
+                        allMatch[0] = false;
+                        foundFalse[0] = true;
                     }
                 });
-            } catch (EmptyException ignored) {}
-            out.accept(JqBoolean.of(allTrue[0]));
+            } catch (EmptyException ignored) {
+            } catch (JqException | JqTypeError e) {
+                if (!foundFalse[0]) throw e;
+            }
+            out.accept(JqBoolean.of(allMatch[0]));
         });
 
         // halt - exit with code 0
@@ -1205,44 +1415,60 @@ public final class BuiltinRegistry {
         });
 
         register("strftime", 1, (input, args, env, eval, out) -> {
-            long epoch = input.longValue();
-            String format = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
-            var instant = java.time.Instant.ofEpochSecond(epoch);
-            var zdt = java.time.ZonedDateTime.ofInstant(instant, java.time.ZoneOffset.UTC);
+            JqValue fmtVal = eval.eval(args.getFirst(), input, env).getFirst();
+            if (!(fmtVal instanceof JqString)) throw new JqException("strftime/1 requires a string format");
+            String format = fmtVal.stringValue();
+            java.time.ZonedDateTime zdt;
+            if (input instanceof JqNumber n) {
+                zdt = java.time.ZonedDateTime.ofInstant(
+                        java.time.Instant.ofEpochSecond(n.longValue()), java.time.ZoneOffset.UTC);
+            } else if (input instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
+                for (int i = 0; i < arr.arrayValue().size(); i++) {
+                    if (!(arr.arrayValue().get(i) instanceof JqNumber)) {
+                        throw new JqException("strftime/1 requires parsed datetime inputs");
+                    }
+                }
+                zdt = brokenDownTimeToZdt(arr);
+            } else {
+                throw new JqException("strftime/1 requires parsed datetime inputs");
+            }
             var formatter = java.time.format.DateTimeFormatter.ofPattern(
                     jqFormatToJava(format));
             out.accept(JqString.of(formatter.format(zdt)));
         });
 
         register("gmtime", 0, (input, args, env, eval, out) -> {
-            long epoch = input.longValue();
-            var instant = java.time.Instant.ofEpochSecond(epoch);
+            double epochDouble = input.doubleValue();
+            long epochSec = (long) Math.floor(epochDouble);
+            double frac = epochDouble - epochSec;
+            var instant = java.time.Instant.ofEpochSecond(epochSec);
             var zdt = java.time.ZonedDateTime.ofInstant(instant, java.time.ZoneOffset.UTC);
+            JqValue seconds = frac != 0.0
+                    ? JqNumber.of(zdt.getSecond() + frac)
+                    : JqNumber.of(zdt.getSecond());
             out.accept(JqArray.of(List.of(
-                    JqNumber.of(zdt.getYear() - 1900),
+                    JqNumber.of(zdt.getYear()),
                     JqNumber.of(zdt.getMonthValue() - 1),
                     JqNumber.of(zdt.getDayOfMonth()),
                     JqNumber.of(zdt.getHour()),
                     JqNumber.of(zdt.getMinute()),
-                    JqNumber.of(zdt.getSecond()),
+                    seconds,
                     JqNumber.of(zdt.getDayOfWeek().getValue() % 7),
                     JqNumber.of(zdt.getDayOfYear() - 1)
             )));
         });
 
         register("mktime", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr) || arr.arrayValue().size() < 6)
-                throw new JqException("mktime requires broken-down time array");
-            var items = arr.arrayValue();
-            int year = (int) items.get(0).longValue() + 1900;
-            int month = (int) items.get(1).longValue() + 1;
-            int day = (int) items.get(2).longValue();
-            int hour = (int) items.get(3).longValue();
-            int minute = (int) items.get(4).longValue();
-            int second = (int) items.get(5).longValue();
-            var zdt = java.time.ZonedDateTime.of(year, month, day, hour, minute, second, 0,
-                    java.time.ZoneOffset.UTC);
-            out.accept(JqNumber.of(zdt.toEpochSecond()));
+            if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
+                throw new JqException("mktime requires parsed datetime inputs");
+            }
+            // Validate all elements are numeric
+            for (int i = 0; i < arr.arrayValue().size(); i++) {
+                if (!(arr.arrayValue().get(i) instanceof JqNumber)) {
+                    throw new JqException("mktime requires parsed datetime inputs");
+                }
+            }
+            out.accept(JqNumber.of(brokenDownTimeToZdt(arr).toEpochSecond()));
         });
 
         register("dateadd", 2, (input, args, env, eval, out) -> {
@@ -1277,6 +1503,51 @@ public final class BuiltinRegistry {
                 default -> throw new JqException("Unknown time unit: " + unit);
             };
             out.accept(JqNumber.of(instant.getEpochSecond()));
+        });
+
+        // strflocaltime — same as strftime but with local time zone (simplified: use UTC)
+        register("strflocaltime", 1, (input, args, env, eval, out) -> {
+            eval.eval(args.getFirst(), input, env, fmtVal -> {
+            if (!(fmtVal instanceof JqString)) throw new JqException("strflocaltime/1 requires a string format");
+            String format = fmtVal.stringValue();
+            java.time.ZonedDateTime zdt;
+            if (input instanceof JqNumber n) {
+                zdt = java.time.ZonedDateTime.ofInstant(
+                        java.time.Instant.ofEpochSecond(n.longValue()), java.time.ZoneOffset.UTC);
+            } else if (input instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
+                for (int i = 0; i < arr.arrayValue().size(); i++) {
+                    if (!(arr.arrayValue().get(i) instanceof JqNumber)) {
+                        throw new JqException("strflocaltime/1 requires parsed datetime inputs");
+                    }
+                }
+                zdt = brokenDownTimeToZdt(arr);
+            } else {
+                throw new JqException("strflocaltime/1 requires parsed datetime inputs");
+            }
+            var formatter = java.time.format.DateTimeFormatter.ofPattern(jqFormatToJava(format));
+            out.accept(JqString.of(formatter.format(zdt)));
+            });
+        });
+
+        // strptime — parse a date string according to a format, returning broken-down time
+        register("strptime", 1, (input, args, env, eval, out) -> {
+            if (!(input instanceof JqString s)) throw new JqException("strptime/1 requires string input");
+            JqValue fmtVal = eval.eval(args.getFirst(), input, env).getFirst();
+            if (!(fmtVal instanceof JqString)) throw new JqException("strptime/1 requires a string format");
+            String format = fmtVal.stringValue();
+            var formatter = java.time.format.DateTimeFormatter.ofPattern(jqFormatToJava(format));
+            var parsed = java.time.LocalDateTime.parse(s.stringValue(), formatter);
+            var zdt = parsed.atZone(java.time.ZoneOffset.UTC);
+            out.accept(JqArray.of(List.of(
+                    JqNumber.of(zdt.getYear()),
+                    JqNumber.of(zdt.getMonthValue() - 1),
+                    JqNumber.of(zdt.getDayOfMonth()),
+                    JqNumber.of(zdt.getHour()),
+                    JqNumber.of(zdt.getMinute()),
+                    JqNumber.of(zdt.getSecond()),
+                    JqNumber.of(zdt.getDayOfWeek().getValue() % 7),
+                    JqNumber.of(zdt.getDayOfYear() - 1)
+            )));
         });
 
         // ascii - convert number to character
@@ -1338,17 +1609,25 @@ public final class BuiltinRegistry {
 
         // nth(n; expr)
         register("nth", 2, (input, args, env, eval, out) -> {
-            int n = (int) eval.eval(args.get(0), input, env).getFirst().longValue();
-            int[] count = {0};
-            try {
-                eval.eval(args.get(1), input, env, val -> {
-                    if (count[0] == n) {
-                        out.accept(val);
-                        throw EmptyException.INSTANCE;
-                    }
-                    count[0]++;
-                });
-            } catch (EmptyException ignored) {}
+            eval.eval(args.get(0), input, env, nVal -> {
+                long n = nVal.longValue();
+                if (n < 0) throw new JqException("nth doesn't support negative indices");
+                int[] count = {0};
+                boolean[] found = {false};
+                try {
+                    eval.eval(args.get(1), input, env, val -> {
+                        if (count[0] == n) {
+                            found[0] = true;
+                            out.accept(val);
+                            throw EmptyException.INSTANCE;
+                        }
+                        count[0]++;
+                    });
+                } catch (EmptyException ignored) {
+                } catch (JqException | JqTypeError e) {
+                    if (!found[0]) throw e;
+                }
+            });
         });
 
         // getpath already registered, setpath already registered
@@ -1390,8 +1669,11 @@ public final class BuiltinRegistry {
         register("abs", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqNumber n) {
                 out.accept(JqNumber.of(n.decimalValue().abs()));
+            } else if (input instanceof JqNull) {
+                out.accept(JqNull.NULL);
             } else {
-                throw new JqException("abs requires number input");
+                // jq: abs on non-number returns the value itself
+                out.accept(input);
             }
         });
 
@@ -1440,37 +1722,44 @@ public final class BuiltinRegistry {
 
         // walk(f) - recursively apply f to all values bottom-up
         register("walk", 1, (input, args, env, eval, out) -> {
-            JqValue walked = walkValue(input, args.getFirst(), env, eval);
-            out.accept(walked);
+            // walk recurses into children, then applies filter at top level
+            // For children, only the first result is used; at top level, all results are emitted
+            JqValue transformed = walkTransform(input, args.getFirst(), env, eval);
+            eval.eval(args.getFirst(), transformed, env, out);
         });
 
         // bsearch(x) - binary search in sorted array
         register("bsearch", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("bsearch requires array input");
-            JqValue target = eval.eval(args.getFirst(), input, env).getFirst();
-            List<JqValue> list = arr.arrayValue();
-            int lo = 0, hi = list.size() - 1;
-            while (lo <= hi) {
-                int mid = (lo + hi) >>> 1;
-                int cmp = list.get(mid).compareTo(target);
-                if (cmp < 0) lo = mid + 1;
-                else if (cmp > 0) hi = mid - 1;
-                else { out.accept(JqNumber.of(mid)); return; }
+            if (!(input instanceof JqArray arr)) {
+                throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be searched from");
             }
-            out.accept(JqNumber.of(-lo - 1));
+            eval.eval(args.getFirst(), input, env, target -> {
+                List<JqValue> list = arr.arrayValue();
+                int lo = 0, hi = list.size() - 1;
+                while (lo <= hi) {
+                    int mid = (lo + hi) >>> 1;
+                    int cmp = list.get(mid).compareTo(target);
+                    if (cmp < 0) lo = mid + 1;
+                    else if (cmp > 0) hi = mid - 1;
+                    else { out.accept(JqNumber.of(mid)); return; }
+                }
+                out.accept(JqNumber.of(-lo - 1));
+            });
         });
 
         // skip(n; generator) - skip the first n outputs of a generator
         register("skip", 2, (input, args, env, eval, out) -> {
-            int n = (int) eval.eval(args.get(0), input, env).getFirst().longValue();
-            if (n < 0) throw new JqException("skip doesn't support negative count");
-            int[] count = {0};
-            try {
-                eval.eval(args.get(1), input, env, val -> {
-                    if (count[0] >= n) out.accept(val);
-                    count[0]++;
-                });
-            } catch (EmptyException ignored) {}
+            eval.eval(args.get(0), input, env, nVal -> {
+                int n = (int) nVal.longValue();
+                if (n < 0) throw new JqException("skip doesn't support negative count");
+                int[] count = {0};
+                try {
+                    eval.eval(args.get(1), input, env, val -> {
+                        if (count[0] >= n) out.accept(val);
+                        count[0]++;
+                    });
+                } catch (EmptyException ignored) {}
+            });
         });
 
         // INDEX(stream; idx_expr) - build object from stream
@@ -1617,10 +1906,93 @@ public final class BuiltinRegistry {
             out.accept(JqNumber.of(Math.fma(x, y, z)));
         });
 
-        // String operations
+        // String operations — trim family (Unicode-aware)
         register("trim", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqString s)) throw new JqException("trim requires string");
-            out.accept(JqString.of(s.stringValue().trim()));
+            if (!(input instanceof JqString s)) throw new JqException("trim input must be a string");
+            out.accept(JqString.of(unicodeTrim(s.stringValue())));
+        });
+        register("ltrim", 0, (input, args, env, eval, out) -> {
+            if (!(input instanceof JqString s)) throw new JqException("trim input must be a string");
+            out.accept(JqString.of(unicodeLtrim(s.stringValue())));
+        });
+        register("rtrim", 0, (input, args, env, eval, out) -> {
+            if (!(input instanceof JqString s)) throw new JqException("trim input must be a string");
+            out.accept(JqString.of(unicodeRtrim(s.stringValue())));
+        });
+        register("trimstr", 1, (input, args, env, eval, out) -> {
+            if (!(input instanceof JqString s)) throw new JqException("trimstr requires string");
+            String fix = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
+            String str = s.stringValue();
+            // Trim from both ends
+            if (fix.isEmpty()) { out.accept(input); return; }
+            while (str.startsWith(fix)) str = str.substring(fix.length());
+            while (str.endsWith(fix)) str = str.substring(0, str.length() - fix.length());
+            out.accept(JqString.of(str));
+        });
+
+        // toboolean
+        register("toboolean", 0, (input, args, env, eval, out) -> {
+            if (input instanceof JqBoolean) { out.accept(input); return; }
+            if (input instanceof JqString s) {
+                String v = s.stringValue();
+                if (v.equals("true")) { out.accept(JqBoolean.TRUE); return; }
+                if (v.equals("false")) { out.accept(JqBoolean.FALSE); return; }
+                throw new JqException("string (" + JqString.of(v).toJsonString() + ") cannot be parsed as a boolean");
+            }
+            throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be parsed as a boolean");
+        });
+
+        // pick/1 — select paths from input
+        register("pick", 1, (input, args, env, eval, out) -> {
+            // Evaluate the path expression to get paths
+            var paths = new ArrayList<List<JqValue>>();
+            eval.eval(new JqExpr.FuncCallExpr("path", args), input, env, pathVal -> {
+                if (pathVal instanceof JqArray arr) {
+                    paths.add(arr.arrayValue());
+                }
+            });
+            JqValue result = JqNull.NULL;
+            for (List<JqValue> path : paths) {
+                JqValue val = getPath(input, path, 0);
+                result = setPath(result, path, 0, val);
+            }
+            out.accept(result);
+        });
+
+        // IN/1 and IN/2 — membership test
+        register("IN", 1, (input, args, env, eval, out) -> {
+            // input | IN(generator) — tests if input is in the generator's outputs
+            var values = eval.eval(args.getFirst(), input, env);
+            for (JqValue v : values) {
+                if (input.equals(v)) { out.accept(JqBoolean.TRUE); return; }
+            }
+            out.accept(JqBoolean.FALSE);
+        });
+        register("IN", 2, (input, args, env, eval, out) -> {
+            // IN(stream; filter) — check if any output of stream is in filter's outputs
+            var filterOutputs = eval.eval(args.get(1), input, env);
+            var filterSet = new java.util.HashSet<>(filterOutputs);
+            var streamOutputs = eval.eval(args.get(0), input, env);
+            boolean found = false;
+            for (JqValue v : streamOutputs) {
+                if (filterSet.contains(v)) { found = true; break; }
+            }
+            out.accept(JqBoolean.of(found));
+        });
+
+        // JOIN(idx; idx_expr) — for each element $x in input array, output [$x, idx[$x | idx_expr]]
+        register("JOIN", 2, (input, args, env, eval, out) -> {
+            JqValue idx = eval.eval(args.get(0), input, env).getFirst();
+            if (!(input instanceof JqArray arr)) {
+                throw new JqTypeError("Cannot iterate over " + input.type().jqName());
+            }
+            var results = new java.util.ArrayList<JqValue>();
+            for (JqValue elem : arr.arrayValue()) {
+                JqValue key = eval.eval(args.get(1), elem, env).getFirst();
+                JqValue looked = (idx instanceof JqObject obj) ? obj.objectValue().get(key.stringValue()) : null;
+                results.add(JqArray.of(java.util.List.of(elem, looked != null ? looked : JqNull.NULL)));
+            }
+            out.accept(JqArray.of(results));
         });
 
         // tostream/fromstream - streaming representation
@@ -1788,6 +2160,28 @@ public final class BuiltinRegistry {
         } catch (JqException | JqTypeError ignored) {}
     }
 
+    private JqValue getPath(JqValue current, List<JqValue> path, int idx) {
+        if (idx >= path.size()) return current;
+        JqValue key = path.get(idx);
+        if (key instanceof JqString s) {
+            if (current instanceof JqObject obj) {
+                JqValue child = obj.objectValue().get(s.stringValue());
+                return getPath(child != null ? child : JqNull.NULL, path, idx + 1);
+            }
+            return JqNull.NULL;
+        } else if (key instanceof JqNumber n) {
+            if (current instanceof JqArray arr) {
+                int i = (int) n.longValue();
+                var list = arr.arrayValue();
+                if (i >= 0 && i < list.size()) {
+                    return getPath(list.get(i), path, idx + 1);
+                }
+            }
+            return JqNull.NULL;
+        }
+        return JqNull.NULL;
+    }
+
     private JqValue setPath(JqValue current, List<JqValue> path, int idx, JqValue value) {
         if (idx >= path.size()) return value;
         JqValue key = path.get(idx);
@@ -1798,18 +2192,28 @@ public final class BuiltinRegistry {
             map.put(s.stringValue(), setPath(map.getOrDefault(s.stringValue(), JqNull.NULL), path, idx + 1, value));
             return JqObject.of(map);
         } else if (key instanceof JqNumber n) {
+            if (current instanceof JqObject) {
+                throw new JqException("Cannot index object with number (" + n.toJsonString() + ")");
+            }
             int i = (int) n.longValue();
             var list = current instanceof JqArray arr
                     ? new ArrayList<>(arr.arrayValue())
                     : new ArrayList<JqValue>();
+            // Resolve negative indices
+            if (i < 0) {
+                i = list.size() + i;
+                if (i < 0) throw new JqException("Out of bounds negative array index");
+            }
+            if (i > 536870911) throw new JqException("Array index too large");
             while (list.size() <= i) list.add(JqNull.NULL);
             list.set(i, setPath(list.get(i), path, idx + 1, value));
             return JqArray.of(list);
         }
-        throw new JqException("Invalid path component: " + key.type().jqName());
+        throw new JqException("Cannot update field at " + key.type().jqName() + " index of " + current.type().jqName());
     }
 
     private JqValue deletePath(JqValue current, List<JqValue> path, int idx) {
+        if (path.isEmpty()) return JqNull.NULL; // del(.) — delete root
         if (idx >= path.size()) return current;
         JqValue key = path.get(idx);
         if (idx == path.size() - 1) {
@@ -1819,6 +2223,7 @@ public final class BuiltinRegistry {
                 map.remove(s.stringValue());
                 return JqObject.of(map);
             } else if (key instanceof JqNumber n && current instanceof JqArray arr) {
+                if (n.isNaN()) return current; // NaN index: no-op
                 var list = new ArrayList<>(arr.arrayValue());
                 int i = (int) n.longValue();
                 if (i >= 0 && i < list.size()) list.remove(i);
@@ -1828,10 +2233,12 @@ public final class BuiltinRegistry {
         }
         // Recurse
         if (key instanceof JqString s && current instanceof JqObject obj) {
+            if (!obj.objectValue().containsKey(s.stringValue())) return current; // path doesn't exist
             var map = new LinkedHashMap<>(obj.objectValue());
-            map.put(s.stringValue(), deletePath(map.getOrDefault(s.stringValue(), JqNull.NULL), path, idx + 1));
+            map.put(s.stringValue(), deletePath(map.get(s.stringValue()), path, idx + 1));
             return JqObject.of(map);
         } else if (key instanceof JqNumber n && current instanceof JqArray arr) {
+            if (n.isNaN()) return current; // NaN index: no-op
             var list = new ArrayList<>(arr.arrayValue());
             int i = (int) n.longValue();
             if (i >= 0 && i < list.size()) {
@@ -2022,64 +2429,36 @@ public final class BuiltinRegistry {
 
     private void collectPaths(JqExpr pathExpr, JqValue input, Environment env,
                                Evaluator eval, List<List<JqValue>> paths) {
-        // Evaluate path expression to get paths
-        switch (pathExpr) {
-            case JqExpr.DotFieldExpr df ->
-                    paths.add(List.of(JqString.of(df.field())));
-            case JqExpr.IndexExpr idx -> {
-                for (JqValue base : eval.eval(idx.expr(), input, env)) {
-                    for (JqValue index : eval.eval(idx.index(), input, env)) {
-                        paths.add(List.of(index));
-                    }
+        // Use path() evaluation for all expressions — handles compound paths like .foo[0]
+        try {
+            eval.eval(new JqExpr.PathExpr(pathExpr), input, env, pathVal -> {
+                if (pathVal instanceof JqArray arr) {
+                    paths.add(arr.arrayValue());
                 }
-            }
-            case JqExpr.IterateExpr iter -> {
-                for (JqValue base : eval.eval(iter.expr(), input, env)) {
-                    if (base instanceof JqArray arr) {
-                        for (int i = 0; i < arr.arrayValue().size(); i++) {
-                            paths.add(List.of(JqNumber.of(i)));
-                        }
-                    } else if (base instanceof JqObject obj) {
-                        for (String key : obj.objectValue().keySet()) {
-                            paths.add(List.of(JqString.of(key)));
-                        }
-                    }
-                }
-            }
-            case JqExpr.PipeExpr pipe -> {
-                // For .foo.bar style - build compound paths
-                var leftPaths = new ArrayList<List<JqValue>>();
-                collectPaths(pipe.left(), input, env, eval, leftPaths);
-                for (List<JqValue> leftPath : leftPaths) {
-                    JqValue subInput = getAtPath(input, leftPath);
-                    var rightPaths = new ArrayList<List<JqValue>>();
-                    collectPaths(pipe.right(), subInput, env, eval, rightPaths);
-                    for (List<JqValue> rightPath : rightPaths) {
-                        var combined = new ArrayList<>(leftPath);
-                        combined.addAll(rightPath);
-                        paths.add(combined);
-                    }
-                }
-            }
-            case JqExpr.CommaExpr comma -> {
-                collectPaths(comma.left(), input, env, eval, paths);
-                collectPaths(comma.right(), input, env, eval, paths);
-            }
-            case JqExpr.SliceExpr ignored ->
-                    throw new JqException("del does not support slice expressions");
-            default -> {
-                // For complex expressions, try to extract path from evaluation
-                try {
-                    eval.eval(new JqExpr.PathExpr(pathExpr), input, env, pathVal -> {
-                        if (pathVal instanceof JqArray arr) {
-                            paths.add(arr.arrayValue());
-                        }
-                    });
-                } catch (Exception ignored) {
-                    throw new JqException("Cannot extract path from expression for del()");
-                }
-            }
+            });
+        } catch (EmptyException ignored) {
+            // del(empty) — no paths, input unchanged
+        } catch (Exception ignored) {
+            throw new JqException("Cannot extract path from expression for del()");
         }
+    }
+
+    private void flattenComma(JqExpr expr, List<JqExpr> result) {
+        if (expr instanceof JqExpr.CommaExpr c) {
+            flattenComma(c.left(), result);
+            flattenComma(c.right(), result);
+        } else {
+            result.add(expr);
+        }
+    }
+
+    private boolean containsSlice(JqExpr expr) {
+        return switch (expr) {
+            case JqExpr.SliceExpr ignored -> true;
+            case JqExpr.CommaExpr c -> containsSlice(c.left()) || containsSlice(c.right());
+            case JqExpr.PipeExpr p -> containsSlice(p.left()) || containsSlice(p.right());
+            default -> false;
+        };
     }
 
     private JqValue getAtPath(JqValue value, List<JqValue> path) {
@@ -2163,24 +2542,31 @@ public final class BuiltinRegistry {
     }
 
     private JqValue walkValue(JqValue value, JqExpr filter, Environment env, Evaluator eval) {
-        JqValue transformed = switch (value) {
+        JqValue transformed = walkTransform(value, filter, env, eval);
+        var results = eval.eval(filter, transformed, env);
+        return results.isEmpty() ? null : results.getFirst();
+    }
+
+    private JqValue walkTransform(JqValue value, JqExpr filter, Environment env, Evaluator eval) {
+        return switch (value) {
             case JqArray arr -> {
                 var list = new ArrayList<JqValue>();
                 for (JqValue elem : arr.arrayValue()) {
-                    list.add(walkValue(elem, filter, env, eval));
+                    JqValue walked = walkValue(elem, filter, env, eval);
+                    if (walked != null) list.add(walked);
                 }
                 yield JqArray.of(list);
             }
             case JqObject obj -> {
                 var map = new LinkedHashMap<String, JqValue>();
                 for (var entry : obj.objectValue().entrySet()) {
-                    map.put(entry.getKey(), walkValue(entry.getValue(), filter, env, eval));
+                    JqValue walked = walkValue(entry.getValue(), filter, env, eval);
+                    if (walked != null) map.put(entry.getKey(), walked);
                 }
                 yield JqObject.of(map);
             }
             default -> value;
         };
-        return eval.eval(filter, transformed, env).getFirst();
     }
 
     private void toStream(JqValue value, List<JqValue> path, Consumer<JqValue> output) {
@@ -2209,26 +2595,89 @@ public final class BuiltinRegistry {
         }
     }
 
+    private java.time.ZonedDateTime brokenDownTimeToZdt(JqArray arr) {
+        var items = arr.arrayValue();
+        int year = items.size() > 0 ? (int) items.get(0).longValue() : 1970;
+        int month = items.size() > 1 ? (int) items.get(1).longValue() + 1 : 1;
+        int day = items.size() > 2 ? (int) items.get(2).longValue() : 1;
+        int hour = items.size() > 3 ? (int) items.get(3).longValue() : 0;
+        int minute = items.size() > 4 ? (int) items.get(4).longValue() : 0;
+        int second = items.size() > 5 ? (int) items.get(5).longValue() : 0;
+        return java.time.ZonedDateTime.of(year, month, day, hour, minute, second, 0,
+                java.time.ZoneOffset.UTC);
+    }
+
     private String jqFormatToJava(String format) {
-        // Convert common strftime directives to Java DateTimeFormatter patterns
-        return format
-                .replace("%Y", "yyyy")
-                .replace("%m", "MM")
-                .replace("%d", "dd")
-                .replace("%H", "HH")
-                .replace("%M", "mm")
-                .replace("%S", "ss")
-                .replace("%Z", "z")
-                .replace("%z", "Z")
-                .replace("%j", "DDD")
-                .replace("%a", "EEE")
-                .replace("%A", "EEEE")
-                .replace("%b", "MMM")
-                .replace("%B", "MMMM")
-                .replace("%p", "a")
-                .replace("%I", "hh")
-                .replace("%e", " d")
-                .replace("%%", "%");
+        // Convert strftime directives to Java DateTimeFormatter patterns.
+        // Literal characters must be quoted in single quotes for DateTimeFormatter.
+        var directives = Map.ofEntries(
+                Map.entry('Y', "yyyy"), Map.entry('m', "MM"), Map.entry('d', "dd"),
+                Map.entry('H', "HH"), Map.entry('M', "mm"), Map.entry('S', "ss"),
+                Map.entry('Z', "z"), Map.entry('z', "Z"), Map.entry('j', "DDD"),
+                Map.entry('a', "EEE"), Map.entry('A', "EEEE"), Map.entry('b', "MMM"),
+                Map.entry('B', "MMMM"), Map.entry('p', "a"), Map.entry('I', "hh"),
+                Map.entry('e', " d")
+        );
+        var sb = new StringBuilder();
+        var literal = new StringBuilder();
+        for (int i = 0; i < format.length(); i++) {
+            char c = format.charAt(i);
+            if (c == '%' && i + 1 < format.length()) {
+                char next = format.charAt(i + 1);
+                if (next == '%') {
+                    literal.append('%');
+                    i++;
+                } else {
+                    String replacement = directives.get(next);
+                    if (replacement != null) {
+                        if (!literal.isEmpty()) {
+                            sb.append('\'').append(literal.toString().replace("'", "''")).append('\'');
+                            literal.setLength(0);
+                        }
+                        sb.append(replacement);
+                        i++;
+                    } else {
+                        literal.append(c);
+                    }
+                }
+            } else {
+                literal.append(c);
+            }
+        }
+        if (!literal.isEmpty()) {
+            sb.append('\'').append(literal.toString().replace("'", "''")).append('\'');
+        }
+        return sb.toString();
+    }
+
+    // Unicode-aware whitespace trimming (matches jq's trim behavior)
+    private static boolean isUnicodeWhitespace(int cp) {
+        return Character.isWhitespace(cp) || Character.getType(cp) == Character.SPACE_SEPARATOR
+                || cp == 0x0085 || cp == 0x00A0 || cp == 0x2007 || cp == 0x202F;
+    }
+
+    private static String unicodeTrim(String s) {
+        return unicodeRtrim(unicodeLtrim(s));
+    }
+
+    private static String unicodeLtrim(String s) {
+        int i = 0;
+        while (i < s.length()) {
+            int cp = s.codePointAt(i);
+            if (!isUnicodeWhitespace(cp)) break;
+            i += Character.charCount(cp);
+        }
+        return s.substring(i);
+    }
+
+    private static String unicodeRtrim(String s) {
+        int i = s.length();
+        while (i > 0) {
+            int cp = s.codePointBefore(i);
+            if (!isUnicodeWhitespace(cp)) break;
+            i -= Character.charCount(cp);
+        }
+        return s.substring(0, i);
     }
 
     private static String asciiUpperCase(String s) {
@@ -2293,5 +2742,13 @@ public final class BuiltinRegistry {
         double xx = ax - 2.356194491;
         double result = Math.sqrt(0.636619772 / ax) * Math.cos(xx);
         return x < 0 ? -result : result;
+    }
+
+    /** Truncate a value string for error messages, matching jq's behavior (25 chars + "...") */
+    private static String truncateValue(String s) {
+        if (s.length() > 25) {
+            return s.substring(0, 25) + "...";
+        }
+        return s;
     }
 }

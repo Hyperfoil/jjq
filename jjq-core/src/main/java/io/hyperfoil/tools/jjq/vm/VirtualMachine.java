@@ -197,7 +197,7 @@ public final class VirtualMachine {
     private static JqValue fieldAccess(JqValue val, String field) {
         if (val instanceof JqObject obj) return obj.get(field);
         if (val instanceof JqNull) return JqNull.NULL;
-        throw new JqException("Cannot index " + val.type().jqName() + " with string \"" + field + "\"");
+        throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + field + "\")");
     }
 
     public List<JqValue> execute(JqValue inputValue, Environment environment) {
@@ -257,7 +257,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(JqNull.NULL);
                         } else {
-                            throw new JqException("Cannot index " + val.type().jqName() + " with string \"" + field + "\"");
+                            throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + field + "\")");
                         }
                     }
 
@@ -292,7 +292,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             throw new JqException("Cannot iterate over null (null)");
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName());
+                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
                         }
                     }
 
@@ -304,16 +304,20 @@ public final class VirtualMachine {
                         JqValue mid;
                         if (val instanceof JqObject obj) mid = obj.get(f1);
                         else if (val instanceof JqNull) mid = JqNull.NULL;
-                        else throw new JqException("Cannot index " + val.type().jqName() + " with string \"" + f1 + "\"");
+                        else throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + f1 + "\")");
                         if (mid instanceof JqObject obj2) push(obj2.get(f2));
                         else if (mid instanceof JqNull) push(JqNull.NULL);
-                        else throw new JqException("Cannot index " + mid.type().jqName() + " with string \"" + f2 + "\"");
+                        else throw new JqException("Cannot index " + mid.type().jqName() + " with string (\"" + f2 + "\")");
                     }
 
                     // Inlined builtins
                     case BUILTIN_LENGTH -> {
                         JqValue val = pop();
-                        push(JqNumber.of(val.length()));
+                        if (val instanceof JqNumber n) {
+                            push((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
+                        } else {
+                            push(JqNumber.of(val.length()));
+                        }
                     }
 
                     case BUILTIN_TYPE -> {
@@ -340,12 +344,11 @@ public final class VirtualMachine {
 
                     case BUILTIN_VALUES -> {
                         JqValue val = pop();
-                        if (val instanceof JqObject obj) {
-                            push(JqArray.of(new ArrayList<>(obj.objectValue().values())));
-                        } else if (val instanceof JqArray) {
-                            push(val);
+                        // values is a type-selector (jq 1.7+): select(. != null)
+                        if (val instanceof JqNull) {
+                            doBacktrack();
                         } else {
-                            throw new JqException(val.type().jqName() + " has no values");
+                            push(val);
                         }
                     }
 
@@ -367,10 +370,14 @@ public final class VirtualMachine {
                         if (val instanceof JqNumber) push(val);
                         else if (val instanceof JqString s) {
                             String str = s.stringValue().trim();
-                            if (str.contains(".") || str.contains("e") || str.contains("E")) {
-                                push(JqNumber.of(new java.math.BigDecimal(str)));
-                            } else {
-                                push(JqNumber.of(Long.parseLong(str)));
+                            try {
+                                if (str.contains(".") || str.contains("e") || str.contains("E")) {
+                                    push(JqNumber.of(new java.math.BigDecimal(str)));
+                                } else {
+                                    push(JqNumber.of(Long.parseLong(str)));
+                                }
+                            } catch (NumberFormatException e) {
+                                throw new JqException(val.type().jqName() + " (" + val.toJsonString() + ") cannot be parsed as a number");
                             }
                         } else {
                             throw new JqException(val.type().jqName() + " cannot be converted to number");
@@ -489,10 +496,13 @@ public final class VirtualMachine {
                     case BUILTIN_ABS -> {
                         JqValue val = pop();
                         if (val instanceof JqNumber n) {
-                            if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
+                            if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
                             else push(JqNumber.of(n.decimalValue().abs()));
+                        } else if (val instanceof JqNull) {
+                            push(JqNull.NULL);
                         } else {
-                            throw new JqException(val.type().jqName() + " has no absolute value");
+                            // jq: abs on non-number returns the value itself
+                            push(val);
                         }
                     }
 
@@ -504,7 +514,11 @@ public final class VirtualMachine {
                     case BUILTIN_FROMJSON -> {
                         JqValue val = pop();
                         if (val instanceof JqString s) {
-                            push(JqValues.parse(s.stringValue()));
+                            try {
+                                push(JqValues.parseStrict(s.stringValue()));
+                            } catch (IllegalArgumentException e) {
+                                throw new JqException(e.getMessage());
+                            }
                         } else {
                             throw new JqException(val.type().jqName() + " cannot be parsed as JSON");
                         }
@@ -570,7 +584,7 @@ public final class VirtualMachine {
                             push(JqObject.of(map));
                         } else if ("__loc__".equals(name)) {
                             var map = new java.util.LinkedHashMap<String, JqValue>();
-                            map.put("file", JqString.of("<stdin>"));
+                            map.put("file", JqString.of("<top-level>"));
                             map.put("line", JqNumber.of(1));
                             push(JqObject.of(map));
                         } else {
@@ -584,7 +598,7 @@ public final class VirtualMachine {
                     }
 
                     // Indexed variable slots
-                    case LOAD_SLOT -> push(varSlots[inst.arg1()]);
+                    case LOAD_SLOT -> { JqValue sv = varSlots[inst.arg1()]; push(sv != null ? sv : JqNull.NULL); }
                     case STORE_SLOT -> varSlots[inst.arg1()] = pop();
 
                     // Scope
@@ -618,7 +632,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName());
+                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
                         }
                     }
 
@@ -633,7 +647,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName());
+                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
                         }
                     }
 
@@ -647,7 +661,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(initVal);
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName());
+                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
                         }
                     }
 
@@ -700,10 +714,13 @@ public final class VirtualMachine {
 
     private JqValue indexValue(JqValue base, JqValue index) {
         return switch (base) {
-            case JqArray arr when index instanceof JqNumber n -> arr.get((int) n.longValue());
+            case JqArray arr when index instanceof JqNumber n -> {
+                if (n.isNaN()) yield JqNull.NULL;
+                yield arr.get((int) n.longValue());
+            }
             case JqObject obj when index instanceof JqString s -> obj.get(s.stringValue());
             case JqNull _ -> JqNull.NULL;
-            default -> throw new JqException("Cannot index " + base.type().jqName() + " with " + index.type().jqName());
+            default -> throw new JqException("Cannot index " + base.type().jqName() + " with " + index.type().jqName() + " (" + index.toJsonString() + ")");
         };
     }
 
@@ -769,7 +786,12 @@ public final class VirtualMachine {
         int newBtp = tryPoint.btDepth;
         for (int i = newBtp; i < btp; i++) btStack[i].clear();
         btp = newBtp;
-        push(JqString.of(e.getMessage()));
+        // Preserve the original JqValue from error() if available
+        if (e instanceof JqException je && je.jqValue() != null) {
+            push(je.jqValue());
+        } else {
+            push(JqString.of(e.getMessage()));
+        }
         pc = tryPoint.catchPc;
     }
 
@@ -899,7 +921,7 @@ public final class VirtualMachine {
                     String field = bytecode.name(bodyInst.arg1());
                     if (v instanceof JqObject obj) push(obj.get(field));
                     else if (v instanceof JqNull) push(JqNull.NULL);
-                    else throw new JqException("Cannot index " + v.type().jqName() + " with string \"" + field + "\"");
+                    else throw new JqException("Cannot index " + v.type().jqName() + " with string (\"" + field + "\")");
                 }
                 case DOT_FIELD2 -> {
                     JqValue v = pop();
@@ -908,10 +930,10 @@ public final class VirtualMachine {
                     JqValue mid;
                     if (v instanceof JqObject obj) mid = obj.get(f1);
                     else if (v instanceof JqNull) mid = JqNull.NULL;
-                    else throw new JqException("Cannot index " + v.type().jqName() + " with string \"" + f1 + "\"");
+                    else throw new JqException("Cannot index " + v.type().jqName() + " with string (\"" + f1 + "\")");
                     if (mid instanceof JqObject obj2) push(obj2.get(f2));
                     else if (mid instanceof JqNull) push(JqNull.NULL);
-                    else throw new JqException("Cannot index " + mid.type().jqName() + " with string \"" + f2 + "\"");
+                    else throw new JqException("Cannot index " + mid.type().jqName() + " with string (\"" + f2 + "\")");
                 }
                 case NOT -> push(JqBoolean.of(!pop().isTruthy()));
                 case EQ -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.equals(r))); }
@@ -920,7 +942,14 @@ public final class VirtualMachine {
                 case GT -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.compareTo(r) > 0)); }
                 case LE -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.compareTo(r) <= 0)); }
                 case GE -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.compareTo(r) >= 0)); }
-                case BUILTIN_LENGTH -> { JqValue v = pop(); push(JqNumber.of(v.length())); }
+                case BUILTIN_LENGTH -> {
+                    JqValue v = pop();
+                    if (v instanceof JqNumber n) {
+                        push((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
+                    } else {
+                        push(JqNumber.of(v.length()));
+                    }
+                }
                 case BUILTIN_TYPE -> { JqValue v = pop(); push(JqString.of(v.type().jqName())); }
                 case BUILTIN_TOSTRING -> {
                     JqValue v = pop();
@@ -935,8 +964,15 @@ public final class VirtualMachine {
                 case JUMP_IF_TRUE -> { if (pop().isTruthy()) bodyPc = bodyInst.arg1(); }
                 case JUMP_IF_FALSE -> { if (!pop().isTruthy()) bodyPc = bodyInst.arg1(); }
                 case SET_INPUT_PEEK -> input = peek();
-                case LOAD_SLOT -> push(varSlots[bodyInst.arg1()]);
+                case LOAD_SLOT -> { JqValue sv2 = varSlots[bodyInst.arg1()]; push(sv2 != null ? sv2 : JqNull.NULL); }
                 case STORE_SLOT -> varSlots[bodyInst.arg1()] = pop();
+                case BUILTIN_FLOOR -> {
+                    JqValue v = pop();
+                    if (v instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
+                    else throw new JqException(v.type().jqName() + " cannot be floored");
+                }
+                case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(indexValue(base, idx)); }
+                case SET_INPUT -> input = pop();
                 default -> throw new JqException("Unsupported opcode in COLLECT_ITERATE body: " + bodyInst.op());
             }
         }

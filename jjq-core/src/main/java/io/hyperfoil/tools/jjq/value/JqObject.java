@@ -55,7 +55,7 @@ public final class JqObject implements JqValue {
             if (!first) sb.append(',');
             first = false;
             sb.append(JqString.of(e.getKey()).toJsonString());
-            sb.append(':');
+            sb.append(":");
             sb.append(e.getValue().toJsonString());
         }
         sb.append('}');

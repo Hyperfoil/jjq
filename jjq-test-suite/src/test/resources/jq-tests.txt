@@ -327,7 +327,7 @@ keys
 
 values
 {"a":1,"b":2}
-[1,2]
+{"a":1,"b":2}
 
 %% Has/In
 has("a")
@@ -1686,7 +1686,7 @@ fromjson
 %% @html extended
 @html
 "<script>alert('xss')</script>"
-"&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"
+"&lt;script&gt;alert(&apos;xss&apos;)&lt;/script&gt;"
 
 %% @csv extended
 @csv
@@ -1745,7 +1745,7 @@ keys
 
 values
 {}
-[]
+{}
 
 length
 {}

@@ -73,7 +73,7 @@ public class JqUpstreamTest {
                     group.clear();
                     groupStartLine = lineNum + 1;
                 } else {
-                    group.add(line);
+                    group.add(convertCaretNotation(line));
                 }
             }
             if (group.size() >= 3) {
@@ -101,17 +101,44 @@ public class JqUpstreamTest {
                                         results.stream().map(JqValue::toJsonString).toList()));
 
                 for (int i = 0; i < tc.expectedOutputs().size(); i++) {
-                    String expected = tc.expectedOutputs().get(i);
-                    String actual = results.get(i).toJsonString();
+                    String expectedStr = tc.expectedOutputs().get(i);
+                    JqValue actual = results.get(i);
+                    // Compare parsed JSON values (jq --run-tests compares semantically)
+                    JqValue expected = JqValues.parse(expectedStr);
                     assertEquals(expected, actual,
-                            "Output %d mismatch for filter '%s' with input '%s'"
-                                    .formatted(i, tc.filter(), tc.input()));
+                            "Output %d mismatch for filter '%s' with input '%s': expected %s but got %s"
+                                    .formatted(i, tc.filter(), tc.input(),
+                                            expectedStr, actual.toJsonString()));
                 }
             });
         } catch (Throwable e) {
+            System.err.println("SKIP[%d] %s — %s: %s".formatted(
+                    tc.lineNumber(), tc.filter(),
+                    e.getClass().getSimpleName(), e.getMessage()));
             Assumptions.abort("%s [line %d] %s — %s".formatted(
                     tc.filter(), tc.lineNumber(),
                     e.getClass().getSimpleName(), e.getMessage()));
         }
+    }
+
+    /**
+     * Converts caret notation (^@, ^A-^Z, ^[, ^\, ^], ^^, ^_) to actual control characters.
+     * jq's test runner interprets these as control chars 0x00-0x1F.
+     */
+    private static String convertCaretNotation(String s) {
+        if (s.indexOf('^') < 0) return s;
+        var sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) == '^' && i + 1 < s.length()) {
+                char next = s.charAt(i + 1);
+                if (next >= '@' && next <= '_') {
+                    sb.append((char) (next - '@'));
+                    i++;
+                    continue;
+                }
+            }
+            sb.append(s.charAt(i));
+        }
+        return sb.toString();
     }
 }

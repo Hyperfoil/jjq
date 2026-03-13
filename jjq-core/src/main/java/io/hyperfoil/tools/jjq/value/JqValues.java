@@ -14,7 +14,36 @@ public final class JqValues {
 
     public static JqValue parse(String json) {
         json = json.trim();
+        // Strip UTF-8 BOM if present
+        if (!json.isEmpty() && json.charAt(0) == '\uFEFF') {
+            json = json.substring(1);
+        }
         return parseValue(json, new int[]{0});
+    }
+
+    /**
+     * Strict parse: requires the entire string to be a single valid JSON value.
+     * Used by fromjson to reject trailing content like "NaN1".
+     */
+    public static JqValue parseStrict(String json) {
+        String trimmed = json.trim();
+        if (trimmed.isEmpty()) return JqNull.NULL;
+        // Strip UTF-8 BOM if present
+        if (trimmed.charAt(0) == '\uFEFF') {
+            trimmed = trimmed.substring(1);
+        }
+        int[] pos = {0};
+        JqValue result = parseValue(trimmed, pos);
+        // Skip trailing whitespace
+        while (pos[0] < trimmed.length() && Character.isWhitespace(trimmed.charAt(pos[0]))) {
+            pos[0]++;
+        }
+        if (pos[0] < trimmed.length()) {
+            throw new IllegalArgumentException(
+                    "Invalid numeric literal at EOF at line 1, column " + trimmed.length()
+                            + " (while parsing '" + trimmed + "')");
+        }
+        return result;
     }
 
     /**
@@ -42,7 +71,25 @@ public final class JqValues {
             case '"' -> parseString(json, pos);
             case 't' -> { pos[0] += 4; yield JqBoolean.TRUE; }
             case 'f' -> { pos[0] += 5; yield JqBoolean.FALSE; }
-            case 'n' -> { pos[0] += 4; yield JqNull.NULL; }
+            case 'n' -> {
+                // Distinguish between "null" and "nan"
+                if (pos[0] + 2 < json.length() && json.charAt(pos[0] + 1) == 'a' && json.charAt(pos[0] + 2) == 'n') {
+                    pos[0] += 3;
+                    yield JqNumber.of(Double.NaN);
+                }
+                pos[0] += 4;
+                yield JqNull.NULL;
+            }
+            case 'I' -> {
+                // Infinity
+                pos[0] += 8; // "Infinity"
+                yield JqNumber.of(Double.POSITIVE_INFINITY);
+            }
+            case 'N' -> {
+                // NaN
+                pos[0] += 3;
+                yield JqNumber.of(Double.NaN);
+            }
             default -> parseNumber(json, pos);
         };
     }
@@ -54,6 +101,13 @@ public final class JqValues {
         if (pos[0] < json.length() && json.charAt(pos[0]) == '}') { pos[0]++; return JqObject.of(map); }
         while (true) {
             skipWs(json, pos);
+            if (pos[0] >= json.length() || json.charAt(pos[0]) != '"') {
+                char got = pos[0] < json.length() ? json.charAt(pos[0]) : '?';
+                throw new IllegalArgumentException(
+                        "Invalid string literal; expected \", but got " + got
+                                + " at line 1, column " + (pos[0] + 1)
+                                + " (while parsing '" + json + "')");
+            }
             String key = parseString(json, pos).stringValue();
             skipWs(json, pos);
             pos[0]++; // skip :
@@ -112,7 +166,20 @@ public final class JqValues {
 
     private static JqNumber parseNumber(String json, int[] pos) {
         int start = pos[0];
-        if (pos[0] < json.length() && json.charAt(pos[0]) == '-') pos[0]++;
+        if (pos[0] < json.length() && json.charAt(pos[0]) == '-') {
+            pos[0]++;
+            // Handle -Infinity and -NaN
+            if (pos[0] < json.length()) {
+                if (json.charAt(pos[0]) == 'I') {
+                    pos[0] += 8; // "Infinity"
+                    return JqNumber.of(Double.NEGATIVE_INFINITY);
+                }
+                if (json.charAt(pos[0]) == 'N') {
+                    pos[0] += 3; // "NaN"
+                    return JqNumber.of(Double.NaN); // -NaN is same as NaN
+                }
+            }
+        }
         while (pos[0] < json.length() && Character.isDigit(json.charAt(pos[0]))) pos[0]++;
         boolean isDecimal = false;
         if (pos[0] < json.length() && json.charAt(pos[0]) == '.') {
@@ -128,12 +195,21 @@ public final class JqValues {
         }
         String numStr = json.substring(start, pos[0]);
         if (isDecimal) {
-            return JqNumber.of(new BigDecimal(numStr));
+            try {
+                return JqNumber.of(new BigDecimal(numStr));
+            } catch (NumberFormatException | ArithmeticException e) {
+                // Extreme exponents: use double (produces Infinity or 0.0)
+                return JqNumber.of(Double.parseDouble(numStr));
+            }
         }
         try {
             return JqNumber.of(Long.parseLong(numStr));
         } catch (NumberFormatException e) {
-            return JqNumber.of(new BigDecimal(numStr));
+            try {
+                return JqNumber.of(new BigDecimal(numStr));
+            } catch (NumberFormatException | ArithmeticException e2) {
+                return JqNumber.of(Double.parseDouble(numStr));
+            }
         }
     }
 

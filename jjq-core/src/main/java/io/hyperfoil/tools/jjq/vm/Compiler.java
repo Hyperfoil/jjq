@@ -141,7 +141,8 @@ public final class Compiler {
             }
 
             case IndexExpr idx -> {
-                if (!modifiesInput(idx.expr()) && !modifiesInput(idx.index())) {
+                if (!modifiesInput(idx.expr()) && !modifiesInput(idx.index())
+                        && !containsGenerator(idx.index())) {
                     compileExpr(idx.expr());
                     compileExpr(idx.index());
                     emit(INDEX);
@@ -177,7 +178,8 @@ public final class Compiler {
                 JqValue folded = tryFoldArithmetic(arith);
                 if (folded != null) {
                     emit(PUSH_CONST, addConstant(folded));
-                } else if (!modifiesInput(arith.left()) && !modifiesInput(arith.right())) {
+                } else if (!modifiesInput(arith.left()) && !modifiesInput(arith.right())
+                        && !containsGenerator(arith.left()) && !containsGenerator(arith.right())) {
                     compileExpr(arith.left());
                     compileExpr(arith.right());
                     emit(switch (arith.op()) {
@@ -197,7 +199,8 @@ public final class Compiler {
                 if (folded != null) {
                     if (folded.equals(JqBoolean.TRUE)) emit(PUSH_TRUE);
                     else emit(PUSH_FALSE);
-                } else if (!modifiesInput(comp.left()) && !modifiesInput(comp.right())) {
+                } else if (!modifiesInput(comp.left()) && !modifiesInput(comp.right())
+                        && !containsGenerator(comp.left()) && !containsGenerator(comp.right())) {
                     compileExpr(comp.left());
                     compileExpr(comp.right());
                     emit(switch (comp.op()) {
@@ -214,7 +217,8 @@ public final class Compiler {
             }
 
             case LogicalExpr log -> {
-                if (!modifiesInput(log.left()) && !modifiesInput(log.right())) {
+                if (!modifiesInput(log.left()) && !modifiesInput(log.right())
+                        && !containsGenerator(log.left()) && !containsGenerator(log.right())) {
                     if (log.op() == JqExpr.LogicalExpr.Op.AND) {
                         compileExpr(log.left());
                         int jumpFalse1 = emitPlaceholder(JUMP_IF_FALSE);
@@ -399,7 +403,8 @@ public final class Compiler {
             case StringInterpolationExpr _ -> emitEvalAst(expr);
 
             case AlternativeExpr alt -> {
-                if (!modifiesInput(alt.left()) && !modifiesInput(alt.right())) {
+                if (isSingleOutputExpr(alt.left()) && isSingleOutputExpr(alt.right())
+                        && !modifiesInput(alt.left()) && !modifiesInput(alt.right())) {
                     compileExpr(alt.left());
                     emit(DUP);
                     int jumpTrue = emitPlaceholder(JUMP_IF_TRUE);
@@ -538,7 +543,8 @@ public final class Compiler {
             case ArithmeticExpr a -> isSingleOutputExpr(a.left()) && isSingleOutputExpr(a.right());
             case ComparisonExpr c -> isSingleOutputExpr(c.left()) && isSingleOutputExpr(c.right());
             case NotExpr n -> isSingleOutputExpr(n.expr());
-            case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) >= 0;
+            case FuncCallExpr fc -> fc.args().isEmpty() && inlineBuiltin(fc.name()) >= 0
+                    && !isFilterBuiltin(fc.name());
             default -> false;
         };
     }
@@ -551,8 +557,10 @@ public final class Compiler {
             case DotFieldExpr _ -> false;
             case NegateExpr n -> bodyUsesTreeWalker(n.expr());
             case ArithmeticExpr a -> modifiesInput(a.left()) || modifiesInput(a.right())
+                    || containsGenerator(a.left()) || containsGenerator(a.right())
                     || bodyUsesTreeWalker(a.left()) || bodyUsesTreeWalker(a.right());
             case ComparisonExpr c -> modifiesInput(c.left()) || modifiesInput(c.right())
+                    || containsGenerator(c.left()) || containsGenerator(c.right())
                     || bodyUsesTreeWalker(c.left()) || bodyUsesTreeWalker(c.right());
             case PipeExpr p -> bodyUsesTreeWalker(p.left()) || bodyUsesTreeWalker(p.right());
             case ArrayConstructExpr a -> a.body() != null && bodyUsesTreeWalker(a.body());
@@ -562,6 +570,7 @@ public final class Compiler {
                     || (i.elseBranch() != null && bodyUsesTreeWalker(i.elseBranch()));
             case NotExpr n -> bodyUsesTreeWalker(n.expr());
             case LogicalExpr l -> modifiesInput(l.left()) || modifiesInput(l.right())
+                    || containsGenerator(l.left()) || containsGenerator(l.right())
                     || bodyUsesTreeWalker(l.left()) || bodyUsesTreeWalker(l.right());
             case ReduceExpr r -> bodyUsesTreeWalker(r.source()) || bodyUsesTreeWalker(r.init()) || bodyUsesTreeWalker(r.update());
             case VariableBindExpr vb -> bodyUsesTreeWalker(vb.expr()) || bodyUsesTreeWalker(vb.body());
@@ -674,6 +683,22 @@ public final class Compiler {
             case "tojson" -> BUILTIN_TOJSON;
             case "fromjson" -> BUILTIN_FROMJSON;
             default -> -1;
+        };
+    }
+
+    /** Builtins that can produce 0 outputs (filters) — not safe for COLLECT_ITERATE single-output path */
+    private boolean isFilterBuiltin(String name) {
+        return "values".equals(name) || "empty".equals(name);
+    }
+
+    private boolean containsGenerator(JqExpr expr) {
+        return switch (expr) {
+            case CommaExpr _ -> true;
+            case IterateExpr _ -> true;
+            case NegateExpr n -> containsGenerator(n.expr());
+            case ArithmeticExpr a -> containsGenerator(a.left()) || containsGenerator(a.right());
+            case IndexExpr i -> containsGenerator(i.expr()) || containsGenerator(i.index());
+            default -> false;
         };
     }
 

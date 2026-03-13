@@ -158,7 +158,7 @@ class VirtualMachineTest {
         @Test void sort() { assertEquals(JqValues.parse("[1,2,3]"), vmOne("sort", "[3,1,2]")); }
         @Test void reverse() { assertEquals(JqValues.parse("[3,2,1]"), vmOne("reverse", "[1,2,3]")); }
         @Test void tostring() { assertEquals(JqString.of("42"), vmOne("tostring", "42")); }
-        @Test void values() { assertEquals(JqValues.parse("[1,2]"), vmOne("values", "{\"a\":1,\"b\":2}")); }
+        @Test void values() { assertEquals(JqValues.parse("{\"a\":1,\"b\":2}"), vmOne("values", "{\"a\":1,\"b\":2}")); }
         @Test void notTrue() { assertEquals(JqBoolean.FALSE, vmOne("not", "true")); }
         @Test void notFalse() { assertEquals(JqBoolean.TRUE, vmOne("not", "false")); }
         @Test void tonumber() { assertEquals(JqNumber.of(42), vmOne("tonumber", "\"42\"")); }

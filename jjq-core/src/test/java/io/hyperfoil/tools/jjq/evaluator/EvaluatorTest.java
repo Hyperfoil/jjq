@@ -251,8 +251,10 @@ class EvaluatorTest {
 
     @Test
     void testValues() {
+        // values is a type-selector (jq 1.7+): select(. != null)
+        // Non-null input passes through unchanged
         var result = first("values", "{\"a\":1,\"b\":2}");
-        assertInstanceOf(JqArray.class, result);
+        assertInstanceOf(JqObject.class, result);
     }
 
     @Test
