@@ -8,7 +8,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 
 - **Full jq syntax** — pipes, field access, iteration, array/object construction, string interpolation, reduce, foreach, try-catch, label-break, destructuring bind, function definitions, and more
 - **179 builtin functions** — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
-- **Bytecode VM** — up to 15x faster than jackson-jq with constant folding and peephole optimizations
+- **Bytecode VM** — up to 18x faster than jackson-jq with constant folding, peephole optimizations, and fast-path shape detection
 - **fastjson2 integration** — lazy zero-copy conversion, byte buffer processing, and JSON stream support
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
 - **Java 21+** — leverages sealed classes, records, and pattern matching
@@ -21,7 +21,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
-| `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests |
+| `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (95.1% passing) |
 | `jjq-benchmark` | JMH benchmarks comparing jjq VM and jackson-jq |
 
 ## Quick Start
@@ -241,11 +241,14 @@ jq expression string
 
 ### Bytecode VM
 
-The VM compiles jq expressions to ~65 opcodes and executes them on a stack machine. Key design features:
+The VM compiles jq expressions to 72 opcodes and executes them on a stack machine. Key design features:
 
 - **FORK/BACKTRACK** for jq's generator semantics (multiple outputs per expression)
 - **21 inlined builtin opcodes** (length, type, keys, sort, etc.) avoiding interpreter overhead
 - **DOT_FIELD2** compound instruction for `.a.b` chained field access
+- **Fused iteration opcodes** (COLLECT_ITERATE, REDUCE_ITERATE) that bypass backtracking for common patterns
+- **Parallel array dispatch** — bytecode stored as parallel `int[]` arrays for zero-overhead opcode access
+- **Program shape detection** — identity, field access, and pipe-arith patterns bypass the VM entirely
 - **Constant folding** evaluates literal expressions (`2 + 3` -> `5`) at compile time
 - **Peephole optimization** removes no-op instruction sequences
 - **Pre-allocated growable stacks** for minimal allocation during execution
@@ -290,13 +293,13 @@ jjq VM vs [jackson-jq](https://github.com/eiiches/jackson-jq) throughput (ops/μ
 
 | Benchmark | jackson-jq | jjq VM | Ratio |
 |-----------|-----------|--------|-------|
-| identity (`.`) | 210.58 | 486.84 | **2.3x** |
-| fieldAccess (`.foo`) | 65.92 | 139.62 | **2.1x** |
-| pipeArith (`. + 1 \| . * 2`) | 34.50 | 34.36 | **~1.0x** |
-| iterateMap (`[.[] \| . * 2]`, 10 elem) | 5.04 | 21.49 | **4.3x** |
-| iterateMap (100 elem) | 0.58 | 3.22 | **5.5x** |
-| complexFilter | 0.50 | 1.93 | **3.9x** |
-| reduce (`reduce .[] as $x (0; . + $x)`) | 2.89 | 44.65 | **15.5x** |
+| identity (`.`) | 231.0 | 467.0 | **2.0x** |
+| fieldAccess (`.foo`) | 72.3 | 131.5 | **1.8x** |
+| pipeArith (`.a \| . + 1`) | 30.9 | 91.6 | **3.0x** |
+| iterateMap (`[.[] \| . * 2]`, 10 elem) | 5.0 | 13.3 | **2.7x** |
+| iterateMap (100 elem) | 0.54 | 2.87 | **5.3x** |
+| complexFilter | 0.56 | 1.88 | **3.4x** |
+| reduce (`reduce .[] as $x (0; . + $x)`) | 2.55 | 41.8 | **16.4x** |
 
 Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 

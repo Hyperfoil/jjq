@@ -319,7 +319,7 @@ List<JqValue> all = program.applyAll(input);   // all results
 
 ### Choosing the Right API Method
 
-`JqProgram` provides several execution methods. The primary API uses the **bytecode VM**, which is the fastest execution engine (up to 15x faster than alternatives). Always prefer the VM methods.
+`JqProgram` provides several execution methods. The primary API uses the **bytecode VM**, which is the fastest execution engine (up to 16x faster than alternatives). Always prefer the VM methods.
 
 | Method | Engine | Returns | Best for |
 |--------|--------|---------|----------|
