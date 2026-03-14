@@ -12,6 +12,14 @@
     <name>jjq</name>
     <description>High-performance Java jq implementation backed by fastjson2</description>
 
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
     <modules>
         <module>jjq-core</module>
         <module>jjq-fastjson2</module>
