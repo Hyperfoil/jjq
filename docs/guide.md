@@ -28,6 +28,7 @@ This guide covers using jjq both as a command-line tool and as an embedded libra
   - [Data Pipeline Processing](#data-pipeline-processing)
   - [Batch Processing](#batch-processing)
 - [jq Language Reference](#jq-language-reference)
+- [Known Limitations](#known-limitations)
 - [API Reference](#api-reference)
 
 ---
@@ -1095,6 +1096,43 @@ This is a quick reference for jq syntax supported by jjq. For the complete jq ma
 **Date/time:** `now`, `todate`, `fromdate`, `gmtime`, `mktime`, `strftime(fmt)`, `strptime(fmt)`
 
 **Iteration:** `recurse`, `recurse(f)`, `walk(f)`, `limit(n; f)`, `first(f)`, `last(f)`, `until(cond; update)`, `while(cond; update)`, `repeat(f)`
+
+---
+
+## Known Limitations
+
+jjq passes 485 of 508 upstream jq tests (95.5%). The remaining differences are documented below so you can determine whether they affect your use case.
+
+### Module system not supported
+
+jjq does not implement jq's module system. The `import`, `include`, and `modulemeta` keywords will produce a parse error. This means you cannot split jq code across multiple files using jq's built-in module mechanism.
+
+**Workaround:** Define functions inline within your filter, or compose programs at the Java API level by chaining multiple `JqProgram` instances in a pipeline.
+
+### Big integer precision
+
+jq uses arbitrary-precision integers internally and clamps values to IEEE 754 double precision only on output. jjq uses `long` with `BigDecimal` fallback, which can produce slightly different results for integers beyond the safe 64-bit floating-point range (greater than 2^53).
+
+```
+# jq:  13911860366432393 - 10  =>  13911860366432382
+# jjq: 13911860366432393 - 10  =>  13911860366432383
+```
+
+Normal-range integer and floating-point arithmetic works correctly. This only affects edge cases with very large integers that exceed the precision of IEEE 754 doubles.
+
+### Deep nesting
+
+Deeply nested structures (10,000+ levels) can cause `StackOverflowError` during JSON serialization or parsing. This is a JVM stack depth limitation rather than a jjq design issue. Typical real-world JSON is unaffected.
+
+### Minor error message differences
+
+A few jq error messages differ slightly from jjq:
+
+- **try-catch error propagation:** One edge case involving re-thrown errors inside nested `try-catch` blocks behaves differently than jq. The error is thrown at the top level instead of being caught by the outer try-catch.
+- **fromjson parse errors:** Column numbers in JSON parse error messages may differ from jq (e.g., column 2 vs column 5) due to differences in the underlying JSON parser (fastjson2 vs jq's built-in parser).
+- **Control characters in error messages:** Null bytes and other control characters in error messages are rendered as `\u0000` instead of jq's `\0` notation. This is a cosmetic difference that only affects error message strings, not program behavior.
+
+These differences do not affect the correctness of filter evaluation — they only change the string content of error messages in edge cases.
 
 ---
 

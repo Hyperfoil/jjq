@@ -21,7 +21,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
-| `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (95.1% passing) |
+| `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (95.5% passing) |
 | `jjq-benchmark` | JMH benchmarks comparing jjq VM and jackson-jq |
 
 ## Quick Start
@@ -327,6 +327,37 @@ Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 - Recursive descent (`..`)
 - Format strings (`@base64`, `@uri`, `@csv`, `@tsv`, `@html`, `@json`)
 - All standard builtins (179 functions)
+
+## Known Limitations
+
+jjq passes 485 of 508 upstream jq tests (95.5%). The remaining differences fall into these categories:
+
+### Module system (`import` / `include` / `modulemeta`)
+
+jjq does not implement jq's module system. The `import`, `include`, and `modulemeta` keywords are not supported. This accounts for 12 of the 23 skipped tests.
+
+If you need to reuse filter logic across files, define functions inline or compose programs at the Java API level.
+
+### Big integer precision
+
+jq uses arbitrary-precision integers internally and clamps values to IEEE 754 double precision only on output. jjq uses `long` with `BigDecimal` fallback, which can produce slightly different results for integers beyond the safe double range (> 2^53). For example:
+
+```
+# jq:  13911860366432393 - 10  =>  13911860366432382
+# jjq: 13911860366432393 - 10  =>  13911860366432383
+```
+
+This affects 4 skipped tests. Normal-range integer and floating-point arithmetic works correctly.
+
+### Deep nesting (StackOverflow)
+
+Deeply nested structures (10,000+ levels) can cause `StackOverflowError` during JSON serialization or parsing. This affects 3 tests that construct arrays nested 10,000 levels deep. Typical real-world JSON is unaffected.
+
+### Minor error message differences
+
+- `try-catch` error propagation differs from jq in one edge case involving re-thrown errors inside nested try-catch blocks (1 test)
+- `fromjson` parse errors report a different column number than jq for certain invalid JSON (1 test)
+- Control characters (null bytes) in error messages are rendered as `\u0000` instead of jq's `\0` notation (2 tests)
 
 ## Documentation
 
