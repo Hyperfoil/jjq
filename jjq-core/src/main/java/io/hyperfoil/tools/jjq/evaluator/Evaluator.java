@@ -150,8 +150,9 @@ public final class Evaluator {
             }
 
             case ArithmeticExpr arith -> {
-                for (JqValue left : eval(arith.left(), input, env)) {
-                    for (JqValue right : eval(arith.right(), input, env)) {
+                // jq semantics: right is outer loop, left is inner (left varies faster)
+                for (JqValue right : eval(arith.right(), input, env)) {
+                    for (JqValue left : eval(arith.left(), input, env)) {
                         output.accept(switch (arith.op()) {
                             case ADD -> left.add(right);
                             case SUB -> left.subtract(right);
@@ -164,8 +165,9 @@ public final class Evaluator {
             }
 
             case ComparisonExpr comp -> {
-                for (JqValue left : eval(comp.left(), input, env)) {
-                    for (JqValue right : eval(comp.right(), input, env)) {
+                // jq semantics: right is outer loop, left is inner (left varies faster)
+                for (JqValue right : eval(comp.right(), input, env)) {
+                    for (JqValue left : eval(comp.left(), input, env)) {
                         boolean result = switch (comp.op()) {
                             case EQ -> left.equals(right);
                             case NEQ -> !left.equals(right);

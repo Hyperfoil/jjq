@@ -847,9 +847,17 @@ public final class Compiler {
             case IterateExpr _ -> true;
             case NegateExpr n -> containsGenerator(n.expr());
             case ArithmeticExpr a -> containsGenerator(a.left()) || containsGenerator(a.right());
+            case ComparisonExpr c -> containsGenerator(c.left()) || containsGenerator(c.right());
             case IndexExpr i -> containsGenerator(i.expr()) || containsGenerator(i.index());
+            // Function calls may produce multiple outputs (range, recurse, etc.)
+            case FuncCallExpr fc -> !fc.args().isEmpty() || isMultiOutputBuiltin(fc.name());
+            case PipeExpr p -> containsGenerator(p.left()) || containsGenerator(p.right());
             default -> false;
         };
+    }
+
+    private boolean isMultiOutputBuiltin(String name) {
+        return "recurse".equals(name) || "repeat".equals(name) || "env".equals(name);
     }
 
     private boolean modifiesInput(JqExpr expr) {

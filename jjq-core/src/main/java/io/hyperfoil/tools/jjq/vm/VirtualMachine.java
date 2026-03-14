@@ -1066,6 +1066,93 @@ public final class VirtualMachine {
                 }
                 case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(indexValue(base, idx)); }
                 case SET_INPUT -> input = pop();
+                case BUILTIN_TOJSON -> push(JqString.of(pop().toJsonString()));
+                case BUILTIN_FROMJSON -> {
+                    JqValue v = pop();
+                    if (!(v instanceof JqString s)) throw new JqException("fromjson requires string");
+                    try { push(JqValues.parseStrict(s.stringValue())); }
+                    catch (IllegalArgumentException e) { throw new JqException(e.getMessage()); }
+                }
+                case BUILTIN_ABS -> {
+                    JqValue v = pop();
+                    if (v instanceof JqNumber n) push(JqNumber.of(Math.abs(n.doubleValue())));
+                    else throw new JqException(v.type().jqName() + " cannot be made absolute");
+                }
+                case BUILTIN_KEYS -> {
+                    JqValue v = pop();
+                    if (v instanceof JqObject obj) {
+                        var keys = new java.util.ArrayList<JqValue>();
+                        for (String k : obj.objectValue().keySet()) keys.add(JqString.of(k));
+                        keys.sort(null);
+                        push(JqArray.of(keys));
+                    } else if (v instanceof JqArray arr) {
+                        var keys = new java.util.ArrayList<JqValue>();
+                        for (int j = 0; j < arr.arrayValue().size(); j++) keys.add(JqNumber.of(j));
+                        push(JqArray.of(keys));
+                    } else throw new JqException(v.type().jqName() + " has no keys");
+                }
+                case BUILTIN_VALUES -> {
+                    JqValue v = pop();
+                    if (v instanceof JqObject obj) push(JqArray.of(new java.util.ArrayList<>(obj.objectValue().values())));
+                    else if (v instanceof JqArray) push(v);
+                    else throw new JqException(v.type().jqName() + " has no values");
+                }
+                case BUILTIN_REVERSE -> {
+                    JqValue v = pop();
+                    if (v instanceof JqArray arr) {
+                        var reversed = new java.util.ArrayList<>(arr.arrayValue());
+                        java.util.Collections.reverse(reversed);
+                        push(JqArray.of(reversed));
+                    } else if (v instanceof JqString s) {
+                        push(JqString.of(new StringBuilder(s.stringValue()).reverse().toString()));
+                    } else throw new JqException(v.type().jqName() + " cannot be reversed");
+                }
+                case BUILTIN_SORT -> {
+                    JqValue v = pop();
+                    if (v instanceof JqArray arr) {
+                        var sorted = new java.util.ArrayList<>(arr.arrayValue());
+                        sorted.sort(null);
+                        push(JqArray.of(sorted));
+                    } else throw new JqException(v.type().jqName() + " cannot be sorted");
+                }
+                case BUILTIN_UNIQUE -> {
+                    JqValue v = pop();
+                    if (v instanceof JqArray arr) {
+                        var sorted = new java.util.ArrayList<>(arr.arrayValue());
+                        sorted.sort(null);
+                        var unique = new java.util.ArrayList<JqValue>();
+                        JqValue prev = null;
+                        for (JqValue item : sorted) {
+                            if (prev == null || !prev.equals(item)) unique.add(item);
+                            prev = item;
+                        }
+                        push(JqArray.of(unique));
+                    } else throw new JqException(v.type().jqName() + " cannot be uniqued");
+                }
+                case BUILTIN_CEIL -> {
+                    JqValue v = pop();
+                    if (v instanceof JqNumber n) push(JqNumber.of((long) Math.ceil(n.doubleValue())));
+                    else throw new JqException(v.type().jqName() + " cannot be ceiled");
+                }
+                case BUILTIN_ROUND -> {
+                    JqValue v = pop();
+                    if (v instanceof JqNumber n) push(JqNumber.of(Math.round(n.doubleValue())));
+                    else throw new JqException(v.type().jqName() + " cannot be rounded");
+                }
+                case BUILTIN_TONUMBER -> {
+                    JqValue v = pop();
+                    if (v instanceof JqNumber) push(v);
+                    else if (v instanceof JqString s) {
+                        String str = s.stringValue().trim();
+                        try {
+                            if (str.contains(".") || str.contains("e") || str.contains("E"))
+                                push(JqNumber.of(new java.math.BigDecimal(str)));
+                            else push(JqNumber.of(Long.parseLong(str)));
+                        } catch (NumberFormatException e) {
+                            throw new JqException(v.type().jqName() + " (" + v.toJsonString() + ") cannot be parsed as a number");
+                        }
+                    } else throw new JqException(v.type().jqName() + " cannot be converted to number");
+                }
                 case BUILD_OBJECT -> {
                     int count = arg1s[bpc];
                     int[] layout = bytecode.objectLayout(arg2s[bpc]);

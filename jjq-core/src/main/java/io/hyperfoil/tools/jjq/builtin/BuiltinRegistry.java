@@ -1207,7 +1207,7 @@ public final class BuiltinRegistry {
                     return;
                 }
             }
-            throw new JqException("input not available in this context");
+            throw new JqException("break");
         });
 
         register("inputs", 0, (input, args, env, eval, out) -> {
