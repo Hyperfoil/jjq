@@ -33,6 +33,29 @@ public final class JqObject implements JqValue {
         return new JqObject(Collections.unmodifiableMap(map));
     }
 
+    /**
+     * Create a JqObject from key-value pairs, preserving insertion order.
+     * Arguments must alternate between String keys and JqValue values.
+     *
+     * <pre>{@code
+     * JqObject.of("name", JqString.of("Alice"), "age", JqNumber.of(30))
+     * }</pre>
+     *
+     * @throws IllegalArgumentException if the number of arguments is odd
+     */
+    public static JqObject of(String key1, JqValue value1, String key2, JqValue value2, Object... rest) {
+        if (rest.length % 2 != 0) {
+            throw new IllegalArgumentException("Arguments must be key-value pairs");
+        }
+        var map = new LinkedHashMap<String, JqValue>(2 + rest.length / 2);
+        map.put(key1, value1);
+        map.put(key2, value2);
+        for (int i = 0; i < rest.length; i += 2) {
+            map.put((String) rest[i], (JqValue) rest[i + 1]);
+        }
+        return new JqObject(Collections.unmodifiableMap(map));
+    }
+
     @Override
     public Type type() { return Type.OBJECT; }
 
@@ -54,8 +77,9 @@ public final class JqObject implements JqValue {
         for (var e : fields.entrySet()) {
             if (!first) sb.append(',');
             first = false;
-            sb.append(JqString.of(e.getKey()).toJsonString());
-            sb.append(":");
+            sb.append('"');
+            JqString.escapeJson(e.getKey(), sb);
+            sb.append("\":");
             sb.append(e.getValue().toJsonString());
         }
         sb.append('}');

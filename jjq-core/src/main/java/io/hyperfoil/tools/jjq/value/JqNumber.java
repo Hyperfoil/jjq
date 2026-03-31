@@ -65,6 +65,11 @@ public final class JqNumber implements JqValue {
         return decimalVal.stripTrailingZeros().scale() <= 0;
     }
 
+    /** Returns true if this number is directly backed by a long (not BigDecimal or special). */
+    public boolean isLongBacked() {
+        return isLong;
+    }
+
     private boolean isSpecial() {
         return !isLong && decimalVal == null;
     }

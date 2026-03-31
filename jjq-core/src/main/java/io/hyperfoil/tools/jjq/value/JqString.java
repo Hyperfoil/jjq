@@ -17,12 +17,13 @@ public final class JqString implements JqValue {
     @Override
     public String stringValue() { return value; }
 
-    @Override
-    public String toJsonString() {
-        var sb = new StringBuilder();
-        sb.append('"');
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
+    /**
+     * Append the JSON-escaped form of a string to the given StringBuilder.
+     * Does not include surrounding quotes.
+     */
+    static void escapeJson(String s, StringBuilder sb) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
             switch (c) {
                 case '"' -> sb.append("\\\"");
                 case '\\' -> sb.append("\\\\");
@@ -40,6 +41,13 @@ public final class JqString implements JqValue {
                 }
             }
         }
+    }
+
+    @Override
+    public String toJsonString() {
+        var sb = new StringBuilder();
+        sb.append('"');
+        escapeJson(value, sb);
         sb.append('"');
         return sb.toString();
     }

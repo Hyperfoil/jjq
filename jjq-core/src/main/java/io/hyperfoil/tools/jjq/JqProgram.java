@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
  * A compiled jq program. Thread-safe: the AST is immutable.
@@ -85,15 +86,6 @@ public final class JqProgram {
         return vm.execute(input, env != null ? env : new Environment());
     }
 
-    /**
-     * Execute and stream results to a consumer.
-     */
-    public void apply(JqValue input, Consumer<JqValue> output) {
-        for (JqValue v : applyAll(input)) {
-            output.accept(v);
-        }
-    }
-
     // ========================================================================
     //  Null-input API — jq's --null-input mode
     // ========================================================================
@@ -157,18 +149,13 @@ public final class JqProgram {
 
     /**
      * Process a stream of inputs through the same filter.
-     * Returns a stream of results. Reuses a single VM instance.
+     * Returns a lazily-evaluated stream of results. Reuses a single VM instance.
      */
     public Stream<JqValue> stream(Iterable<JqValue> inputs) {
         Bytecode bc = getBytecode();
         var vm = new VirtualMachine(bc, builtins);
-        var builder = Stream.<JqValue>builder();
-        for (JqValue input : inputs) {
-            for (JqValue v : vm.execute(input)) {
-                builder.accept(v);
-            }
-        }
-        return builder.build();
+        return StreamSupport.stream(inputs.spliterator(), false)
+                .flatMap(input -> vm.execute(input).stream());
     }
 
     public Bytecode getBytecode() {

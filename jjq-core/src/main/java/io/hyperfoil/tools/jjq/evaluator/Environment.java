@@ -52,6 +52,24 @@ public final class Environment {
         return env;
     }
 
+    /**
+     * Create an Environment with pre-set variables.
+     * This is a convenience for the common {@code --arg} / {@code --argjson} pattern.
+     *
+     * <pre>{@code
+     * var env = Environment.withVariables(Map.of(
+     *     "name", JqString.of("Alice"),
+     *     "age", JqNumber.of(30)
+     * ));
+     * var results = program.applyAll(input, env);
+     * }</pre>
+     */
+    public static Environment withVariables(Map<String, JqValue> vars) {
+        Environment env = new Environment();
+        env.variables.putAll(vars);
+        return env;
+    }
+
     public Environment child() {
         return new Environment(this, depth + 1);
     }

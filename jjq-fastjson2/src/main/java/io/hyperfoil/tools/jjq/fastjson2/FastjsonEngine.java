@@ -20,7 +20,11 @@ public final class FastjsonEngine {
     private final BuiltinRegistry builtins;
 
     public FastjsonEngine() {
-        this.builtins = new BuiltinRegistry();
+        this(BuiltinRegistry.getDefault());
+    }
+
+    public FastjsonEngine(BuiltinRegistry builtins) {
+        this.builtins = builtins;
     }
 
     public JqProgram compile(String expression) {

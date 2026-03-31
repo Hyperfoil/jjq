@@ -265,14 +265,12 @@ public sealed interface JqValue extends Comparable<JqValue>
             case JqBoolean b -> Boolean.compare(b.booleanValue(), other.booleanValue());
             case JqNumber n -> {
                 JqNumber m = (JqNumber) other;
-                // Use long comparison only for small integral values
-                if (n.isIntegral() && m.isIntegral()
-                        && n.doubleValue() >= Long.MIN_VALUE && n.doubleValue() <= Long.MAX_VALUE
-                        && m.doubleValue() >= Long.MIN_VALUE && m.doubleValue() <= Long.MAX_VALUE) {
-                    yield Long.compare(n.longValue(), m.longValue());
-                }
                 if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
                     yield Double.compare(n.doubleValue(), m.doubleValue());
+                }
+                // Fast path: both backed by long
+                if (n.isLongBacked() && m.isLongBacked()) {
+                    yield Long.compare(n.longValue(), m.longValue());
                 }
                 yield n.decimalValue().compareTo(m.decimalValue());
             }
