@@ -293,13 +293,13 @@ jjq VM vs [jackson-jq](https://github.com/eiiches/jackson-jq) throughput (ops/μ
 
 | Benchmark | jackson-jq | jjq VM | Ratio |
 |-----------|-----------|--------|-------|
-| identity (`.`) | 231.0 | 467.0 | **2.0x** |
-| fieldAccess (`.foo`) | 72.3 | 131.5 | **1.8x** |
-| pipeArith (`.a \| . + 1`) | 30.9 | 91.6 | **3.0x** |
-| iterateMap (`[.[] \| . * 2]`, 10 elem) | 5.0 | 13.3 | **2.7x** |
-| iterateMap (100 elem) | 0.54 | 2.87 | **5.3x** |
-| complexFilter | 0.56 | 1.88 | **3.4x** |
-| reduce (`reduce .[] as $x (0; . + $x)`) | 2.55 | 41.8 | **16.4x** |
+| identity (`.`) | 234.5 | 479.0 | **2.0x** |
+| fieldAccess (`.foo`) | 69.5 | 135.3 | **1.9x** |
+| pipeArith (`.a \| . + 1`) | 32.6 | 95.1 | **2.9x** |
+| iterateMap (`[.[] \| . * 2]`, 10 elem) | 5.4 | 18.7 | **3.5x** |
+| iterateMap (100 elem) | 0.55 | 3.41 | **6.2x** |
+| complexFilter | 0.56 | 4.39 | **7.9x** |
+| reduce (`reduce .[] as $x (0; . + $x)`) | 2.64 | 41.6 | **15.8x** |
 
 Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 
