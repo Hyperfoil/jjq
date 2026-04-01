@@ -245,63 +245,23 @@ public final class Lexer {
 
     private Token lexString(int startPos, int startLine, int startCol) {
         advance(); // skip opening quote
-        var sb = new StringBuilder();
-        while (pos < input.length()) {
-            char c = input.charAt(pos);
-            if (c == '"') {
-                advance();
-                return new Token(TokenType.STRING, sb.toString(), startPos, startLine, startCol);
-            }
-            if (c == '\\') {
-                advance();
-                if (pos >= input.length()) {
-                    throw new LexerException("Unterminated string escape", line, column);
-                }
-                char esc = input.charAt(pos);
-                if (esc == '(') {
-                    // String interpolation: \( ... )
-                    advance();
-                    interpDepth++;
-                    parenDepth = 0;
-                    return new Token(TokenType.STRING_INTERP_START, sb.toString(), startPos, startLine, startCol);
-                }
-                sb.append(switch (esc) {
-                    case '"' -> '"';
-                    case '\\' -> '\\';
-                    case '/' -> '/';
-                    case 'b' -> '\b';
-                    case 'f' -> '\f';
-                    case 'n' -> '\n';
-                    case 'r' -> '\r';
-                    case 't' -> '\t';
-                    case 'u' -> {
-                        advance();
-                        if (pos + 3 >= input.length()) {
-                            throw new LexerException("Invalid unicode escape", line, column);
-                        }
-                        String hex = input.substring(pos, pos + 4);
-                        pos += 3; column += 3;
-                        yield (char) Integer.parseInt(hex, 16);
-                    }
-                    default -> throw new LexerException("Invalid escape: \\" + esc, line, column);
-                });
-                advance();
-            } else {
-                sb.append(c);
-                advance();
-            }
-        }
-        throw new LexerException("Unterminated string", startLine, startCol);
+        return lexStringBody(TokenType.STRING, TokenType.STRING_INTERP_START,
+                "Unterminated string", startPos, startLine, startCol);
     }
 
     private Token lexStringAfterInterp(int startPos, int startLine, int startCol) {
-        // Continue reading string after \(expr)
+        return lexStringBody(TokenType.STRING_INTERP_END, TokenType.STRING_INTERP_START,
+                "Unterminated string interpolation", startPos, startLine, startCol);
+    }
+
+    private Token lexStringBody(TokenType endType, TokenType interpType,
+                                 String unterminatedMsg, int startPos, int startLine, int startCol) {
         var sb = new StringBuilder();
         while (pos < input.length()) {
             char c = input.charAt(pos);
             if (c == '"') {
                 advance();
-                return new Token(TokenType.STRING_INTERP_END, sb.toString(), startPos, startLine, startCol);
+                return new Token(endType, sb.toString(), startPos, startLine, startCol);
             }
             if (c == '\\') {
                 advance();
@@ -313,35 +273,39 @@ public final class Lexer {
                     advance();
                     interpDepth++;
                     parenDepth = 0;
-                    return new Token(TokenType.STRING_INTERP_START, sb.toString(), startPos, startLine, startCol);
+                    return new Token(interpType, sb.toString(), startPos, startLine, startCol);
                 }
-                sb.append(switch (esc) {
-                    case '"' -> '"';
-                    case '\\' -> '\\';
-                    case '/' -> '/';
-                    case 'b' -> '\b';
-                    case 'f' -> '\f';
-                    case 'n' -> '\n';
-                    case 'r' -> '\r';
-                    case 't' -> '\t';
-                    case 'u' -> {
-                        advance();
-                        if (pos + 3 >= input.length()) {
-                            throw new LexerException("Invalid unicode escape", line, column);
-                        }
-                        String hex = input.substring(pos, pos + 4);
-                        pos += 3; column += 3;
-                        yield (char) Integer.parseInt(hex, 16);
-                    }
-                    default -> throw new LexerException("Invalid escape: \\" + esc, line, column);
-                });
+                sb.append(processEscapeChar(esc));
                 advance();
             } else {
                 sb.append(c);
                 advance();
             }
         }
-        throw new LexerException("Unterminated string interpolation", startLine, startCol);
+        throw new LexerException(unterminatedMsg, startLine, startCol);
+    }
+
+    private char processEscapeChar(char esc) {
+        return switch (esc) {
+            case '"' -> '"';
+            case '\\' -> '\\';
+            case '/' -> '/';
+            case 'b' -> '\b';
+            case 'f' -> '\f';
+            case 'n' -> '\n';
+            case 'r' -> '\r';
+            case 't' -> '\t';
+            case 'u' -> {
+                advance();
+                if (pos + 3 >= input.length()) {
+                    throw new LexerException("Invalid unicode escape", line, column);
+                }
+                String hex = input.substring(pos, pos + 4);
+                pos += 3; column += 3;
+                yield (char) Integer.parseInt(hex, 16);
+            }
+            default -> throw new LexerException("Invalid escape: \\" + esc, line, column);
+        };
     }
 
     private Token lexVariable(int startPos, int startLine, int startCol) {

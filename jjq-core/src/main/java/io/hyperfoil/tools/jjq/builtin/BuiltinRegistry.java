@@ -20,6 +20,12 @@ public final class BuiltinRegistry {
 
     private final Map<String, BuiltinFunction> builtins = new HashMap<>();
 
+    /** Require the input to be a JqArray, throwing a descriptive error if not. */
+    private static JqArray requireArray(JqValue input, String operation) {
+        if (input instanceof JqArray arr) return arr;
+        throw new JqException(operation + " requires array input");
+    }
+
     public BuiltinRegistry() {
         registerDefaults();
     }
@@ -177,7 +183,7 @@ public final class BuiltinRegistry {
 
         // Collection builtins
         register("map", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("map requires array input");
+            JqArray arr = requireArray(input, "map");
             var results = new ArrayList<JqValue>();
             for (JqValue elem : arr.arrayValue()) {
                 eval.eval(args.getFirst(), elem, env, results::add);
@@ -215,7 +221,7 @@ public final class BuiltinRegistry {
         });
 
         register("add", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("add requires array input");
+            JqArray arr = requireArray(input, "add");
             if (arr.arrayValue().isEmpty()) {
                 out.accept(JqNull.NULL);
                 return;
@@ -247,12 +253,12 @@ public final class BuiltinRegistry {
         });
 
         register("any", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("any requires array input");
+            JqArray arr = requireArray(input, "any");
             out.accept(JqBoolean.of(arr.arrayValue().stream().anyMatch(JqValue::isTruthy)));
         });
 
         register("any", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("any requires array input");
+            JqArray arr = requireArray(input, "any");
             for (JqValue elem : arr.arrayValue()) {
                 var results = eval.eval(args.getFirst(), elem, env);
                 if (results.stream().anyMatch(JqValue::isTruthy)) {
@@ -264,12 +270,12 @@ public final class BuiltinRegistry {
         });
 
         register("all", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("all requires array input");
+            JqArray arr = requireArray(input, "all");
             out.accept(JqBoolean.of(arr.arrayValue().stream().allMatch(JqValue::isTruthy)));
         });
 
         register("all", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("all requires array input");
+            JqArray arr = requireArray(input, "all");
             for (JqValue elem : arr.arrayValue()) {
                 var results = eval.eval(args.getFirst(), elem, env);
                 if (results.stream().noneMatch(JqValue::isTruthy)) {
@@ -281,14 +287,14 @@ public final class BuiltinRegistry {
         });
 
         register("flatten", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("flatten requires array input");
+            JqArray arr = requireArray(input, "flatten");
             var result = new ArrayList<JqValue>();
             flattenArray(arr, result, Integer.MAX_VALUE);
             out.accept(JqArray.of(result));
         });
 
         register("flatten", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("flatten requires array input");
+            JqArray arr = requireArray(input, "flatten");
             eval.eval(args.getFirst(), input, env, depthVal -> {
                 int depth = (int) depthVal.longValue();
                 if (depth < 0) throw new JqException("flatten depth must not be negative");
@@ -299,14 +305,14 @@ public final class BuiltinRegistry {
         });
 
         register("sort", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("sort requires array input");
+            JqArray arr = requireArray(input, "sort");
             var list = new ArrayList<>(arr.arrayValue());
             list.sort(JqValue::compareTo);
             out.accept(JqArray.of(list));
         });
 
         register("sort_by", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("sort_by requires array input");
+            JqArray arr = requireArray(input, "sort_by");
             var list = new ArrayList<>(arr.arrayValue());
             list.sort((a, b) -> {
                 var keysA = eval.eval(args.getFirst(), a, env);
@@ -321,7 +327,7 @@ public final class BuiltinRegistry {
         });
 
         register("group_by", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("group_by requires array input");
+            JqArray arr = requireArray(input, "group_by");
             var groups = new LinkedHashMap<String, List<JqValue>>();
             var sortedList = new ArrayList<>(arr.arrayValue());
             sortedList.sort((a, b) -> {
@@ -340,7 +346,7 @@ public final class BuiltinRegistry {
         });
 
         register("unique", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("unique requires array input");
+            JqArray arr = requireArray(input, "unique");
             var seen = new LinkedHashSet<String>();
             var result = new ArrayList<JqValue>();
             var sorted = new ArrayList<>(arr.arrayValue());
@@ -354,7 +360,7 @@ public final class BuiltinRegistry {
         });
 
         register("unique_by", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("unique_by requires array input");
+            JqArray arr = requireArray(input, "unique_by");
             var seen = new LinkedHashSet<String>();
             var result = new ArrayList<JqValue>();
             for (JqValue elem : arr.arrayValue()) {
@@ -425,7 +431,7 @@ public final class BuiltinRegistry {
         });
 
         register("transpose", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("transpose requires array input");
+            JqArray arr = requireArray(input, "transpose");
             int maxLen = 0;
             for (JqValue v : arr.arrayValue()) {
                 if (v instanceof JqArray a) maxLen = Math.max(maxLen, a.arrayValue().size());
@@ -653,7 +659,7 @@ public final class BuiltinRegistry {
         });
 
         register("join", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("join requires array input");
+            JqArray arr = requireArray(input, "join");
             eval.eval(args.getFirst(), input, env, sep -> {
                 String sepStr = sep instanceof JqString s ? s.stringValue() : sep.toJsonString();
                 var sb = new StringBuilder();
@@ -808,7 +814,7 @@ public final class BuiltinRegistry {
         });
 
         register("implode", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("implode input must be an array");
+            JqArray arr = requireArray(input, "implode");
             var sb = new StringBuilder();
             for (JqValue v : arr.arrayValue()) {
                 if (!(v instanceof JqNumber n)) {
@@ -1119,7 +1125,7 @@ public final class BuiltinRegistry {
         });
 
         register("from_entries", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("from_entries requires array");
+            JqArray arr = requireArray(input, "from_entries");
             var map = new LinkedHashMap<String, JqValue>();
             for (JqValue v : arr.arrayValue()) {
                 if (v instanceof JqObject obj) {
@@ -1694,7 +1700,7 @@ public final class BuiltinRegistry {
 
         // combinations
         register("combinations", 0, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) throw new JqException("combinations requires array of arrays");
+            JqArray arr = requireArray(input, "combinations");
             var arrays = new ArrayList<List<JqValue>>();
             for (JqValue v : arr.arrayValue()) {
                 if (v instanceof JqArray a) {
@@ -1708,7 +1714,7 @@ public final class BuiltinRegistry {
 
         register("combinations", 1, (input, args, env, eval, out) -> {
             int n = (int) eval.eval(args.getFirst(), input, env).getFirst().longValue();
-            if (!(input instanceof JqArray arr)) throw new JqException("combinations requires array");
+            JqArray arr = requireArray(input, "combinations");
             var arrays = new ArrayList<List<JqValue>>();
             for (int i = 0; i < n; i++) {
                 arrays.add(arr.arrayValue());
@@ -1730,9 +1736,7 @@ public final class BuiltinRegistry {
 
         // bsearch(x) - binary search in sorted array
         register("bsearch", 1, (input, args, env, eval, out) -> {
-            if (!(input instanceof JqArray arr)) {
-                throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be searched from");
-            }
+            JqArray arr = requireArray(input, "bsearch");
             eval.eval(args.getFirst(), input, env, target -> {
                 List<JqValue> list = arr.arrayValue();
                 int lo = 0, hi = list.size() - 1;
@@ -1983,9 +1987,7 @@ public final class BuiltinRegistry {
         // JOIN(idx; idx_expr) — for each element $x in input array, output [$x, idx[$x | idx_expr]]
         register("JOIN", 2, (input, args, env, eval, out) -> {
             JqValue idx = eval.eval(args.get(0), input, env).getFirst();
-            if (!(input instanceof JqArray arr)) {
-                throw new JqTypeError("Cannot iterate over " + input.type().jqName());
-            }
+            JqArray arr = requireArray(input, "JOIN");
             var results = new java.util.ArrayList<JqValue>();
             for (JqValue elem : arr.arrayValue()) {
                 JqValue key = eval.eval(args.get(1), elem, env).getFirst();

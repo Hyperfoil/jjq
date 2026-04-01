@@ -497,15 +497,7 @@ public final class Evaluator {
     }
 
     private JqValue indexValue(JqValue base, JqValue index) {
-        return switch (base) {
-            case JqArray arr when index instanceof JqNumber n -> {
-                if (n.isNaN()) yield JqNull.NULL;
-                yield arr.get((int) n.longValue());
-            }
-            case JqObject obj when index instanceof JqString s -> obj.get(s.stringValue());
-            case JqNull ignored -> JqNull.NULL;
-            default -> throw new JqException("Cannot index " + base.type().jqName() + " with " + index.type().jqName() + " (" + index.toJsonString() + ")");
-        };
+        return JqValues.indexValue(base, index);
     }
 
     private void buildObject(List<ObjectConstructExpr.ObjectEntry> entries, int idx,

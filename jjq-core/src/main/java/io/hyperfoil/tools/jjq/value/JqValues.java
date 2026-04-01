@@ -216,4 +216,21 @@ public final class JqValues {
     private static void skipWs(String json, int[] pos) {
         while (pos[0] < json.length() && Character.isWhitespace(json.charAt(pos[0]))) pos[0]++;
     }
+
+    /**
+     * Index into a JqValue: array[number], object["key"], null[anything] = null.
+     * Shared by both the bytecode VM and the tree-walk evaluator.
+     */
+    public static JqValue indexValue(JqValue base, JqValue index) {
+        return switch (base) {
+            case JqArray arr when index instanceof JqNumber n -> {
+                if (n.isNaN()) yield JqNull.NULL;
+                yield arr.get((int) n.longValue());
+            }
+            case JqObject obj when index instanceof JqString s -> obj.get(s.stringValue());
+            case JqNull _ -> JqNull.NULL;
+            default -> throw new JqTypeError("Cannot index " + base.type().jqName()
+                    + " with " + index.type().jqName() + " (" + index.toJsonString() + ")");
+        };
+    }
 }

@@ -244,6 +244,10 @@ public final class VirtualMachine {
         throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + field + "\")");
     }
 
+    private static JqValue fieldAccess2(JqValue val, String f1, String f2) {
+        return fieldAccess(fieldAccess(val, f1), f2);
+    }
+
     public List<JqValue> execute(JqValue inputValue, Environment environment) {
         // Reset state (reuse pre-allocated arrays)
         this.sp = 0;
@@ -302,22 +306,12 @@ public final class VirtualMachine {
                     case SET_INPUT_PEEK -> input = peek();
 
                     // Field access
-                    case DOT_FIELD -> {
-                        JqValue val = pop();
-                        String field = names[arg1s[curPc]];
-                        if (val instanceof JqObject obj) {
-                            push(obj.get(field));
-                        } else if (val instanceof JqNull) {
-                            push(JqNull.NULL);
-                        } else {
-                            throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + field + "\")");
-                        }
-                    }
+                    case DOT_FIELD -> push(fieldAccess(pop(), names[arg1s[curPc]]));
 
                     case INDEX -> {
                         JqValue index = pop();
                         JqValue base = pop();
-                        push(indexValue(base, index));
+                        push(JqValues.indexValue(base, index));
                     }
 
                     case EACH -> {
@@ -350,18 +344,7 @@ public final class VirtualMachine {
                     }
 
                     // Compound field access
-                    case DOT_FIELD2 -> {
-                        JqValue val = pop();
-                        String f1 = names[arg1s[curPc]];
-                        String f2 = names[arg2s[curPc]];
-                        JqValue mid;
-                        if (val instanceof JqObject obj) mid = obj.get(f1);
-                        else if (val instanceof JqNull) mid = JqNull.NULL;
-                        else throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + f1 + "\")");
-                        if (mid instanceof JqObject obj2) push(obj2.get(f2));
-                        else if (mid instanceof JqNull) push(JqNull.NULL);
-                        else throw new JqException("Cannot index " + mid.type().jqName() + " with string (\"" + f2 + "\")");
-                    }
+                    case DOT_FIELD2 -> push(fieldAccess2(pop(), names[arg1s[curPc]], names[arg2s[curPc]]));
 
                     // Inlined builtins
                     case BUILTIN_LENGTH -> {
@@ -799,18 +782,6 @@ public final class VirtualMachine {
         push(results.getFirst());
     }
 
-    private JqValue indexValue(JqValue base, JqValue index) {
-        return switch (base) {
-            case JqArray arr when index instanceof JqNumber n -> {
-                if (n.isNaN()) yield JqNull.NULL;
-                yield arr.get((int) n.longValue());
-            }
-            case JqObject obj when index instanceof JqString s -> obj.get(s.stringValue());
-            case JqNull _ -> JqNull.NULL;
-            default -> throw new JqException("Cannot index " + base.type().jqName() + " with " + index.type().jqName() + " (" + index.toJsonString() + ")");
-        };
-    }
-
     private void push(JqValue val) {
         if (sp >= stack.length) stack = java.util.Arrays.copyOf(stack, stack.length * 2);
         stack[sp++] = val;
@@ -1009,25 +980,9 @@ public final class VirtualMachine {
                 case DIV -> { JqValue r = pop(); JqValue l = pop(); push(l.divide(r)); }
                 case MOD -> { JqValue r = pop(); JqValue l = pop(); push(l.modulo(r)); }
                 case NEGATE -> push(pop().negate());
-                case DOT_FIELD -> {
-                    JqValue v = pop();
-                    String field = names[arg1s[bpc]];
-                    if (v instanceof JqObject obj) push(obj.get(field));
-                    else if (v instanceof JqNull) push(JqNull.NULL);
-                    else throw new JqException("Cannot index " + v.type().jqName() + " with string (\"" + field + "\")");
-                }
-                case DOT_FIELD2 -> {
-                    JqValue v = pop();
-                    String f1 = names[arg1s[bpc]];
-                    String f2 = names[arg2s[bpc]];
-                    JqValue mid;
-                    if (v instanceof JqObject obj) mid = obj.get(f1);
-                    else if (v instanceof JqNull) mid = JqNull.NULL;
-                    else throw new JqException("Cannot index " + v.type().jqName() + " with string (\"" + f1 + "\")");
-                    if (mid instanceof JqObject obj2) push(obj2.get(f2));
-                    else if (mid instanceof JqNull) push(JqNull.NULL);
-                    else throw new JqException("Cannot index " + mid.type().jqName() + " with string (\"" + f2 + "\")");
-                }
+                case DOT_FIELD -> push(fieldAccess(pop(), names[arg1s[bpc]]));
+                case DOT_FIELD2 -> push(fieldAccess2(pop(), names[arg1s[bpc]], names[arg2s[bpc]]));
+
                 case NOT -> push(JqBoolean.of(!pop().isTruthy()));
                 case EQ -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.equals(r))); }
                 case NEQ -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(!l.equals(r))); }
@@ -1064,7 +1019,7 @@ public final class VirtualMachine {
                     if (v instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
                     else throw new JqException(v.type().jqName() + " cannot be floored");
                 }
-                case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(indexValue(base, idx)); }
+                case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(JqValues.indexValue(base, idx)); }
                 case SET_INPUT -> input = pop();
                 case BUILTIN_TOJSON -> push(JqString.of(pop().toJsonString()));
                 case BUILTIN_FROMJSON -> {
