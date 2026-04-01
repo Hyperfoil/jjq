@@ -876,12 +876,12 @@ public final class VirtualMachine {
                 // For integer * integer, use raw long math
                 if (ops[bodyStart + 2] == Opcode.MUL && constVal instanceof JqNumber cn && cn.isIntegral()) {
                     long multiplier = cn.longValue();
-                    var result = new ArrayList<JqValue>(size);
+                    var result = new JqValue[size];
                     boolean allIntegral = true;
                     for (int i = 0; i < size; i++) {
                         JqValue item = items.get(i);
                         if (item instanceof JqNumber n && n.isIntegral()) {
-                            result.add(JqNumber.of(Math.multiplyExact(n.longValue(), multiplier)));
+                            result[i] = JqNumber.of(Math.multiplyExact(n.longValue(), multiplier));
                         } else {
                             allIntegral = false;
                             break;
@@ -890,31 +890,31 @@ public final class VirtualMachine {
                     if (allIntegral) return JqArray.ofTrusted(result);
                 }
                 // General arith: apply via JqValue methods (no stack needed)
-                var result = new ArrayList<JqValue>(size);
+                var result = new JqValue[size];
                 for (int i = 0; i < size; i++) {
                     JqValue item = items.get(i);
-                    result.add(switch (ops[bodyStart + 2]) {
+                    result[i] = switch (ops[bodyStart + 2]) {
                         case ADD -> item.add(constVal);
                         case SUB -> item.subtract(constVal);
                         case MUL -> item.multiply(constVal);
                         case DIV -> item.divide(constVal);
                         case MOD -> item.modulo(constVal);
                         default -> collectIterateBodyGeneral(item, bodyStart, bodyLen);
-                    });
+                    };
                 }
                 return JqArray.ofTrusted(result);
             }
         }
 
         // General path: mini-interpreter with stack
-        var result = new ArrayList<JqValue>(size);
+        var result = new JqValue[size];
         int savedSp = sp;
         JqValue savedInput = input;
         for (int i = 0; i < size; i++) {
             input = items.get(i);
             sp = savedSp;
             collectIterateBody(bodyStart, bodyLen);
-            result.add(pop());
+            result[i] = pop();
         }
         sp = savedSp;
         input = savedInput;
@@ -937,7 +937,8 @@ public final class VirtualMachine {
         int size = items.size();
         if (size == 0) return JqArray.EMPTY;
 
-        var result = new ArrayList<JqValue>();
+        var result = new JqValue[size];
+        int count = 0;
         int savedSp = sp;
         JqValue savedInput = input;
         for (int i = 0; i < size; i++) {
@@ -948,12 +949,12 @@ public final class VirtualMachine {
             collectIterateBody(bodyStart, bodyLen);
             // If JUMP_IF_FALSE jumped past bodyEnd, sp == savedSp (nothing pushed)
             if (sp > savedSp) {
-                result.add(pop());
+                result[count++] = pop();
             }
         }
         sp = savedSp;
         input = savedInput;
-        return JqArray.ofTrusted(result);
+        return JqArray.ofTrusted(result, count);
     }
 
     private void collectIterateBody(int bodyStart, int bodyLen) {

@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.value;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -21,6 +22,19 @@ public final class JqArray implements JqValue {
     public static JqArray ofTrusted(List<JqValue> elements) {
         if (elements.isEmpty()) return EMPTY;
         return new JqArray(elements);
+    }
+
+    /** Create from a raw array that the caller guarantees won't be mutated. Uses Arrays.asList (no copy). */
+    public static JqArray ofTrusted(JqValue[] elements) {
+        if (elements.length == 0) return EMPTY;
+        return new JqArray(Arrays.asList(elements));
+    }
+
+    /** Create from a raw array, trimming to the given count. No copy if count == elements.length. */
+    public static JqArray ofTrusted(JqValue[] elements, int count) {
+        if (count == 0) return EMPTY;
+        if (count == elements.length) return new JqArray(Arrays.asList(elements));
+        return new JqArray(Arrays.asList(Arrays.copyOf(elements, count)));
     }
 
     public static JqArray of(JqValue... elements) {
