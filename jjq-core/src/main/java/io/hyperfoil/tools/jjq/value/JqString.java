@@ -43,6 +43,38 @@ public final class JqString implements JqValue {
         }
     }
 
+    /**
+     * Format a string for jq error messages: like JSON escaping but control characters
+     * below 0x20 (except standard escapes) are output as backslash + raw byte
+     * rather than JSON unicode escapes, matching jq's error message convention.
+     */
+    public static String formatForError(String s) {
+        var sb = new StringBuilder();
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append('\\');
+                        sb.append(c); // raw control char
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        sb.append('"');
+        return sb.toString();
+    }
+
     @Override
     public String toJsonString() {
         var sb = new StringBuilder();

@@ -413,7 +413,7 @@ public final class VirtualMachine {
                                     push(JqNumber.of(Long.parseLong(str)));
                                 }
                             } catch (NumberFormatException e) {
-                                throw new JqException(val.type().jqName() + " (" + val.toJsonString() + ") cannot be parsed as a number");
+                                throw new JqException("string (" + JqString.formatForError(s.stringValue()) + ") cannot be parsed as a number");
                             }
                         } else {
                             throw new JqException(val.type().jqName() + " cannot be converted to number");
@@ -544,7 +544,7 @@ public final class VirtualMachine {
 
                     case BUILTIN_TOJSON -> {
                         JqValue val = pop();
-                        push(JqString.of(val.toJsonString()));
+                        push(JqString.of(JqValues.toJsonStringDepthLimited(val)));
                     }
 
                     case BUILTIN_FROMJSON -> {
@@ -757,6 +757,11 @@ public final class VirtualMachine {
             } catch (JqException | JqTypeError e) {
                 if (tp > 0) {
                     handleError(e);
+                } else if (firstOutput != null || multiOutputs != null) {
+                    // Already produced outputs — halt gracefully (matches jq behavior:
+                    // generators can yield partial results before an uncaught error)
+                    halted = true;
+                    return;
                 } else {
                     throw e;
                 }
@@ -853,10 +858,22 @@ public final class VirtualMachine {
         pc = tryPoint.catchPc;
     }
 
-    private void flattenDeep(JqArray arr, List<JqValue> result) {
-        for (JqValue v : arr.arrayValue()) {
-            if (v instanceof JqArray inner) flattenDeep(inner, result);
-            else result.add(v);
+    private static void flattenDeep(JqArray arr, List<JqValue> result) {
+        // Iterative flattening to avoid stack overflow on deeply nested arrays
+        var stack = new java.util.ArrayDeque<java.util.Iterator<JqValue>>();
+        stack.push(arr.arrayValue().iterator());
+        while (!stack.isEmpty()) {
+            var iter = stack.peek();
+            if (!iter.hasNext()) {
+                stack.pop();
+                continue;
+            }
+            JqValue v = iter.next();
+            if (v instanceof JqArray inner) {
+                stack.push(inner.arrayValue().iterator());
+            } else {
+                result.add(v);
+            }
         }
     }
 
@@ -1022,7 +1039,7 @@ public final class VirtualMachine {
                 }
                 case INDEX -> { JqValue idx = pop(); JqValue base = pop(); push(JqValues.indexValue(base, idx)); }
                 case SET_INPUT -> input = pop();
-                case BUILTIN_TOJSON -> push(JqString.of(pop().toJsonString()));
+                case BUILTIN_TOJSON -> push(JqString.of(JqValues.toJsonStringDepthLimited(pop())));
                 case BUILTIN_FROMJSON -> {
                     JqValue v = pop();
                     if (!(v instanceof JqString s)) throw new JqException("fromjson requires string");
@@ -1105,7 +1122,7 @@ public final class VirtualMachine {
                                 push(JqNumber.of(new java.math.BigDecimal(str)));
                             else push(JqNumber.of(Long.parseLong(str)));
                         } catch (NumberFormatException e) {
-                            throw new JqException(v.type().jqName() + " (" + v.toJsonString() + ") cannot be parsed as a number");
+                            throw new JqException("string (" + JqString.formatForError(s.stringValue()) + ") cannot be parsed as a number");
                         }
                     } else throw new JqException(v.type().jqName() + " cannot be converted to number");
                 }

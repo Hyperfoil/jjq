@@ -622,7 +622,7 @@ public final class BuiltinRegistry {
                 try {
                     out.accept(JqNumber.of(new BigDecimal(s.stringValue())));
                 } catch (NumberFormatException e) {
-                    throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be parsed as a number");
+                    throw new JqException("string (" + JqString.formatForError(s.stringValue()) + ") cannot be parsed as a number");
                 }
             } else {
                 throw new JqException("Cannot convert " + input.type().jqName() + " to number");
@@ -814,7 +814,9 @@ public final class BuiltinRegistry {
         });
 
         register("implode", 0, (input, args, env, eval, out) -> {
-            JqArray arr = requireArray(input, "implode");
+            if (!(input instanceof JqArray arr)) {
+                throw new JqException("implode input must be an array");
+            }
             var sb = new StringBuilder();
             for (JqValue v : arr.arrayValue()) {
                 if (!(v instanceof JqNumber n)) {
@@ -1091,7 +1093,7 @@ public final class BuiltinRegistry {
 
         // Format builtins (as zero-arg functions)
         register("tojson", 0, (input, args, env, eval, out) -> {
-            out.accept(JqString.of(input.toJsonString()));
+            out.accept(JqString.of(JqValues.toJsonStringDepthLimited(input)));
         });
 
         register("fromjson", 0, (input, args, env, eval, out) -> {
@@ -1736,7 +1738,9 @@ public final class BuiltinRegistry {
 
         // bsearch(x) - binary search in sorted array
         register("bsearch", 1, (input, args, env, eval, out) -> {
-            JqArray arr = requireArray(input, "bsearch");
+            if (!(input instanceof JqArray arr)) {
+                throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be searched from");
+            }
             eval.eval(args.getFirst(), input, env, target -> {
                 List<JqValue> list = arr.arrayValue();
                 int lo = 0, hi = list.size() - 1;
@@ -1941,7 +1945,7 @@ public final class BuiltinRegistry {
                 String v = s.stringValue();
                 if (v.equals("true")) { out.accept(JqBoolean.TRUE); return; }
                 if (v.equals("false")) { out.accept(JqBoolean.FALSE); return; }
-                throw new JqException("string (" + JqString.of(v).toJsonString() + ") cannot be parsed as a boolean");
+                throw new JqException("string (" + JqString.formatForError(v) + ") cannot be parsed as a boolean");
             }
             throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be parsed as a boolean");
         });
@@ -2109,9 +2113,19 @@ public final class BuiltinRegistry {
     }
 
     private void flattenArray(JqArray arr, List<JqValue> result, int depth) {
-        for (JqValue v : arr.arrayValue()) {
-            if (v instanceof JqArray inner && depth > 0) {
-                flattenArray(inner, result, depth - 1);
+        // Iterative flattening to avoid stack overflow on deeply nested arrays
+        record Frame(java.util.Iterator<JqValue> iter, int depth) {}
+        var stack = new java.util.ArrayDeque<Frame>();
+        stack.push(new Frame(arr.arrayValue().iterator(), depth));
+        while (!stack.isEmpty()) {
+            var frame = stack.peek();
+            if (!frame.iter().hasNext()) {
+                stack.pop();
+                continue;
+            }
+            JqValue v = frame.iter().next();
+            if (v instanceof JqArray inner && frame.depth() > 0) {
+                stack.push(new Frame(inner.arrayValue().iterator(), frame.depth() - 1));
             } else {
                 result.add(v);
             }

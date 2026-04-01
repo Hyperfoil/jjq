@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.value;
 
 import java.math.BigDecimal;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,6 +11,9 @@ import java.util.List;
  */
 public final class JqValues {
 
+    private static final int MAX_PARSE_DEPTH = 10000;
+    private static final int MAX_SERIALIZE_DEPTH = 10001;
+
     private JqValues() {}
 
     public static JqValue parse(String json) {
@@ -18,7 +22,7 @@ public final class JqValues {
         if (!json.isEmpty() && json.charAt(0) == '\uFEFF') {
             json = json.substring(1);
         }
-        return parseValue(json, new int[]{0});
+        return parseValue(json, new int[]{0}, 0);
     }
 
     /**
@@ -33,7 +37,7 @@ public final class JqValues {
             trimmed = trimmed.substring(1);
         }
         int[] pos = {0};
-        JqValue result = parseValue(trimmed, pos);
+        JqValue result = parseValue(trimmed, pos, 0);
         // Skip trailing whitespace
         while (pos[0] < trimmed.length() && Character.isWhitespace(trimmed.charAt(pos[0]))) {
             pos[0]++;
@@ -56,18 +60,18 @@ public final class JqValues {
         while (true) {
             skipWs(json, pos);
             if (pos[0] >= json.length()) break;
-            results.add(parseValue(json, pos));
+            results.add(parseValue(json, pos, 0));
         }
         return results;
     }
 
-    private static JqValue parseValue(String json, int[] pos) {
+    private static JqValue parseValue(String json, int[] pos, int depth) {
         skipWs(json, pos);
         if (pos[0] >= json.length()) return JqNull.NULL;
         char c = json.charAt(pos[0]);
         return switch (c) {
-            case '{' -> parseObject(json, pos);
-            case '[' -> parseArray(json, pos);
+            case '{' -> parseObject(json, pos, depth + 1);
+            case '[' -> parseArrayIterative(json, pos, depth);
             case '"' -> parseString(json, pos);
             case 't' -> { pos[0] += 4; yield JqBoolean.TRUE; }
             case 'f' -> { pos[0] += 5; yield JqBoolean.FALSE; }
@@ -94,7 +98,77 @@ public final class JqValues {
         };
     }
 
-    private static JqObject parseObject(String json, int[] pos) {
+    /**
+     * Parse arrays iteratively to avoid stack overflow on deeply nested structures.
+     * Uses an explicit stack instead of recursion for nested arrays.
+     */
+    private static JqValue parseArrayIterative(String json, int[] pos, int depth) {
+        var stack = new ArrayDeque<ArrayList<JqValue>>();
+
+        // Iterate through consecutive opening brackets
+        while (pos[0] < json.length() && json.charAt(pos[0]) == '[') {
+            depth++;
+            if (depth > MAX_PARSE_DEPTH) {
+                throw new IllegalArgumentException("Exceeds depth limit for parsing");
+            }
+            pos[0]++; // skip [
+            skipWs(json, pos);
+
+            // Empty array
+            if (pos[0] < json.length() && json.charAt(pos[0]) == ']') {
+                pos[0]++;
+                return unwindArrayStack(stack, JqArray.EMPTY, json, pos, depth);
+            }
+
+            // If first element is another array, push context and continue iterating
+            if (json.charAt(pos[0]) == '[') {
+                stack.push(new ArrayList<>());
+                continue;
+            }
+
+            // First element is not an array — parse this array normally
+            break;
+        }
+
+        // Parse the current array elements
+        var list = new ArrayList<JqValue>();
+        list.add(parseValue(json, pos, depth));
+        skipWs(json, pos);
+        while (pos[0] < json.length() && json.charAt(pos[0]) != ']') {
+            pos[0]++; // skip ,
+            list.add(parseValue(json, pos, depth));
+            skipWs(json, pos);
+        }
+        if (pos[0] < json.length()) pos[0]++; // skip ]
+        JqValue result = JqArray.of(list);
+        return unwindArrayStack(stack, result, json, pos, depth);
+    }
+
+    /**
+     * Unwind the explicit stack of partially-built arrays, completing each level.
+     */
+    private static JqValue unwindArrayStack(ArrayDeque<ArrayList<JqValue>> stack, JqValue result,
+                                             String json, int[] pos, int depth) {
+        while (!stack.isEmpty()) {
+            depth--;
+            var list = stack.pop();
+            list.add(result);
+            skipWs(json, pos);
+            while (pos[0] < json.length() && json.charAt(pos[0]) != ']') {
+                pos[0]++; // skip ,
+                list.add(parseValue(json, pos, depth));
+                skipWs(json, pos);
+            }
+            if (pos[0] < json.length()) pos[0]++; // skip ]
+            result = JqArray.of(list);
+        }
+        return result;
+    }
+
+    private static JqObject parseObject(String json, int[] pos, int depth) {
+        if (depth > MAX_PARSE_DEPTH) {
+            throw new IllegalArgumentException("Exceeds depth limit for parsing");
+        }
         pos[0]++; // skip {
         var map = new LinkedHashMap<String, JqValue>();
         skipWs(json, pos);
@@ -111,27 +185,13 @@ public final class JqValues {
             String key = parseString(json, pos).stringValue();
             skipWs(json, pos);
             pos[0]++; // skip :
-            JqValue value = parseValue(json, pos);
+            JqValue value = parseValue(json, pos, depth);
             map.put(key, value);
             skipWs(json, pos);
             if (pos[0] >= json.length() || json.charAt(pos[0]) == '}') { pos[0]++; break; }
             pos[0]++; // skip ,
         }
         return JqObject.of(map);
-    }
-
-    private static JqArray parseArray(String json, int[] pos) {
-        pos[0]++; // skip [
-        var list = new ArrayList<JqValue>();
-        skipWs(json, pos);
-        if (pos[0] < json.length() && json.charAt(pos[0]) == ']') { pos[0]++; return JqArray.of(list); }
-        while (true) {
-            list.add(parseValue(json, pos));
-            skipWs(json, pos);
-            if (pos[0] >= json.length() || json.charAt(pos[0]) == ']') { pos[0]++; break; }
-            pos[0]++; // skip ,
-        }
-        return JqArray.of(list);
     }
 
     private static JqString parseString(String json, int[] pos) {
@@ -232,5 +292,72 @@ public final class JqValues {
             default -> throw new JqTypeError("Cannot index " + base.type().jqName()
                     + " with " + index.type().jqName() + " (" + index.toJsonString() + ")");
         };
+    }
+
+    /**
+     * Depth-limited JSON serialization for tojson.
+     * Uses iterative array handling to avoid stack overflow on deeply nested structures.
+     * At depths exceeding MAX_SERIALIZE_DEPTH, outputs "&lt;skipped: too deep&gt;" instead of
+     * recursing further — matching jq's behavior for extremely nested structures.
+     */
+    public static String toJsonStringDepthLimited(JqValue val) {
+        var sb = new StringBuilder();
+        appendJson(val, sb, 0);
+        return sb.toString();
+    }
+
+    private static void appendJson(JqValue val, StringBuilder sb, int depth) {
+        // Handle arrays iteratively to avoid stack overflow on deeply nested structures
+        int arrayNesting = 0;
+        while (val instanceof JqArray arr) {
+            depth++;
+            if (depth > MAX_SERIALIZE_DEPTH) {
+                sb.append("\"<skipped: too deep>\"");
+                for (int i = 0; i < arrayNesting; i++) sb.append(']');
+                return;
+            }
+            var elements = arr.arrayValue();
+            if (elements.isEmpty()) {
+                sb.append("[]");
+                for (int i = 0; i < arrayNesting; i++) sb.append(']');
+                return;
+            }
+            sb.append('[');
+            arrayNesting++;
+            // If single-element array whose element is also an array, continue iteratively
+            if (elements.size() == 1) {
+                val = elements.get(0);
+                continue; // loop back to check if it's another array
+            }
+            // Multi-element array: serialize first element iteratively, rest recursively
+            appendJson(elements.get(0), sb, depth);
+            for (int i = 1; i < elements.size(); i++) {
+                sb.append(',');
+                appendJson(elements.get(i), sb, depth);
+            }
+            for (int i = 0; i < arrayNesting; i++) sb.append(']');
+            return;
+        }
+        // Non-array value
+        if (val instanceof JqObject obj) {
+            if (depth > MAX_SERIALIZE_DEPTH) {
+                sb.append("\"<skipped: too deep>\"");
+            } else {
+                sb.append('{');
+                boolean first = true;
+                for (var e : obj.objectValue().entrySet()) {
+                    if (!first) sb.append(',');
+                    first = false;
+                    sb.append('"');
+                    JqString.escapeJson(e.getKey(), sb);
+                    sb.append("\":");
+                    appendJson(e.getValue(), sb, depth + 1);
+                }
+                sb.append('}');
+            }
+        } else {
+            sb.append(val.toJsonString());
+        }
+        for (int i = 0; i < arrayNesting; i++) sb.append(']');
     }
 }
