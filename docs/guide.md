@@ -44,13 +44,13 @@ Build the CLI from source:
 mvn package -pl jjq-cli -DskipTests
 
 # The executable JAR is at:
-java -jar jjq-cli/target/jjq-cli-0.1.0-SNAPSHOT.jar '.name' <<< '{"name":"Alice"}'
+java -jar jjq-cli/target/jjq-cli-0.1.1-SNAPSHOT.jar '.name' <<< '{"name":"Alice"}'
 ```
 
 You can create a shell alias for convenience:
 
 ```bash
-alias jjq='java -jar /path/to/jjq-cli-0.1.0-SNAPSHOT.jar'
+alias jjq='java -jar /path/to/jjq-cli-0.1.1-SNAPSHOT.jar'
 ```
 
 #### Native Binary (GraalVM)
@@ -279,7 +279,7 @@ Add jjq to your Maven project:
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-core</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.1-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -289,7 +289,7 @@ Add jjq to your Maven project:
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-fastjson2</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.1-SNAPSHOT</version>
 </dependency>
 ```
 
