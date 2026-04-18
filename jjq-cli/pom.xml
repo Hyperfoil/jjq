@@ -60,7 +60,6 @@
                             <imageName>jjq</imageName>
                             <buildArgs>
                                 <buildArg>--no-fallback</buildArg>
-                                <buildArg>--enable-preview</buildArg>
                                 <buildArg>-O2</buildArg>
                             </buildArgs>
                         </configuration>

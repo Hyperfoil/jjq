@@ -114,19 +114,13 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.13.0</version>
                     <configuration>
-                        <release>21</release>
-                        <compilerArgs>
-                            <arg>--enable-preview</arg>
-                        </compilerArgs>
+                        <release>22</release>
                     </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.5.2</version>
-                    <configuration>
-                        <argLine>--enable-preview</argLine>
-                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.sonatype.central</groupId>
@@ -184,8 +178,7 @@
                         <artifactId>maven-javadoc-plugin</artifactId>
                         <version>${version.maven.javadoc}</version>
                         <configuration>
-                            <release>21</release>
-                            <additionalOptions>--enable-preview</additionalOptions>
+                            <release>22</release>
                         </configuration>
                         <executions>
                             <execution>
