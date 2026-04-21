@@ -4,7 +4,7 @@
 
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-parent</artifactId>
-    <version>0.1.2</version>
+    <version>0.1.3-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>jjq</name>
