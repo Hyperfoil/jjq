@@ -7,3 +7,7 @@ target/
 .settings/
 profile-*/
 io.hyperfoil.tools.jjq.benchmark.*/
+
+*.versionsBackup
+
+.cachebro*
