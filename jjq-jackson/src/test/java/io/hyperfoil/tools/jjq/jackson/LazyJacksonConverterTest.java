@@ -111,6 +111,27 @@ class LazyJacksonConverterTest {
     }
 
     @Test
+    void toJsonNodeDoesNotForceFullLazyObjectMaterialization() throws Exception {
+        JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":2,\"c\":{\"x\":1},\"d\":[1,2,3]}");
+        JqObject lazy = (JqObject) JacksonConverter.fromJsonNodeLazy(node);
+
+        assertFalse(LazyJacksonConverter.isFullyConverted(lazy));
+        assertEquals(0, LazyJacksonConverter.convertedEntryCount(lazy));
+
+        // Touch one field only
+        assertEquals(JqNumber.of(1), lazy.get("a"));
+        assertFalse(LazyJacksonConverter.isFullyConverted(lazy));
+        assertEquals(1, LazyJacksonConverter.convertedEntryCount(lazy));
+
+        JsonNode restored = JacksonConverter.toJsonNode(lazy);
+        assertEquals(node, restored);
+
+        // Still not fully materialized after serialization path
+        assertFalse(LazyJacksonConverter.isFullyConverted(lazy));
+        assertEquals(1, LazyJacksonConverter.convertedEntryCount(lazy));
+    }
+
+    @Test
     void toJsonStringWorks() throws Exception {
         JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":[2,3]}");
         JqValue lazy = LazyJacksonConverter.fromJsonNode(node);

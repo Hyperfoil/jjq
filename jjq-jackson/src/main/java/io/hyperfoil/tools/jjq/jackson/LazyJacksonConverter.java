@@ -61,12 +61,30 @@ public final class LazyJacksonConverter {
 
     private static JqObject lazyObject(ObjectNode node) {
         if (node.isEmpty()) return JqObject.EMPTY;
-        return JqObject.of(new LazyObjectMap(node));
+        return JqObject.ofTrusted(new LazyObjectMap(node));
     }
 
     private static JqArray lazyArray(ArrayNode node) {
         if (node.isEmpty()) return JqArray.EMPTY;
-        return JqArray.of(new LazyArrayList(node));
+        return JqArray.ofTrusted(new LazyArrayList(node));
+    }
+
+    static JsonNode originalNodeIfLazy(JqValue value) {
+        if (value instanceof JqObject o && o.objectValue() instanceof LazyObjectMap map) {
+            return map.source;
+        }
+        if (value instanceof JqArray a && a.arrayValue() instanceof LazyArrayList list) {
+            return list.source;
+        }
+        return null;
+    }
+
+    static boolean isFullyConverted(JqObject value) {
+        return value.objectValue() instanceof LazyObjectMap map && map.fullyConverted;
+    }
+
+    static int convertedEntryCount(JqObject value) {
+        return value.objectValue() instanceof LazyObjectMap map ? map.converted.size() : -1;
     }
 
     /**
@@ -116,11 +134,39 @@ public final class LazyJacksonConverter {
 
         @Override
         public Set<Entry<String, JqValue>> entrySet() {
-            ensureFullyConverted();
-            return converted.entrySet();
+            if (fullyConverted) {
+                return converted.entrySet();
+            }
+            return new AbstractSet<>() {
+                @Override
+                public Iterator<Entry<String, JqValue>> iterator() {
+                    var fields = source.fields();
+                    return new Iterator<>() {
+                        @Override
+                        public boolean hasNext() {
+                            return fields.hasNext();
+                        }
+
+                        @Override
+                        public Entry<String, JqValue> next() {
+                            var entry = fields.next();
+                            String key = entry.getKey();
+                            JqValue value = converted.get(key);
+                            if (value == null) {
+                                value = fromJsonNode(entry.getValue());
+                            }
+                            return new AbstractMap.SimpleImmutableEntry<>(key, value);
+                        }
+                    };
+                }
+
+                @Override
+                public int size() {
+                    return source.size();
+                }
+            };
         }
 
-        @Override
         public Collection<JqValue> values() {
             ensureFullyConverted();
             return converted.values();

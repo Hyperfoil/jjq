@@ -164,4 +164,5 @@ class JacksonConverterTest {
         JsonNode restored = JacksonConverter.toJsonNode(jqValue);
         assertEquals(original, restored);
     }
+
 }

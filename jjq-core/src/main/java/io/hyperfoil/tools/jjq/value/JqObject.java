@@ -27,6 +27,15 @@ public final class JqObject implements JqValue {
         return new JqObject(Collections.unmodifiableMap(fields));
     }
 
+    /**
+     * Creates a JqObject wrapping the given map without copying or wrapping.
+     * The caller must guarantee the map is not modified after this call.
+     */
+    public static JqObject ofTrusted(Map<String, JqValue> fields) {
+        if (fields.isEmpty()) return EMPTY;
+        return new JqObject(fields);
+    }
+
     public static JqObject of(String key, JqValue value) {
         var map = new LinkedHashMap<String, JqValue>();
         map.put(key, value);
