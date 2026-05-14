@@ -132,6 +132,19 @@ class LazyJacksonConverterTest {
     }
 
     @Test
+    void identityPassthroughAfterSingleFieldAccess() throws Exception {
+        JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":2,\"c\":3}");
+        JqObject lazy = (JqObject) JacksonConverter.fromJsonNodeLazy(node);
+
+        assertEquals(JqNumber.of(2), lazy.get("b"));
+        JsonNode restored = JacksonConverter.toJsonNode(lazy);
+
+        assertSame(node, restored);
+        assertFalse(LazyJacksonConverter.isFullyConverted(lazy));
+        assertEquals(1, LazyJacksonConverter.convertedEntryCount(lazy));
+    }
+
+    @Test
     void toJsonStringWorks() throws Exception {
         JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":[2,3]}");
         JqValue lazy = LazyJacksonConverter.fromJsonNode(node);

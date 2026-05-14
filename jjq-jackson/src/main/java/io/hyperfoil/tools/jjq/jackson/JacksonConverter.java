@@ -101,6 +101,10 @@ public final class JacksonConverter {
      * for node creation.
      */
     public static JsonNode toJsonNode(JqValue value, ObjectMapper mapper) {
+        JsonNode original = LazyJacksonConverter.originalNodeIfLazy(value);
+        if (original != null) {
+            return original;
+        }
         return switch (value) {
             case JqNull ignored -> NullNode.getInstance();
             case JqBoolean b -> BooleanNode.valueOf(b.booleanValue());
