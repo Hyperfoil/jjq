@@ -118,13 +118,23 @@ public final class JacksonConverter {
                 yield arr;
             }
             case JqObject o -> {
-                ObjectNode obj = mapper.createObjectNode();
-                for (var entry : o.objectValue().entrySet()) {
+                var fields = o.objectValue();
+                ObjectNode obj = new ObjectNode(
+                        mapper.getNodeFactory(),
+                        new LinkedHashMap<>(mapCapacityForSize(fields.size())));
+                for (var entry : fields.entrySet()) {
                     obj.set(entry.getKey(), toJsonNode(entry.getValue(), mapper));
                 }
                 yield obj;
             }
         };
+    }
+
+    private static int mapCapacityForSize(int size) {
+        if (size <= 0) return 1;
+        long capacity = (size * 4L) / 3L + 1L;
+        if (capacity > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        return (int) capacity;
     }
 
     private static JsonNode numberToNode(JqNumber n) {
