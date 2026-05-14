@@ -206,7 +206,7 @@ public final class BuiltinRegistry {
                         var vals = eval.eval(args.getFirst(), entry.getValue(), env);
                         map.put(entry.getKey(), vals.getFirst());
                     }
-                    out.accept(JqObject.of(map));
+                    out.accept(JqObject.ofTrusted(map));
                 }
                 default -> throw new JqException("map_values requires array or object input");
             }
@@ -719,7 +719,7 @@ public final class BuiltinRegistry {
                     String val = matcher.group(i);
                     map.put(String.valueOf(i), val != null ? JqString.of(val) : JqNull.NULL);
                 }
-                out.accept(JqObject.of(map));
+                out.accept(JqObject.ofTrusted(map));
             } else {
                 out.accept(JqNull.NULL);
             }
@@ -1121,7 +1121,7 @@ public final class BuiltinRegistry {
                 var map = new LinkedHashMap<String, JqValue>();
                 map.put("key", JqString.of(entry.getKey()));
                 map.put("value", entry.getValue());
-                entries.add(JqObject.of(map));
+                entries.add(JqObject.ofTrusted(map));
             }
             out.accept(JqArray.of(entries));
         });
@@ -1146,7 +1146,7 @@ public final class BuiltinRegistry {
                     map.put(keyStr, value);
                 }
             }
-            out.accept(JqObject.of(map));
+            out.accept(JqObject.ofTrusted(map));
         });
 
         register("with_entries", 1, (input, args, env, eval, out) -> {
@@ -1156,7 +1156,7 @@ public final class BuiltinRegistry {
                 var entryObj = new LinkedHashMap<String, JqValue>();
                 entryObj.put("key", JqString.of(entry.getKey()));
                 entryObj.put("value", entry.getValue());
-                eval.eval(args.getFirst(), JqObject.of(entryObj), env, entries::add);
+                eval.eval(args.getFirst(), JqObject.ofTrusted(entryObj), env, entries::add);
             }
             var map = new LinkedHashMap<String, JqValue>();
             for (JqValue v : entries) {
@@ -1168,7 +1168,7 @@ public final class BuiltinRegistry {
                     map.put(keyStr, value);
                 }
             }
-            out.accept(JqObject.of(map));
+            out.accept(JqObject.ofTrusted(map));
         });
 
         // Misc
@@ -1204,7 +1204,7 @@ public final class BuiltinRegistry {
         register("env", 0, (input, args, env, eval, out) -> {
             var map = new LinkedHashMap<String, JqValue>();
             System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
-            out.accept(JqObject.of(map));
+            out.accept(JqObject.ofTrusted(map));
         });
 
         register("input", 0, (input, args, env, eval, out) -> {
@@ -1782,7 +1782,7 @@ public final class BuiltinRegistry {
                     }
                 });
             } catch (EmptyException ignored) {}
-            out.accept(JqObject.of(map));
+            out.accept(JqObject.ofTrusted(map));
         });
 
         // env already registered
@@ -2206,7 +2206,7 @@ public final class BuiltinRegistry {
                     ? new LinkedHashMap<>(obj.objectValue())
                     : new LinkedHashMap<String, JqValue>();
             map.put(s.stringValue(), setPath(map.getOrDefault(s.stringValue(), JqNull.NULL), path, idx + 1, value));
-            return JqObject.of(map);
+            return JqObject.ofTrusted(map);
         } else if (key instanceof JqNumber n) {
             if (current instanceof JqObject) {
                 throw new JqException("Cannot index object with number (" + n.toJsonString() + ")");
@@ -2237,7 +2237,7 @@ public final class BuiltinRegistry {
             if (key instanceof JqString s && current instanceof JqObject obj) {
                 var map = new LinkedHashMap<>(obj.objectValue());
                 map.remove(s.stringValue());
-                return JqObject.of(map);
+                return JqObject.ofTrusted(map);
             } else if (key instanceof JqNumber n && current instanceof JqArray arr) {
                 if (n.isNaN()) return current; // NaN index: no-op
                 var list = new ArrayList<>(arr.arrayValue());
@@ -2252,7 +2252,7 @@ public final class BuiltinRegistry {
             if (!obj.objectValue().containsKey(s.stringValue())) return current; // path doesn't exist
             var map = new LinkedHashMap<>(obj.objectValue());
             map.put(s.stringValue(), deletePath(map.get(s.stringValue()), path, idx + 1));
-            return JqObject.of(map);
+            return JqObject.ofTrusted(map);
         } else if (key instanceof JqNumber n && current instanceof JqArray arr) {
             if (n.isNaN()) return current; // NaN index: no-op
             var list = new ArrayList<>(arr.arrayValue());
@@ -2313,10 +2313,10 @@ public final class BuiltinRegistry {
             captureMap.put("length", JqNumber.of(g != null ? g.length() : 0));
             captureMap.put("string", g != null ? JqString.of(g) : JqNull.NULL);
             captureMap.put("name", JqNull.NULL);
-            captures.add(JqObject.of(captureMap));
+            captures.add(JqObject.ofTrusted(captureMap));
         }
         map.put("captures", JqArray.of(captures));
-        return JqObject.of(map);
+        return JqObject.ofTrusted(map);
     }
 
     private JqValue parseJson(String json) {
@@ -2361,7 +2361,7 @@ public final class BuiltinRegistry {
         pos[0]++; // skip {
         var map = new LinkedHashMap<String, JqValue>();
         skipWs(json, pos);
-        if (json.charAt(pos[0]) == '}') { pos[0]++; return JqObject.of(map); }
+        if (json.charAt(pos[0]) == '}') { pos[0]++; return JqObject.ofTrusted(map); }
         while (true) {
             skipWs(json, pos);
             JqValue keyVal = parseJsonString(json, pos);
@@ -2374,7 +2374,7 @@ public final class BuiltinRegistry {
             if (json.charAt(pos[0]) == '}') { pos[0]++; break; }
             pos[0]++; // skip ,
         }
-        return JqObject.of(map);
+        return JqObject.ofTrusted(map);
     }
 
     private JqArray parseJsonArray(String json, int[] pos) {
@@ -2579,7 +2579,7 @@ public final class BuiltinRegistry {
                     JqValue walked = walkValue(entry.getValue(), filter, env, eval);
                     if (walked != null) map.put(entry.getKey(), walked);
                 }
-                yield JqObject.of(map);
+                yield JqObject.ofTrusted(map);
             }
             default -> value;
         };

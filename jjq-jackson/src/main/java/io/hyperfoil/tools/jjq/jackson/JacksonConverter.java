@@ -71,7 +71,7 @@ public final class JacksonConverter {
                 var entry = fields.next();
                 map.put(entry.getKey(), fromJsonNode(entry.getValue()));
             }
-            return JqObject.of(map);
+            return JqObject.ofTrusted(map);
         }
         return JqNull.NULL;
     }

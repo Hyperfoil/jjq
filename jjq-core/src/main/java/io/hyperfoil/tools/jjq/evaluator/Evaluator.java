@@ -319,12 +319,12 @@ public final class Evaluator {
                 if ("ENV".equals(vr.name())) {
                     var map = new java.util.LinkedHashMap<String, JqValue>();
                     System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
-                    output.accept(JqObject.of(map));
+                    output.accept(JqObject.ofTrusted(map));
                 } else if ("__loc__".equals(vr.name())) {
                     var map = new java.util.LinkedHashMap<String, JqValue>();
                     map.put("file", JqString.of("<top-level>"));
                     map.put("line", JqNumber.of(1));
-                    output.accept(JqObject.of(map));
+                    output.accept(JqObject.ofTrusted(map));
                 } else {
                     output.accept(env.getVariable(vr.name()));
                 }
@@ -504,7 +504,7 @@ public final class Evaluator {
                               JqValue input, Environment env,
                               LinkedHashMap<String, JqValue> map, Consumer<JqValue> output) {
         if (idx >= entries.size()) {
-            output.accept(JqObject.of(new LinkedHashMap<>(map)));
+            output.accept(JqObject.ofTrusted(new LinkedHashMap<>(map)));
             return;
         }
         var entry = entries.get(idx);
@@ -550,12 +550,12 @@ public final class Evaluator {
                     JqValue oldVal = map.getOrDefault(df.field(), JqNull.NULL);
                     JqValue newVal = updater.apply(List.of(oldVal)).getFirst();
                     map.put(df.field(), newVal);
-                    yield JqObject.of(map);
+                    yield JqObject.ofTrusted(map);
                 } else if (input instanceof JqNull) {
                     var map = new LinkedHashMap<String, JqValue>();
                     JqValue newVal = updater.apply(List.of(JqNull.NULL)).getFirst();
                     map.put(df.field(), newVal);
-                    yield JqObject.of(map);
+                    yield JqObject.ofTrusted(map);
                 } else {
                     throw new JqException("Cannot index " + input.type().jqName() + " with string");
                 }
@@ -592,7 +592,7 @@ public final class Evaluator {
                                     List<JqValue> r = updater.apply(List.of(entry.getValue()));
                                     if (!r.isEmpty()) map2.put(entry.getKey(), r.getFirst());
                                 }
-                                return List.of(JqObject.of(map2));
+                                return List.of(JqObject.ofTrusted(map2));
                             } else {
                                 throw new JqException("Cannot iterate over " + base2.type().jqName());
                             }
@@ -626,7 +626,7 @@ public final class Evaluator {
                         List<JqValue> result = updater.apply(List.of(entry.getValue()));
                         if (!result.isEmpty()) map.put(entry.getKey(), result.getFirst());
                     }
-                    yield JqObject.of(map);
+                    yield JqObject.ofTrusted(map);
                 } else {
                     throw new JqException("Cannot iterate over " + base.type().jqName() + " (" + base.toJsonString() + ")");
                 }
@@ -841,14 +841,14 @@ public final class Evaluator {
             } else {
                 map.put(s.stringValue(), newVals.getFirst());
             }
-            return JqObject.of(map);
+            return JqObject.ofTrusted(map);
         } else if (base instanceof JqNull && index instanceof JqString s) {
             var map = new LinkedHashMap<String, JqValue>();
             List<JqValue> newVals = updater.apply(List.of(JqNull.NULL));
             if (!newVals.isEmpty()) {
                 map.put(s.stringValue(), newVals.getFirst());
             }
-            return JqObject.of(map);
+            return JqObject.ofTrusted(map);
         } else {
             String indexType = index instanceof JqNumber ? "number" : "string";
             String indexStr = index instanceof JqNumber n ? String.valueOf((int) n.longValue())

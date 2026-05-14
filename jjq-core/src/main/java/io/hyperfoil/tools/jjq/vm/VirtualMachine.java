@@ -617,12 +617,12 @@ public final class VirtualMachine {
                         if ("ENV".equals(name)) {
                             var map = new java.util.LinkedHashMap<String, JqValue>();
                             System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
-                            push(JqObject.of(map));
+                            push(JqObject.ofTrusted(map));
                         } else if ("__loc__".equals(name)) {
                             var map = new java.util.LinkedHashMap<String, JqValue>();
                             map.put("file", JqString.of("<top-level>"));
                             map.put("line", JqNumber.of(1));
-                            push(JqObject.of(map));
+                            push(JqObject.ofTrusted(map));
                         } else {
                             push(env.getVariable(name));
                         }

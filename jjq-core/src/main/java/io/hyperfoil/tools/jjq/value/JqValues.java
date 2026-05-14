@@ -172,7 +172,7 @@ public final class JqValues {
         pos[0]++; // skip {
         var map = new LinkedHashMap<String, JqValue>();
         skipWs(json, pos);
-        if (pos[0] < json.length() && json.charAt(pos[0]) == '}') { pos[0]++; return JqObject.of(map); }
+        if (pos[0] < json.length() && json.charAt(pos[0]) == '}') { pos[0]++; return JqObject.ofTrusted(map); }
         while (true) {
             skipWs(json, pos);
             if (pos[0] >= json.length() || json.charAt(pos[0]) != '"') {
@@ -191,7 +191,7 @@ public final class JqValues {
             if (pos[0] >= json.length() || json.charAt(pos[0]) == '}') { pos[0]++; break; }
             pos[0]++; // skip ,
         }
-        return JqObject.of(map);
+        return JqObject.ofTrusted(map);
     }
 
     private static JqString parseString(String json, int[] pos) {

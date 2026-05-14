@@ -107,7 +107,7 @@ public final class FastjsonEngine {
             for (var entry : jsonObj.entrySet()) {
                 map.put(entry.getKey(), fromFastjson(entry.getValue()));
             }
-            return JqObject.of(map);
+            return JqObject.ofTrusted(map);
         }
         if (obj instanceof JSONArray jsonArr) {
             var list = new ArrayList<JqValue>();
