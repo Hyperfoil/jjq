@@ -167,7 +167,7 @@ class JacksonConverterTest {
 
     @Test
     void lazyIdentityPassthroughReturnsOriginalNode() throws Exception {
-        JsonNode original = MAPPER.readTree("{\"name\":\"Alice\",\"age\":30}");
+        JsonNode original = MAPPER.readTree("{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7,\"f8\":8}");
         JqValue lazy = JacksonConverter.fromJsonNodeLazy(original);
 
         JsonNode restored = JacksonConverter.toJsonNode(lazy);

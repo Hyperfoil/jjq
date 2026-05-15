@@ -25,6 +25,9 @@ import java.util.*;
  */
 public final class LazyJacksonConverter {
 
+    static final int DEFAULT_EAGER_OBJECT_FIELD_THRESHOLD = 8;
+    static final int EAGER_OBJECT_FIELD_THRESHOLD = loadObjectThreshold();
+
     private LazyJacksonConverter() {}
 
     /**
@@ -61,7 +64,29 @@ public final class LazyJacksonConverter {
 
     private static JqObject lazyObject(ObjectNode node) {
         if (node.isEmpty()) return JqObject.EMPTY;
+        if (node.size() <= EAGER_OBJECT_FIELD_THRESHOLD) {
+            var map = new LinkedHashMap<String, JqValue>(node.size());
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                map.put(entry.getKey(), fromJsonNode(entry.getValue()));
+            }
+            return JqObject.ofTrusted(map);
+        }
         return JqObject.ofTrusted(new LazyObjectMap(node));
+    }
+
+    private static int loadObjectThreshold() {
+        String configured = System.getProperty("jjq.jackson.lazy.eagerObjectThreshold");
+        if (configured == null || configured.isEmpty()) {
+            return DEFAULT_EAGER_OBJECT_FIELD_THRESHOLD;
+        }
+        try {
+            int parsed = Integer.parseInt(configured);
+            return Math.max(parsed, 0);
+        } catch (NumberFormatException ignored) {
+            return DEFAULT_EAGER_OBJECT_FIELD_THRESHOLD;
+        }
     }
 
     private static JqArray lazyArray(ArrayNode node) {

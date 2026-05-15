@@ -34,6 +34,44 @@ class LazyJacksonConverterTest {
     }
 
     @Test
+    void smallObjectsUseEagerConversionThreshold() throws Exception {
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < LazyJacksonConverter.EAGER_OBJECT_FIELD_THRESHOLD; i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"').append("f").append(i).append('"').append(':').append(i);
+        }
+        sb.append('}');
+
+        JsonNode node = MAPPER.readTree(sb.toString());
+        JqObject value = (JqObject) LazyJacksonConverter.fromJsonNode(node);
+
+        assertFalse(value.objectValue().getClass().getName().contains("LazyObjectMap"));
+        assertEquals(LazyJacksonConverter.EAGER_OBJECT_FIELD_THRESHOLD, value.objectValue().size());
+    }
+
+    @Test
+    void largerObjectsStayLazy() throws Exception {
+        StringBuilder sb = new StringBuilder("{");
+        int fieldCount = LazyJacksonConverter.EAGER_OBJECT_FIELD_THRESHOLD + 1;
+        for (int i = 0; i < fieldCount; i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"').append("f").append(i).append('"').append(':').append(i);
+        }
+        sb.append('}');
+
+        JsonNode node = MAPPER.readTree(sb.toString());
+        JqObject value = (JqObject) LazyJacksonConverter.fromJsonNode(node);
+
+        assertTrue(value.objectValue().getClass().getName().contains("LazyObjectMap"));
+    }
+
+    @Test
+    void defaultThresholdIsExpected() {
+        assertEquals(LazyJacksonConverter.DEFAULT_EAGER_OBJECT_FIELD_THRESHOLD,
+                LazyJacksonConverter.EAGER_OBJECT_FIELD_THRESHOLD);
+    }
+
+    @Test
     void lazyNestedObject() throws Exception {
         JsonNode node = MAPPER.readTree("{\"a\":{\"b\":{\"c\":42}}}");
         JqValue lazy = LazyJacksonConverter.fromJsonNode(node);
@@ -112,7 +150,7 @@ class LazyJacksonConverterTest {
 
     @Test
     void toJsonNodeDoesNotForceFullLazyObjectMaterialization() throws Exception {
-        JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":2,\"c\":{\"x\":1},\"d\":[1,2,3]}");
+        JsonNode node = MAPPER.readTree(largeObjectJson());
         JqObject lazy = (JqObject) JacksonConverter.fromJsonNodeLazy(node);
 
         assertFalse(LazyJacksonConverter.isFullyConverted(lazy));
@@ -133,7 +171,7 @@ class LazyJacksonConverterTest {
 
     @Test
     void identityPassthroughAfterSingleFieldAccess() throws Exception {
-        JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":2,\"c\":3}");
+        JsonNode node = MAPPER.readTree(largeObjectJson());
         JqObject lazy = (JqObject) JacksonConverter.fromJsonNodeLazy(node);
 
         assertEquals(JqNumber.of(2), lazy.get("b"));
@@ -142,6 +180,10 @@ class LazyJacksonConverterTest {
         assertSame(node, restored);
         assertFalse(LazyJacksonConverter.isFullyConverted(lazy));
         assertEquals(1, LazyJacksonConverter.convertedEntryCount(lazy));
+    }
+
+    private static String largeObjectJson() {
+        return "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"i\":9}";
     }
 
     @Test
