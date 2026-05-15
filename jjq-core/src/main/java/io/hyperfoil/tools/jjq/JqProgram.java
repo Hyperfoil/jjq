@@ -34,6 +34,14 @@ public final class JqProgram {
     private final BuiltinRegistry builtins;
     private volatile Bytecode bytecode; // lazily compiled
 
+    /**
+     * Per-thread cached VM instance. Each thread gets its own VM to avoid
+     * synchronization, and the VM resets all state on each execute() call
+     * so it is safe to reuse across invocations. This eliminates 67+ object
+     * allocations per call (64 BacktrackPoint objects, stack arrays, Evaluator).
+     */
+    private final ThreadLocal<VirtualMachine> cachedVM = new ThreadLocal<>();
+
     JqProgram(String expression, JqExpr ast, BuiltinRegistry builtins) {
         this.expression = expression;
         this.ast = ast;
@@ -59,15 +67,11 @@ public final class JqProgram {
      * Returns {@link io.hyperfoil.tools.jjq.value.JqNull#NULL} if the program produces no output.
      */
     public JqValue apply(JqValue input) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
-        return vm.executeOne(input);
+        return getVM().executeOne(input);
     }
 
     public JqValue apply(JqValue input, Environment env) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
-        return vm.executeOne(input, env != null ? env : new Environment());
+        return getVM().executeOne(input, env != null ? env : new Environment());
     }
 
     /**
@@ -75,15 +79,11 @@ public final class JqProgram {
      * Use this when the program may produce multiple outputs (e.g. {@code .[]}).
      */
     public List<JqValue> applyAll(JqValue input) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
-        return vm.execute(input);
+        return getVM().execute(input);
     }
 
     public List<JqValue> applyAll(JqValue input, Environment env) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
-        return vm.execute(input, env != null ? env : new Environment());
+        return getVM().execute(input, env != null ? env : new Environment());
     }
 
     // ========================================================================
@@ -124,8 +124,7 @@ public final class JqProgram {
     }
 
     public List<JqValue> applyAll(Iterable<JqValue> inputs, Environment env) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
+        var vm = getVM();
         var results = new ArrayList<JqValue>();
         for (JqValue input : inputs) {
             results.addAll(env != null ? vm.execute(input, env) : vm.execute(input));
@@ -138,8 +137,7 @@ public final class JqProgram {
      * Reuses a single VM instance across all inputs for efficiency.
      */
     public void applyAll(Iterable<JqValue> inputs, Consumer<JqValue> output) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
+        var vm = getVM();
         for (JqValue input : inputs) {
             for (JqValue v : vm.execute(input)) {
                 output.accept(v);
@@ -152,8 +150,7 @@ public final class JqProgram {
      * Returns a lazily-evaluated stream of results. Reuses a single VM instance.
      */
     public Stream<JqValue> stream(Iterable<JqValue> inputs) {
-        Bytecode bc = getBytecode();
-        var vm = new VirtualMachine(bc, builtins);
+        var vm = getVM();
         return StreamSupport.stream(inputs.spliterator(), false)
                 .flatMap(input -> vm.execute(input).stream());
     }
@@ -167,6 +164,20 @@ public final class JqProgram {
             }
         }
         return bytecode;
+    }
+
+    /**
+     * Get or create a thread-local VM instance for this program.
+     * The VM is reused across calls on the same thread, eliminating
+     * per-call allocation of stacks, backtrack points, and evaluator.
+     */
+    private VirtualMachine getVM() {
+        VirtualMachine vm = cachedVM.get();
+        if (vm == null) {
+            vm = new VirtualMachine(getBytecode(), builtins);
+            cachedVM.set(vm);
+        }
+        return vm;
     }
 
     public String expression() { return expression; }

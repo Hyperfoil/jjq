@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class JjqBenchmark {
 
-    // Pre-compiled VMs (reuse across invocations)
+    // Pre-compiled VMs (reuse across invocations — measures pure VM execution)
     private VirtualMachine identityVM;
     private VirtualMachine fieldAccessVM;
     private VirtualMachine pipeAndArithVM;
@@ -30,6 +30,12 @@ public class JjqBenchmark {
     private VirtualMachine builtinSortVM;
     private VirtualMachine builtinAddVM;
     private VirtualMachine collectIterateFieldVM;
+
+    // Pre-compiled programs (measures JqProgram.apply() path with VM caching)
+    private JqProgram progFieldAccess;
+    private JqProgram progIterateMap;
+    private JqProgram progCollectIterateField;
+    private JqProgram progReduce;
 
     // Input values
     private JqValue simpleObj;
@@ -55,6 +61,12 @@ public class JjqBenchmark {
         // h5m production pattern: [.results[].load.avThroughput]
         collectIterateFieldVM = new VirtualMachine(
                 JqProgram.compile("[.results[].load.avThroughput]", builtins).getBytecode(), builtins);
+
+        // Programs for JqProgram.apply() path benchmarks (measures VM caching)
+        progFieldAccess = JqProgram.compile(".name", builtins);
+        progIterateMap = JqProgram.compile("[.[] | . * 2]", builtins);
+        progCollectIterateField = JqProgram.compile("[.results[].load.avThroughput]", builtins);
+        progReduce = JqProgram.compile("reduce .[] as $x (0; . + $x)", builtins);
 
         simpleObj = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"a\":42}");
         nestedObj = JqValues.parse("{\"a\":{\"b\":42,\"c\":\"hello\"}}");
@@ -146,6 +158,28 @@ public class JjqBenchmark {
     @Benchmark
     public List<JqValue> vm_builtinAdd() {
         return builtinAddVM.execute(smallArray);
+    }
+
+    // --- JqProgram.apply() benchmarks (h5m path — measures VM caching benefit) ---
+
+    @Benchmark
+    public JqValue prog_fieldAccess() {
+        return progFieldAccess.apply(simpleObj);
+    }
+
+    @Benchmark
+    public List<JqValue> prog_iterateMap() {
+        return progIterateMap.applyAll(smallArray);
+    }
+
+    @Benchmark
+    public List<JqValue> prog_collectIterateField() {
+        return progCollectIterateField.applyAll(h5mResultsObj);
+    }
+
+    @Benchmark
+    public JqValue prog_reduce() {
+        return progReduce.apply(smallArray);
     }
 
     // --- Parse benchmarks ---
