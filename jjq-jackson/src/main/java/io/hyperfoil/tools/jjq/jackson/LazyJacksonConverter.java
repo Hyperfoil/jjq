@@ -120,6 +120,7 @@ public final class LazyJacksonConverter {
         private final ObjectNode source;
         private final Map<String, JqValue> converted = new LinkedHashMap<>();
         private boolean fullyConverted;
+        private Set<String> cachedKeySet;
 
         LazyObjectMap(ObjectNode source) {
             this.source = source;
@@ -151,10 +152,14 @@ public final class LazyJacksonConverter {
 
         @Override
         public Set<String> keySet() {
-            // Build key set from source to preserve insertion order
-            var keys = new LinkedHashSet<String>();
-            source.fieldNames().forEachRemaining(keys::add);
-            return keys;
+            Set<String> ks = cachedKeySet;
+            if (ks == null) {
+                var keys = new LinkedHashSet<String>();
+                source.fieldNames().forEachRemaining(keys::add);
+                ks = Collections.unmodifiableSet(keys);
+                cachedKeySet = ks;
+            }
+            return ks;
         }
 
         @Override

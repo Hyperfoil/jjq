@@ -187,6 +187,40 @@ class LazyJacksonConverterTest {
     }
 
     @Test
+    void keySetIsCachedAndPreservesInsertionOrder() throws Exception {
+        JsonNode node = MAPPER.readTree(largeObjectJson());
+        JqObject lazy = (JqObject) JacksonConverter.fromJsonNodeLazy(node);
+
+        var keySet1 = lazy.objectValue().keySet();
+        var keySet2 = lazy.objectValue().keySet();
+
+        // Same instance returned on repeated calls (cached)
+        assertSame(keySet1, keySet2);
+
+        // Preserves insertion order
+        var expectedOrder = List.of("a", "b", "c", "d", "e", "f", "g", "h",
+                "i", "j", "k", "l", "m", "n", "o", "p", "q");
+        assertEquals(expectedOrder, List.copyOf(keySet1));
+
+        // Key set is unmodifiable
+        assertThrows(UnsupportedOperationException.class, () -> keySet1.add("z"));
+    }
+
+    @Test
+    void keySetCachedAfterPartialAccess() throws Exception {
+        JsonNode node = MAPPER.readTree(largeObjectJson());
+        JqObject lazy = (JqObject) JacksonConverter.fromJsonNodeLazy(node);
+
+        // Access a field first, then check keySet is still correct and cached
+        assertEquals(JqNumber.of(3), lazy.get("c"));
+
+        var keySet1 = lazy.objectValue().keySet();
+        var keySet2 = lazy.objectValue().keySet();
+        assertSame(keySet1, keySet2);
+        assertEquals(17, keySet1.size());
+    }
+
+    @Test
     void toJsonStringWorks() throws Exception {
         JsonNode node = MAPPER.readTree("{\"a\":1,\"b\":[2,3]}");
         JqValue lazy = LazyJacksonConverter.fromJsonNode(node);
