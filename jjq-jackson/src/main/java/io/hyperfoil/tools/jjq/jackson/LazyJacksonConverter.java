@@ -25,7 +25,7 @@ import java.util.*;
  */
 public final class LazyJacksonConverter {
 
-    static final int DEFAULT_EAGER_OBJECT_FIELD_THRESHOLD = 8;
+    static final int DEFAULT_EAGER_OBJECT_FIELD_THRESHOLD = 16;
     static final int EAGER_OBJECT_FIELD_THRESHOLD = loadObjectThreshold();
 
     private LazyJacksonConverter() {}

@@ -16,7 +16,7 @@ Meaning:
 
 Default:
 
-- `8`
+- `16`
 
 ## Build benchmark jar
 
@@ -29,7 +29,7 @@ mvn -pl jjq-core,jjq-jackson,jjq-benchmark -am package -DskipTests
 Example thresholds:
 
 - `0` (always lazy)
-- `8` (current default)
+- `8`
 - `12`
 - `16`
 
@@ -111,9 +111,8 @@ Method: `-prof async` with `event=alloc`, `-wi 1 -i 2`, benchmark pattern
   `16` is highest, `12` is a close second, `0` and `8` are lower.
 - `8` is strongest for `medium_singleField`, but weaker on several
   identity/multi-field scenarios.
-- Recommendation: keep default at `8` for now (conservative, single-field
-  friendly), and only switch to `16` after a workload-weighted benchmark that
-  reflects production query mix.
+- Decision: switch default threshold to `16` as the best overall balanced
+  choice from the current benchmark set.
 
 ## Record sheet
 
@@ -122,7 +121,7 @@ Method: `-prof async` with `event=alloc`, `-wi 1 -i 2`, benchmark pattern
 | 0 |  |  |  |
 | 8 |  |  |  |
 | 12 |  |  |  |
-| 16 |  |  |  |
+| 16 | Selected default | Selected default | Best aggregate in isolated sweep |
 
 ## Decision guidance
 
