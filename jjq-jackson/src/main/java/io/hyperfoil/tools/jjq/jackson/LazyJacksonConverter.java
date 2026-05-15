@@ -207,7 +207,10 @@ public final class LazyJacksonConverter {
                 var fields = source.fields();
                 while (fields.hasNext()) {
                     var entry = fields.next();
-                    converted.computeIfAbsent(entry.getKey(), k -> fromJsonNode(entry.getValue()));
+                    String key = entry.getKey();
+                    if (!converted.containsKey(key)) {
+                        converted.put(key, fromJsonNode(entry.getValue()));
+                    }
                 }
                 fullyConverted = true;
             }

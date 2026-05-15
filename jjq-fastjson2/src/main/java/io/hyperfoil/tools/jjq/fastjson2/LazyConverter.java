@@ -121,7 +121,9 @@ public final class LazyConverter {
         private void ensureFullyConverted() {
             if (!fullyConverted) {
                 for (String key : source.keySet()) {
-                    converted.computeIfAbsent(key, k -> convertValue(source.get(k)));
+                    if (!converted.containsKey(key)) {
+                        converted.put(key, convertValue(source.get(key)));
+                    }
                 }
                 fullyConverted = true;
             }
