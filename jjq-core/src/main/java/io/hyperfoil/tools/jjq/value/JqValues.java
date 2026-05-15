@@ -8,6 +8,9 @@ import java.util.List;
 
 /**
  * Utility for parsing JSON strings into JqValue without external dependencies.
+ * <p>
+ * Parsing uses a lightweight inner class with a mutable position field to avoid
+ * array-access overhead on every character.
  */
 public final class JqValues {
 
@@ -16,13 +19,42 @@ public final class JqValues {
 
     private JqValues() {}
 
+    /** Mutable parser state — avoids int[] indirection on every character access. */
+    private static final class JsonReader {
+        final String json;
+        final int len;
+        int pos;
+
+        JsonReader(String json) {
+            this.json = json;
+            this.len = json.length();
+            this.pos = 0;
+        }
+
+        char peek() { return json.charAt(pos); }
+        char advance() { return json.charAt(pos++); }
+
+        void skipWs() {
+            int p = pos;
+            final int l = len;
+            final String s = json;
+            while (p < l) {
+                char c = s.charAt(p);
+                if (c != ' ' && c != '\n' && c != '\r' && c != '\t') break;
+                p++;
+            }
+            pos = p;
+        }
+    }
+
     public static JqValue parse(String json) {
         json = json.trim();
         // Strip UTF-8 BOM if present
         if (!json.isEmpty() && json.charAt(0) == '\uFEFF') {
             json = json.substring(1);
         }
-        return parseValue(json, new int[]{0}, 0);
+        var reader = new JsonReader(json);
+        return parseValue(reader, 0);
     }
 
     /**
@@ -36,15 +68,13 @@ public final class JqValues {
         if (trimmed.charAt(0) == '\uFEFF') {
             trimmed = trimmed.substring(1);
         }
-        int[] pos = {0};
-        JqValue result = parseValue(trimmed, pos, 0);
+        var reader = new JsonReader(trimmed);
+        JqValue result = parseValue(reader, 0);
         // Skip trailing whitespace
-        while (pos[0] < trimmed.length() && Character.isWhitespace(trimmed.charAt(pos[0]))) {
-            pos[0]++;
-        }
-        if (pos[0] < trimmed.length()) {
+        reader.skipWs();
+        if (reader.pos < reader.len) {
             throw new IllegalArgumentException(
-                    "Invalid numeric literal at EOF at line 1, column " + trimmed.length()
+                    "Invalid numeric literal at EOF at line 1, column " + reader.len
                             + " (while parsing '" + trimmed + "')");
         }
         return result;
@@ -56,45 +86,45 @@ public final class JqValues {
      */
     public static List<JqValue> parseAll(String json) {
         var results = new ArrayList<JqValue>();
-        int[] pos = {0};
+        var reader = new JsonReader(json);
         while (true) {
-            skipWs(json, pos);
-            if (pos[0] >= json.length()) break;
-            results.add(parseValue(json, pos, 0));
+            reader.skipWs();
+            if (reader.pos >= reader.len) break;
+            results.add(parseValue(reader, 0));
         }
         return results;
     }
 
-    private static JqValue parseValue(String json, int[] pos, int depth) {
-        skipWs(json, pos);
-        if (pos[0] >= json.length()) return JqNull.NULL;
-        char c = json.charAt(pos[0]);
+    private static JqValue parseValue(JsonReader r, int depth) {
+        r.skipWs();
+        if (r.pos >= r.len) return JqNull.NULL;
+        char c = r.json.charAt(r.pos);
         return switch (c) {
-            case '{' -> parseObject(json, pos, depth + 1);
-            case '[' -> parseArrayIterative(json, pos, depth);
-            case '"' -> parseString(json, pos);
-            case 't' -> { pos[0] += 4; yield JqBoolean.TRUE; }
-            case 'f' -> { pos[0] += 5; yield JqBoolean.FALSE; }
+            case '{' -> parseObject(r, depth + 1);
+            case '[' -> parseArrayIterative(r, depth);
+            case '"' -> parseString(r);
+            case 't' -> { r.pos += 4; yield JqBoolean.TRUE; }
+            case 'f' -> { r.pos += 5; yield JqBoolean.FALSE; }
             case 'n' -> {
                 // Distinguish between "null" and "nan"
-                if (pos[0] + 2 < json.length() && json.charAt(pos[0] + 1) == 'a' && json.charAt(pos[0] + 2) == 'n') {
-                    pos[0] += 3;
+                if (r.pos + 2 < r.len && r.json.charAt(r.pos + 1) == 'a' && r.json.charAt(r.pos + 2) == 'n') {
+                    r.pos += 3;
                     yield JqNumber.of(Double.NaN);
                 }
-                pos[0] += 4;
+                r.pos += 4;
                 yield JqNull.NULL;
             }
             case 'I' -> {
                 // Infinity
-                pos[0] += 8; // "Infinity"
+                r.pos += 8; // "Infinity"
                 yield JqNumber.of(Double.POSITIVE_INFINITY);
             }
             case 'N' -> {
                 // NaN
-                pos[0] += 3;
+                r.pos += 3;
                 yield JqNumber.of(Double.NaN);
             }
-            default -> parseNumber(json, pos);
+            default -> parseNumber(r);
         };
     }
 
@@ -102,26 +132,26 @@ public final class JqValues {
      * Parse arrays iteratively to avoid stack overflow on deeply nested structures.
      * Uses an explicit stack instead of recursion for nested arrays.
      */
-    private static JqValue parseArrayIterative(String json, int[] pos, int depth) {
+    private static JqValue parseArrayIterative(JsonReader r, int depth) {
         var stack = new ArrayDeque<ArrayList<JqValue>>();
 
         // Iterate through consecutive opening brackets
-        while (pos[0] < json.length() && json.charAt(pos[0]) == '[') {
+        while (r.pos < r.len && r.json.charAt(r.pos) == '[') {
             depth++;
             if (depth > MAX_PARSE_DEPTH) {
                 throw new IllegalArgumentException("Exceeds depth limit for parsing");
             }
-            pos[0]++; // skip [
-            skipWs(json, pos);
+            r.pos++; // skip [
+            r.skipWs();
 
             // Empty array
-            if (pos[0] < json.length() && json.charAt(pos[0]) == ']') {
-                pos[0]++;
-                return unwindArrayStack(stack, JqArray.EMPTY, json, pos, depth);
+            if (r.pos < r.len && r.json.charAt(r.pos) == ']') {
+                r.pos++;
+                return unwindArrayStack(stack, JqArray.EMPTY, r, depth);
             }
 
             // If first element is another array, push context and continue iterating
-            if (json.charAt(pos[0]) == '[') {
+            if (r.json.charAt(r.pos) == '[') {
                 stack.push(new ArrayList<>());
                 continue;
             }
@@ -132,75 +162,105 @@ public final class JqValues {
 
         // Parse the current array elements
         var list = new ArrayList<JqValue>();
-        list.add(parseValue(json, pos, depth));
-        skipWs(json, pos);
-        while (pos[0] < json.length() && json.charAt(pos[0]) != ']') {
-            pos[0]++; // skip ,
-            list.add(parseValue(json, pos, depth));
-            skipWs(json, pos);
+        list.add(parseValue(r, depth));
+        r.skipWs();
+        while (r.pos < r.len && r.json.charAt(r.pos) != ']') {
+            r.pos++; // skip ,
+            list.add(parseValue(r, depth));
+            r.skipWs();
         }
-        if (pos[0] < json.length()) pos[0]++; // skip ]
+        if (r.pos < r.len) r.pos++; // skip ]
         JqValue result = JqArray.of(list);
-        return unwindArrayStack(stack, result, json, pos, depth);
+        return unwindArrayStack(stack, result, r, depth);
     }
 
     /**
      * Unwind the explicit stack of partially-built arrays, completing each level.
      */
     private static JqValue unwindArrayStack(ArrayDeque<ArrayList<JqValue>> stack, JqValue result,
-                                             String json, int[] pos, int depth) {
+                                             JsonReader r, int depth) {
         while (!stack.isEmpty()) {
             depth--;
             var list = stack.pop();
             list.add(result);
-            skipWs(json, pos);
-            while (pos[0] < json.length() && json.charAt(pos[0]) != ']') {
-                pos[0]++; // skip ,
-                list.add(parseValue(json, pos, depth));
-                skipWs(json, pos);
+            r.skipWs();
+            while (r.pos < r.len && r.json.charAt(r.pos) != ']') {
+                r.pos++; // skip ,
+                list.add(parseValue(r, depth));
+                r.skipWs();
             }
-            if (pos[0] < json.length()) pos[0]++; // skip ]
+            if (r.pos < r.len) r.pos++; // skip ]
             result = JqArray.of(list);
         }
         return result;
     }
 
-    private static JqObject parseObject(String json, int[] pos, int depth) {
+    private static JqObject parseObject(JsonReader r, int depth) {
         if (depth > MAX_PARSE_DEPTH) {
             throw new IllegalArgumentException("Exceeds depth limit for parsing");
         }
-        pos[0]++; // skip {
+        r.pos++; // skip {
         var map = new LinkedHashMap<String, JqValue>();
-        skipWs(json, pos);
-        if (pos[0] < json.length() && json.charAt(pos[0]) == '}') { pos[0]++; return JqObject.ofTrusted(map); }
+        r.skipWs();
+        if (r.pos < r.len && r.json.charAt(r.pos) == '}') { r.pos++; return JqObject.ofTrusted(map); }
         while (true) {
-            skipWs(json, pos);
-            if (pos[0] >= json.length() || json.charAt(pos[0]) != '"') {
-                char got = pos[0] < json.length() ? json.charAt(pos[0]) : '?';
+            r.skipWs();
+            if (r.pos >= r.len || r.json.charAt(r.pos) != '"') {
+                char got = r.pos < r.len ? r.json.charAt(r.pos) : '?';
                 throw new IllegalArgumentException(
                         "Invalid string literal; expected \", but got " + got
-                                + " at line 1, column " + (pos[0] + 1)
-                                + " (while parsing '" + json + "')");
+                                + " at line 1, column " + (r.pos + 1)
+                                + " (while parsing '" + r.json + "')");
             }
-            String key = parseString(json, pos).stringValue();
-            skipWs(json, pos);
-            pos[0]++; // skip :
-            JqValue value = parseValue(json, pos, depth);
+            String key = parseStringRaw(r);
+            r.skipWs();
+            r.pos++; // skip :
+            JqValue value = parseValue(r, depth);
             map.put(key, value);
-            skipWs(json, pos);
-            if (pos[0] >= json.length() || json.charAt(pos[0]) == '}') { pos[0]++; break; }
-            pos[0]++; // skip ,
+            r.skipWs();
+            if (r.pos >= r.len || r.json.charAt(r.pos) == '}') { r.pos++; break; }
+            r.pos++; // skip ,
         }
         return JqObject.ofTrusted(map);
     }
 
-    private static JqString parseString(String json, int[] pos) {
-        pos[0]++; // skip opening "
-        var sb = new StringBuilder();
-        while (pos[0] < json.length() && json.charAt(pos[0]) != '"') {
-            if (json.charAt(pos[0]) == '\\') {
-                pos[0]++;
-                char esc = json.charAt(pos[0]);
+    /**
+     * Fast-path string parser: scans for the closing quote without escape characters.
+     * If the string contains no backslash, returns a substring directly (no StringBuilder,
+     * no char-by-char copy). Falls back to escape-handling path only when needed.
+     */
+    private static JqString parseString(JsonReader r) {
+        return JqString.of(parseStringRaw(r));
+    }
+
+    /** Parse a JSON string and return the raw Java String value (without wrapping in JqString). */
+    private static String parseStringRaw(JsonReader r) {
+        r.pos++; // skip opening "
+        int start = r.pos;
+        final String s = r.json;
+        final int len = r.len;
+
+        // Fast path: scan for closing quote, bail on backslash
+        while (r.pos < len) {
+            char c = s.charAt(r.pos);
+            if (c == '"') {
+                // No escapes — direct substring (zero-copy on modern JVMs with compact strings)
+                String result = s.substring(start, r.pos);
+                r.pos++; // skip closing "
+                return result;
+            }
+            if (c == '\\') break; // fall through to slow path
+            r.pos++;
+        }
+
+        // Slow path: string contains escape sequences
+        var sb = new StringBuilder(r.pos - start + 16);
+        // Copy the portion already scanned
+        sb.append(s, start, r.pos);
+        while (r.pos < len && s.charAt(r.pos) != '"') {
+            if (s.charAt(r.pos) == '\\') {
+                r.pos++;
+                char esc = s.charAt(r.pos);
                 switch (esc) {
                     case '"', '\\', '/' -> sb.append(esc);
                     case 'b' -> sb.append('\b');
@@ -209,56 +269,92 @@ public final class JqValues {
                     case 'r' -> sb.append('\r');
                     case 't' -> sb.append('\t');
                     case 'u' -> {
-                        String hex = json.substring(pos[0] + 1, pos[0] + 5);
-                        sb.append((char) Integer.parseInt(hex, 16));
-                        pos[0] += 4;
+                        int cp = Integer.parseInt(s, r.pos + 1, r.pos + 5, 16);
+                        sb.append((char) cp);
+                        r.pos += 4;
                     }
                     default -> sb.append(esc);
                 }
             } else {
-                sb.append(json.charAt(pos[0]));
+                sb.append(s.charAt(r.pos));
             }
-            pos[0]++;
+            r.pos++;
         }
-        pos[0]++; // skip closing "
-        return JqString.of(sb.toString());
+        r.pos++; // skip closing "
+        return sb.toString();
     }
 
-    private static JqNumber parseNumber(String json, int[] pos) {
-        int start = pos[0];
-        if (pos[0] < json.length() && json.charAt(pos[0]) == '-') {
-            pos[0]++;
+    private static JqNumber parseNumber(JsonReader r) {
+        final String s = r.json;
+        final int len = r.len;
+        int start = r.pos;
+        boolean negative = false;
+
+        if (r.pos < len && s.charAt(r.pos) == '-') {
+            negative = true;
+            r.pos++;
             // Handle -Infinity and -NaN
-            if (pos[0] < json.length()) {
-                if (json.charAt(pos[0]) == 'I') {
-                    pos[0] += 8; // "Infinity"
+            if (r.pos < len) {
+                if (s.charAt(r.pos) == 'I') {
+                    r.pos += 8; // "Infinity"
                     return JqNumber.of(Double.NEGATIVE_INFINITY);
                 }
-                if (json.charAt(pos[0]) == 'N') {
-                    pos[0] += 3; // "NaN"
+                if (s.charAt(r.pos) == 'N') {
+                    r.pos += 3; // "NaN"
                     return JqNumber.of(Double.NaN); // -NaN is same as NaN
                 }
             }
         }
-        while (pos[0] < json.length() && Character.isDigit(json.charAt(pos[0]))) pos[0]++;
+
+        // Fast path: parse integer digits directly into a long accumulator
+        long acc = 0;
+        boolean overflow = false;
+        int digitStart = r.pos;
+        while (r.pos < len) {
+            int d = s.charAt(r.pos) - '0';
+            if (d < 0 || d > 9) break;
+            // Check for overflow before multiply+add
+            if (!overflow) {
+                long next = acc * 10 + d;
+                if (next < acc) overflow = true; // wrapped
+                else acc = next;
+            }
+            r.pos++;
+        }
+
+        // Check for decimal point or exponent
         boolean isDecimal = false;
-        if (pos[0] < json.length() && json.charAt(pos[0]) == '.') {
+        if (r.pos < len && s.charAt(r.pos) == '.') {
             isDecimal = true;
-            pos[0]++;
-            while (pos[0] < json.length() && Character.isDigit(json.charAt(pos[0]))) pos[0]++;
+            r.pos++;
+            while (r.pos < len) {
+                int d = s.charAt(r.pos) - '0';
+                if (d < 0 || d > 9) break;
+                r.pos++;
+            }
         }
-        if (pos[0] < json.length() && (json.charAt(pos[0]) == 'e' || json.charAt(pos[0]) == 'E')) {
+        if (r.pos < len && (s.charAt(r.pos) == 'e' || s.charAt(r.pos) == 'E')) {
             isDecimal = true;
-            pos[0]++;
-            if (pos[0] < json.length() && (json.charAt(pos[0]) == '+' || json.charAt(pos[0]) == '-')) pos[0]++;
-            while (pos[0] < json.length() && Character.isDigit(json.charAt(pos[0]))) pos[0]++;
+            r.pos++;
+            if (r.pos < len && (s.charAt(r.pos) == '+' || s.charAt(r.pos) == '-')) r.pos++;
+            while (r.pos < len) {
+                int d = s.charAt(r.pos) - '0';
+                if (d < 0 || d > 9) break;
+                r.pos++;
+            }
         }
-        String numStr = json.substring(start, pos[0]);
+
+        if (!isDecimal && !overflow && (r.pos - digitStart) <= 18) {
+            // Integer that fits in a long — no string allocation needed
+            return JqNumber.of(negative ? -acc : acc);
+        }
+
+        // Fall back to string-based parsing for decimals and large integers
+        String numStr = s.substring(start, r.pos);
         if (isDecimal) {
             try {
                 return JqNumber.of(new BigDecimal(numStr));
             } catch (NumberFormatException | ArithmeticException e) {
-                // Extreme exponents: use double (produces Infinity or 0.0)
                 return JqNumber.of(Double.parseDouble(numStr));
             }
         }
@@ -271,10 +367,6 @@ public final class JqValues {
                 return JqNumber.of(Double.parseDouble(numStr));
             }
         }
-    }
-
-    private static void skipWs(String json, int[] pos) {
-        while (pos[0] < json.length() && Character.isWhitespace(json.charAt(pos[0]))) pos[0]++;
     }
 
     /**

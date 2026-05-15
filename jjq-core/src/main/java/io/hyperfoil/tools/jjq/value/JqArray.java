@@ -64,9 +64,13 @@ public final class JqArray implements JqValue {
 
     @Override
     public String toJsonString() {
-        var sb = new StringBuilder("[");
-        for (int i = 0; i < elements.size(); i++) {
-            if (i > 0) sb.append(',');
+        int size = elements.size();
+        if (size == 0) return "[]";
+        var sb = new StringBuilder(size * 8);
+        sb.append('[');
+        sb.append(elements.get(0).toJsonString());
+        for (int i = 1; i < size; i++) {
+            sb.append(',');
             sb.append(elements.get(i).toJsonString());
         }
         sb.append(']');
