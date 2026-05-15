@@ -48,6 +48,7 @@ public final class JacksonJqEngine {
 
     /**
      * Apply a jq filter to a Jackson JsonNode, returning results as JsonNodes.
+     * For repeated use with the same filter, prefer {@link #compile(String)} + {@link #apply(JqProgram, JsonNode)}.
      */
     public List<JsonNode> apply(String expression, JsonNode input) {
         return apply(compile(expression), input);
@@ -60,7 +61,7 @@ public final class JacksonJqEngine {
         JqValue jqInput = JacksonConverter.fromJsonNodeLazy(input);
         List<JqValue> results = program.applyAll(jqInput);
         return results.stream()
-                .map(v -> JacksonConverter.toJsonNode(v, mapper))
+                .map(v -> toJsonNodeWithPassthrough(v, jqInput, input))
                 .toList();
     }
 
@@ -71,7 +72,7 @@ public final class JacksonJqEngine {
         JqValue jqInput = JacksonConverter.fromJsonNodeLazy(input);
         List<JqValue> results = program.applyAll(jqInput, env);
         return results.stream()
-                .map(v -> JacksonConverter.toJsonNode(v, mapper))
+                .map(v -> toJsonNodeWithPassthrough(v, jqInput, input))
                 .toList();
     }
 
@@ -82,6 +83,16 @@ public final class JacksonJqEngine {
     public JsonNode applyFirst(JqProgram program, JsonNode input) {
         JqValue jqInput = JacksonConverter.fromJsonNodeLazy(input);
         JqValue result = program.apply(jqInput);
+        return toJsonNodeWithPassthrough(result, jqInput, input);
+    }
+
+    /**
+     * Convert a JqValue back to JsonNode, with a fast path for identity passthrough.
+     * If the result is the same JqValue instance as the input (identity filter, or
+     * passthrough), return the original JsonNode directly without reconstruction.
+     */
+    private JsonNode toJsonNodeWithPassthrough(JqValue result, JqValue jqInput, JsonNode originalInput) {
+        if (result == jqInput && originalInput != null) return originalInput;
         return JacksonConverter.toJsonNode(result, mapper);
     }
 
