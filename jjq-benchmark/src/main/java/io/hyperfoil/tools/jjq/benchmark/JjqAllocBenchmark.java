@@ -200,7 +200,7 @@ public class JjqAllocBenchmark {
         vmToFromJson = createVM("[.[] | fromjson | keys | .[0]]", builtins);
 
         // Chained pipe with multiple transforms
-        vmChainedPipe = createVM("[.[] | select(.auth) | .path] | unique | length", builtins);
+        vmChainedPipe = createVM("[.endpoints[] | select(.auth) | .path] | unique | length", builtins);
     }
 
     private VirtualMachine createVM(String expr, BuiltinRegistry builtins) {

@@ -531,23 +531,50 @@ public final class Compiler {
     }
 
     /**
-     * Try to emit a fused COLLECT_ITERATE for [.[] | simple-expr].
-     * Pattern: ArrayConstructExpr whose body is PipeExpr(IterateExpr(IdentityExpr), body)
-     * where body is a single-output expression (no generators/backtracking).
+     * Try to emit a fused COLLECT_ITERATE for [.[] | simple-expr], [.field[] | simple-expr],
+     * or [.field[].a.b...] (left-associative pipe chain with iterate at the root).
+     * <p>
+     * Walks left through the pipe chain to find the IterateExpr, then treats everything
+     * to the right as the body. Handles both:
+     * <ul>
+     *   <li>{@code PipeExpr(IterateExpr(source), body)} — direct</li>
+     *   <li>{@code PipeExpr(PipeExpr(...IterateExpr(source), a), b)} — left-associative chain</li>
+     * </ul>
      */
     private boolean tryEmitCollectIterate(ArrayConstructExpr arr) {
         JqExpr body = arr.body();
-        if (!(body instanceof PipeExpr pipe)) return false;
-        if (!(pipe.left() instanceof IterateExpr iter)) return false;
-        if (!(iter.expr() instanceof IdentityExpr)) return false;
-        JqExpr mapBody = pipe.right();
-        if (!isSingleOutputExpr(mapBody)) return false;
+        if (!(body instanceof PipeExpr)) return false;
 
-        // Emit: LOAD_INPUT, COLLECT_ITERATE <bodyLen>, <body bytecode>
-        emit(LOAD_INPUT);
+        // Walk left through the pipe chain to find the IterateExpr and collect the body parts
+        JqExpr iterSource = null;
+        var bodyParts = new ArrayList<JqExpr>();
+        JqExpr current = body;
+        while (current instanceof PipeExpr pipe) {
+            bodyParts.addFirst(pipe.right());
+            current = pipe.left();
+        }
+        if (current instanceof IterateExpr iter) {
+            iterSource = iter.expr();
+        }
+        if (iterSource == null) return false;
+
+        // Source must be single-output and not contain generators
+        if (!isSingleOutputExpr(iterSource) || containsGenerator(iterSource)) return false;
+        // All body parts must be single-output
+        for (var part : bodyParts) {
+            if (!isSingleOutputExpr(part)) return false;
+        }
+
+        // Emit: <source bytecode>, COLLECT_ITERATE <bodyLen>, <body bytecode>
+        compileExpr(iterSource);
         int collectPc = currentPc();
         emitPlaceholder(COLLECT_ITERATE); // will patch with body length
         int bodyStart = currentPc();
+        // Reconstruct and compile the body as a right-associative pipe chain
+        JqExpr mapBody = bodyParts.getLast();
+        for (int i = bodyParts.size() - 2; i >= 0; i--) {
+            mapBody = new PipeExpr(bodyParts.get(i), mapBody, null);
+        }
         compileExpr(mapBody);
         int bodyLen = currentPc() - bodyStart;
         patch(collectPc, bodyLen);
@@ -555,43 +582,58 @@ public final class Compiler {
     }
 
     /**
-     * Try to emit a fused COLLECT_SELECT_ITERATE for [.[] | select(cond) | expr].
-     * Pattern: ArrayConstructExpr body is PipeExpr chain with IterateExpr, select, and single-output expr.
+     * Try to emit a fused COLLECT_SELECT_ITERATE for [.[] | select(cond) | expr]
+     * or [.field[] | select(cond) | expr].
+     * <p>
+     * Walks left through the pipe chain to find the IterateExpr, then locates the
+     * select() call and treats everything after it as the map expression.
      */
     private boolean tryEmitCollectSelectIterate(ArrayConstructExpr arr) {
         JqExpr body = arr.body();
-        // Match: .[] | select(cond) | expr
-        // Parser may produce either:
-        //   A) PipeExpr(PipeExpr(.[], select(cond)), expr)  — left-assoc
-        //   B) PipeExpr(.[], PipeExpr(select(cond), expr))  — right-assoc
-        if (!(body instanceof PipeExpr outerPipe)) return false;
-        JqExpr cond;
-        JqExpr mapExpr;
-        if (outerPipe.left() instanceof PipeExpr innerPipe
-                && innerPipe.left() instanceof IterateExpr iter
-                && iter.expr() instanceof IdentityExpr
-                && innerPipe.right() instanceof FuncCallExpr selectCall
-                && "select".equals(selectCall.name()) && selectCall.args().size() == 1) {
-            // Pattern A: left-associative
-            cond = selectCall.args().getFirst();
-            mapExpr = outerPipe.right();
-        } else if (outerPipe.left() instanceof IterateExpr iter2
-                && iter2.expr() instanceof IdentityExpr
-                && outerPipe.right() instanceof PipeExpr rightPipe
-                && rightPipe.left() instanceof FuncCallExpr selectCall2
-                && "select".equals(selectCall2.name()) && selectCall2.args().size() == 1) {
-            // Pattern B: right-associative
-            cond = selectCall2.args().getFirst();
-            mapExpr = rightPipe.right();
-        } else {
+        if (!(body instanceof PipeExpr)) return false;
+
+        // Walk left through the pipe chain to flatten it
+        var parts = new ArrayList<JqExpr>();
+        JqExpr current = body;
+        while (current instanceof PipeExpr pipe) {
+            parts.addFirst(pipe.right());
+            current = pipe.left();
+        }
+        // current should now be the IterateExpr
+        if (!(current instanceof IterateExpr iter)) return false;
+        JqExpr iterSource = iter.expr();
+
+        // Source must be single-output and not contain generators
+        if (!isSingleOutputExpr(iterSource) || containsGenerator(iterSource)) return false;
+
+        // Find the select() call in parts — it should be the first part
+        if (parts.isEmpty()) return false;
+        JqExpr firstPart = parts.getFirst();
+        if (!(firstPart instanceof FuncCallExpr selectCall)
+                || !"select".equals(selectCall.name()) || selectCall.args().size() != 1) {
             return false;
         }
+        JqExpr cond = selectCall.args().getFirst();
+
+        // Everything after select is the map expression
+        if (parts.size() < 2) return false; // need at least select + one more part
+        JqExpr mapExpr;
+        if (parts.size() == 2) {
+            mapExpr = parts.get(1);
+        } else {
+            // Rebuild as right-associative pipe chain
+            mapExpr = parts.getLast();
+            for (int i = parts.size() - 2; i >= 1; i--) {
+                mapExpr = new PipeExpr(parts.get(i), mapExpr, null);
+            }
+        }
+
         // Both condition and map expression must be single-output and not modify input
         if (!isSingleOutputExpr(cond) || modifiesInput(cond)) return false;
         if (!isSingleOutputExpr(mapExpr) || modifiesInput(mapExpr)) return false;
 
-        // Emit: LOAD_INPUT, COLLECT_SELECT_ITERATE <bodyLen>, <cond bytecode>, JUMP_IF_FALSE <skip>, <mapExpr bytecode>
-        emit(LOAD_INPUT);
+        // Emit: <source bytecode>, COLLECT_SELECT_ITERATE <bodyLen>, <cond bytecode>, JUMP_IF_FALSE <skip>, <mapExpr bytecode>
+        compileExpr(iterSource);
         int collectPc = currentPc();
         emitPlaceholder(COLLECT_SELECT_ITERATE);
         int bodyStart = currentPc();
@@ -609,11 +651,14 @@ public final class Compiler {
 
     /**
      * Try to emit a fused REDUCE_ITERATE for reduce .[] as $x (INIT; . OP $x)
+     * or reduce .field[] as $x (INIT; . OP $x)
      * where INIT is a literal and OP is +, -, or *.
      */
     private boolean tryEmitFusedReduce(ReduceExpr red) {
         if (!(red.source() instanceof IterateExpr iter)) return false;
-        if (!(iter.expr() instanceof IdentityExpr)) return false;
+        JqExpr iterSource = iter.expr();
+        // Source must be single-output and not contain generators
+        if (!isSingleOutputExpr(iterSource) || containsGenerator(iterSource)) return false;
         if (!(red.init() instanceof LiteralExpr initLit)) return false;
         if (!(red.update() instanceof ArithmeticExpr arith)) return false;
         // update must be: . OP $x
@@ -629,7 +674,7 @@ public final class Compiler {
         if (opCode < 0) return false;
 
         int initIdx = addConstant(initLit.value());
-        emit(LOAD_INPUT);
+        compileExpr(iterSource);
         emit(REDUCE_ITERATE, initIdx, opCode);
         return true;
     }

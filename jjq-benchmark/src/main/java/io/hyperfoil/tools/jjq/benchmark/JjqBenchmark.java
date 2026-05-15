@@ -29,12 +29,14 @@ public class JjqBenchmark {
     private VirtualMachine builtinLengthVM;
     private VirtualMachine builtinSortVM;
     private VirtualMachine builtinAddVM;
+    private VirtualMachine collectIterateFieldVM;
 
     // Input values
     private JqValue simpleObj;
     private JqValue nestedObj;
     private JqValue smallArray;
     private JqValue mediumArray;
+    private JqValue h5mResultsObj;
 
     @Setup
     public void setup() {
@@ -50,6 +52,9 @@ public class JjqBenchmark {
         builtinLengthVM = new VirtualMachine(JqProgram.compile("length", builtins).getBytecode(), builtins);
         builtinSortVM = new VirtualMachine(JqProgram.compile("sort", builtins).getBytecode(), builtins);
         builtinAddVM = new VirtualMachine(JqProgram.compile("add", builtins).getBytecode(), builtins);
+        // h5m production pattern: [.results[].load.avThroughput]
+        collectIterateFieldVM = new VirtualMachine(
+                JqProgram.compile("[.results[].load.avThroughput]", builtins).getBytecode(), builtins);
 
         simpleObj = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"a\":42}");
         nestedObj = JqValues.parse("{\"a\":{\"b\":42,\"c\":\"hello\"}}");
@@ -62,6 +67,19 @@ public class JjqBenchmark {
         }
         sb.append("]");
         mediumArray = JqValues.parse(sb.toString());
+
+        // h5m-style nested results object (mirrors real Horreum/qvss benchmark data)
+        var h5mSb = new StringBuilder("{\"results\":[");
+        String[] runtimes = {"quarkus3-jvm", "quarkus3-native", "spring-boot-jvm", "spring-boot-native", "micronaut-jvm"};
+        for (int i = 0; i < runtimes.length; i++) {
+            if (i > 0) h5mSb.append(",");
+            h5mSb.append(String.format(
+                "{\"name\":\"%s\",\"load\":{\"avThroughput\":%.1f,\"maxRss\":%d},\"rss\":{\"avStartupRss\":%d},\"build\":{\"avBuildTime\":%.1f}}",
+                runtimes[i], 1000.0 + i * 250.5, 200 + i * 50, 80 + i * 15, 5.0 + i * 1.2
+            ));
+        }
+        h5mSb.append("]}");
+        h5mResultsObj = JqValues.parse(h5mSb.toString());
     }
 
     // --- VM benchmarks ---
@@ -99,6 +117,13 @@ public class JjqBenchmark {
     @Benchmark
     public List<JqValue> vm_iterateMap_medium() {
         return iterateMapVM.execute(mediumArray);
+    }
+
+    // --- VM benchmarks: fused collect-iterate with field source (h5m pattern) ---
+
+    @Benchmark
+    public List<JqValue> vm_collectIterateField() {
+        return collectIterateFieldVM.execute(h5mResultsObj);
     }
 
     // --- VM benchmarks: inlined builtins & compound field access ---
