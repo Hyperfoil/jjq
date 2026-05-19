@@ -16,6 +16,8 @@ import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 public final class BuiltinRegistry {
+    private static final int MAX_PATH_DEPTH = 10000;
+
     private static volatile BuiltinRegistry defaultInstance;
 
     private final Map<String, BuiltinFunction> builtins = new HashMap<>();
@@ -1048,6 +1050,7 @@ public final class BuiltinRegistry {
         register("getpath", 1, (input, args, env, eval, out) -> {
             JqValue pathArr = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(pathArr instanceof JqArray arr)) throw new JqException("getpath requires array argument");
+            if (arr.arrayValue().size() > MAX_PATH_DEPTH) throw new JqException("Path too deep");
             JqValue current = input;
             for (JqValue p : arr.arrayValue()) {
                 current = switch (current) {
@@ -1070,6 +1073,11 @@ public final class BuiltinRegistry {
         register("delpaths", 1, (input, args, env, eval, out) -> {
             JqValue pathsArr = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(pathsArr instanceof JqArray paths)) throw new JqException("Paths must be specified as an array");
+            for (JqValue p : paths.arrayValue()) {
+                if (p instanceof JqArray pa && pa.arrayValue().size() > MAX_PATH_DEPTH) {
+                    throw new JqException("Path too deep");
+                }
+            }
             JqValue result = input;
             // Delete paths in reverse order to maintain indices
             var pathList = new ArrayList<>(paths.arrayValue());
@@ -2086,14 +2094,77 @@ public final class BuiltinRegistry {
 
     // Helper methods
 
+    /**
+     * Check containment with an explicit stack to avoid StackOverflowError on
+     * deeply nested structures, throwing "Containment check too deep" at the limit.
+     */
     private boolean containsValue(JqValue container, JqValue contained) {
+        // Check nesting depth before attempting comparison to catch pathologically deep structures
+        if (nestingDepth(container) > MAX_PATH_DEPTH || nestingDepth(contained) > MAX_PATH_DEPTH) {
+            throw new JqException("Containment check too deep");
+        }
+        record Pair(JqValue container, JqValue contained) {}
+        var stack = new ArrayDeque<Pair>();
+        stack.push(new Pair(container, contained));
+        int checks = 0;
+        while (!stack.isEmpty()) {
+            if (++checks > MAX_PATH_DEPTH * 2) throw new JqException("Containment check too deep");
+            var pair = stack.pop();
+            JqValue c = pair.container(), d = pair.contained();
+            if (c.equals(d)) continue;
+            switch (c) {
+                case JqArray arr when d instanceof JqArray contArr -> {
+                    for (JqValue v : contArr.arrayValue()) {
+                        boolean found = false;
+                        for (JqValue cv : arr.arrayValue()) {
+                            // For element-level containment, use recursive call with depth tracking
+                            if (containsValueDepth(cv, v, 0)) { found = true; break; }
+                        }
+                        if (!found) return false;
+                    }
+                }
+                case JqObject obj when d instanceof JqObject contObj -> {
+                    for (var entry : contObj.objectValue().entrySet()) {
+                        JqValue val = obj.get(entry.getKey());
+                        stack.push(new Pair(val, entry.getValue()));
+                    }
+                }
+                case JqString s when d instanceof JqString cs -> {
+                    if (!s.stringValue().contains(cs.stringValue())) return false;
+                }
+                default -> { return false; }
+            }
+        }
+        return true;
+    }
+
+    /** Measure nesting depth iteratively (only follows first element/value). Returns > limit if too deep. */
+    private static int nestingDepth(JqValue v) {
+        int depth = 0;
+        JqValue current = v;
+        while (depth <= MAX_PATH_DEPTH) {
+            if (current instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
+                current = arr.arrayValue().getFirst();
+                depth++;
+            } else if (current instanceof JqObject obj && !obj.objectValue().isEmpty()) {
+                current = obj.objectValue().values().iterator().next();
+                depth++;
+            } else {
+                break;
+            }
+        }
+        return depth;
+    }
+
+    private boolean containsValueDepth(JqValue container, JqValue contained, int depth) {
+        if (depth > MAX_PATH_DEPTH) throw new JqException("Containment check too deep");
         if (container.equals(contained)) return true;
         return switch (container) {
             case JqArray arr when contained instanceof JqArray contArr -> {
                 for (JqValue v : contArr.arrayValue()) {
                     boolean found = false;
                     for (JqValue cv : arr.arrayValue()) {
-                        if (containsValue(cv, v)) { found = true; break; }
+                        if (containsValueDepth(cv, v, depth + 1)) { found = true; break; }
                     }
                     if (!found) yield false;
                 }
@@ -2102,7 +2173,7 @@ public final class BuiltinRegistry {
             case JqObject obj when contained instanceof JqObject contObj -> {
                 for (var entry : contObj.objectValue().entrySet()) {
                     JqValue val = obj.get(entry.getKey());
-                    if (!containsValue(val, entry.getValue())) yield false;
+                    if (!containsValueDepth(val, entry.getValue(), depth + 1)) yield false;
                 }
                 yield true;
             }
@@ -2198,39 +2269,81 @@ public final class BuiltinRegistry {
         return JqNull.NULL;
     }
 
-    private JqValue setPath(JqValue current, List<JqValue> path, int idx, JqValue value) {
-        if (idx >= path.size()) return value;
-        JqValue key = path.get(idx);
-        if (key instanceof JqString s) {
-            var map = current instanceof JqObject obj
-                    ? new LinkedHashMap<>(obj.objectValue())
-                    : new LinkedHashMap<String, JqValue>();
-            map.put(s.stringValue(), setPath(map.getOrDefault(s.stringValue(), JqNull.NULL), path, idx + 1, value));
-            return JqObject.ofTrusted(map);
-        } else if (key instanceof JqNumber n) {
-            if (current instanceof JqObject) {
-                throw new JqException("Cannot index object with number (" + n.toJsonString() + ")");
+    /**
+     * Set a value at the given path, iteratively to avoid stack overflow on deep paths.
+     * Walks down the path collecting parent containers, then builds back up.
+     */
+    private JqValue setPath(JqValue current, List<JqValue> path, int startIdx, JqValue value) {
+        int pathSize = path.size();
+        if (startIdx >= pathSize) return value;
+        if (pathSize - startIdx > MAX_PATH_DEPTH) throw new JqException("Path too deep");
+
+        // Collect the chain of containers and keys from root to leaf
+        JqValue[] containers = new JqValue[pathSize - startIdx];
+        containers[0] = current;
+        for (int idx = startIdx; idx < pathSize - 1; idx++) {
+            int ci = idx - startIdx;
+            JqValue key = path.get(idx);
+            JqValue container = containers[ci];
+            if (key instanceof JqString s) {
+                containers[ci + 1] = container instanceof JqObject obj
+                        ? obj.objectValue().getOrDefault(s.stringValue(), JqNull.NULL)
+                        : JqNull.NULL;
+            } else if (key instanceof JqNumber n) {
+                if (container instanceof JqObject) {
+                    throw new JqException("Cannot index object with number (" + n.toJsonString() + ")");
+                }
+                int i = (int) n.longValue();
+                if (container instanceof JqArray arr) {
+                    if (i < 0) i = arr.arrayValue().size() + i;
+                    containers[ci + 1] = (i >= 0 && i < arr.arrayValue().size()) ? arr.arrayValue().get(i) : JqNull.NULL;
+                } else {
+                    containers[ci + 1] = JqNull.NULL;
+                }
+            } else {
+                throw new JqException("Cannot update field at " + key.type().jqName() + " index of " + container.type().jqName());
             }
-            int i = (int) n.longValue();
-            var list = current instanceof JqArray arr
-                    ? new ArrayList<>(arr.arrayValue())
-                    : new ArrayList<JqValue>();
-            // Resolve negative indices
-            if (i < 0) {
-                i = list.size() + i;
-                if (i < 0) throw new JqException("Out of bounds negative array index");
-            }
-            if (i > 536870911) throw new JqException("Array index too large");
-            while (list.size() <= i) list.add(JqNull.NULL);
-            list.set(i, setPath(list.get(i), path, idx + 1, value));
-            return JqArray.of(list);
         }
-        throw new JqException("Cannot update field at " + key.type().jqName() + " index of " + current.type().jqName());
+
+        // Build back up from the leaf to the root
+        JqValue result = value;
+        for (int idx = pathSize - 1; idx >= startIdx; idx--) {
+            int ci = idx - startIdx;
+            JqValue key = path.get(idx);
+            JqValue container = containers[ci];
+            if (key instanceof JqString s) {
+                var map = container instanceof JqObject obj
+                        ? new LinkedHashMap<>(obj.objectValue())
+                        : new LinkedHashMap<String, JqValue>();
+                map.put(s.stringValue(), result);
+                result = JqObject.ofTrusted(map);
+            } else if (key instanceof JqNumber n) {
+                if (container instanceof JqObject) {
+                    throw new JqException("Cannot index object with number (" + n.toJsonString() + ")");
+                }
+                int i = (int) n.longValue();
+                var list = container instanceof JqArray arr
+                        ? new ArrayList<>(arr.arrayValue())
+                        : new ArrayList<JqValue>();
+                if (i < 0) {
+                    i = list.size() + i;
+                    if (i < 0) throw new JqException("Out of bounds negative array index");
+                }
+                if (i > 536870911) throw new JqException("Array index too large");
+                while (list.size() <= i) list.add(JqNull.NULL);
+                list.set(i, result);
+                result = JqArray.of(list);
+            } else {
+                throw new JqException("Cannot update field at " + key.type().jqName() + " index of " + container.type().jqName());
+            }
+        }
+        return result;
     }
 
     private JqValue deletePath(JqValue current, List<JqValue> path, int idx) {
         if (path.isEmpty()) return JqNull.NULL; // del(.) — delete root
         if (idx >= path.size()) return current;
+        if (idx > MAX_PATH_DEPTH) throw new JqException("Path too deep");
         JqValue key = path.get(idx);
         if (idx == path.size() - 1) {
             // Last element: delete it
