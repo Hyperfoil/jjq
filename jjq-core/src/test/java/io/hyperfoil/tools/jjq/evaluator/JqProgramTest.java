@@ -9,7 +9,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class EvaluatorTest {
+class JqProgramTest {
 
     private List<JqValue> eval(String expr, JqValue input) {
         return JqProgram.compile(expr).applyAll(input);

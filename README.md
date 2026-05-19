@@ -17,7 +17,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 
 | Module | Description |
 |--------|-------------|
-| `jjq-core` | Lexer, parser, AST, evaluator, bytecode VM, builtins (zero external dependencies) |
+| `jjq-core` | Lexer, parser, AST, bytecode VM, builtins (zero external dependencies) |
 | `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |

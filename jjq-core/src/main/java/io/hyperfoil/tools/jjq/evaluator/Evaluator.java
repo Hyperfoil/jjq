@@ -11,21 +11,18 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.function.Consumer;
 
-public final class Evaluator {
+final class Evaluator implements ExprEvaluator {
     private final BuiltinRegistry builtins;
 
-    public Evaluator() {
-        this.builtins = BuiltinRegistry.getDefault();
-    }
-
-    public Evaluator(BuiltinRegistry builtins) {
+    Evaluator(BuiltinRegistry builtins) {
         this.builtins = builtins;
     }
 
-    public List<JqValue> eval(JqExpr expr, JqValue input) {
+    List<JqValue> eval(JqExpr expr, JqValue input) {
         return eval(expr, input, new Environment());
     }
 
+    @Override
     public List<JqValue> eval(JqExpr expr, JqValue input, Environment env) {
         var results = new ArrayList<JqValue>();
         try {
@@ -36,6 +33,7 @@ public final class Evaluator {
         return results;
     }
 
+    @Override
     public void eval(JqExpr expr, JqValue input, Environment env, Consumer<JqValue> output) {
         switch (expr) {
             case IdentityExpr ignored -> output.accept(input);
@@ -540,6 +538,7 @@ public final class Evaluator {
         }
     }
 
+    @Override
     public JqValue updatePath(JqExpr pathExpr, JqValue input, Environment env,
                                 java.util.function.Function<List<JqValue>, List<JqValue>> updater) {
         return switch (pathExpr) {

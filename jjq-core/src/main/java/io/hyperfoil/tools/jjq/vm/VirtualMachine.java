@@ -20,7 +20,7 @@ public final class VirtualMachine {
 
     private final Bytecode bytecode;
     private final BuiltinRegistry builtins;
-    private final Evaluator treeWalker;
+    private final ExprEvaluator treeWalker;
     private final ProgramShape shape;
     private final boolean needsEnv;
     private final String fastField1;  // cached for FIELD_ACCESS / FIELD_ACCESS2 / PIPE_FIELD_ARITH
@@ -76,7 +76,7 @@ public final class VirtualMachine {
     public VirtualMachine(Bytecode bytecode, BuiltinRegistry builtins) {
         this.bytecode = bytecode;
         this.builtins = builtins;
-        this.treeWalker = new Evaluator(builtins);
+        this.treeWalker = ExprEvaluator.create(builtins);
         this.stack = new JqValue[INIT_STACK];
         this.btStack = new BacktrackPoint[INIT_BT];
         for (int i = 0; i < INIT_BT; i++) btStack[i] = new BacktrackPoint();

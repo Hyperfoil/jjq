@@ -3,7 +3,7 @@ package io.hyperfoil.tools.jjq.builtin;
 import io.hyperfoil.tools.jjq.ast.JqExpr;
 import io.hyperfoil.tools.jjq.evaluator.EmptyException;
 import io.hyperfoil.tools.jjq.evaluator.Environment;
-import io.hyperfoil.tools.jjq.evaluator.Evaluator;
+import io.hyperfoil.tools.jjq.evaluator.ExprEvaluator;
 import io.hyperfoil.tools.jjq.evaluator.HaltException;
 import io.hyperfoil.tools.jjq.evaluator.JqException;
 import io.hyperfoil.tools.jjq.value.*;
@@ -2146,7 +2146,7 @@ public final class BuiltinRegistry {
     }
 
     private void recurseWithFilter(JqValue input, JqExpr filter, Environment env,
-                                    Evaluator eval, Consumer<JqValue> output, Set<String> seen) {
+                                    ExprEvaluator eval, Consumer<JqValue> output, Set<String> seen) {
         String key = input.toJsonString();
         if (!seen.add(key)) return;
         output.accept(input);
@@ -2158,7 +2158,7 @@ public final class BuiltinRegistry {
     }
 
     private void recurseWithCondition(JqValue input, JqExpr filter, JqExpr cond,
-                                      Environment env, Evaluator eval, Consumer<JqValue> output) {
+                                      Environment env, ExprEvaluator eval, Consumer<JqValue> output) {
         // Check condition
         try {
             var condResult = eval.eval(cond, input, env);
@@ -2444,7 +2444,7 @@ public final class BuiltinRegistry {
     // --- Phase 2 helper methods ---
 
     private void collectPaths(JqExpr pathExpr, JqValue input, Environment env,
-                               Evaluator eval, List<List<JqValue>> paths) {
+                               ExprEvaluator eval, List<List<JqValue>> paths) {
         // Use path() evaluation for all expressions — handles compound paths like .foo[0]
         try {
             eval.eval(new JqExpr.PathExpr(pathExpr), input, env, pathVal -> {
@@ -2515,7 +2515,7 @@ public final class BuiltinRegistry {
     }
 
     private void allPathsFiltered(JqValue value, List<JqValue> currentPath,
-                                   JqExpr filter, Environment env, Evaluator eval,
+                                   JqExpr filter, Environment env, ExprEvaluator eval,
                                    Consumer<JqValue> output) {
         // Check if the value at this path matches the filter
         try {
@@ -2557,13 +2557,13 @@ public final class BuiltinRegistry {
         }
     }
 
-    private JqValue walkValue(JqValue value, JqExpr filter, Environment env, Evaluator eval) {
+    private JqValue walkValue(JqValue value, JqExpr filter, Environment env, ExprEvaluator eval) {
         JqValue transformed = walkTransform(value, filter, env, eval);
         var results = eval.eval(filter, transformed, env);
         return results.isEmpty() ? null : results.getFirst();
     }
 
-    private JqValue walkTransform(JqValue value, JqExpr filter, Environment env, Evaluator eval) {
+    private JqValue walkTransform(JqValue value, JqExpr filter, Environment env, ExprEvaluator eval) {
         return switch (value) {
             case JqArray arr -> {
                 var list = new ArrayList<JqValue>();
