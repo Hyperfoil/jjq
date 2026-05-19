@@ -55,9 +55,8 @@ public final class JqString implements JqValue {
     }
 
     /**
-     * Format a string for jq error messages: like JSON escaping but control characters
-     * below 0x20 (except standard escapes) are output as backslash + raw byte
-     * rather than JSON unicode escapes, matching jq's error message convention.
+     * Format a string for jq error messages: uses JSON-style escaping for
+     * control characters, matching jq's error message convention.
      */
     public static String formatForError(String s) {
         var sb = new StringBuilder();
@@ -74,8 +73,9 @@ public final class JqString implements JqValue {
                 case '\t' -> sb.append("\\t");
                 default -> {
                     if (c < 0x20) {
-                        sb.append('\\');
-                        sb.append(c); // raw control char
+                        sb.append("\\u00");
+                        sb.append(Character.forDigit((c >> 4) & 0xF, 16));
+                        sb.append(Character.forDigit(c & 0xF, 16));
                     } else {
                         sb.append(c);
                     }
