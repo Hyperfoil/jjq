@@ -397,18 +397,21 @@ JqProgram program = JqProgram.compile("select(.age >= $minAge)");
 List<JqValue> results = program.applyAll(inputs, env);
 ```
 
-**Why use `applyAll(Iterable)` instead of looping with `apply()`?**
+**Processing multiple inputs:**
 
-The multi-input methods create **one** `VirtualMachine` and reuse it across all inputs. Calling `apply()` or `applyAll(singleInput)` in a loop creates a new VM each time, re-allocating stacks and re-analyzing the program. For high-throughput processing (thousands of records), the multi-input API is measurably faster.
+Both approaches below reuse a cached `VirtualMachine` internally — `JqProgram`
+caches a VM per thread via `ThreadLocal`, so calling `apply()` in a loop is
+efficient. The multi-input `applyAll(Iterable)` method is a convenience that
+collects all results into a single list.
 
 ```java
-// GOOD: single VM reused across all inputs
+// Convenient: all results in one call
 List<JqValue> results = program.applyAll(inputs);
 
-// ALSO FINE but slower: new VM per input
+// Also efficient: VM is cached and reused automatically
 List<JqValue> results = new ArrayList<>();
 for (JqValue input : inputs) {
-    results.addAll(program.applyAll(input));  // new VM each time
+    results.addAll(program.applyAll(input));
 }
 ```
 
@@ -619,6 +622,70 @@ JqValue input = FastjsonEngine.fromFastjson(obj);
 // Convert results back to fastjson2
 JqValue result = program.apply(input);
 JSONObject output = (JSONObject) FastjsonEngine.toFastjson(result);
+```
+
+### JacksonJqEngine (Jackson Integration)
+
+If your application uses Jackson databind, the `jjq-jackson` module provides
+seamless integration:
+
+```xml
+<dependency>
+    <groupId>io.hyperfoil.tools</groupId>
+    <artifactId>jjq-jackson</artifactId>
+    <version>0.1.3-SNAPSHOT</version>
+</dependency>
+```
+
+**Basic usage:**
+
+```java
+import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
+
+JacksonJqEngine engine = new JacksonJqEngine(objectMapper);
+
+// Pre-compiled for repeated use (recommended)
+JqProgram program = engine.compile(".users[] | {name, email}");
+List<JsonNode> results = engine.apply(program, inputJsonNode);
+
+// One-shot convenience
+List<JsonNode> results = engine.apply(".name", jsonNode);
+
+// First result only
+JsonNode first = engine.applyFirst(program, jsonNode);
+```
+
+**Lazy conversion** avoids converting the entire Jackson tree upfront. Only
+fields accessed by the filter are converted:
+
+```java
+// Large document — only .metadata.id is converted, the rest stays as JsonNode
+JqProgram idExtractor = engine.compile(".metadata.id");
+JsonNode id = engine.applyFirst(idExtractor, largeDocument);
+```
+
+**With variables:**
+
+```java
+Environment env = new Environment();
+env.setVariable("minScore", JqNumber.of(80));
+
+List<JsonNode> results = engine.apply(program, inputNode, env);
+```
+
+**Direct converter access** (for custom integration patterns):
+
+```java
+import io.hyperfoil.tools.jjq.jackson.JacksonConverter;
+
+// Jackson -> JqValue (lazy — recommended for large documents)
+JqValue input = JacksonConverter.fromJsonNodeLazy(jsonNode);
+
+// Jackson -> JqValue (eager — converts entire tree immediately)
+JqValue input = JacksonConverter.fromJsonNode(jsonNode);
+
+// JqValue -> Jackson
+JsonNode output = JacksonConverter.toJsonNode(result, objectMapper);
 ```
 
 ---
