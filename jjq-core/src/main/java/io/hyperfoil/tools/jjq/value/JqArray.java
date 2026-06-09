@@ -82,7 +82,44 @@ public final class JqArray implements JqValue {
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof JqArray a && a.elements.equals(elements);
+        if (!(o instanceof JqArray a)) return false;
+        return equalsDepth(this, a, 0);
+    }
+
+    static boolean equalsDepth(JqArray a, JqArray b, int depth) {
+        // Iterative descent for linear chains (single-element nested arrays)
+        while (true) {
+            if (depth > JqValue.MAX_MERGE_DEPTH) {
+                throw new JqTypeError("Equality check too deep");
+            }
+            var aElems = a.elements;
+            var bElems = b.elements;
+            if (aElems.size() != bElems.size()) return false;
+            if (aElems.isEmpty()) return true;
+            // Compare all but the last element recursively
+            for (int i = 0; i < aElems.size() - 1; i++) {
+                JqValue av = aElems.get(i), bv = bElems.get(i);
+                if (av instanceof JqArray aa && bv instanceof JqArray ba) {
+                    if (!equalsDepth(aa, ba, depth + 1)) return false;
+                } else if (av instanceof JqObject ao && bv instanceof JqObject bo) {
+                    if (!JqObject.equalsDepth(ao, bo, depth + 1)) return false;
+                } else {
+                    if (!av.equals(bv)) return false;
+                }
+            }
+            // Tail-iterate on the last element
+            JqValue lastA = aElems.getLast(), lastB = bElems.getLast();
+            if (lastA instanceof JqArray aa && lastB instanceof JqArray ba) {
+                a = aa;
+                b = ba;
+                depth++;
+                continue; // iterate instead of recurse
+            } else if (lastA instanceof JqObject ao && lastB instanceof JqObject bo) {
+                return JqObject.equalsDepth(ao, bo, depth + 1);
+            } else {
+                return lastA.equals(lastB);
+            }
+        }
     }
 
     @Override

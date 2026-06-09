@@ -349,14 +349,15 @@ public final class BuiltinRegistry {
 
         register("unique", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "unique");
-            var seen = new LinkedHashSet<String>();
             var result = new ArrayList<JqValue>();
             var sorted = new ArrayList<>(arr.arrayValue());
             sorted.sort(JqValue::compareTo);
+            JqValue prev = null;
             for (JqValue v : sorted) {
-                if (seen.add(v.toJsonString())) {
+                if (prev == null || !prev.equals(v)) {
                     result.add(v);
                 }
+                prev = v;
             }
             out.accept(JqArray.of(result));
         });

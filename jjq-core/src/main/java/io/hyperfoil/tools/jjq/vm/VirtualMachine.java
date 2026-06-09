@@ -501,11 +501,15 @@ public final class VirtualMachine {
                     case BUILTIN_UNIQUE -> {
                         JqValue val = pop();
                         if (val instanceof JqArray arr) {
-                            var seen = new java.util.LinkedHashSet<JqValue>();
-                            for (var item : arr.arrayValue()) seen.add(item);
-                            var sorted = new ArrayList<>(seen);
+                            var sorted = new ArrayList<>(arr.arrayValue());
                             sorted.sort(JqValue::compareTo);
-                            push(JqArray.of(sorted));
+                            var unique = new ArrayList<JqValue>();
+                            JqValue prev = null;
+                            for (JqValue item : sorted) {
+                                if (prev == null || !prev.equals(item)) unique.add(item);
+                                prev = item;
+                            }
+                            push(JqArray.of(unique));
                         } else {
                             throw new JqException(val.type().jqName() + " cannot be uniquified");
                         }

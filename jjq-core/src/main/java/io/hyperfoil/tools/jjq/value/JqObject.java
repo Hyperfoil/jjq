@@ -100,7 +100,51 @@ public final class JqObject implements JqValue {
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof JqObject obj && obj.fields.equals(fields);
+        if (!(o instanceof JqObject obj)) return false;
+        return equalsDepth(this, obj, 0);
+    }
+
+    static boolean equalsDepth(JqObject a, JqObject b, int depth) {
+        // Iterative descent for linear chains (single-key nested objects)
+        while (true) {
+            if (depth > JqValue.MAX_MERGE_DEPTH) {
+                throw new JqTypeError("Equality check too deep");
+            }
+            var aFields = a.fields;
+            var bFields = b.fields;
+            if (aFields.size() != bFields.size()) return false;
+            if (aFields.isEmpty()) return true;
+            // Compare all but the last entry recursively
+            var entries = new java.util.ArrayList<>(aFields.entrySet());
+            for (int i = 0; i < entries.size() - 1; i++) {
+                var entry = entries.get(i);
+                JqValue bv = bFields.get(entry.getKey());
+                if (bv == null) return false;
+                JqValue av = entry.getValue();
+                if (av instanceof JqArray aa && bv instanceof JqArray ba) {
+                    if (!JqArray.equalsDepth(aa, ba, depth + 1)) return false;
+                } else if (av instanceof JqObject ao && bv instanceof JqObject bo) {
+                    if (!equalsDepth(ao, bo, depth + 1)) return false;
+                } else {
+                    if (!av.equals(bv)) return false;
+                }
+            }
+            // Tail-iterate on the last entry
+            var lastEntry = entries.getLast();
+            JqValue bv = bFields.get(lastEntry.getKey());
+            if (bv == null) return false;
+            JqValue av = lastEntry.getValue();
+            if (av instanceof JqObject ao && bv instanceof JqObject bo) {
+                a = ao;
+                b = bo;
+                depth++;
+                continue; // iterate instead of recurse
+            } else if (av instanceof JqArray aa && bv instanceof JqArray ba) {
+                return JqArray.equalsDepth(aa, ba, depth + 1);
+            } else {
+                return av.equals(bv);
+            }
+        }
     }
 
     @Override

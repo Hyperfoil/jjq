@@ -332,54 +332,80 @@ public sealed interface JqValue extends Comparable<JqValue>
 
     @Override
     default int compareTo(JqValue other) {
-        if (this.type() != other.type()) {
-            return this.type().ordinal() - other.type().ordinal();
+        return compareToDepth(this, other, 0);
+    }
+
+    /** @hidden */
+    static int compareToDepth(JqValue a, JqValue b, int depth) {
+        // Iterative descent for linear chains (single-element arrays, single-key objects)
+        while (true) {
+            if (depth > MAX_MERGE_DEPTH) {
+                throw new JqTypeError("Comparison too deep");
+            }
+            if (a.type() != b.type()) {
+                return a.type().ordinal() - b.type().ordinal();
+            }
+            switch (a) {
+                case JqNull ignored -> { return 0; }
+                case JqBoolean ab -> { return Boolean.compare(ab.booleanValue(), b.booleanValue()); }
+                case JqNumber n -> {
+                    JqNumber m = (JqNumber) b;
+                    if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
+                        return Double.compare(n.doubleValue(), m.doubleValue());
+                    }
+                    if (n.isLongBacked() && m.isLongBacked()) {
+                        return Long.compare(n.longValue(), m.longValue());
+                    }
+                    return n.decimalValue().compareTo(m.decimalValue());
+                }
+                case JqString s -> { return s.stringValue().compareTo(b.stringValue()); }
+                case JqArray arr -> {
+                    var thisArr = arr.arrayValue();
+                    var otherArr = b.arrayValue();
+                    int minSize = Math.min(thisArr.size(), otherArr.size());
+                    if (minSize == 0) return Integer.compare(thisArr.size(), otherArr.size());
+                    // Compare all but the last element recursively
+                    for (int i = 0; i < minSize - 1; i++) {
+                        int cmp = compareToDepth(thisArr.get(i), otherArr.get(i), depth + 1);
+                        if (cmp != 0) return cmp;
+                    }
+                    // Tail-iterate on the last element
+                    if (thisArr.size() != otherArr.size()) {
+                        int cmp = compareToDepth(thisArr.get(minSize - 1), otherArr.get(minSize - 1), depth + 1);
+                        if (cmp != 0) return cmp;
+                        return Integer.compare(thisArr.size(), otherArr.size());
+                    }
+                    a = thisArr.get(minSize - 1);
+                    b = otherArr.get(minSize - 1);
+                    depth++;
+                    continue; // iterate instead of recurse
+                }
+                case JqObject obj -> {
+                    var thisMap = obj.objectValue();
+                    var otherMap = ((JqObject) b).objectValue();
+                    int sizeCmp = Integer.compare(thisMap.size(), otherMap.size());
+                    if (sizeCmp != 0) return sizeCmp;
+                    var thisKeys = thisMap.keySet().stream().sorted().toList();
+                    var otherKeys = otherMap.keySet().stream().sorted().toList();
+                    for (int i = 0; i < thisKeys.size(); i++) {
+                        int keyCmp = thisKeys.get(i).compareTo(otherKeys.get(i));
+                        if (keyCmp != 0) return keyCmp;
+                    }
+                    if (thisKeys.isEmpty()) return 0;
+                    // Compare all but the last value recursively
+                    for (int i = 0; i < thisKeys.size() - 1; i++) {
+                        int valCmp = compareToDepth(thisMap.get(thisKeys.get(i)), otherMap.get(otherKeys.get(i)), depth + 1);
+                        if (valCmp != 0) return valCmp;
+                    }
+                    // Tail-iterate on the last value
+                    String lastKey = thisKeys.getLast();
+                    a = thisMap.get(lastKey);
+                    b = otherMap.get(otherKeys.getLast());
+                    depth++;
+                    continue; // iterate instead of recurse
+                }
+            }
         }
-        return switch (this) {
-            case JqNull ignored -> 0;
-            case JqBoolean b -> Boolean.compare(b.booleanValue(), other.booleanValue());
-            case JqNumber n -> {
-                JqNumber m = (JqNumber) other;
-                if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
-                    yield Double.compare(n.doubleValue(), m.doubleValue());
-                }
-                // Fast path: both backed by long
-                if (n.isLongBacked() && m.isLongBacked()) {
-                    yield Long.compare(n.longValue(), m.longValue());
-                }
-                yield n.decimalValue().compareTo(m.decimalValue());
-            }
-            case JqString s -> s.stringValue().compareTo(other.stringValue());
-            case JqArray a -> {
-                var otherArr = other.arrayValue();
-                var thisArr = a.arrayValue();
-                for (int i = 0; i < Math.min(thisArr.size(), otherArr.size()); i++) {
-                    int cmp = thisArr.get(i).compareTo(otherArr.get(i));
-                    if (cmp != 0) yield cmp;
-                }
-                yield Integer.compare(thisArr.size(), otherArr.size());
-            }
-            case JqObject obj -> {
-                var thisMap = obj.objectValue();
-                var otherMap = ((JqObject) other).objectValue();
-                // Compare by number of keys first
-                int sizeCmp = Integer.compare(thisMap.size(), otherMap.size());
-                if (sizeCmp != 0) yield sizeCmp;
-                // Then by sorted keys
-                var thisKeys = thisMap.keySet().stream().sorted().toList();
-                var otherKeys = otherMap.keySet().stream().sorted().toList();
-                for (int i = 0; i < thisKeys.size(); i++) {
-                    int keyCmp = thisKeys.get(i).compareTo(otherKeys.get(i));
-                    if (keyCmp != 0) yield keyCmp;
-                }
-                // Then by values in sorted key order
-                for (int i = 0; i < thisKeys.size(); i++) {
-                    int valCmp = thisMap.get(thisKeys.get(i)).compareTo(otherMap.get(otherKeys.get(i)));
-                    if (valCmp != 0) yield valCmp;
-                }
-                yield 0;
-            }
-        };
     }
 
     String toJsonString();
