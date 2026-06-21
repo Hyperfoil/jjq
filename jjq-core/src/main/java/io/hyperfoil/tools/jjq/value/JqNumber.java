@@ -17,6 +17,7 @@ public final class JqNumber implements JqValue {
     private final BigDecimal decimalVal;
     private final double rawDouble; // used for NaN/Infinity
     private final boolean isLong;
+    private BigDecimal cachedDecimal; // lazy cache for long-backed numbers
 
     private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong) {
         this.longVal = longVal;
@@ -93,7 +94,14 @@ public final class JqNumber implements JqValue {
 
     @Override
     public BigDecimal decimalValue() {
-        if (isLong) return BigDecimal.valueOf(longVal);
+        if (isLong) {
+            BigDecimal cached = cachedDecimal;
+            if (cached == null) {
+                cached = BigDecimal.valueOf(longVal);
+                cachedDecimal = cached;
+            }
+            return cached;
+        }
         if (decimalVal != null) return decimalVal;
         // NaN/Infinity can't be BigDecimal - return 0 as fallback
         return BigDecimal.ZERO;
