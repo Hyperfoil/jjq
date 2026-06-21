@@ -133,7 +133,9 @@ public final class JqValues {
      * Uses an explicit stack instead of recursion for nested arrays.
      */
     private static JqValue parseArrayIterative(JsonReader r, int depth) {
-        var stack = new ArrayDeque<ArrayList<JqValue>>();
+        ArrayDeque<JqValue[]> stack = null; // deferred -- only allocated for nested [[...]]
+        int[] stackCounts = null;
+        int stackDepth = 0;
 
         // Iterate through consecutive opening brackets
         while (r.pos < r.len && r.json.charAt(r.pos) == '[') {
@@ -147,12 +149,17 @@ public final class JqValues {
             // Empty array
             if (r.pos < r.len && r.json.charAt(r.pos) == ']') {
                 r.pos++;
-                return unwindArrayStack(stack, JqArray.EMPTY, r, depth);
+                return unwindArrayStack(stack, stackCounts, stackDepth, JqArray.EMPTY, r, depth);
             }
 
             // If first element is another array, push context and continue iterating
             if (r.json.charAt(r.pos) == '[') {
-                stack.push(new ArrayList<>());
+                if (stack == null) {
+                    stack = new ArrayDeque<>();
+                    stackCounts = new int[16];
+                }
+                stack.push(new JqValue[8]);
+                stackCounts[stackDepth++] = 0;
                 continue;
             }
 
@@ -160,37 +167,45 @@ public final class JqValues {
             break;
         }
 
-        // Parse the current array elements
-        var list = new ArrayList<JqValue>();
-        list.add(parseValue(r, depth));
+        // Parse the current array elements using raw array
+        JqValue[] elems = new JqValue[8];
+        int count = 0;
+        elems[count++] = parseValue(r, depth);
         r.skipWs();
         while (r.pos < r.len && r.json.charAt(r.pos) != ']') {
             r.pos++; // skip ,
-            list.add(parseValue(r, depth));
+            if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
+            elems[count++] = parseValue(r, depth);
             r.skipWs();
         }
         if (r.pos < r.len) r.pos++; // skip ]
-        JqValue result = JqArray.of(list);
-        return unwindArrayStack(stack, result, r, depth);
+        JqValue result = JqArray.ofTrusted(elems, count);
+        return unwindArrayStack(stack, stackCounts, stackDepth, result, r, depth);
     }
 
     /**
      * Unwind the explicit stack of partially-built arrays, completing each level.
      */
-    private static JqValue unwindArrayStack(ArrayDeque<ArrayList<JqValue>> stack, JqValue result,
+    private static JqValue unwindArrayStack(ArrayDeque<JqValue[]> stack, int[] stackCounts,
+                                             int stackDepth, JqValue result,
                                              JsonReader r, int depth) {
-        while (!stack.isEmpty()) {
+        if (stack == null) return result;
+        while (stackDepth > 0) {
             depth--;
-            var list = stack.pop();
-            list.add(result);
+            stackDepth--;
+            JqValue[] elems = stack.pop();
+            int count = stackCounts[stackDepth];
+            if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
+            elems[count++] = result;
             r.skipWs();
             while (r.pos < r.len && r.json.charAt(r.pos) != ']') {
                 r.pos++; // skip ,
-                list.add(parseValue(r, depth));
+                if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
+                elems[count++] = parseValue(r, depth);
                 r.skipWs();
             }
             if (r.pos < r.len) r.pos++; // skip ]
-            result = JqArray.of(list);
+            result = JqArray.ofTrusted(elems, count);
         }
         return result;
     }
@@ -200,7 +215,7 @@ public final class JqValues {
             throw new IllegalArgumentException("Exceeds depth limit for parsing");
         }
         r.pos++; // skip {
-        var map = new LinkedHashMap<String, JqValue>();
+        var map = new LinkedHashMap<String, JqValue>(8);
         r.skipWs();
         if (r.pos < r.len && r.json.charAt(r.pos) == '}') { r.pos++; return JqObject.ofTrusted(map); }
         while (true) {
