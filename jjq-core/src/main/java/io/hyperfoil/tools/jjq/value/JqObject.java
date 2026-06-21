@@ -114,10 +114,17 @@ public final class JqObject implements JqValue {
             var bFields = b.fields;
             if (aFields.size() != bFields.size()) return false;
             if (aFields.isEmpty()) return true;
-            // Compare all but the last entry recursively
-            var entries = new java.util.ArrayList<>(aFields.entrySet());
-            for (int i = 0; i < entries.size() - 1; i++) {
-                var entry = entries.get(i);
+
+            // Use iterator to avoid copying entrySet into a list
+            var iter = aFields.entrySet().iterator();
+            Map.Entry<String, JqValue> lastEntry = null;
+            while (iter.hasNext()) {
+                var entry = iter.next();
+                if (!iter.hasNext()) {
+                    // This is the last entry -- handle via tail-iteration below
+                    lastEntry = entry;
+                    break;
+                }
                 JqValue bv = bFields.get(entry.getKey());
                 if (bv == null) return false;
                 JqValue av = entry.getValue();
@@ -130,7 +137,6 @@ public final class JqObject implements JqValue {
                 }
             }
             // Tail-iterate on the last entry
-            var lastEntry = entries.getLast();
             JqValue bv = bFields.get(lastEntry.getKey());
             if (bv == null) return false;
             JqValue av = lastEntry.getValue();
