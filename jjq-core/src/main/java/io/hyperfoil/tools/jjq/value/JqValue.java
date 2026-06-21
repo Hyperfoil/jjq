@@ -381,26 +381,26 @@ public sealed interface JqValue extends Comparable<JqValue>
                     continue; // iterate instead of recurse
                 }
                 case JqObject obj -> {
+                    JqObject otherObj = (JqObject) b;
                     var thisMap = obj.objectValue();
-                    var otherMap = ((JqObject) b).objectValue();
+                    var otherMap = otherObj.objectValue();
                     int sizeCmp = Integer.compare(thisMap.size(), otherMap.size());
                     if (sizeCmp != 0) return sizeCmp;
-                    var thisKeys = thisMap.keySet().stream().sorted().toList();
-                    var otherKeys = otherMap.keySet().stream().sorted().toList();
-                    for (int i = 0; i < thisKeys.size(); i++) {
-                        int keyCmp = thisKeys.get(i).compareTo(otherKeys.get(i));
+                    String[] thisKeys = obj.sortedKeys();
+                    String[] otherKeys = otherObj.sortedKeys();
+                    for (int i = 0; i < thisKeys.length; i++) {
+                        int keyCmp = thisKeys[i].compareTo(otherKeys[i]);
                         if (keyCmp != 0) return keyCmp;
                     }
-                    if (thisKeys.isEmpty()) return 0;
+                    if (thisKeys.length == 0) return 0;
                     // Compare all but the last value recursively
-                    for (int i = 0; i < thisKeys.size() - 1; i++) {
-                        int valCmp = compareToDepth(thisMap.get(thisKeys.get(i)), otherMap.get(otherKeys.get(i)), depth + 1);
+                    for (int i = 0; i < thisKeys.length - 1; i++) {
+                        int valCmp = compareToDepth(thisMap.get(thisKeys[i]), otherMap.get(otherKeys[i]), depth + 1);
                         if (valCmp != 0) return valCmp;
                     }
                     // Tail-iterate on the last value
-                    String lastKey = thisKeys.getLast();
-                    a = thisMap.get(lastKey);
-                    b = otherMap.get(otherKeys.getLast());
+                    a = thisMap.get(thisKeys[thisKeys.length - 1]);
+                    b = otherMap.get(otherKeys[otherKeys.length - 1]);
                     depth++;
                     continue; // iterate instead of recurse
                 }

@@ -8,6 +8,7 @@ public final class JqObject implements JqValue {
     public static final JqObject EMPTY = new JqObject(Map.of());
 
     private final Map<String, JqValue> fields;
+    private String[] sortedKeysCache; // lazy, for compareTo
 
     private JqObject(Map<String, JqValue> fields) {
         this.fields = fields;
@@ -77,6 +78,17 @@ public final class JqObject implements JqValue {
 
     public boolean has(String key) {
         return fields.containsKey(key);
+    }
+
+    /** Returns sorted keys, cached for reuse in compareTo. */
+    String[] sortedKeys() {
+        String[] cached = sortedKeysCache;
+        if (cached == null) {
+            cached = fields.keySet().toArray(new String[0]);
+            java.util.Arrays.sort(cached);
+            sortedKeysCache = cached;
+        }
+        return cached;
     }
 
     @Override
