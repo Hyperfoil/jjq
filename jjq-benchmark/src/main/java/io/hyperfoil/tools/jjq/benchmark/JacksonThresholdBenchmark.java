@@ -13,9 +13,9 @@ import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-@Warmup(iterations = 3, time = 2)
+@Warmup(iterations = 5, time = 2)
 @Measurement(iterations = 5, time = 2)
-@Fork(value = 1, jvmArgs = "--enable-preview")
+@Fork(value = 3, jvmArgs = {"-Xmx2g", "-Xms2g"})
 @State(Scope.Benchmark)
 public class JacksonThresholdBenchmark {
 

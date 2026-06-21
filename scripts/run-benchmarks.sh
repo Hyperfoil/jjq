@@ -16,10 +16,10 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BENCHMARK_JAR="$PROJECT_DIR/jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar"
 RESULTS_DIR="$PROJECT_DIR/benchmark-results"
 
-# Default settings (baseline-quality)
-WARMUP=5
-ITERATIONS=10
-FORKS=3
+# Default settings (use annotation defaults: 5 warmup, 5 measurement, 3 forks)
+WARMUP=""
+ITERATIONS=""
+FORKS=""
 FILTER=""
 QUICK=false
 
@@ -58,21 +58,23 @@ RESULT_FILE="$RESULTS_DIR/benchmark-${TIMESTAMP}-jdk${JDK_VERSION}.json"
 echo "JMH Benchmark Runner"
 echo "===================="
 echo "JDK:        $JDK_VERSION"
-echo "Warmup:     $WARMUP iterations"
-echo "Measure:    $ITERATIONS iterations"
-echo "Forks:      $FORKS"
+echo "Warmup:     ${WARMUP:-annotation default (5)}"
+echo "Measure:    ${ITERATIONS:-annotation default (5)}"
+echo "Forks:      ${FORKS:-annotation default (3)}"
 echo "Filter:     ${FILTER:-all}"
 echo "Output:     $RESULT_FILE"
 echo ""
 
 # Build JMH command
 JMH_CMD=(java -jar "$BENCHMARK_JAR"
-    -wi "$WARMUP"
-    -i "$ITERATIONS"
-    -f "$FORKS"
     -rf json
     -rff "$RESULT_FILE"
 )
+
+# Only override annotation defaults if explicitly set (--quick mode)
+if [[ -n "$WARMUP" ]]; then JMH_CMD+=(-wi "$WARMUP"); fi
+if [[ -n "$ITERATIONS" ]]; then JMH_CMD+=(-i "$ITERATIONS"); fi
+if [[ -n "$FORKS" ]]; then JMH_CMD+=(-f "$FORKS"); fi
 
 if [[ -n "$FILTER" ]]; then
     JMH_CMD+=("$FILTER")
