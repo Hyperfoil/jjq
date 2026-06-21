@@ -47,8 +47,8 @@ import java.util.concurrent.TimeUnit;
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-@Warmup(iterations = 5, time = 2)
-@Measurement(iterations = 5, time = 2)
+@Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 5, time = 1)
 @Fork(value = 3, jvmArgs = {"-Xmx2g", "-Xms2g"})
 @State(Scope.Benchmark)
 public class JjqParserBenchmark {
@@ -80,6 +80,9 @@ public class JjqParserBenchmark {
     private String flatJson10kb;
     private String flatJson100kb;
     private String flatJson1mb;
+
+    // Nested array input (exercises deferred ArrayDeque in parser)
+    private String nestedArrayJson;
 
     // ========================================================================
     //  Round-trip benchmark state
@@ -126,6 +129,16 @@ public class JjqParserBenchmark {
         flatJson10kb = loadResource("benchmark-data/flat-10kb.json");
         flatJson100kb = loadResource("benchmark-data/flat-100kb.json");
         flatJson1mb = loadResource("benchmark-data/flat-1mb.json");
+
+        // Nested array input: [[1,2,3],[4,5,6],...] ~10KB
+        // Exercises the deferred ArrayDeque path in parseArrayIterative
+        var nestedArrSb = new StringBuilder("[");
+        for (int i = 0; i < 200; i++) {
+            if (i > 0) nestedArrSb.append(",");
+            nestedArrSb.append("[").append(i * 3).append(",").append(i * 3 + 1).append(",").append(i * 3 + 2).append("]");
+        }
+        nestedArrSb.append("]");
+        nestedArrayJson = nestedArrSb.toString();
 
         // Round-trip programs
         progIdentity = JqProgram.compile(".");
@@ -215,6 +228,13 @@ public class JjqParserBenchmark {
 
     @Benchmark
     public JqValue parse_flat_1mb() { return JqValues.parse(flatJson1mb); }
+
+    // ========================================================================
+    //  Parser benchmarks: nested arrays (exercises deferred ArrayDeque)
+    // ========================================================================
+
+    @Benchmark
+    public JqValue parse_nestedArrays_10kb() { return JqValues.parse(nestedArrayJson); }
 
     // ========================================================================
     //  Round-trip benchmarks: parse -> filter -> serialize

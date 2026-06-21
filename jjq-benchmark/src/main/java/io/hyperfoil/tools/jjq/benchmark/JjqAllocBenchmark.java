@@ -24,8 +24,8 @@ import java.util.concurrent.TimeUnit;
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-@Warmup(iterations = 5, time = 2)
-@Measurement(iterations = 5, time = 2)
+@Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 5, time = 1)
 @Fork(value = 3, jvmArgs = {"-Xmx2g", "-Xms2g"})
 @State(Scope.Benchmark)
 public class JjqAllocBenchmark {

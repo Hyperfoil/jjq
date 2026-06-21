@@ -12,8 +12,8 @@ import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-@Warmup(iterations = 5, time = 2)
-@Measurement(iterations = 5, time = 2)
+@Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 5, time = 1)
 @Fork(value = 3, jvmArgs = {"-Xmx2g", "-Xms2g"})
 @State(Scope.Benchmark)
 public class JjqBenchmark {
@@ -31,6 +31,11 @@ public class JjqBenchmark {
     private VirtualMachine builtinAddVM;
     private VirtualMachine collectIterateFieldVM;
 
+    // Issue #5 coverage: object comparison, equality, mixed numeric
+    private VirtualMachine objectSortVM;
+    private VirtualMachine objectUniqueVM;
+    private VirtualMachine mixedNumericSortVM;
+
     // Pre-compiled programs (measures JqProgram.apply() path with VM caching)
     private JqProgram progFieldAccess;
     private JqProgram progIterateMap;
@@ -43,6 +48,8 @@ public class JjqBenchmark {
     private JqValue smallArray;
     private JqValue mediumArray;
     private JqValue h5mResultsObj;
+    private JqValue objectArray;       // array of objects for sort/unique
+    private JqValue mixedNumericArray;  // mixed long/decimal for comparisons
 
     @Setup
     public void setup() {
@@ -61,6 +68,11 @@ public class JjqBenchmark {
         // h5m production pattern: [.results[].load.avThroughput]
         collectIterateFieldVM = new VirtualMachine(
                 JqProgram.compile("[.results[].load.avThroughput]", builtins).getBytecode(), builtins);
+
+        // Issue #5 coverage: object sort, unique, mixed numeric comparison
+        objectSortVM = new VirtualMachine(JqProgram.compile("sort_by(.name)", builtins).getBytecode(), builtins);
+        objectUniqueVM = new VirtualMachine(JqProgram.compile("unique", builtins).getBytecode(), builtins);
+        mixedNumericSortVM = new VirtualMachine(JqProgram.compile("sort", builtins).getBytecode(), builtins);
 
         // Programs for JqProgram.apply() path benchmarks (measures VM caching)
         progFieldAccess = JqProgram.compile(".name", builtins);
@@ -92,6 +104,23 @@ public class JjqBenchmark {
         }
         h5mSb.append("]}");
         h5mResultsObj = JqValues.parse(h5mSb.toString());
+
+        // Array of objects for sort/unique benchmarks (exercises sorted keys cache)
+        var objSb = new StringBuilder("[");
+        for (int i = 0; i < 20; i++) {
+            if (i > 0) objSb.append(",");
+            objSb.append(String.format(
+                "{\"name\":\"user_%d\",\"score\":%d,\"dept\":\"%s\"}",
+                19 - i, i * 7, new String[]{"eng", "sales", "mkt", "support"}[i % 4]
+            ));
+        }
+        objSb.append("]");
+        objectArray = JqValues.parse(objSb.toString());
+
+        // Mixed long/decimal array for numeric comparison benchmarks (exercises BigDecimal cache)
+        mixedNumericArray = JqValues.parse(
+            "[1, 1.0, 3, 2.5, 7, 4.2, 2, 9.1, 5, 3.7, 8, 6.3, 4, 7.8, 6, 1.5, 10, 8.4, 9, 5.6]"
+        );
     }
 
     // --- VM benchmarks ---
@@ -158,6 +187,23 @@ public class JjqBenchmark {
     @Benchmark
     public List<JqValue> vm_builtinAdd() {
         return builtinAddVM.execute(smallArray);
+    }
+
+    // --- Issue #5 coverage: object comparison & mixed numeric ---
+
+    @Benchmark
+    public List<JqValue> vm_objectSort() {
+        return objectSortVM.execute(objectArray);
+    }
+
+    @Benchmark
+    public List<JqValue> vm_objectUnique() {
+        return objectUniqueVM.execute(objectArray);
+    }
+
+    @Benchmark
+    public List<JqValue> vm_mixedNumericSort() {
+        return mixedNumericSortVM.execute(mixedNumericArray);
     }
 
     // --- JqProgram.apply() benchmarks (h5m path — measures VM caching benefit) ---
