@@ -1,108 +1,220 @@
 package io.hyperfoil.tools.jjq.value;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 
+/**
+ * Immutable JSON object value. Internally uses one of two representations:
+ * <ul>
+ *   <li><b>Array-backed</b> (parser, builtins, VM): parallel {@code String[] keys}
+ *       + {@code JqValue[] values} arrays for cache-friendly access and low allocation.</li>
+ *   <li><b>Map-backed</b> (lazy adapter wrappers): external {@code Map<String, JqValue>}
+ *       preserves lazy conversion benefit from Jackson/fastjson2 adapters.</li>
+ * </ul>
+ */
 public final class JqObject implements JqValue {
-    public static final JqObject EMPTY = new JqObject(Map.of());
+    public static final JqObject EMPTY = new JqObject(new String[0], new JqValue[0], 0, null);
 
-    private final Map<String, JqValue> fields;
-    private String[] sortedKeysCache; // lazy, for compareTo
+    // Array-backed representation (null when map-backed)
+    private final String[] keys;
+    private final JqValue[] values;
+    private final int size;
 
-    private JqObject(Map<String, JqValue> fields) {
-        this.fields = fields;
+    // Map-backed representation (null when array-backed)
+    private final Map<String, JqValue> externalMap;
+
+    // Cached views (lazy)
+    private String[] sortedKeysCache;
+    private Map<String, JqValue> mapView;
+
+    private JqObject(String[] keys, JqValue[] values, int size, Map<String, JqValue> externalMap) {
+        this.keys = keys;
+        this.values = values;
+        this.size = size;
+        this.externalMap = externalMap;
     }
 
+    // ========================================================================
+    //  Factory methods
+    // ========================================================================
+
+    /** Create from a Map with defensive copy. */
     public static JqObject of(Map<String, JqValue> fields) {
         if (fields.isEmpty()) return EMPTY;
-        return new JqObject(new LinkedHashMap<>(fields));
+        // Copy into arrays preserving insertion order
+        int n = fields.size();
+        String[] keys = new String[n];
+        JqValue[] vals = new JqValue[n];
+        int i = 0;
+        for (var entry : fields.entrySet()) {
+            keys[i] = entry.getKey();
+            vals[i] = entry.getValue();
+            i++;
+        }
+        return new JqObject(keys, vals, n, null);
     }
 
     /**
-     * Creates a JqObject wrapping the given map without copying.
+     * Create from a LinkedHashMap without copying the map contents.
+     * Converts to parallel arrays for cache-friendly access.
      * The caller must not modify the map after this call.
      */
     public static JqObject ofTrusted(LinkedHashMap<String, JqValue> fields) {
         if (fields.isEmpty()) return EMPTY;
-        return new JqObject(fields);
+        int n = fields.size();
+        String[] keys = new String[n];
+        JqValue[] vals = new JqValue[n];
+        int i = 0;
+        for (var entry : fields.entrySet()) {
+            keys[i] = entry.getKey();
+            vals[i] = entry.getValue();
+            i++;
+        }
+        return new JqObject(keys, vals, n, null);
     }
 
     /**
-     * Creates a JqObject wrapping the given map without copying or wrapping.
+     * Create wrapping an external Map without copying.
+     * Used by lazy adapter wrappers (Jackson LazyObjectMap, fastjson2 LazyObjectMap).
      * The caller must guarantee the map is not modified after this call.
      */
     public static JqObject ofTrusted(Map<String, JqValue> fields) {
         if (fields.isEmpty()) return EMPTY;
-        return new JqObject(fields);
+        if (fields instanceof LinkedHashMap<String, JqValue> lhm) {
+            return ofTrusted(lhm);
+        }
+        // External map mode (lazy adapters)
+        return new JqObject(null, null, fields.size(), fields);
+    }
+
+    /**
+     * Create directly from parallel arrays. The caller must guarantee
+     * the arrays are not modified after this call.
+     */
+    public static JqObject ofArrays(String[] keys, JqValue[] values, int size) {
+        if (size == 0) return EMPTY;
+        return new JqObject(keys, values, size, null);
     }
 
     public static JqObject of(String key, JqValue value) {
-        var map = new LinkedHashMap<String, JqValue>();
-        map.put(key, value);
-        return new JqObject(map);
+        return new JqObject(new String[]{key}, new JqValue[]{value}, 1, null);
     }
 
     /**
      * Create a JqObject from key-value pairs, preserving insertion order.
-     * Arguments must alternate between String keys and JqValue values.
      *
-     * <pre>{@code
-     * JqObject.of("name", JqString.of("Alice"), "age", JqNumber.of(30))
-     * }</pre>
-     *
-     * @throws IllegalArgumentException if the number of arguments is odd
+     * @throws IllegalArgumentException if the number of rest arguments is odd
      */
     public static JqObject of(String key1, JqValue value1, String key2, JqValue value2, Object... rest) {
         if (rest.length % 2 != 0) {
             throw new IllegalArgumentException("Arguments must be key-value pairs");
         }
-        var map = new LinkedHashMap<String, JqValue>(2 + rest.length / 2);
-        map.put(key1, value1);
-        map.put(key2, value2);
+        int n = 2 + rest.length / 2;
+        String[] keys = new String[n];
+        JqValue[] vals = new JqValue[n];
+        keys[0] = key1; vals[0] = value1;
+        keys[1] = key2; vals[1] = value2;
         for (int i = 0; i < rest.length; i += 2) {
-            map.put((String) rest[i], (JqValue) rest[i + 1]);
+            keys[2 + i / 2] = (String) rest[i];
+            vals[2 + i / 2] = (JqValue) rest[i + 1];
         }
-        return new JqObject(map);
+        return new JqObject(keys, vals, n, null);
     }
+
+    // ========================================================================
+    //  Core accessors
+    // ========================================================================
 
     @Override
     public Type type() { return Type.OBJECT; }
 
     @Override
-    public Map<String, JqValue> objectValue() { return fields; }
+    public Map<String, JqValue> objectValue() {
+        if (externalMap != null) return externalMap;
+        Map<String, JqValue> mv = mapView;
+        if (mv == null) {
+            mv = new ArrayBackedMap();
+            mapView = mv;
+        }
+        return mv;
+    }
 
+    /**
+     * Get a field value by key. Returns {@link JqNull#NULL} for missing keys.
+     * For array-backed objects, uses linear scan with hashCode fast-reject.
+     */
     public JqValue get(String key) {
-        JqValue v = fields.get(key);
-        return v != null ? v : JqNull.NULL;
+        if (externalMap != null) {
+            JqValue v = externalMap.get(key);
+            return v != null ? v : JqNull.NULL;
+        }
+        // Linear scan with hashCode fast-reject (backwards for last-wins on duplicates)
+        int h = key.hashCode();
+        for (int i = size - 1; i >= 0; i--) {
+            if (keys[i].hashCode() == h && keys[i].equals(key)) {
+                return values[i];
+            }
+        }
+        return JqNull.NULL;
     }
 
     public boolean has(String key) {
-        return fields.containsKey(key);
+        if (externalMap != null) return externalMap.containsKey(key);
+        int h = key.hashCode();
+        for (int i = size - 1; i >= 0; i--) {
+            if (keys[i].hashCode() == h && keys[i].equals(key)) return true;
+        }
+        return false;
     }
 
     /** Returns sorted keys, cached for reuse in compareTo. */
     String[] sortedKeys() {
         String[] cached = sortedKeysCache;
         if (cached == null) {
-            cached = fields.keySet().toArray(new String[0]);
+            if (externalMap != null) {
+                cached = externalMap.keySet().toArray(new String[0]);
+            } else {
+                cached = java.util.Arrays.copyOf(keys, size);
+            }
             java.util.Arrays.sort(cached);
             sortedKeysCache = cached;
         }
         return cached;
     }
 
+    // ========================================================================
+    //  Serialization
+    // ========================================================================
+
     @Override
     public String toJsonString() {
-        if (fields.isEmpty()) return "{}";
+        if (size == 0 && externalMap == null) return "{}";
+        if (externalMap != null && externalMap.isEmpty()) return "{}";
         return JqValues.serialize(this);
     }
 
     @Override
     public void appendTo(StringBuilder sb) {
-        if (fields.isEmpty()) { sb.append("{}"); return; }
+        if (externalMap != null) {
+            appendFromMap(sb);
+            return;
+        }
+        if (size == 0) { sb.append("{}"); return; }
+        sb.append('{');
+        for (int i = 0; i < size; i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"');
+            JqString.escapeJson(keys[i], sb);
+            sb.append("\":");
+            values[i].appendTo(sb);
+        }
+        sb.append('}');
+    }
+
+    private void appendFromMap(StringBuilder sb) {
+        if (externalMap.isEmpty()) { sb.append("{}"); return; }
         sb.append('{');
         boolean first = true;
-        for (var e : fields.entrySet()) {
+        for (var e : externalMap.entrySet()) {
             if (!first) sb.append(',');
             first = false;
             sb.append('"');
@@ -116,6 +228,10 @@ public final class JqObject implements JqValue {
     @Override
     public String toString() { return toJsonString(); }
 
+    // ========================================================================
+    //  Equality and hashing
+    // ========================================================================
+
     @Override
     public boolean equals(Object o) {
         if (!(o instanceof JqObject obj)) return false;
@@ -123,29 +239,52 @@ public final class JqObject implements JqValue {
     }
 
     static boolean equalsDepth(JqObject a, JqObject b, int depth) {
-        // Iterative descent for linear chains (single-key nested objects)
         while (true) {
             if (depth > JqValue.MAX_MERGE_DEPTH) {
                 throw new JqTypeError("Equality check too deep");
             }
-            var aFields = a.fields;
-            var bFields = b.fields;
-            if (aFields.size() != bFields.size()) return false;
-            if (aFields.isEmpty()) return true;
+            int aSize = a.externalMap != null ? a.externalMap.size() : a.size;
+            int bSize = b.externalMap != null ? b.externalMap.size() : b.size;
+            if (aSize != bSize) return false;
+            if (aSize == 0) return true;
 
-            // Use iterator to avoid copying entrySet into a list
-            var iter = aFields.entrySet().iterator();
-            Map.Entry<String, JqValue> lastEntry = null;
-            while (iter.hasNext()) {
-                var entry = iter.next();
-                if (!iter.hasNext()) {
-                    // This is the last entry -- handle via tail-iteration below
-                    lastEntry = entry;
-                    break;
+            // Delegate to map-based comparison if either is map-backed
+            if (a.externalMap != null || b.externalMap != null) {
+                var aMap = a.objectValue();
+                var bMap = b.objectValue();
+                var iter = aMap.entrySet().iterator();
+                Map.Entry<String, JqValue> lastEntry = null;
+                while (iter.hasNext()) {
+                    var entry = iter.next();
+                    if (!iter.hasNext()) { lastEntry = entry; break; }
+                    JqValue bv = bMap.get(entry.getKey());
+                    if (bv == null) return false;
+                    JqValue av = entry.getValue();
+                    if (av instanceof JqArray aa && bv instanceof JqArray ba) {
+                        if (!JqArray.equalsDepth(aa, ba, depth + 1)) return false;
+                    } else if (av instanceof JqObject ao && bv instanceof JqObject bo) {
+                        if (!equalsDepth(ao, bo, depth + 1)) return false;
+                    } else {
+                        if (!av.equals(bv)) return false;
+                    }
                 }
-                JqValue bv = bFields.get(entry.getKey());
+                JqValue bv = bMap.get(lastEntry.getKey());
                 if (bv == null) return false;
-                JqValue av = entry.getValue();
+                JqValue av = lastEntry.getValue();
+                if (av instanceof JqObject ao && bv instanceof JqObject bo) {
+                    a = ao; b = bo; depth++; continue;
+                } else if (av instanceof JqArray aa && bv instanceof JqArray ba) {
+                    return JqArray.equalsDepth(aa, ba, depth + 1);
+                } else {
+                    return av.equals(bv);
+                }
+            }
+
+            // Both array-backed: iterate directly
+            for (int i = 0; i < a.size - 1; i++) {
+                JqValue bv = b.get(a.keys[i]);
+                if (bv instanceof JqNull && !b.has(a.keys[i])) return false;
+                JqValue av = a.values[i];
                 if (av instanceof JqArray aa && bv instanceof JqArray ba) {
                     if (!JqArray.equalsDepth(aa, ba, depth + 1)) return false;
                 } else if (av instanceof JqObject ao && bv instanceof JqObject bo) {
@@ -154,15 +293,13 @@ public final class JqObject implements JqValue {
                     if (!av.equals(bv)) return false;
                 }
             }
-            // Tail-iterate on the last entry
-            JqValue bv = bFields.get(lastEntry.getKey());
-            if (bv == null) return false;
-            JqValue av = lastEntry.getValue();
+            // Tail-iterate on last entry
+            String lastKey = a.keys[a.size - 1];
+            JqValue bv = b.get(lastKey);
+            if (bv instanceof JqNull && !b.has(lastKey)) return false;
+            JqValue av = a.values[a.size - 1];
             if (av instanceof JqObject ao && bv instanceof JqObject bo) {
-                a = ao;
-                b = bo;
-                depth++;
-                continue; // iterate instead of recurse
+                a = ao; b = bo; depth++; continue;
             } else if (av instanceof JqArray aa && bv instanceof JqArray ba) {
                 return JqArray.equalsDepth(aa, ba, depth + 1);
             } else {
@@ -172,5 +309,99 @@ public final class JqObject implements JqValue {
     }
 
     @Override
-    public int hashCode() { return fields.hashCode(); }
+    public int hashCode() {
+        if (externalMap != null) return externalMap.hashCode();
+        // Match AbstractMap.hashCode(): sum of (key.hashCode() ^ value.hashCode())
+        int h = 0;
+        for (int i = 0; i < size; i++) {
+            h += keys[i].hashCode() ^ values[i].hashCode();
+        }
+        return h;
+    }
+
+    // ========================================================================
+    //  ArrayBackedMap: Map view over parallel arrays
+    // ========================================================================
+
+    private final class ArrayBackedMap extends AbstractMap<String, JqValue> {
+        @Override
+        public JqValue get(Object key) {
+            if (key instanceof String k) {
+                int h = k.hashCode();
+                for (int i = size - 1; i >= 0; i--) {
+                    if (keys[i].hashCode() == h && keys[i].equals(k)) {
+                        return values[i];
+                    }
+                }
+            }
+            return null; // Map contract: null for missing, not JqNull
+        }
+
+        @Override
+        public boolean containsKey(Object key) {
+            if (key instanceof String k) {
+                int h = k.hashCode();
+                for (int i = size - 1; i >= 0; i--) {
+                    if (keys[i].hashCode() == h && keys[i].equals(k)) return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public int size() { return size; }
+
+        @Override
+        public boolean isEmpty() { return size == 0; }
+
+        @Override
+        public Set<Entry<String, JqValue>> entrySet() {
+            return new AbstractSet<>() {
+                @Override
+                public Iterator<Entry<String, JqValue>> iterator() {
+                    return new Iterator<>() {
+                        int pos = 0;
+                        @Override public boolean hasNext() { return pos < size; }
+                        @Override public Entry<String, JqValue> next() {
+                            var e = Map.entry(keys[pos], values[pos]);
+                            pos++;
+                            return e;
+                        }
+                    };
+                }
+                @Override public int size() { return size; }
+            };
+        }
+
+        @Override
+        public Set<String> keySet() {
+            return new AbstractSet<>() {
+                @Override
+                public Iterator<String> iterator() {
+                    return new Iterator<>() {
+                        int pos = 0;
+                        @Override public boolean hasNext() { return pos < size; }
+                        @Override public String next() { return keys[pos++]; }
+                    };
+                }
+                @Override public int size() { return size; }
+                @Override public boolean contains(Object o) { return containsKey(o); }
+            };
+        }
+
+        @Override
+        public Collection<JqValue> values() {
+            return new AbstractCollection<>() {
+                @Override
+                public Iterator<JqValue> iterator() {
+                    return new Iterator<>() {
+                        int pos = 0;
+                        @Override public boolean hasNext() { return pos < size; }
+                        @Override public JqValue next() { return values[pos++]; }
+                    };
+                }
+                @Override public int size() { return size; }
+            };
+        }
+    }
 }
