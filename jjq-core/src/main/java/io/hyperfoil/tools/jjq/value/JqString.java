@@ -1,21 +1,99 @@
 package io.hyperfoil.tools.jjq.value;
 
+/**
+ * Immutable JSON string value. Supports two internal representations:
+ * <ul>
+ *   <li><b>Eager</b> (via {@code of(String)}): the Java String is available immediately.</li>
+ *   <li><b>Deferred</b> (via {@link #deferred(String, int, int, boolean)}): holds a reference
+ *       to the original JSON input with start/end offsets. The Java String is materialized
+ *       lazily on first {@link #stringValue()} call. Serialization via {@link #appendTo}
+ *       can write the source bytes directly (zero-copy) for strings without escapes.</li>
+ * </ul>
+ */
 public final class JqString implements JqValue {
-    private final String value;
+    // Eager: value is set, source is null
+    // Deferred: value is null (until materialized), source/start/end describe the content
+    private volatile String value;
+    private final String source;      // original JSON input; null for eager strings
+    private final int start;          // content start offset (after opening ")
+    private final int end;            // content end offset (before closing ")
+    private final boolean hasEscapes; // whether source range contains backslash escapes
 
-    private JqString(String value) {
+    private JqString(String value, String source, int start, int end, boolean hasEscapes) {
         this.value = value;
+        this.source = source;
+        this.start = start;
+        this.end = end;
+        this.hasEscapes = hasEscapes;
     }
 
+    /** Create an eager JqString with the value already materialized. */
     public static JqString of(String value) {
-        return new JqString(value);
+        return new JqString(value, null, 0, 0, false);
+    }
+
+    /**
+     * Create a deferred JqString that references a region of the JSON input.
+     * The Java String is materialized lazily on first access.
+     * Package-private -- used by the parser only.
+     */
+    static JqString deferred(String source, int start, int end, boolean hasEscapes) {
+        return new JqString(null, source, start, end, hasEscapes);
     }
 
     @Override
     public Type type() { return Type.STRING; }
 
     @Override
-    public String stringValue() { return value; }
+    public String stringValue() {
+        String v = value;
+        if (v == null) {
+            v = materialize();
+            value = v;
+        }
+        return v;
+    }
+
+    private String materialize() {
+        if (!hasEscapes) {
+            return source.substring(start, end);
+        }
+        return unescapeJson(source, start, end);
+    }
+
+    /**
+     * Process JSON escape sequences in a source range, producing the unescaped Java String.
+     * Handles standard JSON escape sequences including unicode escapes.
+     */
+    static String unescapeJson(String source, int start, int end) {
+        var sb = new StringBuilder(end - start);
+        int pos = start;
+        while (pos < end) {
+            char c = source.charAt(pos);
+            if (c == '\\' && pos + 1 < end) {
+                pos++;
+                char esc = source.charAt(pos);
+                switch (esc) {
+                    case '"', '\\', '/' -> sb.append(esc);
+                    case 'b' -> sb.append('\b');
+                    case 'f' -> sb.append('\f');
+                    case 'n' -> sb.append('\n');
+                    case 'r' -> sb.append('\r');
+                    case 't' -> sb.append('\t');
+                    case 'u' -> {
+                        int cp = Integer.parseInt(source, pos + 1, pos + 5, 16);
+                        sb.append((char) cp);
+                        pos += 4;
+                    }
+                    default -> sb.append(esc);
+                }
+            } else {
+                sb.append(c);
+            }
+            pos++;
+        }
+        return sb.toString();
+    }
 
     /**
      * Append the JSON-escaped form of a string to the given StringBuilder.
@@ -88,16 +166,15 @@ public final class JqString implements JqValue {
 
     @Override
     public String toJsonString() {
-        // Fast path: if the string contains no characters that need escaping,
-        // avoid StringBuilder and thread-local overhead entirely
-        if (!needsEscaping(value)) {
-            return "\"" + value + "\"";
+        String v = value;
+        if (v != null && !needsEscaping(v)) {
+            return "\"" + v + "\"";
         }
         return JqValues.serialize(this);
     }
 
     /** Check if a string contains any characters that require JSON escaping. */
-    private static boolean needsEscaping(String s) {
+    static boolean needsEscaping(String s) {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c < 0x20 || c == '"' || c == '\\') return true;
@@ -108,10 +185,20 @@ public final class JqString implements JqValue {
     @Override
     public void appendTo(StringBuilder sb) {
         sb.append('"');
-        // escapeJson uses bulk segment appending -- for clean strings it appends
-        // the entire string in one sb.append(s, 0, len) call, so the needsEscaping
-        // pre-check would just duplicate that scan. Skip it and let escapeJson handle both cases.
-        escapeJson(value, sb);
+        String v = value;
+        if (v != null) {
+            // Materialized (eager or already accessed deferred) -- standard path
+            escapeJson(v, sb);
+        } else if (source != null && !hasEscapes) {
+            // Deferred, no escapes -- ZERO-COPY: write source directly
+            // Source content between quotes is already valid JSON (no escape sequences)
+            sb.append(source, start, end);
+        } else if (source != null) {
+            // Deferred with escapes -- must materialize first, then re-escape
+            // (cannot write source directly since re-escaping may differ, e.g. \/ -> /)
+            v = stringValue(); // triggers materialize + caching
+            escapeJson(v, sb);
+        }
         sb.append('"');
     }
 
@@ -120,9 +207,9 @@ public final class JqString implements JqValue {
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof JqString s && s.value.equals(value);
+        return o instanceof JqString s && stringValue().equals(s.stringValue());
     }
 
     @Override
-    public int hashCode() { return value.hashCode(); }
+    public int hashCode() { return stringValue().hashCode(); }
 }
