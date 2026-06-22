@@ -324,6 +324,12 @@ public final class JqValues {
         return sb.toString();
     }
 
+    /** Precomputed powers of 10 for direct decimal accumulation. */
+    private static final double[] POW10 = {
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
+        1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18
+    };
+
     private static JqNumber parseNumber(JsonReader r) {
         final String s = r.json;
         final int len = r.len;
@@ -350,46 +356,82 @@ public final class JqValues {
         long acc = 0;
         boolean overflow = false;
         int digitStart = r.pos;
+        int intDigitCount = 0;
         while (r.pos < len) {
             int d = s.charAt(r.pos) - '0';
             if (d < 0 || d > 9) break;
-            // Check for overflow before multiply+add
             if (!overflow) {
                 long next = acc * 10 + d;
-                if (next < acc) overflow = true; // wrapped
+                if (next < acc) overflow = true;
                 else acc = next;
             }
+            intDigitCount++;
             r.pos++;
         }
 
-        // Check for decimal point or exponent
+        // Parse fractional part with digit accumulation
         boolean isDecimal = false;
+        long fracPart = 0;
+        int fracCount = 0;
         if (r.pos < len && s.charAt(r.pos) == '.') {
             isDecimal = true;
             r.pos++;
             while (r.pos < len) {
                 int d = s.charAt(r.pos) - '0';
                 if (d < 0 || d > 9) break;
-                r.pos++;
-            }
-        }
-        if (r.pos < len && (s.charAt(r.pos) == 'e' || s.charAt(r.pos) == 'E')) {
-            isDecimal = true;
-            r.pos++;
-            if (r.pos < len && (s.charAt(r.pos) == '+' || s.charAt(r.pos) == '-')) r.pos++;
-            while (r.pos < len) {
-                int d = s.charAt(r.pos) - '0';
-                if (d < 0 || d > 9) break;
+                if (fracCount < 18) { // avoid long overflow
+                    fracPart = fracPart * 10 + d;
+                    fracCount++;
+                }
                 r.pos++;
             }
         }
 
-        if (!isDecimal && !overflow && (r.pos - digitStart) <= 18) {
+        // Parse exponent with value accumulation
+        int expValue = 0;
+        boolean hasExp = false;
+        if (r.pos < len && (s.charAt(r.pos) == 'e' || s.charAt(r.pos) == 'E')) {
+            isDecimal = true;
+            hasExp = true;
+            r.pos++;
+            boolean expNegative = false;
+            if (r.pos < len && s.charAt(r.pos) == '-') { expNegative = true; r.pos++; }
+            else if (r.pos < len && s.charAt(r.pos) == '+') { r.pos++; }
+            while (r.pos < len) {
+                int d = s.charAt(r.pos) - '0';
+                if (d < 0 || d > 9) break;
+                expValue = expValue * 10 + d;
+                r.pos++;
+            }
+            if (expNegative) expValue = -expValue;
+        }
+
+        if (!isDecimal && !overflow && intDigitCount <= 18) {
             // Integer that fits in a long — no string allocation needed
             return JqNumber.of(negative ? -acc : acc);
         }
 
-        // Fall back to string-based parsing for decimals and large integers
+        // Direct digit accumulation for decimals with <= 15 significant digits
+        // and manageable exponents — zero string allocation, zero BigDecimal
+        if (isDecimal && !overflow && intDigitCount <= 15 && fracCount <= 15) {
+            int totalDigits = intDigitCount + fracCount;
+            if (totalDigits <= 15 && expValue >= -18 && expValue <= 18) {
+                double value = (double) acc;
+                if (fracCount > 0) {
+                    value += (double) fracPart / POW10[fracCount];
+                }
+                if (expValue > 0 && expValue < POW10.length) {
+                    value *= POW10[expValue];
+                } else if (expValue < 0 && -expValue < POW10.length) {
+                    value /= POW10[-expValue];
+                } else if (expValue != 0) {
+                    value *= Math.pow(10, expValue);
+                }
+                return JqNumber.of(negative ? -value : value);
+            }
+        }
+
+        // Fall back to string-based parsing for high-precision or extreme exponents
         String numStr = s.substring(start, r.pos);
         if (isDecimal) {
             try {
