@@ -356,6 +356,10 @@ public sealed interface JqValue extends Comparable<JqValue>
                     if (n.isLongBacked() && m.isLongBacked()) {
                         return Long.compare(n.longValue(), m.longValue());
                     }
+                    // Fast path: compare via doubles when no BigDecimal is involved
+                    if (!n.isLongBacked() && !m.isLongBacked()) {
+                        return Double.compare(n.doubleValue(), m.doubleValue());
+                    }
                     return n.decimalValue().compareTo(m.decimalValue());
                 }
                 case JqString s -> { return s.stringValue().compareTo(b.stringValue()); }

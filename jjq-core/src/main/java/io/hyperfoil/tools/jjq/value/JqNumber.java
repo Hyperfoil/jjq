@@ -40,7 +40,8 @@ public final class JqNumber implements JqValue {
         if (value == Math.floor(value) && value >= Long.MIN_VALUE && value <= Long.MAX_VALUE) {
             return of((long) value);
         }
-        return new JqNumber(0, BigDecimal.valueOf(value), value, false);
+        // Store double directly, defer BigDecimal construction until needed
+        return new JqNumber(0, null, value, false);
     }
 
     public static JqNumber of(BigDecimal value) {
@@ -62,7 +63,11 @@ public final class JqNumber implements JqValue {
 
     public boolean isIntegral() {
         if (isLong) return true;
-        if (decimalVal == null) return false; // NaN/Infinity
+        if (isSpecial()) return false; // NaN/Infinity
+        if (decimalVal == null) {
+            // double-backed: check if it's a whole number
+            return rawDouble == Math.floor(rawDouble) && !Double.isInfinite(rawDouble);
+        }
         return decimalVal.stripTrailingZeros().scale() <= 0;
     }
 
@@ -71,8 +76,9 @@ public final class JqNumber implements JqValue {
         return isLong;
     }
 
+    /** True for NaN/Infinity values that have no BigDecimal representation. */
     private boolean isSpecial() {
-        return !isLong && decimalVal == null;
+        return !isLong && decimalVal == null && (Double.isNaN(rawDouble) || Double.isInfinite(rawDouble));
     }
 
     @Override
@@ -103,6 +109,15 @@ public final class JqNumber implements JqValue {
             return cached;
         }
         if (decimalVal != null) return decimalVal;
+        if (!isSpecial()) {
+            // double-backed, not NaN/Infinity -- lazy construct
+            BigDecimal cached = cachedDecimal;
+            if (cached == null) {
+                cached = BigDecimal.valueOf(rawDouble);
+                cachedDecimal = cached;
+            }
+            return cached;
+        }
         // NaN/Infinity can't be BigDecimal - return 0 as fallback
         return BigDecimal.ZERO;
     }
@@ -111,22 +126,35 @@ public final class JqNumber implements JqValue {
     public String toJsonString() {
         if (isLong) return Long.toString(longVal);
         if (isSpecial()) {
-            // In JSON, NaN and Infinity are represented as null
-            return "null";
+            return "null"; // JSON: NaN and Infinity -> null
+        }
+        if (decimalVal == null) {
+            return formatDouble(rawDouble);
         }
         BigDecimal stripped = decimalVal.stripTrailingZeros();
         if (stripped.scale() <= 0) {
-            // Guard against extremely large scales that would create huge BigIntegers
             if (stripped.scale() < -20) {
-                return stripped.toString(); // Scientific notation (e.g. 9E+999999999)
+                return stripped.toString();
             }
             return stripped.toBigInteger().toString();
         }
-        // Guard against extremely small numbers with very large scale
         if (stripped.scale() > 20) {
-            return stripped.toString(); // Scientific notation (e.g. 1E-999999999)
+            return stripped.toString();
         }
         return stripped.toPlainString();
+    }
+
+    /** Format a double for JSON output, matching jq's plain notation for common values. */
+    private static String formatDouble(double d) {
+        long asLong = (long) d;
+        if ((double) asLong == d) {
+            return Long.toString(asLong); // 3.0 -> "3"
+        }
+        if ((d > 1e-3 && d < 1e15) || (d < -1e-3 && d > -1e15)) {
+            return Double.toString(d); // common range: plain notation
+        }
+        // Extreme range: use BigDecimal for consistent plain notation
+        return BigDecimal.valueOf(d).stripTrailingZeros().toPlainString();
     }
 
     @Override
@@ -137,6 +165,10 @@ public final class JqNumber implements JqValue {
         }
         if (isSpecial()) {
             sb.append("null");
+            return;
+        }
+        if (decimalVal == null) {
+            appendDouble(sb, rawDouble);
             return;
         }
         BigDecimal stripped = decimalVal.stripTrailingZeros();
@@ -153,6 +185,18 @@ public final class JqNumber implements JqValue {
         }
     }
 
+    /** Append a double to StringBuilder, matching jq's plain notation for common values. */
+    private static void appendDouble(StringBuilder sb, double d) {
+        long asLong = (long) d;
+        if ((double) asLong == d) {
+            sb.append(asLong); // 3.0 -> "3"
+        } else if ((d > 1e-3 && d < 1e15) || (d < -1e-3 && d > -1e15)) {
+            sb.append(d); // common range: plain notation
+        } else {
+            sb.append(BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
+        }
+    }
+
     @Override
     public String toString() { return toJsonString(); }
 
@@ -163,6 +207,17 @@ public final class JqNumber implements JqValue {
             if (this.isSpecial() || n.isSpecial()) {
                 return Double.compare(this.doubleValue(), n.doubleValue()) == 0;
             }
+            // Fast path: both double-backed, compare doubles directly
+            if (!this.isLong && this.decimalVal == null && !n.isLong && n.decimalVal == null) {
+                return Double.compare(this.rawDouble, n.rawDouble) == 0;
+            }
+            // Fast path: long vs double-backed
+            if (this.isLong && !n.isLong && n.decimalVal == null) {
+                return Double.compare((double) this.longVal, n.rawDouble) == 0;
+            }
+            if (!this.isLong && this.decimalVal == null && n.isLong) {
+                return Double.compare(this.rawDouble, (double) n.longVal) == 0;
+            }
             return this.decimalValue().compareTo(n.decimalValue()) == 0;
         }
         return false;
@@ -172,6 +227,7 @@ public final class JqNumber implements JqValue {
     public int hashCode() {
         if (isLong) return Long.hashCode(longVal);
         if (isSpecial()) return Double.hashCode(rawDouble);
+        if (decimalVal == null) return Double.hashCode(rawDouble);
         return decimalVal.stripTrailingZeros().hashCode();
     }
 }

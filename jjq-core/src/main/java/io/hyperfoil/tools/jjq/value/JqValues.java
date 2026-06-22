@@ -183,6 +183,9 @@ public final class JqValues {
                     stack = new ArrayDeque<>();
                     stackCounts = new int[16];
                 }
+                if (stackDepth >= stackCounts.length) {
+                    stackCounts = java.util.Arrays.copyOf(stackCounts, stackCounts.length * 2);
+                }
                 stack.push(new JqValue[8]);
                 stackCounts[stackDepth++] = 0;
                 continue;
