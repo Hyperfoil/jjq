@@ -510,6 +510,370 @@ public final class JqValues {
         }
     }
 
+    // ========================================================================
+    //  byte[]-based parser (mirrors the String-based parser above)
+    //  In valid UTF-8, bytes 0x22 (") and 0x5C (\) only appear as single-byte
+    //  characters -- continuation bytes are 0x80-0xBF. So scanning raw bytes
+    //  for quote and backslash is safe.
+    // ========================================================================
+
+    /** Mutable parser state for byte[]-based parsing. */
+    private static final class JsonByteReader {
+        final byte[] data;
+        final int end;
+        int pos;
+
+        JsonByteReader(byte[] data, int offset, int end) {
+            this.data = data;
+            this.pos = offset;
+            this.end = end;
+        }
+
+        int peek() { return data[pos] & 0xFF; }
+
+        void skipWs() {
+            while (pos < end) {
+                int b = data[pos] & 0xFF;
+                if (b != ' ' && b != '\n' && b != '\r' && b != '\t') break;
+                pos++;
+            }
+        }
+    }
+
+    /**
+     * Parse a JSON value from a UTF-8 byte array.
+     * Avoids constructing an intermediate String from the entire input.
+     */
+    public static JqValue parse(byte[] bytes) {
+        return parse(bytes, 0, bytes.length);
+    }
+
+    /**
+     * Parse a JSON value from a region of a UTF-8 byte array.
+     */
+    public static JqValue parse(byte[] bytes, int offset, int length) {
+        int end = offset + length;
+        // Skip leading whitespace
+        while (offset < end && isWsByte(bytes[offset])) offset++;
+        // Skip UTF-8 BOM (EF BB BF) if present
+        if (end - offset >= 3 && (bytes[offset] & 0xFF) == 0xEF
+                && (bytes[offset + 1] & 0xFF) == 0xBB && (bytes[offset + 2] & 0xFF) == 0xBF) {
+            offset += 3;
+        }
+        // Skip whitespace after BOM
+        while (offset < end && isWsByte(bytes[offset])) offset++;
+        var reader = new JsonByteReader(bytes, offset, end);
+        return parseValueBytes(reader, 0);
+    }
+
+    /**
+     * Parse a stream of whitespace-separated JSON values from a UTF-8 byte array.
+     */
+    public static List<JqValue> parseAll(byte[] bytes) {
+        return parseAll(bytes, 0, bytes.length);
+    }
+
+    /**
+     * Parse a stream of whitespace-separated JSON values from a region of a UTF-8 byte array.
+     */
+    public static List<JqValue> parseAll(byte[] bytes, int offset, int length) {
+        var results = new ArrayList<JqValue>();
+        int end = offset + length;
+        var reader = new JsonByteReader(bytes, offset, end);
+        while (true) {
+            reader.skipWs();
+            if (reader.pos >= reader.end) break;
+            results.add(parseValueBytes(reader, 0));
+        }
+        return results;
+    }
+
+    private static boolean isWsByte(byte b) {
+        return b == ' ' || b == '\n' || b == '\r' || b == '\t';
+    }
+
+    private static JqValue parseValueBytes(JsonByteReader r, int depth) {
+        r.skipWs();
+        if (r.pos >= r.end) return JqNull.NULL;
+        int b = r.data[r.pos] & 0xFF;
+        return switch (b) {
+            case '{' -> parseObjectBytes(r, depth + 1);
+            case '[' -> parseArrayBytes(r, depth);
+            case '"' -> parseStringBytes(r);
+            case 't' -> { r.pos += 4; yield JqBoolean.TRUE; }
+            case 'f' -> { r.pos += 5; yield JqBoolean.FALSE; }
+            case 'n' -> {
+                if (r.pos + 2 < r.end && r.data[r.pos + 1] == 'a' && r.data[r.pos + 2] == 'n') {
+                    r.pos += 3;
+                    yield JqNumber.of(Double.NaN);
+                }
+                r.pos += 4;
+                yield JqNull.NULL;
+            }
+            case 'I' -> { r.pos += 8; yield JqNumber.of(Double.POSITIVE_INFINITY); }
+            case 'N' -> { r.pos += 3; yield JqNumber.of(Double.NaN); }
+            default -> parseNumberBytes(r);
+        };
+    }
+
+    private static JqValue parseArrayBytes(JsonByteReader r, int depth) {
+        ArrayDeque<JqValue[]> stack = null;
+        int[] stackCounts = null;
+        int stackDepth = 0;
+
+        while (r.pos < r.end && (r.data[r.pos] & 0xFF) == '[') {
+            depth++;
+            if (depth > MAX_PARSE_DEPTH) throw new IllegalArgumentException("Exceeds depth limit for parsing");
+            r.pos++;
+            r.skipWs();
+
+            if (r.pos < r.end && (r.data[r.pos] & 0xFF) == ']') {
+                r.pos++;
+                return unwindArrayStackBytes(stack, stackCounts, stackDepth, JqArray.EMPTY, r, depth);
+            }
+            if ((r.data[r.pos] & 0xFF) == '[') {
+                if (stack == null) { stack = new ArrayDeque<>(); stackCounts = new int[16]; }
+                if (stackDepth >= stackCounts.length) stackCounts = java.util.Arrays.copyOf(stackCounts, stackCounts.length * 2);
+                stack.push(new JqValue[8]);
+                stackCounts[stackDepth++] = 0;
+                continue;
+            }
+            break;
+        }
+
+        JqValue[] elems = new JqValue[8];
+        int count = 0;
+        elems[count++] = parseValueBytes(r, depth);
+        r.skipWs();
+        while (r.pos < r.end && (r.data[r.pos] & 0xFF) != ']') {
+            r.pos++;
+            if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
+            elems[count++] = parseValueBytes(r, depth);
+            r.skipWs();
+        }
+        if (r.pos < r.end) r.pos++;
+        JqValue result = JqArray.ofTrusted(elems, count);
+        return unwindArrayStackBytes(stack, stackCounts, stackDepth, result, r, depth);
+    }
+
+    private static JqValue unwindArrayStackBytes(ArrayDeque<JqValue[]> stack, int[] stackCounts,
+                                                  int stackDepth, JqValue result,
+                                                  JsonByteReader r, int depth) {
+        if (stack == null) return result;
+        while (stackDepth > 0) {
+            depth--;
+            stackDepth--;
+            JqValue[] elems = stack.pop();
+            int count = stackCounts[stackDepth];
+            if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
+            elems[count++] = result;
+            r.skipWs();
+            while (r.pos < r.end && (r.data[r.pos] & 0xFF) != ']') {
+                r.pos++;
+                if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
+                elems[count++] = parseValueBytes(r, depth);
+                r.skipWs();
+            }
+            if (r.pos < r.end) r.pos++;
+            result = JqArray.ofTrusted(elems, count);
+        }
+        return result;
+    }
+
+    private static JqObject parseObjectBytes(JsonByteReader r, int depth) {
+        if (depth > MAX_PARSE_DEPTH) throw new IllegalArgumentException("Exceeds depth limit for parsing");
+        r.pos++;
+        r.skipWs();
+        if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '}') { r.pos++; return JqObject.EMPTY; }
+
+        String[] keys = new String[8];
+        JqValue[] values = new JqValue[8];
+        int count = 0;
+        while (true) {
+            r.skipWs();
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') {
+                throw new IllegalArgumentException("Expected '\"' for object key");
+            }
+            if (count >= keys.length) {
+                keys = java.util.Arrays.copyOf(keys, keys.length * 2);
+                values = java.util.Arrays.copyOf(values, values.length * 2);
+            }
+            // Keys must be eager Strings for JqObject parallel array lookup
+            keys[count] = parseStringRawBytes(r);
+            r.skipWs();
+            r.pos++; // skip :
+            values[count] = parseValueBytes(r, depth);
+            count++;
+            r.skipWs();
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) == '}') { r.pos++; break; }
+            r.pos++; // skip ,
+        }
+        return JqObject.ofArrays(keys, values, count);
+    }
+
+    /** Parse a JSON string value from bytes, returning a deferred JqString. */
+    private static JqString parseStringBytes(JsonByteReader r) {
+        r.pos++; // skip opening "
+        int contentStart = r.pos;
+
+        // Scan for closing quote -- in valid UTF-8, 0x22 (") and 0x5C (\)
+        // only appear as single-byte characters, so byte scanning is safe
+        while (r.pos < r.end) {
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') {
+                int contentEnd = r.pos;
+                r.pos++;
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, false);
+            }
+            if (b == '\\') {
+                return parseDeferredWithEscapesBytes(r, contentStart);
+            }
+            r.pos++;
+        }
+        throw new IllegalArgumentException("Unterminated string");
+    }
+
+    private static JqString parseDeferredWithEscapesBytes(JsonByteReader r, int contentStart) {
+        while (r.pos < r.end) {
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') {
+                int contentEnd = r.pos;
+                r.pos++;
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
+            }
+            if (b == '\\') {
+                r.pos++;
+                if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
+            }
+            r.pos++;
+        }
+        throw new IllegalArgumentException("Unterminated string");
+    }
+
+    /** Parse a JSON string from bytes and return the raw Java String (for object keys). */
+    private static String parseStringRawBytes(JsonByteReader r) {
+        r.pos++; // skip opening "
+        int start = r.pos;
+
+        // Fast path: scan for closing quote, bail on backslash
+        while (r.pos < r.end) {
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') {
+                String result = new String(r.data, start, r.pos - start, java.nio.charset.StandardCharsets.UTF_8);
+                r.pos++;
+                return result;
+            }
+            if (b == '\\') break;
+            r.pos++;
+        }
+
+        // Slow path: string contains escape sequences
+        // Convert the byte range to String first, then process escapes
+        int scanStart = start;
+        // Find closing quote
+        int escStart = r.pos;
+        while (r.pos < r.end) {
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') break;
+            if (b == '\\') {
+                r.pos++;
+                if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
+            }
+            r.pos++;
+        }
+        int contentEnd = r.pos;
+        r.pos++; // skip closing "
+        String raw = new String(r.data, start, contentEnd - start, java.nio.charset.StandardCharsets.UTF_8);
+        return JqString.unescapeJson(raw, 0, raw.length());
+    }
+
+    private static JqNumber parseNumberBytes(JsonByteReader r) {
+        int start = r.pos;
+        boolean negative = false;
+
+        if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '-') {
+            negative = true;
+            r.pos++;
+            if (r.pos < r.end) {
+                if ((r.data[r.pos] & 0xFF) == 'I') { r.pos += 8; return JqNumber.of(Double.NEGATIVE_INFINITY); }
+                if ((r.data[r.pos] & 0xFF) == 'N') { r.pos += 3; return JqNumber.of(Double.NaN); }
+            }
+        }
+
+        long acc = 0;
+        boolean overflow = false;
+        int intDigitCount = 0;
+        while (r.pos < r.end) {
+            int d = (r.data[r.pos] & 0xFF) - '0';
+            if (d < 0 || d > 9) break;
+            if (!overflow) {
+                long next = acc * 10 + d;
+                if (next < acc) overflow = true;
+                else acc = next;
+            }
+            intDigitCount++;
+            r.pos++;
+        }
+
+        boolean isDecimal = false;
+        long fracPart = 0;
+        int fracCount = 0;
+        if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '.') {
+            isDecimal = true;
+            r.pos++;
+            while (r.pos < r.end) {
+                int d = (r.data[r.pos] & 0xFF) - '0';
+                if (d < 0 || d > 9) break;
+                if (fracCount < 18) { fracPart = fracPart * 10 + d; fracCount++; }
+                r.pos++;
+            }
+        }
+
+        int expValue = 0;
+        if (r.pos < r.end && ((r.data[r.pos] & 0xFF) == 'e' || (r.data[r.pos] & 0xFF) == 'E')) {
+            isDecimal = true;
+            r.pos++;
+            boolean expNegative = false;
+            if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '-') { expNegative = true; r.pos++; }
+            else if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '+') { r.pos++; }
+            while (r.pos < r.end) {
+                int d = (r.data[r.pos] & 0xFF) - '0';
+                if (d < 0 || d > 9) break;
+                expValue = expValue * 10 + d;
+                r.pos++;
+            }
+            if (expNegative) expValue = -expValue;
+        }
+
+        if (!isDecimal && !overflow && intDigitCount <= 18) {
+            return JqNumber.of(negative ? -acc : acc);
+        }
+
+        if (isDecimal && !overflow && intDigitCount <= 15 && fracCount <= 15) {
+            int totalDigits = intDigitCount + fracCount;
+            if (totalDigits <= 15 && expValue >= -18 && expValue <= 18) {
+                double value = (double) acc;
+                if (fracCount > 0) value += (double) fracPart / POW10[fracCount];
+                if (expValue > 0 && expValue < POW10.length) value *= POW10[expValue];
+                else if (expValue < 0 && -expValue < POW10.length) value /= POW10[-expValue];
+                else if (expValue != 0) value *= Math.pow(10, expValue);
+                return JqNumber.of(negative ? -value : value);
+            }
+        }
+
+        // Fallback: convert byte range to String for BigDecimal/Double parsing
+        String numStr = new String(r.data, start, r.pos - start, java.nio.charset.StandardCharsets.UTF_8);
+        if (isDecimal) {
+            try { return JqNumber.of(new BigDecimal(numStr)); }
+            catch (NumberFormatException | ArithmeticException e) { return JqNumber.of(Double.parseDouble(numStr)); }
+        }
+        try { return JqNumber.of(Long.parseLong(numStr)); }
+        catch (NumberFormatException e) {
+            try { return JqNumber.of(new BigDecimal(numStr)); }
+            catch (NumberFormatException | ArithmeticException e2) { return JqNumber.of(Double.parseDouble(numStr)); }
+        }
+    }
+
     /**
      * Index into a JqValue: array[number], object["key"], null[anything] = null.
      * Shared by both the bytecode VM and the tree-walk evaluator.

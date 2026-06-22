@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.value;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 
@@ -136,5 +137,102 @@ class JqValueTest {
         // null + x = x (jq semantics)
         assertEquals(JqNumber.of(5), JqNull.NULL.add(JqNumber.of(5)));
         assertEquals(JqString.of("hello"), JqNull.NULL.add(JqString.of("hello")));
+    }
+
+    // ========================================================================
+    //  byte[] parser tests -- verify identical output to String parser
+    // ========================================================================
+
+    @Test
+    void testByteParserScalars() {
+        assertByteParseSame("null");
+        assertByteParseSame("true");
+        assertByteParseSame("false");
+        assertByteParseSame("42");
+        assertByteParseSame("-17");
+        assertByteParseSame("3.14");
+        assertByteParseSame("1e10");
+        assertByteParseSame("3.14e-2");
+        assertByteParseSame("-0.5");
+        assertByteParseSame("0");
+        assertByteParseSame("\"\"");
+        assertByteParseSame("\"hello\"");
+        assertByteParseSame("\"hello world\"");
+    }
+
+    @Test
+    void testByteParserEscapedStrings() {
+        assertByteParseSame("\"hello\\nworld\"");
+        assertByteParseSame("\"tab\\there\"");
+        assertByteParseSame("\"quote\\\"inside\"");
+        assertByteParseSame("\"back\\\\slash\"");
+        assertByteParseSame("\"unicode\\u0041\"");  // \u0041 = A
+    }
+
+    @Test
+    void testByteParserArrays() {
+        assertByteParseSame("[]");
+        assertByteParseSame("[1,2,3]");
+        assertByteParseSame("[\"a\",\"b\"]");
+        assertByteParseSame("[[1],[2,3]]");
+        assertByteParseSame("[true,false,null,42,\"str\"]");
+    }
+
+    @Test
+    void testByteParserObjects() {
+        assertByteParseSame("{}");
+        assertByteParseSame("{\"name\":\"Alice\",\"age\":30}");
+        assertByteParseSame("{\"a\":{\"b\":{\"c\":42}}}");
+    }
+
+    @Test
+    void testByteParserComplex() {
+        assertByteParseSame("[{\"x\":1},{\"x\":2}]");
+        assertByteParseSame("{\"arr\":[1,2,3],\"obj\":{\"a\":\"b\"}}");
+        assertByteParseSame("{\"results\":[{\"load\":{\"avThroughput\":1000.5}}]}");
+    }
+
+    @Test
+    void testByteParserUtf8() {
+        // Multi-byte UTF-8 characters
+        assertByteParseSame("{\"city\":\"T\\u00f6ky\\u00f6\"}");
+        // Direct UTF-8 in string
+        String utf8Json = "{\"emoji\":\"hello\"}"; // simple ASCII for now
+        assertByteParseSame(utf8Json);
+    }
+
+    @Test
+    void testByteParserWhitespace() {
+        String json = "  {  \"a\"  :  1  ,  \"b\"  :  [  2  ,  3  ]  }  ";
+        assertByteParseSame(json);
+    }
+
+    @Test
+    void testByteParserBOM() {
+        // UTF-8 BOM: EF BB BF
+        byte[] withBom = new byte[]{(byte)0xEF, (byte)0xBB, (byte)0xBF, '4', '2'};
+        assertEquals(JqNumber.of(42), JqValues.parse(withBom));
+    }
+
+    @Test
+    void testByteParserParseAll() {
+        String jsonl = "{\"a\":1}\n{\"b\":2}\n{\"c\":3}";
+        byte[] bytes = jsonl.getBytes(StandardCharsets.UTF_8);
+        var fromString = JqValues.parseAll(jsonl);
+        var fromBytes = JqValues.parseAll(bytes);
+        assertEquals(fromString.size(), fromBytes.size());
+        for (int i = 0; i < fromString.size(); i++) {
+            assertEquals(fromString.get(i).toJsonString(), fromBytes.get(i).toJsonString());
+        }
+    }
+
+    private void assertByteParseSame(String json) {
+        JqValue fromString = JqValues.parse(json);
+        JqValue fromBytes = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertEquals(fromString.toJsonString(), fromBytes.toJsonString(),
+                "Byte parser produced different output for: " + json);
+        // Also verify equals works (tests materialization for deferred strings)
+        assertEquals(fromString, fromBytes,
+                "Byte parser value not equal for: " + json);
     }
 }
