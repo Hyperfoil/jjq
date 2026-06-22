@@ -3,7 +3,6 @@ package io.hyperfoil.tools.jjq.value;
 import java.math.BigDecimal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 
 /**
@@ -243,9 +242,12 @@ public final class JqValues {
             throw new IllegalArgumentException("Exceeds depth limit for parsing");
         }
         r.pos++; // skip {
-        var map = new LinkedHashMap<String, JqValue>(8);
         r.skipWs();
-        if (r.pos < r.len && r.json.charAt(r.pos) == '}') { r.pos++; return JqObject.ofTrusted(map); }
+        if (r.pos < r.len && r.json.charAt(r.pos) == '}') { r.pos++; return JqObject.EMPTY; }
+        // Direct array construction -- no LinkedHashMap intermediate
+        String[] keys = new String[8];
+        JqValue[] values = new JqValue[8];
+        int count = 0;
         while (true) {
             r.skipWs();
             if (r.pos >= r.len || r.json.charAt(r.pos) != '"') {
@@ -255,16 +257,20 @@ public final class JqValues {
                                 + " at line 1, column " + (r.pos + 1)
                                 + " (while parsing '" + r.json + "')");
             }
-            String key = parseStringRaw(r);
+            if (count >= keys.length) {
+                keys = java.util.Arrays.copyOf(keys, keys.length * 2);
+                values = java.util.Arrays.copyOf(values, values.length * 2);
+            }
+            keys[count] = parseStringRaw(r);
             r.skipWs();
             r.pos++; // skip :
-            JqValue value = parseValue(r, depth);
-            map.put(key, value);
+            values[count] = parseValue(r, depth);
+            count++;
             r.skipWs();
             if (r.pos >= r.len || r.json.charAt(r.pos) == '}') { r.pos++; break; }
             r.pos++; // skip ,
         }
-        return JqObject.ofTrusted(map);
+        return JqObject.ofArrays(keys, values, count);
     }
 
     /**
