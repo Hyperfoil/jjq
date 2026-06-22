@@ -46,8 +46,9 @@ public class JsonProductionBenchmark {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String RESOURCE = "benchmark-data/production-upload-14mb.json";
 
-    // Raw JSON string for parse benchmarks
+    // Raw JSON for parse benchmarks
     private String productionJson;
+    private byte[] productionJsonBytes;
 
     // Pre-parsed into each library's native type for serialize/access benchmarks
     private JsonNode jacksonValue;
@@ -57,6 +58,7 @@ public class JsonProductionBenchmark {
     @Setup(Level.Trial)
     public void setup() throws IOException {
         productionJson = loadResource(RESOURCE);
+        productionJsonBytes = productionJson.getBytes(StandardCharsets.UTF_8);
         jacksonValue = MAPPER.readTree(productionJson);
         jjqValue = JqValues.parse(productionJson);
         fastjsonValue = JSON.parse(productionJson);
@@ -72,13 +74,28 @@ public class JsonProductionBenchmark {
     }
 
     @Benchmark
+    public JsonNode parse_jackson_bytes() throws IOException {
+        return MAPPER.readTree(productionJsonBytes);
+    }
+
+    @Benchmark
     public JqValue parse_jjq() {
         return JqValues.parse(productionJson);
     }
 
     @Benchmark
+    public JqValue parse_jjq_bytes() {
+        return JqValues.parse(productionJsonBytes);
+    }
+
+    @Benchmark
     public Object parse_fastjson2() {
         return JSON.parse(productionJson);
+    }
+
+    @Benchmark
+    public Object parse_fastjson2_bytes() {
+        return JSON.parseObject(productionJsonBytes);
     }
 
     // ========================================================================

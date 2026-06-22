@@ -52,10 +52,12 @@ public class JsonParseComparisonBenchmark {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private String paramJson;
+    private byte[] paramJsonBytes;
 
     @Setup(Level.Trial)
     public void setup() throws IOException {
         paramJson = loadResource("benchmark-data/" + structure + "-" + size + ".json");
+        paramJsonBytes = paramJson.getBytes(StandardCharsets.UTF_8);
     }
 
     @Benchmark
@@ -64,13 +66,28 @@ public class JsonParseComparisonBenchmark {
     }
 
     @Benchmark
+    public JsonNode parse_jackson_bytes() throws IOException {
+        return MAPPER.readTree(paramJsonBytes);
+    }
+
+    @Benchmark
     public JqValue parse_jjq() {
         return JqValues.parse(paramJson);
     }
 
     @Benchmark
+    public JqValue parse_jjq_bytes() {
+        return JqValues.parse(paramJsonBytes);
+    }
+
+    @Benchmark
     public Object parse_fastjson2() {
         return JSON.parse(paramJson);
+    }
+
+    @Benchmark
+    public Object parse_fastjson2_bytes() {
+        return JSON.parseObject(paramJsonBytes);
     }
 
     private static String loadResource(String name) throws IOException {
