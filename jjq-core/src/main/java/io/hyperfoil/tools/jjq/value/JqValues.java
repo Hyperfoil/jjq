@@ -716,8 +716,28 @@ public final class JqValues {
         r.pos++; // skip opening "
         int contentStart = r.pos;
 
-        // Scan for closing quote -- in valid UTF-8, 0x22 (") and 0x5C (\)
-        // only appear as single-byte characters, so byte scanning is safe
+        // SWAR fast path: scan 8 bytes at a time for quote or backslash.
+        // In valid UTF-8, 0x22 (") and 0x5C (\) only appear as single-byte
+        // characters -- continuation bytes are 0x80-0xBF, so byte scanning is safe.
+        while (r.pos + 8 <= r.end) {
+            long word = SwarUtil.loadLong(r.data, r.pos);
+            long quoteHits = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN);
+            long bsHits = SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
+            long anyHit = quoteHits | bsHits;
+            if (anyHit != 0) {
+                r.pos += SwarUtil.getIndex(anyHit);
+                int b = r.data[r.pos] & 0xFF;
+                if (b == '"') {
+                    int contentEnd = r.pos;
+                    r.pos++;
+                    return JqString.deferredBytes(r.data, contentStart, contentEnd, false);
+                }
+                // Must be backslash
+                return parseDeferredWithEscapesBytes(r, contentStart);
+            }
+            r.pos += 8;
+        }
+        // Scalar tail for remaining < 8 bytes
         while (r.pos < r.end) {
             int b = r.data[r.pos] & 0xFF;
             if (b == '"') {
@@ -734,6 +754,9 @@ public final class JqValues {
     }
 
     private static JqString parseDeferredWithEscapesBytes(JsonByteReader r, int contentStart) {
+        // After hitting a backslash, scan for closing quote.
+        // Can't use pure SWAR here because backslash-escaped quotes must be
+        // skipped. Use SWAR to find the next quote or backslash, then handle.
         while (r.pos < r.end) {
             int b = r.data[r.pos] & 0xFF;
             if (b == '"') {
@@ -742,7 +765,7 @@ public final class JqValues {
                 return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
             }
             if (b == '\\') {
-                r.pos++;
+                r.pos++; // skip backslash
                 if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
             }
             r.pos++;
@@ -755,7 +778,24 @@ public final class JqValues {
         r.pos++; // skip opening "
         int start = r.pos;
 
-        // Fast path: scan for closing quote, bail on backslash
+        // SWAR fast path: scan 8 bytes at a time for quote or backslash
+        while (r.pos + 8 <= r.end) {
+            long word = SwarUtil.loadLong(r.data, r.pos);
+            long quoteHits = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN);
+            long bsHits = SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
+            long anyHit = quoteHits | bsHits;
+            if (anyHit != 0) {
+                r.pos += SwarUtil.getIndex(anyHit);
+                if ((r.data[r.pos] & 0xFF) == '"') {
+                    String result = new String(r.data, start, r.pos - start, java.nio.charset.StandardCharsets.UTF_8);
+                    r.pos++;
+                    return result;
+                }
+                break; // backslash -- fall through to slow path
+            }
+            r.pos += 8;
+        }
+        // Scalar tail: scan remaining < 8 bytes
         while (r.pos < r.end) {
             int b = r.data[r.pos] & 0xFF;
             if (b == '"') {
