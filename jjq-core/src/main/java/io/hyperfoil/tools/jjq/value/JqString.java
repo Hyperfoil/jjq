@@ -1,25 +1,30 @@
 package io.hyperfoil.tools.jjq.value;
 
+import java.nio.charset.StandardCharsets;
+
 /**
- * Immutable JSON string value. Supports two internal representations:
+ * Immutable JSON string value. Supports three internal representations:
  * <ul>
  *   <li><b>Eager</b> (via {@code of(String)}): the Java String is available immediately.</li>
- *   <li><b>Deferred</b> (via {@link #deferred(String, int, int, boolean)}): holds a reference
- *       to the original JSON input with start/end offsets. The Java String is materialized
- *       lazily on first {@link #stringValue()} call. Serialization via {@link #appendTo}
- *       can write the source bytes directly (zero-copy) for strings without escapes.</li>
+ *   <li><b>Deferred from String</b> (via {@code deferred(String, ...)}): holds a reference
+ *       to the original JSON input String with start/end offsets.</li>
+ *   <li><b>Deferred from bytes</b> (via {@code deferredBytes(byte[], ...)}): holds a reference
+ *       to the original UTF-8 byte array with start/end offsets.</li>
  * </ul>
+ * In both deferred modes, the Java String is materialized lazily on first
+ * {@link #stringValue()} call. Serialization via {@link #appendTo} can write
+ * the source directly (zero-copy) for strings without escapes.
  */
 public final class JqString implements JqValue {
     // Eager: value is set, source is null
-    // Deferred: value is null (until materialized), source/start/end describe the content
+    // Deferred: value is null (until materialized), source is String or byte[]
     private volatile String value;
-    private final String source;      // original JSON input; null for eager strings
+    private final Object source;      // String or byte[] or null
     private final int start;          // content start offset (after opening ")
     private final int end;            // content end offset (before closing ")
     private final boolean hasEscapes; // whether source range contains backslash escapes
 
-    private JqString(String value, String source, int start, int end, boolean hasEscapes) {
+    private JqString(String value, Object source, int start, int end, boolean hasEscapes) {
         this.value = value;
         this.source = source;
         this.start = start;
@@ -33,11 +38,20 @@ public final class JqString implements JqValue {
     }
 
     /**
-     * Create a deferred JqString that references a region of the JSON input.
+     * Create a deferred JqString that references a region of the JSON input String.
      * The Java String is materialized lazily on first access.
-     * Package-private -- used by the parser only.
+     * Package-private -- used by the String parser only.
      */
     static JqString deferred(String source, int start, int end, boolean hasEscapes) {
+        return new JqString(null, source, start, end, hasEscapes);
+    }
+
+    /**
+     * Create a deferred JqString that references a region of a UTF-8 byte array.
+     * The Java String is materialized lazily on first access.
+     * Package-private -- used by the byte parser only.
+     */
+    static JqString deferredBytes(byte[] source, int start, int end, boolean hasEscapes) {
         return new JqString(null, source, start, end, hasEscapes);
     }
 
@@ -55,10 +69,13 @@ public final class JqString implements JqValue {
     }
 
     private String materialize() {
-        if (!hasEscapes) {
-            return source.substring(start, end);
+        if (source instanceof String s) {
+            return hasEscapes ? unescapeJson(s, start, end) : s.substring(start, end);
+        } else if (source instanceof byte[] bytes) {
+            String raw = new String(bytes, start, end - start, StandardCharsets.UTF_8);
+            return hasEscapes ? unescapeJson(raw, 0, raw.length()) : raw;
         }
-        return unescapeJson(source, start, end);
+        throw new IllegalStateException("Deferred JqString with no source");
     }
 
     /**
@@ -189,10 +206,16 @@ public final class JqString implements JqValue {
         if (v != null) {
             // Materialized (eager or already accessed deferred) -- standard path
             escapeJson(v, sb);
-        } else if (source != null && !hasEscapes) {
-            // Deferred, no escapes -- ZERO-COPY: write source directly
+        } else if (source instanceof String s && !hasEscapes) {
+            // Deferred from String, no escapes -- ZERO-COPY: write source directly
             // Source content between quotes is already valid JSON (no escape sequences)
-            sb.append(source, start, end);
+            sb.append(s, start, end);
+        } else if (source instanceof byte[] bytes && !hasEscapes) {
+            // Deferred from bytes, no escapes -- materialize once, then append
+            // (For ASCII byte ranges this constructs the String; future SWAR
+            // optimization could append bytes directly for pure-ASCII content)
+            v = stringValue();
+            sb.append(v);
         } else if (source != null) {
             // Deferred with escapes -- must materialize first, then re-escape
             // (cannot write source directly since re-escaping may differ, e.g. \/ -> /)
