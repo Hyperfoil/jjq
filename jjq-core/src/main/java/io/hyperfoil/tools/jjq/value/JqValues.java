@@ -289,7 +289,10 @@ public final class JqValues {
         final String s = r.json;
         final int len = r.len;
 
-        // Fast path: scan for closing quote, bail on backslash
+        // Fast path: scan for closing quote, bail on backslash.
+        // Uses char-by-char scan rather than String.indexOf because indexOf
+        // would search the entire remaining document for both '"' and '\\',
+        // which is wasteful for short strings (typical JSON values are 5-20 chars).
         while (r.pos < len) {
             char c = s.charAt(r.pos);
             if (c == '"') {

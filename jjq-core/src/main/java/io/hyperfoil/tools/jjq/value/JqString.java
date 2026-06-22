@@ -108,11 +108,10 @@ public final class JqString implements JqValue {
     @Override
     public void appendTo(StringBuilder sb) {
         sb.append('"');
-        if (needsEscaping(value)) {
-            escapeJson(value, sb);
-        } else {
-            sb.append(value);
-        }
+        // escapeJson uses bulk segment appending -- for clean strings it appends
+        // the entire string in one sb.append(s, 0, len) call, so the needsEscaping
+        // pre-check would just duplicate that scan. Skip it and let escapeJson handle both cases.
+        escapeJson(value, sb);
         sb.append('"');
     }
 

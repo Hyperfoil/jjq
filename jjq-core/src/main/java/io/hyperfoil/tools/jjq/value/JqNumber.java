@@ -191,7 +191,9 @@ public final class JqNumber implements JqValue {
         if ((double) asLong == d) {
             sb.append(asLong); // 3.0 -> "3"
         } else if ((d > 1e-3 && d < 1e15) || (d < -1e-3 && d > -1e15)) {
-            sb.append(d); // common range: plain notation
+            // StringBuilder.append(double) formats directly into the buffer
+            // without intermediate String allocation (unlike Double.toString())
+            sb.append(d);
         } else {
             sb.append(BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
         }
