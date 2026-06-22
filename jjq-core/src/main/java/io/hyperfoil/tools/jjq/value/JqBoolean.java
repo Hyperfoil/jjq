@@ -27,6 +27,9 @@ public final class JqBoolean implements JqValue {
     public String toJsonString() { return String.valueOf(value); }
 
     @Override
+    public void appendTo(StringBuilder sb) { sb.append(value); }
+
+    @Override
     public String toString() { return String.valueOf(value); }
 
     @Override

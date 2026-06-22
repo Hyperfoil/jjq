@@ -15,6 +15,9 @@ public final class JqNull implements JqValue {
     public String toJsonString() { return "null"; }
 
     @Override
+    public void appendTo(StringBuilder sb) { sb.append("null"); }
+
+    @Override
     public String toString() { return "null"; }
 
     @Override

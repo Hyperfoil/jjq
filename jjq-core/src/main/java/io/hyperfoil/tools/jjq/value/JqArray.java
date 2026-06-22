@@ -78,6 +78,19 @@ public final class JqArray implements JqValue {
     }
 
     @Override
+    public void appendTo(StringBuilder sb) {
+        int size = elements.size();
+        if (size == 0) { sb.append("[]"); return; }
+        sb.append('[');
+        elements.get(0).appendTo(sb);
+        for (int i = 1; i < size; i++) {
+            sb.append(',');
+            elements.get(i).appendTo(sb);
+        }
+        sb.append(']');
+    }
+
+    @Override
     public String toString() { return toJsonString(); }
 
     @Override

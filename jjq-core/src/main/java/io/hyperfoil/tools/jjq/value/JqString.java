@@ -110,6 +110,17 @@ public final class JqString implements JqValue {
     }
 
     @Override
+    public void appendTo(StringBuilder sb) {
+        sb.append('"');
+        if (needsEscaping(value)) {
+            escapeJson(value, sb);
+        } else {
+            sb.append(value);
+        }
+        sb.append('"');
+    }
+
+    @Override
     public String toString() { return toJsonString(); }
 
     @Override

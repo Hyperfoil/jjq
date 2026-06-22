@@ -130,6 +130,30 @@ public final class JqNumber implements JqValue {
     }
 
     @Override
+    public void appendTo(StringBuilder sb) {
+        if (isLong) {
+            sb.append(longVal);
+            return;
+        }
+        if (isSpecial()) {
+            sb.append("null");
+            return;
+        }
+        BigDecimal stripped = decimalVal.stripTrailingZeros();
+        if (stripped.scale() <= 0) {
+            if (stripped.scale() < -20) {
+                sb.append(stripped.toString());
+            } else {
+                sb.append(stripped.toBigInteger().toString());
+            }
+        } else if (stripped.scale() > 20) {
+            sb.append(stripped.toString());
+        } else {
+            sb.append(stripped.toPlainString());
+        }
+    }
+
+    @Override
     public String toString() { return toJsonString(); }
 
     @Override

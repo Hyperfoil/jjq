@@ -108,6 +108,22 @@ public final class JqObject implements JqValue {
     }
 
     @Override
+    public void appendTo(StringBuilder sb) {
+        if (fields.isEmpty()) { sb.append("{}"); return; }
+        sb.append('{');
+        boolean first = true;
+        for (var e : fields.entrySet()) {
+            if (!first) sb.append(',');
+            first = false;
+            sb.append('"');
+            JqString.escapeJson(e.getKey(), sb);
+            sb.append("\":");
+            e.getValue().appendTo(sb);
+        }
+        sb.append('}');
+    }
+
+    @Override
     public String toString() { return toJsonString(); }
 
     @Override

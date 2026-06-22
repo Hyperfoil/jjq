@@ -410,6 +410,17 @@ public sealed interface JqValue extends Comparable<JqValue>
 
     String toJsonString();
 
+    /**
+     * Append the JSON representation of this value to the given StringBuilder.
+     * This is the low-level serialization primitive -- {@link #toJsonString()} is
+     * a convenience wrapper that uses a thread-local buffer internally.
+     * <p>
+     * For nested structures (arrays, objects), this method calls {@code appendTo}
+     * recursively on child values, writing everything into the single shared buffer
+     * without creating intermediate StringBuilders.
+     */
+    void appendTo(StringBuilder sb);
+
     /** Truncate value string for error messages (jq uses 25 chars + "...") */
     private static String truncateForError(String jsonStr) {
         // jq truncation: if the full JSON representation exceeds 30 UTF-8 bytes,
