@@ -64,17 +64,8 @@ public final class JqArray implements JqValue {
 
     @Override
     public String toJsonString() {
-        int size = elements.size();
-        if (size == 0) return "[]";
-        var sb = new StringBuilder(size * 8);
-        sb.append('[');
-        sb.append(elements.get(0).toJsonString());
-        for (int i = 1; i < size; i++) {
-            sb.append(',');
-            sb.append(elements.get(i).toJsonString());
-        }
-        sb.append(']');
-        return sb.toString();
+        if (elements.isEmpty()) return "[]";
+        return JqValues.serialize(this);
     }
 
     @Override

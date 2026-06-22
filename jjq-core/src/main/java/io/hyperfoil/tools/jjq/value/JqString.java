@@ -89,15 +89,11 @@ public final class JqString implements JqValue {
     @Override
     public String toJsonString() {
         // Fast path: if the string contains no characters that need escaping,
-        // avoid StringBuilder allocation entirely
+        // avoid StringBuilder and thread-local overhead entirely
         if (!needsEscaping(value)) {
             return "\"" + value + "\"";
         }
-        var sb = new StringBuilder(value.length() + 8);
-        sb.append('"');
-        escapeJson(value, sb);
-        sb.append('"');
-        return sb.toString();
+        return JqValues.serialize(this);
     }
 
     /** Check if a string contains any characters that require JSON escaping. */
