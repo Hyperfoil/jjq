@@ -278,8 +278,55 @@ public final class JqValues {
      * If the string contains no backslash, returns a substring directly (no StringBuilder,
      * no char-by-char copy). Falls back to escape-handling path only when needed.
      */
+    /**
+     * Parse a JSON string value and return a deferred JqString.
+     * Scans for the closing quote without materializing the Java String.
+     * Field names (object keys) use {@link #parseStringRaw} instead.
+     */
     private static JqString parseString(JsonReader r) {
-        return JqString.of(parseStringRaw(r));
+        r.pos++; // skip opening "
+        int contentStart = r.pos;
+        final String s = r.json;
+        final int len = r.len;
+
+        // Fast path: scan for closing quote, check for backslash
+        while (r.pos < len) {
+            char c = s.charAt(r.pos);
+            if (c == '"') {
+                // No escapes -- deferred, zero-copy on serialization
+                int contentEnd = r.pos;
+                r.pos++; // skip closing "
+                return JqString.deferred(s, contentStart, contentEnd, false);
+            }
+            if (c == '\\') {
+                // Has escapes -- scan to end, mark as has-escapes
+                return parseDeferredWithEscapes(r, s, contentStart);
+            }
+            r.pos++;
+        }
+        throw new IllegalArgumentException("Unterminated string");
+    }
+
+    /** Scan to closing quote for a string that contains escape sequences. */
+    private static JqString parseDeferredWithEscapes(JsonReader r, String s, int contentStart) {
+        final int len = r.len;
+        while (r.pos < len) {
+            char c = s.charAt(r.pos);
+            if (c == '"') {
+                int contentEnd = r.pos;
+                r.pos++; // skip closing "
+                return JqString.deferred(s, contentStart, contentEnd, true);
+            }
+            if (c == '\\') {
+                r.pos++; // skip backslash
+                // Skip the escaped character (including unicode escapes)
+                if (r.pos < len && s.charAt(r.pos) == 'u') {
+                    r.pos += 4; // skip 4 hex digits
+                }
+            }
+            r.pos++;
+        }
+        throw new IllegalArgumentException("Unterminated string");
     }
 
     /** Parse a JSON string and return the raw Java String value (without wrapping in JqString). */
