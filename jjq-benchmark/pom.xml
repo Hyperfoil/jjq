@@ -26,6 +26,10 @@
             <artifactId>jjq-jackson</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-fastjson2</artifactId>
+        </dependency>
+        <dependency>
             <groupId>net.thisptr</groupId>
             <artifactId>jackson-jq</artifactId>
             <version>1.6.0</version>
