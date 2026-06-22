@@ -433,12 +433,17 @@ public final class JqValues {
      * recursing further — matching jq's behavior for extremely nested structures.
      */
     public static String toJsonStringDepthLimited(JqValue val) {
-        var sb = new StringBuilder();
-        appendJson(val, sb, 0);
-        return sb.toString();
+        StringBuilder sb = SERIALIZER_BUFFER.get();
+        sb.setLength(0);
+        appendJsonDepthLimited(val, sb, 0);
+        String result = sb.toString();
+        if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
+            SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
+        }
+        return result;
     }
 
-    private static void appendJson(JqValue val, StringBuilder sb, int depth) {
+    private static void appendJsonDepthLimited(JqValue val, StringBuilder sb, int depth) {
         // Handle arrays iteratively to avoid stack overflow on deeply nested structures
         int arrayNesting = 0;
         while (val instanceof JqArray arr) {
@@ -462,15 +467,15 @@ public final class JqValues {
                 continue; // loop back to check if it's another array
             }
             // Multi-element array: serialize first element iteratively, rest recursively
-            appendJson(elements.get(0), sb, depth);
+            appendJsonDepthLimited(elements.get(0), sb, depth);
             for (int i = 1; i < elements.size(); i++) {
                 sb.append(',');
-                appendJson(elements.get(i), sb, depth);
+                appendJsonDepthLimited(elements.get(i), sb, depth);
             }
             for (int i = 0; i < arrayNesting; i++) sb.append(']');
             return;
         }
-        // Non-array value
+        // Non-array value: use appendTo for scalars and objects
         if (val instanceof JqObject obj) {
             if (depth > MAX_SERIALIZE_DEPTH) {
                 sb.append("\"<skipped: too deep>\"");
@@ -483,12 +488,12 @@ public final class JqValues {
                     sb.append('"');
                     JqString.escapeJson(e.getKey(), sb);
                     sb.append("\":");
-                    appendJson(e.getValue(), sb, depth + 1);
+                    appendJsonDepthLimited(e.getValue(), sb, depth + 1);
                 }
                 sb.append('}');
             }
         } else {
-            sb.append(val.toJsonString());
+            val.appendTo(sb);
         }
         for (int i = 0; i < arrayNesting; i++) sb.append(']');
     }
