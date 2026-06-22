@@ -1,6 +1,5 @@
 package io.hyperfoil.tools.jjq.value;
 
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -16,7 +15,7 @@ public final class JqObject implements JqValue {
 
     public static JqObject of(Map<String, JqValue> fields) {
         if (fields.isEmpty()) return EMPTY;
-        return new JqObject(Collections.unmodifiableMap(new LinkedHashMap<>(fields)));
+        return new JqObject(new LinkedHashMap<>(fields));
     }
 
     /**
@@ -25,7 +24,7 @@ public final class JqObject implements JqValue {
      */
     public static JqObject ofTrusted(LinkedHashMap<String, JqValue> fields) {
         if (fields.isEmpty()) return EMPTY;
-        return new JqObject(Collections.unmodifiableMap(fields));
+        return new JqObject(fields);
     }
 
     /**
@@ -40,7 +39,7 @@ public final class JqObject implements JqValue {
     public static JqObject of(String key, JqValue value) {
         var map = new LinkedHashMap<String, JqValue>();
         map.put(key, value);
-        return new JqObject(Collections.unmodifiableMap(map));
+        return new JqObject(map);
     }
 
     /**
@@ -63,7 +62,7 @@ public final class JqObject implements JqValue {
         for (int i = 0; i < rest.length; i += 2) {
             map.put((String) rest[i], (JqValue) rest[i + 1]);
         }
-        return new JqObject(Collections.unmodifiableMap(map));
+        return new JqObject(map);
     }
 
     @Override
@@ -73,7 +72,8 @@ public final class JqObject implements JqValue {
     public Map<String, JqValue> objectValue() { return fields; }
 
     public JqValue get(String key) {
-        return fields.getOrDefault(key, JqNull.NULL);
+        JqValue v = fields.get(key);
+        return v != null ? v : JqNull.NULL;
     }
 
     public boolean has(String key) {
