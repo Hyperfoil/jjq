@@ -16,8 +16,33 @@ public final class JqValues {
 
     private static final int MAX_PARSE_DEPTH = 10000;
     private static final int MAX_SERIALIZE_DEPTH = 10001;
+    private static final int SERIALIZE_BUFFER_INIT = 8192;
+    private static final int SERIALIZE_BUFFER_MAX_RETAINED = 1024 * 1024; // 1MB
+
+    private static final ThreadLocal<StringBuilder> SERIALIZER_BUFFER =
+            ThreadLocal.withInitial(() -> new StringBuilder(SERIALIZE_BUFFER_INIT));
 
     private JqValues() {}
+
+    /**
+     * Serialize a JqValue to a JSON string using a thread-local StringBuilder.
+     * The buffer is reused across calls on the same thread, eliminating per-call
+     * StringBuilder allocation. For nested structures, {@link JqValue#appendTo}
+     * writes directly into the shared buffer without intermediate allocations.
+     * <p>
+     * If the buffer grows beyond 1MB (e.g., for a 14MB document), it is replaced
+     * with a fresh buffer after serialization to avoid retaining excessive memory.
+     */
+    public static String serialize(JqValue value) {
+        StringBuilder sb = SERIALIZER_BUFFER.get();
+        sb.setLength(0);
+        value.appendTo(sb);
+        String result = sb.toString();
+        if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
+            SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
+        }
+        return result;
+    }
 
     /** Mutable parser state — avoids int[] indirection on every character access. */
     private static final class JsonReader {
