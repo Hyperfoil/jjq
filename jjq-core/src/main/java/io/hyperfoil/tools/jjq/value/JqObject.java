@@ -140,17 +140,16 @@ public final class JqObject implements JqValue {
 
     /**
      * Get a field value by key. Returns {@link JqNull#NULL} for missing keys.
-     * For array-backed objects, uses linear scan with hashCode fast-reject.
+     * For array-backed objects, uses linear scan with equals (forward, first match wins
+     * since parser deduplicates via last-wins at construction).
      */
     public JqValue get(String key) {
         if (externalMap != null) {
             JqValue v = externalMap.get(key);
             return v != null ? v : JqNull.NULL;
         }
-        // Linear scan with hashCode fast-reject (backwards for last-wins on duplicates)
-        int h = key.hashCode();
-        for (int i = size - 1; i >= 0; i--) {
-            if (keys[i].hashCode() == h && keys[i].equals(key)) {
+        for (int i = 0; i < size; i++) {
+            if (key.equals(keys[i])) {
                 return values[i];
             }
         }
@@ -159,9 +158,8 @@ public final class JqObject implements JqValue {
 
     public boolean has(String key) {
         if (externalMap != null) return externalMap.containsKey(key);
-        int h = key.hashCode();
-        for (int i = size - 1; i >= 0; i--) {
-            if (keys[i].hashCode() == h && keys[i].equals(key)) return true;
+        for (int i = 0; i < size; i++) {
+            if (key.equals(keys[i])) return true;
         }
         return false;
     }
@@ -327,11 +325,8 @@ public final class JqObject implements JqValue {
         @Override
         public JqValue get(Object key) {
             if (key instanceof String k) {
-                int h = k.hashCode();
-                for (int i = size - 1; i >= 0; i--) {
-                    if (keys[i].hashCode() == h && keys[i].equals(k)) {
-                        return values[i];
-                    }
+                for (int i = 0; i < size; i++) {
+                    if (k.equals(keys[i])) return values[i];
                 }
             }
             return null; // Map contract: null for missing, not JqNull
@@ -340,9 +335,8 @@ public final class JqObject implements JqValue {
         @Override
         public boolean containsKey(Object key) {
             if (key instanceof String k) {
-                int h = k.hashCode();
-                for (int i = size - 1; i >= 0; i--) {
-                    if (keys[i].hashCode() == h && keys[i].equals(k)) return true;
+                for (int i = 0; i < size; i++) {
+                    if (k.equals(keys[i])) return true;
                 }
             }
             return false;
