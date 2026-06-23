@@ -23,6 +23,7 @@ public final class VirtualMachine {
     private final ExprEvaluator treeWalker;
     private final ProgramShape shape;
     private final boolean needsEnv;
+    private final boolean[] uniqueLayouts; // per object layout: true if all name indices are distinct
     private final String fastField1;  // cached for FIELD_ACCESS / FIELD_ACCESS2 / PIPE_FIELD_ARITH
     private final String fastField2;  // cached for FIELD_ACCESS2
     private final JqValue fastConst;  // cached for PIPE_FIELD_ARITH
@@ -85,6 +86,7 @@ public final class VirtualMachine {
         this.varSlots = bytecode.varSlotCount() > 0 ? new JqValue[bytecode.varSlotCount()] : null;
         this.shape = detectShape();
         this.needsEnv = detectNeedsEnv();
+        this.uniqueLayouts = computeUniqueLayouts();
 
         // Cache field names for fast-path shapes
         if (shape == ProgramShape.FIELD_ACCESS) {
@@ -165,6 +167,24 @@ public final class VirtualMachine {
             }
         }
         return false;
+    }
+
+    /** Pre-compute which object layouts have all-distinct name indices. */
+    private boolean[] computeUniqueLayouts() {
+        int[][] layouts = bytecode.objectLayouts();
+        if (layouts.length == 0) return new boolean[0];
+        boolean[] unique = new boolean[layouts.length];
+        for (int li = 0; li < layouts.length; li++) {
+            int[] layout = layouts[li];
+            boolean isUnique = true;
+            for (int i = 0; i < layout.length && isUnique; i++) {
+                for (int j = i + 1; j < layout.length; j++) {
+                    if (layout[i] == layout[j]) { isUnique = false; break; }
+                }
+            }
+            unique[li] = isUnique;
+        }
+        return unique;
     }
 
     public List<JqValue> execute(JqValue inputValue) {
@@ -712,8 +732,14 @@ public final class VirtualMachine {
                             vals[i] = pop();
                         }
                         var builder = JqObject.builder(count);
-                        for (int i = 0; i < count; i++) {
-                            builder.put(names[layout[i]], vals[i]);
+                        if (uniqueLayouts[arg2s[curPc]]) {
+                            for (int i = 0; i < count; i++) {
+                                builder.putUnchecked(names[layout[i]], vals[i]);
+                            }
+                        } else {
+                            for (int i = 0; i < count; i++) {
+                                builder.put(names[layout[i]], vals[i]);
+                            }
                         }
                         push(builder.build());
                     }
@@ -1129,7 +1155,11 @@ public final class VirtualMachine {
                     JqValue[] vals = new JqValue[count];
                     for (int j = count - 1; j >= 0; j--) vals[j] = pop();
                     var builder = JqObject.builder(count);
-                    for (int j = 0; j < count; j++) builder.put(names[layout[j]], vals[j]);
+                    if (uniqueLayouts[arg2s[bpc]]) {
+                        for (int j = 0; j < count; j++) builder.putUnchecked(names[layout[j]], vals[j]);
+                    } else {
+                        for (int j = 0; j < count; j++) builder.put(names[layout[j]], vals[j]);
+                    }
                     push(builder.build());
                 }
                 case STRING_CONCAT -> {

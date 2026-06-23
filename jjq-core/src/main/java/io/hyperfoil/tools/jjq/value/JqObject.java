@@ -328,6 +328,22 @@ public final class JqObject implements JqValue {
         /** Add a null-valued field. */
         public Builder putNull(String key) { return put(key, JqNull.NULL); }
 
+        /**
+         * Append a field without checking for duplicates.
+         * The caller must guarantee the key is not already present in the builder.
+         * Used by the VM for {@code BUILD_OBJECT} with compile-time-known unique keys.
+         */
+        public Builder putUnchecked(String key, JqValue value) {
+            if (size >= keys.length) {
+                keys = Arrays.copyOf(keys, keys.length * 2);
+                values = Arrays.copyOf(values, values.length * 2);
+            }
+            keys[size] = key;
+            values[size] = value;
+            size++;
+            return this;
+        }
+
         /** Build the JqObject. The builder should not be used after this call. */
         public JqObject build() {
             return size == 0 ? EMPTY : JqObject.ofArrays(keys, values, size);
