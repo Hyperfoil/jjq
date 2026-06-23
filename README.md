@@ -2,14 +2,14 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It parses JSON **1.9x faster than Jackson** and executes field access queries in **5 nanoseconds with zero allocation** on a 14MB production document.
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, with parse allocation matching Jackson and serialization **60% faster**.
 
 ## Features
 
 - **Full jq syntax** — pipes, field access, iteration, array/object construction, string interpolation, reduce, foreach, try-catch, label-break, destructuring bind, function definitions, and more
 - **179 builtin functions** — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
 - **Bytecode VM** — fused iteration opcodes, whole-program shape detection, constant folding, peephole optimization, pre-allocated stacks
-- **1.9x faster JSON parsing than Jackson** — direct digit accumulation, deferred string values, byte[]-based parsing with SWAR scanning, field name interning
+- **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing with SWAR scanning, field name interning. 1.3-2.4x faster than Jackson on 10KB inputs; comparable on large files (interning trades parse throughput for zero-allocation queries)
 - **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
 - **Hibernate + JAX-RS integration** — `jjq-jakarta` module provides FormatMapper and MessageBodyReader/Writer for direct `JqValue` persistence and REST endpoints
@@ -240,45 +240,47 @@ printf '{"name":"Alice"}\n{"name":"Bob"}\n' | jjq '.name'
 
 ### JSON Parsing: jjq vs Jackson vs fastjson2
 
-Parsing throughput on varied input types (ops/us, higher is better). Measured with JMH, 3 forks, JDK 25:
+Parsing throughput on varied input types (ops/us, higher is better). Measured with JMH, 3 forks, JDK 25. Percentages are vs Jackson (String) for the same structure:
 
-| Input type | Size | Jackson | jjq (String) | jjq (byte[]) | fastjson2 |
-|-----------|------|---------|--------------|--------------|-----------|
-| flat | 10KB | 0.033 | 0.053 (+63%) | 0.055 (+70%) | 0.055 |
-| strings | 10KB | 0.046 | 0.072 (+59%) | 0.099 (+117%) | 0.063 |
-| numbers | 10KB | 0.024 | 0.041 (+73%) | 0.047 (+99%) | 0.042 |
-| nested | 10KB | 0.025 | 0.050 (+100%) | 0.058 (+131%) | 0.057 |
-| **Production 14MB** | **14MB** | **0.000033** | **0.000069** (+109%) | **0.000090** (+173%) | 0.000058 |
+| Input type | Size | Jackson | Jackson (bytes) | jjq (String) | jjq (byte[]) | fastjson2 |
+|-----------|------|---------|-----------------|--------------|--------------|-----------|
+| flat | 10KB | 0.032 | 0.030 | 0.050 (+56%) | 0.071 (+137%) | 0.055 |
+| strings | 10KB | 0.046 | 0.053 | 0.055 (+20%) | 0.098 (+85%) | 0.063 |
+| numbers | 10KB | 0.025 | 0.028 | 0.039 (+56%) | 0.049 (+75%) | 0.043 |
+| nested | 10KB | 0.026 | 0.032 | 0.030 (+15%) | 0.041 (+28%) | 0.059 |
+| **Production 14MB** | **14MB** | **0.000034** | **0.000047** | **0.000033** | **0.000040** | 0.000059 |
 
-jjq's byte[]-based parser is **1.9x faster than Jackson** on the 14MB production file with comparable allocation (40.7 MB vs 38.4 MB).
+On 10KB inputs, jjq's byte[] parser is **1.3-2.4x faster than Jackson**. On the 14MB production file, jjq trades some parse throughput for field name interning and eager hash indexing — optimizations that enable zero-allocation queries on the parsed document. Parse allocation matches Jackson (40.5 MB vs 40.3 MB).
 
 ### Production Query Execution on 14MB Document
 
-Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects):
+Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects). Times via `JqProgram.apply()` — the h5m API path including compiled program dispatch:
 
 | Query | Expression | Time | Allocation |
 |-------|-----------|------|------------|
-| Top-level field | `.user` | **5.3 ns** | **0 B** |
+| Top-level field | `.user` | **3.1 ns** | **0 B** |
 | Deep field (4 levels) | `.autobench_workload.data[0].results` | 63 ns | 0 B |
 | Keys (127-key object) | `.data[0].pcp_time_series[0] \| keys` | 69 ns | 0 B |
 | Array length | `.data[0].pcp_time_series \| length` | 64 ns | 0 B |
+| PCP entry (127-key object) | `.data[0].pcp_time_series[0]` | 69 ns | 0 B |
 | Object construction | `{user, uuid, run_id, start_time, end_time}` | 95 ns | 168 B |
-| Iterate + extract | `[.stressng_workload.data[] \| .sample_uuid]` | 151 ns | 80 B |
-| Extract metric (502 entries) | `[.pcp_time_series[] \| .["mem.util.used"]]` | 13 us | 2.0 KB |
+| Config extract | `.rhivos_config \| {build, model, kernel, architecture}` | 105 ns | 144 B |
+| Iterate + extract | `[.stressng_workload.data[] \| .sample_uuid]` | 150 ns | 80 B |
+| Extract metric (502 entries) | `[.pcp_time_series[] \| .["mem.util.used"]]` | 13 us | 2.1 KB |
 | Round-trip (extract + serialize) | `.user` | 15 ns | 56 B |
 
-Six of fifteen production benchmarks achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation.
+Seven of fifteen production benchmarks achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation. Single field access bypasses the VM entirely via inlined fast path detection.
 
 ### Serialization
 
 | Input type | Size | Jackson | jjq | jjq/Jackson |
 |-----------|------|---------|-----|-------------|
-| strings | 10KB | 0.077 | 0.099 | **129%** |
-| numbers | 10KB | 0.045 | 0.043 | 97% |
-| nested | 10KB | 0.048 | 0.049 | 102% |
-| **Production 14MB** | **14MB** | **0.000056** | **0.000056** | **100%** |
+| strings | 10KB | 0.075 | 0.141 | **188%** |
+| numbers | 10KB | 0.044 | 0.055 | 125% |
+| nested | 10KB | 0.048 | 0.084 | **175%** |
+| **Production 14MB** | **14MB** | **0.000054** | **0.000087** | **160%** |
 
-jjq matches Jackson on serialization throughput with **lower allocation** (45.1 MB vs 52.2 MB on the 14MB production file).
+jjq serializes **60% faster than Jackson** on the 14MB production file with **14% lower allocation** (47.2 MB vs 54.7 MB). The speedup comes from pre-computed JSON key forms (no escape scanning for interned field names) and type-specialized `appendTo` dispatch.
 
 ## Architecture
 
@@ -318,7 +320,7 @@ jq expression string
 | `JqNumber` | `long` fast-path with cache [-128, 1023], `double` for decimals, `BigDecimal` fallback | Direct digit accumulation avoids `new BigDecimal()` for 99% of numbers |
 | `JqString` | Deferred: holds `(source, start, end)` reference, materializes lazily | Zero-copy serialization via `sb.append(source, start, end)` for untouched strings |
 | `JqArray` | `List<JqValue>` via raw `JqValue[]` | `ofTrusted()` avoids defensive copying |
-| `JqObject` | Parallel `String[]` keys + `JqValue[]` values | Linear scan for ≤32 keys, hash index for larger objects. Interned field names enable reference equality. Pre-computed JSON key form eliminates escapeJson scanning. |
+| `JqObject` | Parallel `String[]` keys + `JqValue[]` values, `Builder` for zero-intermediate construction | Linear scan for ≤32 keys, hash index for larger objects. Interned field names enable reference equality. Pre-computed `"key":` JSON form eliminates escapeJson scanning. Copy-on-write `with()`/`without()`/`merge()`/`deepMerge()`. |
 
 ### Parser Optimizations
 
