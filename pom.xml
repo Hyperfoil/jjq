@@ -49,8 +49,6 @@
         <module>jjq-test-suite</module>
         <module>jjq-jackson</module>
         <module>jjq-jakarta</module>
-        <module>jjq-benchmark</module>
-        <module>jjq-examples</module>
     </modules>
 
     <properties>
@@ -152,6 +150,18 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>benchmark</id>
+            <modules>
+                <module>jjq-benchmark</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>examples</id>
+            <modules>
+                <module>jjq-examples</module>
+            </modules>
+        </profile>
         <profile>
             <id>release</id>
             <activation>
