@@ -705,21 +705,21 @@ public final class VirtualMachine {
                         }
                     }
 
-                    // Object construction
+                    // Object construction (direct array via Builder, no LinkedHashMap)
                     case BUILD_OBJECT -> {
                         int count = arg1s[curPc];
                         int[] layout = objLayouts[arg2s[curPc]];
-                        var map = new java.util.LinkedHashMap<String, JqValue>(count * 2);
                         // Values are on stack with first field's value deepest.
                         // Pop all values (reverse order), then insert in layout order.
                         JqValue[] vals = new JqValue[count];
                         for (int i = count - 1; i >= 0; i--) {
                             vals[i] = pop();
                         }
+                        var builder = JqObject.builder(count);
                         for (int i = 0; i < count; i++) {
-                            map.put(names[layout[i]], vals[i]);
+                            builder.put(names[layout[i]], vals[i]);
                         }
-                        push(JqObject.ofTrusted(map));
+                        push(builder.build());
                     }
 
                     // String interpolation
@@ -1133,11 +1133,11 @@ public final class VirtualMachine {
                 case BUILD_OBJECT -> {
                     int count = arg1s[bpc];
                     int[] layout = bytecode.objectLayout(arg2s[bpc]);
-                    var map = new java.util.LinkedHashMap<String, JqValue>(count * 2);
                     JqValue[] vals = new JqValue[count];
                     for (int j = count - 1; j >= 0; j--) vals[j] = pop();
-                    for (int j = 0; j < count; j++) map.put(names[layout[j]], vals[j]);
-                    push(JqObject.ofTrusted(map));
+                    var builder = JqObject.builder(count);
+                    for (int j = 0; j < count; j++) builder.put(names[layout[j]], vals[j]);
+                    push(builder.build());
                 }
                 case STRING_CONCAT -> {
                     int partCount = arg1s[bpc];
