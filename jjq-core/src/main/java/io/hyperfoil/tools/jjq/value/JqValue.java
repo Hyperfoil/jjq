@@ -159,11 +159,7 @@ public sealed interface JqValue extends Comparable<JqValue>
                 list.addAll(other.arrayValue());
                 yield JqArray.of(list);
             }
-            case JqObject o -> {
-                var map = new java.util.LinkedHashMap<>(o.objectValue());
-                map.putAll(other.objectValue());
-                yield JqObject.ofTrusted(map);
-            }
+            case JqObject o -> o.merge((JqObject) other);
             default -> throw new JqTypeError(type().jqName() + " (" + truncateForError(toJsonString()) + ") and "
                     + other.type().jqName() + " (" + truncateForError(other.toJsonString()) + ") cannot be added");
         };
@@ -208,7 +204,7 @@ public sealed interface JqValue extends Comparable<JqValue>
             return JqNumber.of(n.decimalValue().multiply(m.decimalValue()));
         }
         if (this instanceof JqObject o1 && other instanceof JqObject o2) {
-            return mergeObjects(o1, o2, 0);
+            return o1.deepMerge(o2);
         }
         if (this instanceof JqString s && other instanceof JqNumber n) {
             return repeatString(s, n);
@@ -225,86 +221,7 @@ public sealed interface JqValue extends Comparable<JqValue>
     /** @hidden */
     static final int MAX_MERGE_DEPTH = 10000;
 
-    /**
-     * Merge two objects iteratively to avoid StackOverflowError on deeply nested structures.
-     * Uses an explicit stack for the recursive descent and bottom-up rebuild.
-     * @hidden
-     */
-    static JqValue mergeObjects(JqObject o1, JqObject o2, int depth) {
-        // For shallow nesting, use simple recursion (common case, zero overhead)
-        if (depth > 0 || !hasDeepObjectOverlap(o1, o2)) {
-            return mergeObjectsSimple(o1, o2, depth);
-        }
-
-        // Deep merge path: use iterative approach with explicit stack
-        // Walk down the chain of single-key nested objects to find the deepest merge point
-        record MergeFrame(java.util.LinkedHashMap<String, JqValue> map, String key) {}
-        var frames = new java.util.ArrayDeque<MergeFrame>();
-        JqObject left = o1, right = o2;
-
-        while (true) {
-            if (frames.size() > MAX_MERGE_DEPTH) {
-                throw new JqTypeError("Object merge too deep");
-            }
-            var map = new java.util.LinkedHashMap<>(left.objectValue());
-            // Find keys where both sides have objects (need recursive merge)
-            String mergeKey = null;
-            JqObject leftChild = null, rightChild = null;
-            for (var entry : right.objectValue().entrySet()) {
-                JqValue existing = map.get(entry.getKey());
-                if (existing instanceof JqObject eo && entry.getValue() instanceof JqObject ev) {
-                    if (mergeKey == null) {
-                        mergeKey = entry.getKey();
-                        leftChild = eo;
-                        rightChild = ev;
-                    } else {
-                        // Multiple keys need merging -- fall back to simple recursion for this level
-                        map.put(entry.getKey(), mergeObjectsSimple(eo, ev, frames.size() + 1));
-                    }
-                } else {
-                    map.put(entry.getKey(), entry.getValue());
-                }
-            }
-            if (mergeKey == null) {
-                // No further recursive merge needed -- unwind
-                JqValue result = JqObject.ofTrusted(map);
-                while (!frames.isEmpty()) {
-                    var frame = frames.pop();
-                    frame.map.put(frame.key, result);
-                    result = JqObject.ofTrusted(frame.map);
-                }
-                return result;
-            }
-            // Push this level and continue deeper
-            frames.push(new MergeFrame(map, mergeKey));
-            left = leftChild;
-            right = rightChild;
-        }
-    }
-
-    private static boolean hasDeepObjectOverlap(JqObject o1, JqObject o2) {
-        for (var entry : o2.objectValue().entrySet()) {
-            JqValue existing = o1.objectValue().get(entry.getKey());
-            if (existing instanceof JqObject && entry.getValue() instanceof JqObject) return true;
-        }
-        return false;
-    }
-
-    private static JqValue mergeObjectsSimple(JqObject o1, JqObject o2, int depth) {
-        if (depth > MAX_MERGE_DEPTH) {
-            throw new JqTypeError("Object merge too deep");
-        }
-        var map = new java.util.LinkedHashMap<>(o1.objectValue());
-        for (var entry : o2.objectValue().entrySet()) {
-            JqValue existing = map.get(entry.getKey());
-            if (existing instanceof JqObject eo && entry.getValue() instanceof JqObject ev) {
-                map.put(entry.getKey(), mergeObjectsSimple(eo, ev, depth + 1));
-            } else {
-                map.put(entry.getKey(), entry.getValue());
-            }
-        }
-        return JqObject.ofTrusted(map);
-    }
+    // Deep merge implementation moved to JqObject.deepMerge()
 
     private static JqValue repeatString(JqString s, JqNumber n) {
         double d = n.doubleValue();

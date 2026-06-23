@@ -399,6 +399,104 @@ public final class JqObject implements JqValue {
     }
 
     /**
+     * Deep merge: for overlapping keys where both values are JqObject,
+     * recursively merge them. For all other overlapping keys, {@code other}'s
+     * value wins. Matches jq {@code *} operator semantics for objects.
+     *
+     * <p>Unlike {@link #merge(JqObject)} which is shallow (jq {@code +}),
+     * this method recurses into nested objects.</p>
+     *
+     * @throws JqTypeError if recursion exceeds {@link JqValue#MAX_MERGE_DEPTH}
+     */
+    public JqObject deepMerge(JqObject other) {
+        return deepMerge(other, 0);
+    }
+
+    private JqObject deepMerge(JqObject other, int depth) {
+        // Use iterative approach with explicit stack to avoid StackOverflowError
+        // on deeply nested structures (e.g., reduce range(10000) as $_ ({}; {a: .}) * .)
+        record MergeFrame(Builder builder, String key) {}
+        var frames = new java.util.ArrayDeque<MergeFrame>();
+        JqObject left = this, right = other;
+
+        while (true) {
+            if (depth + frames.size() > JqValue.MAX_MERGE_DEPTH) {
+                throw new JqTypeError("Object merge too deep");
+            }
+            if (right.size == 0 && right.externalMap == null) break;
+            if (right.externalMap != null && right.externalMap.isEmpty()) break;
+            if (left.size == 0 && left.externalMap == null) { left = right; break; }
+            if (left.externalMap != null && left.externalMap.isEmpty()) { left = right; break; }
+
+            int leftSize = left.externalMap != null ? left.externalMap.size() : left.size;
+            int rightSize = right.externalMap != null ? right.externalMap.size() : right.size;
+            var builder = new Builder(leftSize + rightSize);
+
+            // Add all from left
+            if (left.externalMap != null) {
+                for (var e : left.externalMap.entrySet()) builder.put(e.getKey(), e.getValue());
+            } else {
+                for (int i = 0; i < left.size; i++) builder.put(left.keys[i], left.values[i]);
+            }
+
+            // Merge from right — find at most one key to tail-recurse on
+            String tailKey = null;
+            JqObject tailLeft = null, tailRight = null;
+            if (right.externalMap != null) {
+                for (var e : right.externalMap.entrySet()) {
+                    JqValue existing = left.get(e.getKey());
+                    if (existing instanceof JqObject eo && e.getValue() instanceof JqObject ov) {
+                        if (tailKey == null) {
+                            tailKey = e.getKey();
+                            tailLeft = eo;
+                            tailRight = ov;
+                        } else {
+                            builder.put(e.getKey(), eo.deepMerge(ov, depth + frames.size() + 1));
+                        }
+                    } else {
+                        builder.put(e.getKey(), e.getValue());
+                    }
+                }
+            } else {
+                for (int i = 0; i < right.size; i++) {
+                    JqValue existing = left.get(right.keys[i]);
+                    if (existing instanceof JqObject eo && right.values[i] instanceof JqObject ov) {
+                        if (tailKey == null) {
+                            tailKey = right.keys[i];
+                            tailLeft = eo;
+                            tailRight = ov;
+                        } else {
+                            builder.put(right.keys[i], eo.deepMerge(ov, depth + frames.size() + 1));
+                        }
+                    } else {
+                        builder.put(right.keys[i], right.values[i]);
+                    }
+                }
+            }
+
+            if (tailKey == null) {
+                // No recursive merge needed — build and unwind
+                left = builder.build();
+                break;
+            }
+
+            // Push this level and iterate deeper on the tail key
+            frames.push(new MergeFrame(builder, tailKey));
+            left = tailLeft;
+            right = tailRight;
+        }
+
+        // Unwind the stack
+        JqObject result = left;
+        while (!frames.isEmpty()) {
+            var frame = frames.pop();
+            frame.builder.put(frame.key, result);
+            result = frame.builder.build();
+        }
+        return result;
+    }
+
+    /**
      * Returns a cached JqArray of sorted JqString-wrapped keys.
      * Used by the {@code keys} builtin to avoid re-sorting and
      * re-wrapping key strings on repeated calls on the same object.

@@ -545,16 +545,12 @@ final class Evaluator implements ExprEvaluator {
             case IdentityExpr ignored -> updater.apply(List.of(input)).getFirst();
             case DotFieldExpr df -> {
                 if (input instanceof JqObject obj) {
-                    var map = new LinkedHashMap<>(obj.objectValue());
-                    JqValue oldVal = map.getOrDefault(df.field(), JqNull.NULL);
+                    JqValue oldVal = obj.get(df.field());
                     JqValue newVal = updater.apply(List.of(oldVal)).getFirst();
-                    map.put(df.field(), newVal);
-                    yield JqObject.ofTrusted(map);
+                    yield obj.with(df.field(), newVal);
                 } else if (input instanceof JqNull) {
-                    var map = new LinkedHashMap<String, JqValue>();
                     JqValue newVal = updater.apply(List.of(JqNull.NULL)).getFirst();
-                    map.put(df.field(), newVal);
-                    yield JqObject.ofTrusted(map);
+                    yield JqObject.of(df.field(), newVal);
                 } else {
                     throw new JqException("Cannot index " + input.type().jqName() + " with string");
                 }
@@ -832,22 +828,19 @@ final class Evaluator implements ExprEvaluator {
             }
             return JqArray.of(list);
         } else if (base instanceof JqObject obj && index instanceof JqString s) {
-            var map = new LinkedHashMap<>(obj.objectValue());
-            JqValue oldVal = map.getOrDefault(s.stringValue(), JqNull.NULL);
+            JqValue oldVal = obj.get(s.stringValue());
             List<JqValue> newVals = updater.apply(List.of(oldVal));
             if (newVals.isEmpty()) {
-                map.remove(s.stringValue());
+                return obj.without(s.stringValue());
             } else {
-                map.put(s.stringValue(), newVals.getFirst());
+                return obj.with(s.stringValue(), newVals.getFirst());
             }
-            return JqObject.ofTrusted(map);
         } else if (base instanceof JqNull && index instanceof JqString s) {
-            var map = new LinkedHashMap<String, JqValue>();
             List<JqValue> newVals = updater.apply(List.of(JqNull.NULL));
             if (!newVals.isEmpty()) {
-                map.put(s.stringValue(), newVals.getFirst());
+                return JqObject.of(s.stringValue(), newVals.getFirst());
             }
-            return JqObject.ofTrusted(map);
+            return JqObject.EMPTY;
         } else {
             String indexType = index instanceof JqNumber ? "number" : "string";
             String indexStr = index instanceof JqNumber n ? String.valueOf((int) n.longValue())

@@ -2309,11 +2309,9 @@ public final class BuiltinRegistry {
             JqValue key = path.get(idx);
             JqValue container = containers[ci];
             if (key instanceof JqString s) {
-                var map = container instanceof JqObject obj
-                        ? new LinkedHashMap<>(obj.objectValue())
-                        : new LinkedHashMap<String, JqValue>();
-                map.put(s.stringValue(), result);
-                result = JqObject.ofTrusted(map);
+                result = container instanceof JqObject obj
+                        ? obj.with(s.stringValue(), result)
+                        : JqObject.of(s.stringValue(), result);
             } else if (key instanceof JqNumber n) {
                 if (container instanceof JqObject) {
                     throw new JqException("Cannot index object with number (" + n.toJsonString() + ")");
@@ -2345,9 +2343,7 @@ public final class BuiltinRegistry {
         if (idx == path.size() - 1) {
             // Last element: delete it
             if (key instanceof JqString s && current instanceof JqObject obj) {
-                var map = new LinkedHashMap<>(obj.objectValue());
-                map.remove(s.stringValue());
-                return JqObject.ofTrusted(map);
+                return obj.without(s.stringValue());
             } else if (key instanceof JqNumber n && current instanceof JqArray arr) {
                 if (n.isNaN()) return current; // NaN index: no-op
                 var list = new ArrayList<>(arr.arrayValue());
@@ -2359,10 +2355,8 @@ public final class BuiltinRegistry {
         }
         // Recurse
         if (key instanceof JqString s && current instanceof JqObject obj) {
-            if (!obj.objectValue().containsKey(s.stringValue())) return current; // path doesn't exist
-            var map = new LinkedHashMap<>(obj.objectValue());
-            map.put(s.stringValue(), deletePath(map.get(s.stringValue()), path, idx + 1));
-            return JqObject.ofTrusted(map);
+            if (!obj.has(s.stringValue())) return current; // path doesn't exist
+            return obj.with(s.stringValue(), deletePath(obj.get(s.stringValue()), path, idx + 1));
         } else if (key instanceof JqNumber n && current instanceof JqArray arr) {
             if (n.isNaN()) return current; // NaN index: no-op
             var list = new ArrayList<>(arr.arrayValue());
