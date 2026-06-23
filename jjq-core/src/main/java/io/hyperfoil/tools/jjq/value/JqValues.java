@@ -431,50 +431,25 @@ public final class JqValues {
     }
 
     /**
-     * Parse a JSON object key with incremental hash computation and intern cache lookup.
-     * On cache hit, returns the cached String instance without calling substring() —
-     * compares directly against source characters. On cache miss, creates the String
-     * and caches it.
+     * Parse a JSON object key with intern cache lookup.
+     * Two-pass approach: (1) scan to find closing quote, (2) compute hash
+     * and do intern lookup over the known range (data in L1 cache from scan).
+     * On cache hit, returns cached String instance without substring().
      */
     private static String parseAndInternKey(JsonReader r) {
         r.pos++; // skip opening "
         int start = r.pos;
         final String s = r.json;
         final int len = r.len;
-        int hash = 0;
 
-        // Fast path: scan for closing quote, computing hash incrementally
+        // Pass 1: scan for closing quote (no hash computation — keep loop tight)
         while (r.pos < len) {
             char c = s.charAt(r.pos);
             if (c == '"') {
-                int keyLen = r.pos - start;
-                int slot = hash & INTERN_MASK;
-                String cached = INTERN_TABLE[slot];
-
-                // Cache hit: verify length + content without substring()
-                if (cached != null && cached.length() == keyLen) {
-                    boolean match = true;
-                    for (int i = 0; i < keyLen; i++) {
-                        if (cached.charAt(i) != s.charAt(start + i)) {
-                            match = false;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        r.pos++; // skip closing "
-                        return cached; // ZERO ALLOCATION
-                    }
-                }
-
-                // Cache miss: create string and cache (with JSON key form)
-                String result = s.substring(start, r.pos);
-                INTERN_TABLE[slot] = result;
-                INTERN_JSON_KEY[slot] = buildJsonKey(result);
-                r.pos++;
-                return result;
+                // Found closing quote — pass 2: hash + intern
+                return internKeyFromString(s, start, r.pos++);
             }
             if (c == '\\') break; // fall through to slow path
-            hash = hash * 31 + c;
             r.pos++;
         }
 
@@ -483,6 +458,38 @@ public final class JqValues {
         r.pos = start - 1; // back to opening "
         String result = parseStringRaw(r);
         return internFieldName(result);
+    }
+
+    /**
+     * Compute hash over a known char range and do intern cache lookup.
+     * Called after scanning has found the closing quote.
+     */
+    private static String internKeyFromString(String s, int start, int end) {
+        int keyLen = end - start;
+        int hash = 0;
+        for (int i = start; i < end; i++) {
+            hash = hash * 31 + s.charAt(i);
+        }
+        int slot = hash & INTERN_MASK;
+        String cached = INTERN_TABLE[slot];
+
+        // Cache hit: verify length + content without substring()
+        if (cached != null && cached.length() == keyLen) {
+            boolean match = true;
+            for (int i = 0; i < keyLen; i++) {
+                if (cached.charAt(i) != s.charAt(start + i)) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return cached; // ZERO ALLOCATION
+        }
+
+        // Cache miss: create string and cache (with JSON key form)
+        String result = s.substring(start, end);
+        INTERN_TABLE[slot] = result;
+        INTERN_JSON_KEY[slot] = buildJsonKey(result);
+        return result;
     }
 
     /** Parse a JSON string and return the raw Java String value (without wrapping in JqString). */
@@ -928,47 +935,38 @@ public final class JqValues {
 
     /** Parse a JSON string from bytes and return the raw Java String (for object keys). */
     /**
-     * Parse a JSON object key from bytes with incremental hash and intern cache.
-     * On cache hit, verifies against source bytes and returns cached String (zero allocation).
-     * On cache miss, constructs String and caches it.
+     * Parse a JSON object key from bytes with SWAR scanning and intern cache.
+     * Two-pass approach: (1) SWAR scan to find closing quote, (2) compute hash
+     * and do intern lookup over the known range (data in L1 cache from scan).
+     * On cache hit, returns cached String instance (zero allocation).
      */
     private static String parseAndInternKeyBytes(JsonByteReader r) {
         r.pos++; // skip opening "
         int start = r.pos;
-        int hash = 0;
 
-        // Scalar scan with incremental hash (no SWAR — need per-byte hash)
+        // Pass 1: SWAR scan to find closing quote (8 bytes at a time)
+        while (r.pos + 8 <= r.end) {
+            long word = SwarUtil.loadLong(r.data, r.pos);
+            long quoteHits = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN);
+            long bsHits = SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
+            long anyHit = quoteHits | bsHits;
+            if (anyHit != 0) {
+                r.pos += SwarUtil.getIndex(anyHit);
+                if ((r.data[r.pos] & 0xFF) == '"') {
+                    // Found closing quote — pass 2: hash + intern
+                    return internKeyFromBytes(r.data, start, r.pos++);
+                }
+                break; // backslash — slow path
+            }
+            r.pos += 8;
+        }
+        // Scalar tail for remaining < 8 bytes
         while (r.pos < r.end) {
             int b = r.data[r.pos] & 0xFF;
             if (b == '"') {
-                int keyLen = r.pos - start;
-                int slot = hash & INTERN_MASK;
-                String cached = INTERN_TABLE[slot];
-
-                // Cache hit: verify length + content without String construction
-                if (cached != null && cached.length() == keyLen) {
-                    boolean match = true;
-                    for (int i = 0; i < keyLen; i++) {
-                        if (cached.charAt(i) != (char) (r.data[start + i] & 0xFF)) {
-                            match = false;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        r.pos++; // skip closing "
-                        return cached; // ZERO ALLOCATION
-                    }
-                }
-
-                // Cache miss: create string and cache (with JSON key form)
-                String result = new String(r.data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
-                INTERN_TABLE[slot] = result;
-                INTERN_JSON_KEY[slot] = buildJsonKey(result);
-                r.pos++;
-                return result;
+                return internKeyFromBytes(r.data, start, r.pos++);
             }
-            if (b == '\\') break; // fall through to slow path
-            hash = hash * 31 + b;
+            if (b == '\\') break;
             r.pos++;
         }
 
@@ -976,6 +974,40 @@ public final class JqValues {
         r.pos = start - 1; // back to opening "
         String result = parseStringRawBytes(r);
         return internFieldName(result);
+    }
+
+    /**
+     * Compute hash over a known byte range and do intern cache lookup.
+     * Called after SWAR scan has already found the closing quote, so
+     * the data is in L1 cache.
+     */
+    private static String internKeyFromBytes(byte[] data, int start, int end) {
+        int keyLen = end - start;
+        // Compute hash over known range (data in L1 cache from SWAR scan)
+        int hash = 0;
+        for (int i = start; i < end; i++) {
+            hash = hash * 31 + (data[i] & 0xFF);
+        }
+        int slot = hash & INTERN_MASK;
+        String cached = INTERN_TABLE[slot];
+
+        // Cache hit: verify length + content without String construction
+        if (cached != null && cached.length() == keyLen) {
+            boolean match = true;
+            for (int i = 0; i < keyLen; i++) {
+                if (cached.charAt(i) != (char) (data[start + i] & 0xFF)) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return cached; // ZERO ALLOCATION
+        }
+
+        // Cache miss: create string and cache (with JSON key form)
+        String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
+        INTERN_TABLE[slot] = result;
+        INTERN_JSON_KEY[slot] = buildJsonKey(result);
+        return result;
     }
 
     private static String parseStringRawBytes(JsonByteReader r) {

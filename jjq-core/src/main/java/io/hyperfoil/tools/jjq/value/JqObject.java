@@ -39,7 +39,11 @@ public final class JqObject implements JqValue {
     private String[] sortedKeysCache;
     private JqArray cachedKeysArray; // lazy, sorted JqArray of JqString keys for `keys` builtin
     private Map<String, JqValue> mapView;
-    private HashMap<String, Integer> hashIndex; // lazy, for large array-backed objects
+    // Open-addressing hash index for O(1) key lookup on large objects.
+    // hashSlots[hash & mask] = key index into keys[]/values[], or -1 if empty.
+    // Collisions use linear probing. Cheaper than HashMap (no Node/Integer allocation).
+    private int[] hashSlots;
+    private int hashMask;
 
     private JqObject(String[] keys, JqValue[] values, int size, Map<String, JqValue> externalMap) {
         this.keys = keys;
@@ -109,7 +113,7 @@ public final class JqObject implements JqValue {
         if (size == 0) return EMPTY;
         var obj = new JqObject(keys, values, size, null);
         if (size > HASH_THRESHOLD) {
-            obj.ensureHashIndex(); // pre-build at construction to avoid per-query cost
+            obj.buildHashSlots(); // pre-build at construction to avoid per-query cost
         }
         return obj;
     }
@@ -389,8 +393,8 @@ public final class JqObject implements JqValue {
             }
             return JqNull.NULL;
         }
-        Integer pos = ensureHashIndex().get(key);
-        return pos != null ? values[pos] : JqNull.NULL;
+        int idx = hashLookup(key);
+        return idx >= 0 ? values[idx] : JqNull.NULL;
     }
 
     public boolean has(String key) {
@@ -401,21 +405,49 @@ public final class JqObject implements JqValue {
             }
             return false;
         }
-        return ensureHashIndex().containsKey(key);
+        return hashLookup(key) >= 0;
     }
 
     /**
-     * Build and cache a hash index for O(1) key lookups on large objects.
-     * Maps key names to their position in the parallel arrays.
+     * Look up a key in the hash index. Returns the index into keys[]/values[],
+     * or -1 if not found. Uses open-addressing with linear probing.
      */
-    private HashMap<String, Integer> ensureHashIndex() {
-        HashMap<String, Integer> idx = hashIndex;
-        if (idx == null) {
-            idx = new HashMap<>(size * 2);
-            for (int i = 0; i < size; i++) idx.put(keys[i], i);
-            hashIndex = idx;
+    private int hashLookup(String key) {
+        int[] slots = hashSlots;
+        if (slots == null) {
+            slots = buildHashSlots();
         }
-        return idx;
+        int mask = hashMask;
+        int slot = key.hashCode() & mask;
+        while (true) {
+            int idx = slots[slot];
+            if (idx < 0) return -1; // empty slot
+            if (key.equals(keys[idx])) return idx;
+            slot = (slot + 1) & mask; // linear probe
+        }
+    }
+
+    /**
+     * Build the open-addressing hash index. Uses a power-of-2 sized int[] array
+     * with load factor ~50% for fast probing. No Node/Integer allocation —
+     * just a flat int array mapping hash slots to key indices.
+     */
+    private int[] buildHashSlots() {
+        // Size to next power of 2, at least 2x the number of keys for ~50% load
+        int capacity = Integer.highestOneBit(size * 2 - 1) << 1;
+        int mask = capacity - 1;
+        int[] slots = new int[capacity];
+        java.util.Arrays.fill(slots, -1);
+        for (int i = 0; i < size; i++) {
+            int slot = keys[i].hashCode() & mask;
+            while (slots[slot] >= 0) {
+                slot = (slot + 1) & mask; // linear probe
+            }
+            slots[slot] = i;
+        }
+        this.hashSlots = slots;
+        this.hashMask = mask;
+        return slots;
     }
 
     /**
