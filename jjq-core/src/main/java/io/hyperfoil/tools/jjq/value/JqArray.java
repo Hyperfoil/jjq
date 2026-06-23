@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.value;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 public final class JqArray implements JqValue {
     public static final JqArray EMPTY = new JqArray(List.of());
@@ -53,6 +54,7 @@ public final class JqArray implements JqValue {
      * @throws IndexOutOfBoundsException if the resolved index is out of range
      */
     public JqArray with(int index, JqValue element) {
+        Objects.requireNonNull(element, "element");
         int actualIndex = index < 0 ? elements.size() + index : index;
         if (actualIndex < 0 || actualIndex >= elements.size()) {
             throw new IndexOutOfBoundsException("Index " + index + " out of range for array of size " + elements.size());
@@ -66,6 +68,7 @@ public final class JqArray implements JqValue {
      * Returns a new JqArray with the element appended at the end.
      */
     public JqArray append(JqValue element) {
+        Objects.requireNonNull(element, "element");
         JqValue[] arr = new JqValue[elements.size() + 1];
         for (int i = 0; i < elements.size(); i++) {
             arr[i] = elements.get(i);
@@ -102,6 +105,7 @@ public final class JqArray implements JqValue {
 
         /** Add a JqValue element. */
         public ArrayBuilder add(JqValue value) {
+            Objects.requireNonNull(value, "value");
             if (size >= elements.length) {
                 elements = Arrays.copyOf(elements, elements.length * 2);
             }

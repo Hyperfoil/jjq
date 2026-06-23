@@ -149,6 +149,8 @@ public final class JqObject implements JqValue {
      * (preserving insertion order). If the key is new, it is appended.
      */
     public JqObject with(String key, JqValue value) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(value, "value");
         if (externalMap != null) {
             var map = new LinkedHashMap<>(externalMap);
             map.put(key, value);
@@ -179,6 +181,7 @@ public final class JqObject implements JqValue {
      * {@code without()} calls (each call copies arrays).</p>
      */
     public JqObject without(String key) {
+        Objects.requireNonNull(key, "key");
         if (externalMap != null) {
             if (!externalMap.containsKey(key)) return this;
             var map = new LinkedHashMap<>(externalMap);
@@ -275,6 +278,8 @@ public final class JqObject implements JqValue {
 
         /** Add or replace a field with a JqValue. */
         public Builder put(String key, JqValue value) {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(value, "value");
             // Scan for existing key (replace in place)
             for (int i = 0; i < size; i++) {
                 if (key.equals(keys[i])) {

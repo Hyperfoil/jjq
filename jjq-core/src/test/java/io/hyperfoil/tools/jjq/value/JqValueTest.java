@@ -534,6 +534,180 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  Error handling and edge cases
+    // ========================================================================
+
+    @Test
+    void testBuilderNullKeyThrows() {
+        var builder = JqObject.builder();
+        assertThrows(NullPointerException.class, () -> builder.put(null, JqNumber.of(1)));
+    }
+
+    @Test
+    void testBuilderNullValueThrows() {
+        var builder = JqObject.builder();
+        assertThrows(NullPointerException.class, () -> builder.put("key", (JqValue) null));
+    }
+
+    @Test
+    void testWithNullKeyThrows() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        assertThrows(NullPointerException.class, () -> obj.with(null, JqNumber.of(2)));
+    }
+
+    @Test
+    void testWithNullValueThrows() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        assertThrows(NullPointerException.class, () -> obj.with("b", null));
+    }
+
+    @Test
+    void testWithoutNullKeyThrows() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        assertThrows(NullPointerException.class, () -> obj.without(null));
+    }
+
+    @Test
+    void testMergeWithSelf() {
+        var obj = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var merged = obj.merge(obj);
+        assertEquals(obj, merged);
+        assertEquals("{\"a\":1,\"b\":2}", merged.toJsonString());
+    }
+
+    @Test
+    void testArrayWithNullValueThrows() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2));
+        assertThrows(NullPointerException.class, () -> arr.with(0, null));
+    }
+
+    @Test
+    void testArrayAppendNullValueThrows() {
+        var arr = JqArray.of(JqNumber.of(1));
+        assertThrows(NullPointerException.class, () -> arr.append(null));
+    }
+
+    @Test
+    void testArrayBuilderNullValueThrows() {
+        var builder = JqArray.arrayBuilder();
+        assertThrows(NullPointerException.class, () -> builder.add((JqValue) null));
+    }
+
+    @Test
+    void testArrayWithOnEmptyThrows() {
+        assertThrows(IndexOutOfBoundsException.class, () -> JqArray.EMPTY.with(0, JqNumber.of(1)));
+    }
+
+    @Test
+    void testArrayWithNegativeOnSingleElement() {
+        var arr = JqArray.of(JqNumber.of(42));
+        // -1 on single element = index 0
+        var arr2 = arr.with(-1, JqNumber.of(99));
+        assertEquals("[99]", arr2.toJsonString());
+    }
+
+    @Test
+    void testArrayWithNegativeTooLarge() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2));
+        // -3 on size-2 array = index -1 = out of bounds
+        assertThrows(IndexOutOfBoundsException.class, () -> arr.with(-3, JqNumber.of(99)));
+    }
+
+    @Test
+    void testGetFieldOnNull() {
+        assertThrows(JqTypeError.class, () -> JqNull.NULL.getField("x"));
+    }
+
+    @Test
+    void testGetFieldOnBoolean() {
+        assertThrows(JqTypeError.class, () -> JqBoolean.TRUE.getField("x"));
+    }
+
+    @Test
+    void testWithFieldOnNull() {
+        assertThrows(JqTypeError.class, () -> JqNull.NULL.withField("x", JqNumber.of(1)));
+    }
+
+    @Test
+    void testWithFieldOnString() {
+        assertThrows(JqTypeError.class, () -> JqString.of("hi").withField("x", JqNumber.of(1)));
+    }
+
+    @Test
+    void testGetElementOnNull() {
+        assertThrows(JqTypeError.class, () -> JqNull.NULL.getElement(0));
+    }
+
+    @Test
+    void testGetElementOnString() {
+        assertThrows(JqTypeError.class, () -> JqString.of("hi").getElement(0));
+    }
+
+    @Test
+    void testWithElementOnNull() {
+        assertThrows(JqTypeError.class, () -> JqNull.NULL.withElement(0, JqNumber.of(1)));
+    }
+
+    @Test
+    void testWithElementOnString() {
+        assertThrows(JqTypeError.class, () -> JqString.of("hi").withElement(0, JqNumber.of(1)));
+    }
+
+    @Test
+    void testWithElementOnNumber() {
+        assertThrows(JqTypeError.class, () -> JqNumber.of(42).withElement(0, JqNull.NULL));
+    }
+
+    @Test
+    void testWithElementOnBoolean() {
+        assertThrows(JqTypeError.class, () -> JqBoolean.FALSE.withElement(0, JqNull.NULL));
+    }
+
+    @Test
+    void testObjectWithEmptyStringKey() {
+        // Empty string is a valid JSON key
+        var obj = JqObject.builder().put("", "value").build();
+        assertEquals(JqString.of("value"), obj.get(""));
+        var obj2 = obj.with("", JqString.of("updated"));
+        assertEquals(JqString.of("updated"), obj2.get(""));
+        assertEquals(1, obj2.length());
+    }
+
+    @Test
+    void testMergePreservesAllKeyPositions() {
+        // More complex merge with interleaved keys
+        // {"a":1,"b":2,"c":3} + {"c":30,"a":10,"d":4} = {"a":10,"b":2,"c":30,"d":4}
+        var obj1 = JqObject.builder().put("a", 1L).put("b", 2L).put("c", 3L).build();
+        var obj2 = JqObject.builder().put("c", 30L).put("a", 10L).put("d", 4L).build();
+        var merged = obj1.merge(obj2);
+        assertEquals(4, merged.length());
+        assertEquals("{\"a\":10,\"b\":2,\"c\":30,\"d\":4}", merged.toJsonString());
+    }
+
+    @Test
+    void testWithFieldChaining() {
+        // Chaining with() creates multiple intermediate copies -- verify correctness
+        JqValue result = JqObject.EMPTY
+                .withField("a", JqNumber.of(1))
+                .withField("b", JqNumber.of(2))
+                .withField("c", JqNumber.of(3));
+        assertTrue(result.isObject());
+        assertEquals(3, result.length());
+        assertEquals("{\"a\":1,\"b\":2,\"c\":3}", result.toJsonString());
+    }
+
+    @Test
+    void testWithoutFirstMiddleLast() {
+        var obj = JqObject.builder().put("a", 1L).put("b", 2L).put("c", 3L).build();
+        // Remove first
+        assertEquals("{\"b\":2,\"c\":3}", obj.without("a").toJsonString());
+        // Remove middle
+        assertEquals("{\"a\":1,\"c\":3}", obj.without("b").toJsonString());
+        // Remove last
+        assertEquals("{\"a\":1,\"b\":2}", obj.without("c").toJsonString());
+    }
+
+    // ========================================================================
     //  Map-backed JqObject with/without/merge tests
     // ========================================================================
 
