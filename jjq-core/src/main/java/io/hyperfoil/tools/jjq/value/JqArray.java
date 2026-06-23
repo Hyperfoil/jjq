@@ -169,12 +169,21 @@ public final class JqArray implements JqValue {
         int size = elements.size();
         if (size == 0) { sb.append("[]"); return; }
         sb.append('[');
-        elements.get(0).appendTo(sb);
+        appendValue(elements.get(0), sb);
         for (int i = 1; i < size; i++) {
             sb.append(',');
-            elements.get(i).appendTo(sb);
+            appendValue(elements.get(i), sb);
         }
         sb.append(']');
+    }
+
+    /** Type-specialize dispatch to help JIT devirtualize common cases (avoids itable stub). */
+    private static void appendValue(JqValue v, StringBuilder sb) {
+        if (v instanceof JqString s) s.appendTo(sb);
+        else if (v instanceof JqNumber n) n.appendTo(sb);
+        else if (v instanceof JqBoolean b) sb.append(b.booleanValue() ? "true" : "false");
+        else if (v instanceof JqNull) sb.append("null");
+        else v.appendTo(sb);
     }
 
     @Override

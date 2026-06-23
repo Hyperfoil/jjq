@@ -574,7 +574,14 @@ public final class JqObject implements JqValue {
             sb.append('"');
             JqString.escapeJson(keys[i], sb);
             sb.append("\":");
-            values[i].appendTo(sb);
+            // Type-specialize dispatch to help JIT devirtualize the common cases
+            // (avoids itable stub overhead for interface method dispatch)
+            JqValue v = values[i];
+            if (v instanceof JqString s) s.appendTo(sb);
+            else if (v instanceof JqNumber n) n.appendTo(sb);
+            else if (v instanceof JqBoolean b) sb.append(b.booleanValue() ? "true" : "false");
+            else if (v instanceof JqNull) sb.append("null");
+            else v.appendTo(sb); // JqObject, JqArray — recurse
         }
         sb.append('}');
     }
