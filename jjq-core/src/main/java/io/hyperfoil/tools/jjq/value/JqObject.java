@@ -22,9 +22,18 @@ public final class JqObject implements JqValue {
     // Map-backed representation (null when array-backed)
     private final Map<String, JqValue> externalMap;
 
+    /**
+     * Threshold above which array-backed objects build a hash index for
+     * O(1) {@code get()} / {@code has()} lookups instead of linear scan.
+     * Below this size, linear scan with {@code String.equals()} is faster
+     * due to cache locality and no hash computation overhead.
+     */
+    static final int HASH_THRESHOLD = 16;
+
     // Cached views (lazy)
     private String[] sortedKeysCache;
     private Map<String, JqValue> mapView;
+    private HashMap<String, Integer> hashIndex; // lazy, for large array-backed objects
 
     private JqObject(String[] keys, JqValue[] values, int size, Map<String, JqValue> externalMap) {
         this.keys = keys;
@@ -339,28 +348,48 @@ public final class JqObject implements JqValue {
 
     /**
      * Get a field value by key. Returns {@link JqNull#NULL} for missing keys.
-     * For array-backed objects, uses linear scan with equals (forward, first match wins
-     * since parser deduplicates via last-wins at construction).
+     * For array-backed objects with {@code size <= HASH_THRESHOLD} (16), uses
+     * linear scan with equals. For larger objects, builds and caches a hash
+     * index for O(1) lookups.
      */
     public JqValue get(String key) {
         if (externalMap != null) {
             JqValue v = externalMap.get(key);
             return v != null ? v : JqNull.NULL;
         }
-        for (int i = 0; i < size; i++) {
-            if (key.equals(keys[i])) {
-                return values[i];
+        if (size <= HASH_THRESHOLD) {
+            for (int i = 0; i < size; i++) {
+                if (key.equals(keys[i])) return values[i];
             }
+            return JqNull.NULL;
         }
-        return JqNull.NULL;
+        Integer pos = ensureHashIndex().get(key);
+        return pos != null ? values[pos] : JqNull.NULL;
     }
 
     public boolean has(String key) {
         if (externalMap != null) return externalMap.containsKey(key);
-        for (int i = 0; i < size; i++) {
-            if (key.equals(keys[i])) return true;
+        if (size <= HASH_THRESHOLD) {
+            for (int i = 0; i < size; i++) {
+                if (key.equals(keys[i])) return true;
+            }
+            return false;
         }
-        return false;
+        return ensureHashIndex().containsKey(key);
+    }
+
+    /**
+     * Build and cache a hash index for O(1) key lookups on large objects.
+     * Maps key names to their position in the parallel arrays.
+     */
+    private HashMap<String, Integer> ensureHashIndex() {
+        HashMap<String, Integer> idx = hashIndex;
+        if (idx == null) {
+            idx = new HashMap<>(size * 2);
+            for (int i = 0; i < size; i++) idx.put(keys[i], i);
+            hashIndex = idx;
+        }
+        return idx;
     }
 
     /** Returns sorted keys, cached for reuse in compareTo. */

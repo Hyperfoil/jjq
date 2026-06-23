@@ -708,6 +708,136 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  Hash-indexed JqObject.get() and has() for large objects
+    // ========================================================================
+
+    @Test
+    void testLargeObjectGet() {
+        // Build object with more keys than HASH_THRESHOLD (16)
+        var builder = JqObject.builder(32);
+        for (int i = 0; i < 32; i++) {
+            builder.put("field_" + i, (long) i);
+        }
+        var obj = builder.build();
+        // Verify all keys accessible via hash-indexed path
+        for (int i = 0; i < 32; i++) {
+            assertEquals(JqNumber.of(i), obj.get("field_" + i));
+        }
+        // Missing key returns JqNull
+        assertEquals(JqNull.NULL, obj.get("nonexistent"));
+    }
+
+    @Test
+    void testLargeObjectHas() {
+        var builder = JqObject.builder(32);
+        for (int i = 0; i < 32; i++) {
+            builder.put("key_" + i, (long) i);
+        }
+        var obj = builder.build();
+        for (int i = 0; i < 32; i++) {
+            assertTrue(obj.has("key_" + i), "Should have key_" + i);
+        }
+        assertFalse(obj.has("missing"));
+    }
+
+    @Test
+    void testSmallObjectStaysLinearScan() {
+        // Objects at or below threshold should still work correctly
+        var builder = JqObject.builder(JqObject.HASH_THRESHOLD);
+        for (int i = 0; i < JqObject.HASH_THRESHOLD; i++) {
+            builder.put("k" + i, (long) i);
+        }
+        var obj = builder.build();
+        for (int i = 0; i < JqObject.HASH_THRESHOLD; i++) {
+            assertEquals(JqNumber.of(i), obj.get("k" + i));
+            assertTrue(obj.has("k" + i));
+        }
+        assertEquals(JqNull.NULL, obj.get("missing"));
+        assertFalse(obj.has("missing"));
+    }
+
+    @Test
+    void testLargeObjectEquality() {
+        // Two large objects with same fields should be equal
+        var builder1 = JqObject.builder(20);
+        var builder2 = JqObject.builder(20);
+        for (int i = 0; i < 20; i++) {
+            builder1.put("f" + i, (long) i);
+            builder2.put("f" + i, (long) i);
+        }
+        assertEquals(builder1.build(), builder2.build());
+    }
+
+    @Test
+    void testLargeObjectSerialization() {
+        var builder = JqObject.builder(20);
+        for (int i = 0; i < 20; i++) {
+            builder.put("k" + i, (long) i);
+        }
+        var obj = builder.build();
+        // Serialize, re-parse, verify equal
+        String json = obj.toJsonString();
+        var reparsed = JqValues.parse(json);
+        assertEquals(obj, reparsed);
+    }
+
+    @Test
+    void testExactlyAtThreshold() {
+        // Object with exactly HASH_THRESHOLD keys -- should use linear scan
+        var builder = JqObject.builder(JqObject.HASH_THRESHOLD);
+        for (int i = 0; i < JqObject.HASH_THRESHOLD; i++) {
+            builder.put("key_" + i, (long) i);
+        }
+        var obj = builder.build();
+        assertEquals(JqObject.HASH_THRESHOLD, obj.length());
+        assertEquals(JqNumber.of(0), obj.get("key_0"));
+        assertEquals(JqNumber.of(JqObject.HASH_THRESHOLD - 1),
+                obj.get("key_" + (JqObject.HASH_THRESHOLD - 1)));
+    }
+
+    @Test
+    void testOneAboveThreshold() {
+        // Object with HASH_THRESHOLD + 1 keys -- should use hash index
+        int n = JqObject.HASH_THRESHOLD + 1;
+        var builder = JqObject.builder(n);
+        for (int i = 0; i < n; i++) {
+            builder.put("key_" + i, (long) i);
+        }
+        var obj = builder.build();
+        assertEquals(n, obj.length());
+        // First and last key should be accessible
+        assertEquals(JqNumber.of(0), obj.get("key_0"));
+        assertEquals(JqNumber.of(n - 1), obj.get("key_" + (n - 1)));
+        assertTrue(obj.has("key_0"));
+        assertFalse(obj.has("nope"));
+    }
+
+    @Test
+    void testLargeObjectWithPcpLikeKeys() {
+        // Simulate PCP time series keys (the production hotspot)
+        String[] pcpKeys = {
+            "mem.util.used", "mem.util.free", "mem.util.bufmem",
+            "mem.util.cached", "mem.util.active", "mem.util.inactive",
+            "kernel.all.cpu.user", "kernel.all.cpu.sys", "kernel.all.cpu.idle",
+            "kernel.all.cpu.nice", "kernel.all.cpu.wait.total",
+            "disk.all.read", "disk.all.write", "disk.all.total",
+            "network.interface.in.bytes", "network.interface.out.bytes",
+            "kernel.all.load", // 17 keys -- above threshold
+        };
+        var builder = JqObject.builder(pcpKeys.length);
+        for (int i = 0; i < pcpKeys.length; i++) {
+            builder.put(pcpKeys[i], (long) i);
+        }
+        var obj = builder.build();
+        // Verify specific metric lookup (the benchmark hotspot)
+        assertEquals(JqNumber.of(0), obj.get("mem.util.used"));
+        assertEquals(JqNumber.of(16), obj.get("kernel.all.load"));
+        assertEquals(JqNull.NULL, obj.get("nonexistent.metric"));
+        assertTrue(obj.has("mem.util.used"));
+        assertFalse(obj.has("nonexistent.metric"));
+    }
+
+    // ========================================================================
     //  Map-backed JqObject with/without/merge tests
     // ========================================================================
 
