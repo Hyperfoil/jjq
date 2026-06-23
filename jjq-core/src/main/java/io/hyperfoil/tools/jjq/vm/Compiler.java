@@ -148,7 +148,11 @@ public final class Compiler {
             }
 
             case IndexExpr idx -> {
-                if (!modifiesInput(idx.expr()) && !modifiesInput(idx.index())
+                // Relax guard for literal indices: LiteralExpr never reads the input
+                // register, so it's safe even when idx.expr() modifies input (e.g.,
+                // .data[0] where .data is compiled as a PipeExpr that sets input).
+                boolean indexIsLiteral = idx.index() instanceof LiteralExpr;
+                if ((indexIsLiteral || (!modifiesInput(idx.expr()) && !modifiesInput(idx.index())))
                         && !containsGenerator(idx.index())) {
                     compileExpr(idx.expr());
                     compileExpr(idx.index());
