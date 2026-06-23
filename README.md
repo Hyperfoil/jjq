@@ -2,7 +2,7 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, with parse allocation matching Jackson and serialization **60% faster**.
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses with **26% less allocation than Jackson**, and serializes **60% faster**.
 
 ## Features
 
@@ -250,7 +250,7 @@ Parsing throughput on varied input types (ops/us, higher is better). Measured wi
 | nested | 10KB | 0.026 | 0.032 | 0.030 (+15%) | 0.041 (+28%) | 0.059 |
 | **Production 14MB** | **14MB** | **0.000034** | **0.000047** | **0.000033** | **0.000040** | 0.000059 |
 
-On 10KB inputs, jjq's byte[] parser is **1.3-2.4x faster than Jackson**. On the 14MB production file, jjq trades some parse throughput for field name interning and eager hash indexing — optimizations that enable zero-allocation queries on the parsed document. Parse allocation matches Jackson (40.5 MB vs 40.3 MB).
+On 10KB inputs, jjq's byte[] parser is **1.3-2.4x faster than Jackson**. On the 14MB production file, jjq trades some parse throughput for field name interning and eager hash indexing — optimizations that enable zero-allocation queries on the parsed document. Parse allocation is **26% lower than Jackson** (29.7 MB vs 40.3 MB) thanks to interned field names and a lightweight open-addressing hash index.
 
 ### Production Query Execution on 14MB Document
 
@@ -281,6 +281,18 @@ Seven of fifteen production benchmarks achieve **zero allocation per query** —
 | **Production 14MB** | **14MB** | **0.000054** | **0.000087** | **160%** |
 
 jjq serializes **60% faster than Jackson** on the 14MB production file with **14% lower allocation** (47.2 MB vs 54.7 MB). The speedup comes from pre-computed JSON key forms (no escape scanning for interned field names) and type-specialized `appendTo` dispatch.
+
+### Memory Efficiency
+
+Parse allocation comparison on the 14MB production file:
+
+| Library | Parse allocation | vs Jackson |
+|---------|-----------------|------------|
+| **jjq** | **29.7 MB** | **-26%** |
+| Jackson | 40.3 MB | baseline |
+| fastjson2 | 57.7 MB | +43% |
+
+jjq achieves the lowest parse allocation through field name interning (shared String instances across repeated schemas), deferred string values (no allocation for untouched strings), and a lightweight open-addressing hash index (flat `int[]` instead of `HashMap` nodes).
 
 ## Architecture
 
