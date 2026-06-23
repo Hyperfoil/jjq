@@ -48,6 +48,7 @@
         <module>jjq-cli</module>
         <module>jjq-test-suite</module>
         <module>jjq-jackson</module>
+        <module>jjq-jakarta</module>
         <module>jjq-benchmark</module>
         <module>jjq-examples</module>
     </modules>
@@ -80,6 +81,11 @@
             <dependency>
                 <groupId>io.hyperfoil.tools</groupId>
                 <artifactId>jjq-jackson</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-jakarta</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.hyperfoil.tools</groupId>
+        <artifactId>jjq-parent</artifactId>
+        <version>0.1.4-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jjq-jakarta</artifactId>
+    <name>jjq :: Jakarta EE Integration</name>
+    <description>Hibernate FormatMapper and JAX-RS providers for jjq — enables JqValue as a persistence and REST type</description>
+
+    <properties>
+        <hibernate.version>7.3.2.Final</hibernate.version>
+        <jakarta.ws.rs.version>4.0.0</jakarta.ws.rs.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-core</artifactId>
+            <version>${hibernate.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.ws.rs</groupId>
+            <artifactId>jakarta.ws.rs-api</artifactId>
+            <version>${jakarta.ws.rs.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
