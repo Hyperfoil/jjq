@@ -950,6 +950,11 @@ public final class VirtualMachine {
         }
 
         // General path: mini-interpreter with stack
+        // Pre-ensure stack capacity for body execution to help JIT eliminate
+        // bounds checks in push() during the inner loop
+        if (sp + 16 >= stack.length) {
+            stack = java.util.Arrays.copyOf(stack, Math.max(stack.length * 2, sp + 16));
+        }
         var result = new JqValue[size];
         int savedSp = sp;
         JqValue savedInput = input;
@@ -980,6 +985,10 @@ public final class VirtualMachine {
         int size = items.size();
         if (size == 0) return JqArray.EMPTY;
 
+        // Pre-ensure stack capacity
+        if (sp + 16 >= stack.length) {
+            stack = java.util.Arrays.copyOf(stack, Math.max(stack.length * 2, sp + 16));
+        }
         var result = new JqValue[size];
         int count = 0;
         int savedSp = sp;
