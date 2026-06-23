@@ -1,16 +1,19 @@
 # jjq
 
-High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation backed by [fastjson2](https://github.com/alibaba/fastjson2).
+High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It uses a bytecode-compiled VM for optimal performance.
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It parses JSON **1.9x faster than Jackson** and executes field access queries in **5 nanoseconds with zero allocation** on a 14MB production document.
 
 ## Features
 
 - **Full jq syntax** — pipes, field access, iteration, array/object construction, string interpolation, reduce, foreach, try-catch, label-break, destructuring bind, function definitions, and more
 - **179 builtin functions** — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
-- **Bytecode VM** — up to 18x faster than jackson-jq with constant folding, peephole optimizations, and fast-path shape detection
-- **fastjson2 integration** — lazy zero-copy conversion, byte buffer processing, and JSON stream support
+- **Bytecode VM** — fused iteration opcodes, whole-program shape detection, constant folding, peephole optimization, pre-allocated stacks
+- **1.9x faster JSON parsing than Jackson** — direct digit accumulation, deferred string values, byte[]-based parsing with SWAR scanning, field name interning
+- **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
+- **Hibernate + JAX-RS integration** — `jjq-jakarta` module provides FormatMapper and MessageBodyReader/Writer for direct `JqValue` persistence and REST endpoints
+- **Multiple JSON adapters** — Jackson, fastjson2, and byte[] adapters with lazy zero-copy conversion
 - **Java 21+** — leverages sealed classes, records, and pattern matching
 
 ## Modules
@@ -18,11 +21,12 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | Module | Description |
 |--------|-------------|
 | `jjq-core` | Lexer, parser, AST, bytecode VM, builtins (zero external dependencies) |
-| `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion |
+| `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion with lazy wrapping |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
+| `jjq-jakarta` | Hibernate `FormatMapper` and JAX-RS `MessageBodyReader`/`Writer` for `JqValue` persistence and REST |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (96.7% passing) |
-| `jjq-benchmark` | JMH benchmarks comparing jjq VM and jackson-jq |
+| `jjq-benchmark` | JMH benchmarks: library comparison, production queries, allocation profiling |
 
 ## Quick Start
 
@@ -32,27 +36,25 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-core</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.4-SNAPSHOT</version>
 </dependency>
 
-<!-- For Jackson integration (Quarkus, Spring, etc.) -->
+<!-- For Jackson integration -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jackson</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.4-SNAPSHOT</version>
 </dependency>
 
-<!-- For fastjson2 integration -->
+<!-- For Hibernate/JAX-RS integration -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
-    <artifactId>jjq-fastjson2</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <artifactId>jjq-jakarta</artifactId>
+    <version>0.1.4-SNAPSHOT</version>
 </dependency>
 ```
 
-### Java API
-
-**Core API (zero dependencies):**
+### Core API (zero dependencies)
 
 ```java
 import io.hyperfoil.tools.jjq.JqProgram;
@@ -69,13 +71,47 @@ JqValue input = JqValues.parse("""
     ]}
     """);
 
-List<JqValue> results = program.apply(input);
+List<JqValue> results = program.applyAll(input);
 results.forEach(r -> System.out.println(r.toJsonString()));
 // {"name":"Alice","email":"alice@example.com"}
 // {"name":"Bob","email":"bob@example.com"}
 ```
 
-**Jackson integration (for Quarkus / REST APIs):**
+### Parse from byte[] (fastest path)
+
+```java
+// Parse directly from bytes — no intermediate String allocation
+byte[] jsonBytes = Files.readAllBytes(Path.of("data.json"));
+JqValue data = JqValues.parse(jsonBytes);
+```
+
+### Build JSON values
+
+```java
+import io.hyperfoil.tools.jjq.value.*;
+
+// Object builder with type-safe convenience methods
+JqObject result = JqObject.builder()
+    .put("name", "Alice")
+    .put("age", 30)
+    .put("score", 95.5)
+    .put("active", true)
+    .build();
+
+// Array builder
+JqArray items = JqArray.arrayBuilder()
+    .add("first")
+    .add("second")
+    .add(42)
+    .build();
+
+// Copy-on-write modification (immutable — returns new instances)
+JqObject updated = result.with("status", JqString.of("verified"));
+JqObject merged = result.merge(otherObject);
+JqObject without = result.without("age");
+```
+
+### Jackson integration
 
 ```java
 import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
@@ -85,70 +121,70 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 ObjectMapper mapper = new ObjectMapper();
 JacksonJqEngine engine = new JacksonJqEngine(mapper);
 
-// Pre-compile filter (thread-safe, reuse across requests)
 JqProgram program = engine.compile(".users[] | {name, email}");
-
-// Apply to Jackson JsonNode — input and output are both JsonNode
 JsonNode input = mapper.readTree(requestBody);
 List<JsonNode> results = engine.apply(program, input);
-
-// Or get the first result directly
-JsonNode first = engine.applyFirst(program, input);
 ```
 
-**With variables:**
+### Hibernate / JAX-RS integration (jjq-jakarta)
+
+Use `JqValue` directly as a Hibernate entity field type and in REST endpoints:
+
+```java
+// Entity with JqValue field (mapped to JSONB column)
+@Entity
+public class MyEntity {
+    @Column(columnDefinition = "JSONB")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Mutability(Immutability.class)
+    public JqValue data;
+}
+
+// REST endpoint accepting and returning JqValue (auto-parsed/serialized)
+@POST @Path("/upload")
+public Response upload(JqValue data) {
+    service.store(data);
+    return Response.ok().build();
+}
+
+@GET @Path("/{id}")
+public JqValue get(@PathParam("id") long id) {
+    return service.load(id);
+}
+```
+
+Register the FormatMapper for Quarkus:
+```java
+@ApplicationScoped
+@PersistenceUnitExtension
+@JsonFormat
+public class MyFormatMapper extends JqValueFormatMapper {}
+```
+
+See the [jjq-jakarta README](jjq-jakarta/README.md) for full setup details.
+
+### With variables
 
 ```java
 import io.hyperfoil.tools.jjq.evaluator.Environment;
-import io.hyperfoil.tools.jjq.value.JqString;
 
 JqProgram program = JqProgram.compile(".[] | select(.name == $target)");
 Environment env = new Environment();
 env.setVariable("target", JqString.of("Alice"));
 
-List<JqValue> results = program.apply(input, env);
+List<JqValue> results = program.applyAll(input, env);
 ```
 
-**Processing multiple inputs (JSONL-style):**
+### Processing multiple inputs (JSONL)
 
 ```java
-// Parse a JSONL / NDJSON string into multiple values
 List<JqValue> inputs = JqValues.parseAll("""
     {"name":"Alice","age":30}
     {"name":"Bob","age":25}
-    {"name":"Charlie","age":35}
     """);
 
-// Process all inputs through one filter — reuses a single VM for efficiency
 JqProgram program = JqProgram.compile(".name");
 List<JqValue> names = program.applyAll(inputs);
-// "Alice", "Bob", "Charlie"
-
-// Or stream results
-program.stream(inputs).forEach(name -> System.out.println(name.toJsonString()));
-```
-
-**FastjsonEngine (high-level API with fastjson2):**
-
-```java
-import io.hyperfoil.tools.jjq.fastjson2.FastjsonEngine;
-
-FastjsonEngine engine = new FastjsonEngine();
-
-// String in, results out
-List<JqValue> results = engine.apply(".name", "{\"name\": \"Alice\"}");
-
-// Compile and reuse
-JqProgram program = engine.compile("[.[] | . * 2]");
-
-// Byte buffer mode
-byte[] output = engine.applyToBytes(program, jsonBytes);
-
-// JSON stream processing (multiple JSON values)
-Stream<JqValue> stream = engine.applyToJsonStream(program, inputStream);
-
-// Lazy parsing (converts nested values on demand)
-JqValue lazy = FastjsonEngine.fromJsonLazy(largeJsonString);
 ```
 
 ## CLI Usage
@@ -170,8 +206,6 @@ jjq [OPTIONS] FILTER [FILE...]
 | `-S, --sort-keys` | Sort object keys in output |
 | `-j, --join-output` | Don't print newlines between outputs |
 | `-f, --from-file FILE` | Read filter from file |
-| `-C, --color-output` | Force colored output |
-| `-M, --monochrome-output` | Disable colored output |
 | `--arg NAME VALUE` | Set `$NAME` to string VALUE |
 | `--argjson NAME JSON` | Set `$NAME` to parsed JSON value |
 | `--tab` | Use tab for indentation |
@@ -196,73 +230,104 @@ echo '{"first":"Alice","last":"Smith","age":30}' | jjq '{full: (.first + " " + .
 echo '[1,2,3,4,5]' | jjq 'reduce .[] as $x (0; . + $x)'
 # 15
 
-# With variables
-echo '{"items":[1,2,3]}' | jjq --arg name items '.[$name]'
-# [1,2,3]
-
-# Read filter from file
-jjq -f filter.jq data.json
-
-# Process JSONL / NDJSON (one JSON value per line)
+# Process JSONL (one JSON value per line)
 printf '{"name":"Alice"}\n{"name":"Bob"}\n' | jjq '.name'
 # "Alice"
 # "Bob"
-
-# Slurp JSONL into array
-printf '1\n2\n3\n' | jjq -s 'add'
-# 6
 ```
+
+## Performance
+
+### JSON Parsing: jjq vs Jackson vs fastjson2
+
+Parsing throughput on varied input types (ops/us, higher is better). Measured with JMH, 3 forks, JDK 25:
+
+| Input type | Size | Jackson | jjq (String) | jjq (byte[]) | fastjson2 |
+|-----------|------|---------|--------------|--------------|-----------|
+| flat | 10KB | 0.033 | 0.053 (+63%) | 0.055 (+70%) | 0.055 |
+| strings | 10KB | 0.046 | 0.072 (+59%) | 0.099 (+117%) | 0.063 |
+| numbers | 10KB | 0.024 | 0.041 (+73%) | 0.047 (+99%) | 0.042 |
+| nested | 10KB | 0.025 | 0.050 (+100%) | 0.058 (+131%) | 0.057 |
+| **Production 14MB** | **14MB** | **0.000033** | **0.000069** (+109%) | **0.000090** (+173%) | 0.000058 |
+
+jjq's byte[]-based parser is **1.9x faster than Jackson** on the 14MB production file with comparable allocation (40.7 MB vs 38.4 MB).
+
+### Production Query Execution on 14MB Document
+
+Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects):
+
+| Query | Expression | Time | Allocation |
+|-------|-----------|------|------------|
+| Top-level field | `.user` | **5.3 ns** | **0 B** |
+| Deep field (4 levels) | `.autobench_workload.data[0].results` | 63 ns | 0 B |
+| Keys (127-key object) | `.data[0].pcp_time_series[0] \| keys` | 69 ns | 0 B |
+| Array length | `.data[0].pcp_time_series \| length` | 64 ns | 0 B |
+| Object construction | `{user, uuid, run_id, start_time, end_time}` | 95 ns | 168 B |
+| Iterate + extract | `[.stressng_workload.data[] \| .sample_uuid]` | 151 ns | 80 B |
+| Extract metric (502 entries) | `[.pcp_time_series[] \| .["mem.util.used"]]` | 13 us | 2.0 KB |
+| Round-trip (extract + serialize) | `.user` | 15 ns | 56 B |
+
+Six of fifteen production benchmarks achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation.
+
+### Serialization
+
+| Input type | Size | Jackson | jjq | jjq/Jackson |
+|-----------|------|---------|-----|-------------|
+| strings | 10KB | 0.077 | 0.099 | **129%** |
+| numbers | 10KB | 0.045 | 0.043 | 97% |
+| nested | 10KB | 0.048 | 0.049 | 102% |
+| **Production 14MB** | **14MB** | **0.000056** | **0.000056** | **100%** |
+
+jjq matches Jackson on serialization throughput with **lower allocation** (45.1 MB vs 52.2 MB on the 14MB production file).
 
 ## Architecture
 
 ```
 jq expression string
         |
-   [Lexer]           Hand-written, character-by-character
+   [Lexer]              Hand-written, keyword-aware
         |
    Token stream
         |
-   [Parser]           Pratt parser (top-down operator precedence)
+   [Parser]              Pratt parser (top-down operator precedence)
         |
-   AST (JqExpr)       ~35 sealed record types with source locations
+   AST (JqExpr)          ~35 sealed record types
         |
-   +-----------+-----------+
-   |                       |
-   [Compiler]
-   AST -> Bytecode
+   [Compiler]            AST -> Bytecode with fusion + folding
         |
-   [VM]
-   Stack-based with
-   FORK/BACKTRACK
-   for generators
+   [VirtualMachine]      Stack-based, FORK/BACKTRACK for generators
         |
-   Output
+   Output (JqValue)
 ```
 
 ### Bytecode VM
 
-The VM compiles jq expressions to 72 opcodes and executes them on a stack machine. Key design features:
-
-- **FORK/BACKTRACK** for jq's generator semantics (multiple outputs per expression)
-- **21 inlined builtin opcodes** (length, type, keys, sort, etc.) avoiding interpreter overhead
-- **DOT_FIELD2** compound instruction for `.a.b` chained field access
-- **Fused iteration opcodes** (COLLECT_ITERATE, REDUCE_ITERATE) that bypass backtracking for common patterns
-- **Parallel array dispatch** — bytecode stored as parallel `int[]` arrays for zero-overhead opcode access
-- **Program shape detection** — identity, field access, and pipe-arith patterns bypass the VM entirely
-- **Constant folding** evaluates literal expressions (`2 + 3` -> `5`) at compile time
-- **Peephole optimization** removes no-op instruction sequences
-- **Pre-allocated growable stacks** for minimal allocation during execution
+- **74 opcodes** with fused iteration (COLLECT_ITERATE, REDUCE_ITERATE, COLLECT_SELECT_ITERATE)
+- **21 inlined builtin opcodes** (length, type, keys, sort, add, etc.)
+- **Compound instructions** (DOT_FIELD2 for `.a.b`, BUILD_OBJECT with pre-computed layouts)
+- **Whole-program shape detection** — IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, PIPE_FIELD_ARITH bypass the VM loop entirely
+- **Constant folding** and **peephole optimization** at compile time
+- **Pre-allocated growable stacks** with pre-ensured capacity for hot loops
 
 ### Value System
 
-| Type | Implementation |
-|------|---------------|
-| `JqNull` | Singleton |
-| `JqBoolean` | `boolean` with TRUE/FALSE constants |
-| `JqNumber` | `long` fast-path, `BigDecimal` fallback, NaN/Infinity support |
-| `JqString` | `String` |
-| `JqArray` | `List<JqValue>` |
-| `JqObject` | `LinkedHashMap<String, JqValue>` (preserves insertion order) |
+| Type | Implementation | Key optimization |
+|------|---------------|-----------------|
+| `JqNull` | Singleton | Zero allocation |
+| `JqBoolean` | TRUE/FALSE constants | Zero allocation |
+| `JqNumber` | `long` fast-path with cache [-128, 1023], `double` for decimals, `BigDecimal` fallback | Direct digit accumulation avoids `new BigDecimal()` for 99% of numbers |
+| `JqString` | Deferred: holds `(source, start, end)` reference, materializes lazily | Zero-copy serialization via `sb.append(source, start, end)` for untouched strings |
+| `JqArray` | `List<JqValue>` via raw `JqValue[]` | `ofTrusted()` avoids defensive copying |
+| `JqObject` | Parallel `String[]` keys + `JqValue[]` values | Linear scan for ≤32 keys, hash index for larger objects. Interned field names enable reference equality. Pre-computed JSON key form eliminates escapeJson scanning. |
+
+### Parser Optimizations
+
+- **byte[]-based parser** (`JqValues.parse(byte[])`) — parses UTF-8 bytes directly, no intermediate String
+- **SWAR scanning** — finds `"` and `\` in 8 bytes per iteration using Netty-style bit manipulation
+- **Deferred string values** — string values hold source references, materialized only when accessed
+- **Field name interning** — open-addressing hash table (2048 slots) with incremental hash computation. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
+- **Direct digit accumulation** — integers and decimals parsed to `long`/`double` without `BigDecimal` or `substring()` for numbers with ≤15 significant digits
+- **Thread-local StringBuilder reuse** — serialization buffer grows once and is reused across calls
 
 ## Building
 
@@ -279,29 +344,17 @@ mvn package -pl jjq-cli
 # Build native binary (requires GraalVM 21+)
 mvn package -pl jjq-core,jjq-cli -Pnative -DskipTests
 
-# The native binary is at:
-./jjq-cli/target/jjq '.name' <<< '{"name":"Alice"}'
-
 # Run benchmarks
-mvn package -pl jjq-benchmark -DskipTests
-java -jar jjq-benchmark/target/jjq-benchmark-0.1.0-SNAPSHOT.jar
+mvn package -pl jjq-core,jjq-jackson,jjq-fastjson2,jjq-benchmark -DskipTests
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar
+
+# Run specific benchmark class
+./scripts/run-benchmarks.sh JsonParseComparisonBenchmark
+
+# Run with allocation profiling
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar \
+  JsonProductionBenchmark -prof gc -rf json -rff results.json
 ```
-
-## Performance
-
-jjq VM vs [jackson-jq](https://github.com/eiiches/jackson-jq) throughput (ops/μs, higher is better):
-
-| Benchmark | jackson-jq | jjq VM | Ratio |
-|-----------|-----------|--------|-------|
-| identity (`.`) | 234.5 | 479.0 | **2.0x** |
-| fieldAccess (`.foo`) | 69.5 | 135.3 | **1.9x** |
-| pipeArith (`.a \| . + 1`) | 32.6 | 95.1 | **2.9x** |
-| iterateMap (`[.[] \| . * 2]`, 10 elem) | 5.4 | 18.7 | **3.5x** |
-| iterateMap (100 elem) | 0.55 | 3.41 | **6.2x** |
-| complexFilter | 0.56 | 4.39 | **7.9x** |
-| reduce (`reduce .[] as $x (0; . + $x)`) | 2.64 | 41.6 | **15.8x** |
-
-Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 
 ## Supported jq Features
 
@@ -310,7 +363,7 @@ Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 - Array/object construction (`[...]`, `{...}`, computed keys)
 - String interpolation (`"Hello \(.name)"`)
 - Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical operators
-- Recursive object merge (`* operator`)
+- Recursive object merge (`*` operator)
 - Alternative operator (`//`)
 - Optional operator (`.foo?`, `.[]?`)
 - `if-then-elif-else-end`
@@ -319,49 +372,35 @@ Measured with JMH on Temurin JDK 21.0.6, 2 forks × 5 iterations.
 - Destructuring bind (`. as [$a, $b] | ...`, `. as {name: $n} | ...`)
 - `reduce`, `foreach` (with destructuring pattern support)
 - Function definitions (`def f(x): ...;`) with proper closure scoping
-- Function arguments as path expressions (`def inc(x): x |= .+1;`)
 - `label-break`
 - Assignment operators (`|=`, `+=`, `-=`, `*=`, `/=`, `%=`, `//=`)
 - Path expressions (`path()`, `getpath`, `setpath`, `delpaths`, `del`)
-- Complex path expressions (`path(.foo[0,1])`, `path(..)`, `del(.[] | select(...))`)
 - Recursive descent (`..`)
 - Format strings (`@base64`, `@uri`, `@csv`, `@tsv`, `@html`, `@json`)
 - All standard builtins (179 functions)
 
 ## Known Limitations
 
-jjq passes 491 of 508 upstream jq tests (96.7%). The remaining differences fall into these categories:
+jjq passes 491 of 508 upstream jq tests (96.7%). The remaining differences:
 
 ### Module system (`import` / `include` / `modulemeta`)
 
-jjq does not implement jq's module system. The `import`, `include`, and `modulemeta` keywords are not supported. This accounts for 12 of the 17 skipped tests.
-
-If you need to reuse filter logic across files, define functions inline or compose programs at the Java API level.
+jjq does not implement jq's module system. The `import`, `include`, and `modulemeta` keywords are not supported (12 skipped tests).
 
 ### Big integer precision
 
-jq uses arbitrary-precision integers internally and clamps values to IEEE 754 double precision only on output. jjq uses `long` with `BigDecimal` fallback, which can produce slightly different results for integers beyond the safe double range (> 2^53). For example:
-
-```
-# jq:  13911860366432393 - 10  =>  13911860366432382
-# jjq: 13911860366432393 - 10  =>  13911860366432383
-```
-
-This affects 4 skipped tests. Normal-range integer and floating-point arithmetic works correctly.
+jq uses arbitrary-precision integers internally. jjq uses `long` with `BigDecimal` fallback, which can produce slightly different results for integers beyond 2^53 (4 skipped tests). Normal-range arithmetic works correctly.
 
 ### Minor error message differences
 
-- `fromjson` parse errors report a different column number than jq for certain invalid JSON (1 test)
+`fromjson` parse errors report a different column number than jq for certain invalid JSON (1 skipped test).
 
 ## Documentation
 
-See the [User Guide](docs/guide.md) for comprehensive documentation covering:
-
-- CLI usage with examples
-- Java library API with code samples
-- Enterprise integration patterns (REST APIs, message queues, batch processing, metrics)
-- Performance best practices
-- jq language reference
+- [User Guide](docs/guide.md) — CLI usage, Java API, integration patterns
+- [Performance Guide](docs/performance.md) — benchmarking methodology, profiling, optimization history
+- [Profiling Guide](docs/profiling-guide.md) — JMH profiler recipes, async-profiler flame graphs
+- [jjq-jakarta README](jjq-jakarta/README.md) — Hibernate and JAX-RS integration
 
 ## License
 

@@ -1,233 +1,111 @@
 # jjq Performance Backlog
 
-This document tracks prioritized optimization candidates for jjq with explicit
-measurement and decision criteria.
+This document tracks optimization work, completed items, and remaining
+candidates.
 
-## Priority List
+## Completed Optimizations
 
-1. ~~Adaptive lazy-vs-eager conversion threshold in Jackson adapter~~ — Done
-2. ~~Reduce `LazyObjectMap.keySet()` allocation~~ — Done
-3. ~~Remove lambda-based map operations in hot lazy paths~~ — Done
-4. ~~Expand bytecode shape fusion only from real frequency data~~ — Done
-5. ~~Explore additional conservative subtree passthrough in serialization~~ — Done
-6. ~~Optimize built-in JSON parser and serialization~~ — Done
-7. ~~Cache VirtualMachine per thread in JqProgram~~ — Done
-8. Deep field access chain shape (3+ levels)
-9. Profile real h5m benchmark runs with async-profiler
+### Phase 1: Foundation (Issues #4, #5, #9)
 
----
+| # | Optimization | Impact |
+|---|-------------|--------|
+| #4 | Baseline performance characterization infrastructure | 9 benchmark classes, profiling recipes, JOL analysis |
+| #5 | Value type allocation reduction (sorted key cache, BigDecimal cache, iterator equals, parser pre-sizing) | +26% on small_singleField |
+| #9 | Thread-local StringBuilder reuse for serialization + `appendTo()` primitive | +95% serialize speed, -86% allocation on 14MB |
 
-## Completed Items
+### Phase 2: Parser Optimizations (Issues #14, #13, #11)
 
-### 1) Adaptive Lazy-vs-Eager Threshold — Done
+| # | Optimization | Impact |
+|---|-------------|--------|
+| #14 | Direct digit accumulation for decimals, defer BigDecimal, fix `of(double)` | 7.5x faster on number-heavy data |
+| #13 | Deferred string values with zero-copy `appendTo()` for no-escape strings | +131% string serialization, -44% parse allocation |
+| #11 | byte[]-based parser + SWAR string scanning + ASCII fast path investigation | 1.9x faster than Jackson on 14MB production file |
 
-Implemented configurable threshold (`jjq.jackson.lazy.eagerObjectThreshold`,
-default 16). Objects with field count <= threshold are converted eagerly;
-larger objects use `LazyObjectMap` wrappers. Benchmarked with JMH across
-object sizes 5/20/100 and access patterns identity/singleField/multiField.
+### Phase 3: Data Structure Optimizations (Issues #12, #19)
 
-### 2) `LazyObjectMap.keySet()` Allocation Reduction — Done
+| # | Optimization | Impact |
+|---|-------------|--------|
+| #12 | Parallel arrays replacing LinkedHashMap in JqObject + hash index for >32 keys | +45% prog_fieldAccess, 85% of Jackson access speed |
+| #19 | Eager hash at parse time, cached sortedKeysAsArray, Builder for BUILD_OBJECT | 33x faster on `keys`, +31% objectConstruct |
 
-`keySet()` now caches an immutable `Collections.unmodifiableSet()` on first
-call and returns the same instance on subsequent calls. The `ObjectNode`
-backing the lazy map is treated as immutable, so the cached set never goes
-stale.
+### Phase 4: Profiling-Driven Optimizations (Issues #20, #22, #10)
 
-Biggest impact: `JqValue.compareTo()` calls `keySet()` twice per comparison,
-O(n log n) times during sort operations. Previously each call allocated a new
-`LinkedHashSet`; now zero allocations after the first.
+| # | Optimization | Impact |
+|---|-------------|--------|
+| #20 | Copy-then-mutate refactor to with/without/merge/deepMerge | Eliminated all LinkedHashMap intermediates from mutation paths |
+| #22 | Compile IndexExpr with literal index, putUnchecked for unique layouts, push pre-check, type-specialized appendTo, eager hash index | +50% deepField, +47% objectConstruct, eliminated evaluator fallback |
+| #10 | Field name interning with incremental hash + pre-computed JSON key serialization | +49% round-trip serialization, +21% extractMetric, eliminated escapeJson for keys |
 
-### 3) Replace Lambda-Based Map Operations in Hot Paths — Done
+### Infrastructure (Issues #16, #17, #18, #21)
 
-Replaced `computeIfAbsent` with capturing lambdas in `ensureFullyConverted()`
-in both Jackson and fastjson2 `LazyObjectMap` implementations. Now uses
-explicit `containsKey` + `put` branches, eliminating per-iteration lambda
-allocation.
+| # | Optimization | Impact |
+|---|-------------|--------|
+| #16 | Copy-on-write mutation API: Builder, with/without/merge/deepMerge, ArrayBuilder | Prerequisite for h5m#150 |
+| #17 | jjq-jakarta module: Hibernate FormatMapper + JAX-RS providers | Prerequisite for h5m#150 |
+| #18 | Production-scale jq query benchmarks (15 benchmarks on 14MB, async-profiler) | Validated all optimizations at scale |
+| #21 | Streaming serialization to OutputStream/Writer | Eliminates 2 of 3 copies for large serialization |
 
-### 4) Expand Shape Fusion from Real Workload Data — Done
+## Open Items
 
-Generalized `tryEmitCollectIterate`, `tryEmitCollectSelectIterate`, and
-`tryEmitFusedReduce` in the compiler to accept any single-output iteration
-source, not just bare `.[]` (`IdentityExpr`). The compiler now walks left
-through left-associative pipe chains to find the `IterateExpr` and collects
-all right-hand parts as the body.
+### High Priority
 
-This covers 30% of real h5m production jq expressions (7 of 23) which use the
-`[.results[].load.avThroughput]` pattern. These now compile to
-`COLLECT_ITERATE` (7 instructions) instead of `FORK/BACKTRACK` (15
-instructions), eliminating backtracking overhead entirely.
+| # | Item | Status |
+|---|------|--------|
+| #23 | Compile more expression types to bytecode (TryCatchExpr, OptionalExpr, SliceExpr) | Open — Phase 1 targets h5m's `try/catch` patterns |
+| #22 | Remaining CPU hotspots (5 identified from flame graphs) | Partially addressed |
 
-### 5) Additional Conservative Subtree Passthrough — Done
+### Medium Priority
 
-Implemented identity passthrough in `JacksonJqEngine`: when a jq filter
-returns the same `JqValue` instance as the input (reference equality), the
-original `JsonNode` is returned directly without reconstruction. This
-complements the existing `originalNodeIfLazy` passthrough for lazy sub-trees.
+| # | Item | Status |
+|---|------|--------|
+| #15 | vm_pipeAndArith -14% regression investigation | Open — likely JIT artifact from JqString size increase |
+| #6 | Tape-based document representation | Open — parallel arrays + deferred strings captured most benefits |
+| #7 | Branchless parsing techniques (simdjson-inspired) | Open — partially covered by #11 SWAR |
 
-### 6) Optimize Built-in JSON Parser and Serialization — Done
+### Low Priority / Investigation
 
-Parser improvements:
-- Replaced `int[]` position tracking with mutable `JsonReader` field (avoids
-  array indirection on every character)
-- Fast-path string parsing: `substring()` for strings without escape
-  characters, avoiding `StringBuilder` allocation entirely
-- Inline whitespace checks (`c == ' ' || c == '\n'` etc.) instead of
-  `Character.isWhitespace()` method call
-- Direct integer parsing into `long` accumulator, avoiding
-  `substring` + `Long.parseLong` for most numbers
+| # | Item | Status |
+|---|------|--------|
+| #8 | FFM + Java 25 feature exploration | Open — Compact Object Headers worth benchmarking |
 
-Serialization improvements:
-- `escapeJson` scans for clean segments and appends in bulk via
-  `sb.append(s, start, end)` instead of char-by-char
-- `JqString.toJsonString()` skips `StringBuilder` for strings without
-  characters that need escaping
-- `JqArray.toJsonString()` pre-sizes its `StringBuilder`
+## Performance Journey Summary
 
-Result: ~10-14% improvement on 67KB inputs in native-image CLI benchmarks.
+### Parsing (vs Jackson, 14MB production file)
 
-### 7) Cache VirtualMachine per Thread in JqProgram — Done
+| Stage | Speed vs Jackson | Parse allocation |
+|-------|-----------------|-----------------|
+| Original | 130% (String) | 62.8 MB |
+| After #14 (numbers) | 173% | 40.7 MB |
+| After #13 (deferred strings) | 213% | 40.7 MB |
+| After #11 (byte[] parser) | 191% (byte[] vs Jackson byte[]) | 40.7 MB |
+| After #10 (interning) | ~200% (estimated) | ~38 MB |
 
-`JqProgram` now holds a `ThreadLocal<VirtualMachine>` that is lazily created
-once per thread and reused across all subsequent `apply`/`applyAll` calls.
-The VM resets all state on each `execute()` call, so reuse is safe.
+### Serialization (14MB production file)
 
-Eliminates 67+ object allocations per invocation (64 `BacktrackPoint` objects,
-stack arrays, `Evaluator`) which were the dominant overhead for simple
-expressions that complete in single-digit nanoseconds. For the h5m use case
-(cached `JqProgram`, repeated calls on the same thread), the
-`JqProgram.apply()` path is now nearly as fast as using a pre-constructed
-`VirtualMachine` directly.
+| Stage | Allocation | vs Jackson |
+|-------|-----------|------------|
+| Original | 316 MB/op | 40% of Jackson speed |
+| After #9 (StringBuilder reuse) | 45.1 MB/op | 78% of Jackson |
+| After #13 (deferred strings) | 45.1 MB/op | 100% of Jackson |
+| After #10 (pre-computed JSON keys) | 45.1 MB/op | ~112% (estimated) |
 
-### Real Workload Data from h5m
+### Production Query Execution (14MB, post all optimizations)
 
-h5m (Horreum rewrite) uses jjq for its DAG-based JSON transformation pipeline.
-Profiling a benchmark of 100 uploads with 24 JQ nodes (qvss test) and a
-legacy import of rhivos-perf-comprehensive (5 uploads, 23 JQ nodes) shows
-three dominant expression shapes:
+| Query | Time | Allocation |
+|-------|------|------------|
+| `.user` (top-level field) | 5.3 ns | 0 B |
+| `.data[0].results` (4-level deep) | 63 ns | 0 B |
+| `keys` (127-key object) | 69 ns | 0 B |
+| `{user, uuid, ...}` (object construct) | 95 ns | 168 B |
+| `[.data[] \| .sample_uuid]` (iterate + extract) | 151 ns | 80 B |
+| `.` identity round-trip (14MB serialize) | 13.4 ms | 45.1 MB |
 
-#### Shape 1: Single field access — 54% of all executions
+## Research References
 
-```
-.field
-.nested.field.path
-```
-
-Examples from h5m (sorted by frequency):
-```
-.avThroughput           # 1100x — extract scalar from dataset object
-.runtime                # 1100x — extract scalar from dataset object
-.env.BUILD_ID           # 100x  — nested field access (2 levels)
-.config.QUARKUS_VERSION # 100x  — nested field access (2 levels)
-.results."quarkus3-jvm".load.avThroughput  # 100x — 4 levels with quoted key
-```
-
-Bytecode shape: `LOAD_INPUT → DOT_FIELD(name)` (or `DOT_FIELD2` for 2
-levels). Already handled by `FIELD_ACCESS` and `FIELD_ACCESS2` whole-program
-shapes which bypass the VM interpreter loop entirely.
-
-#### Shape 2: Array construction with nested iteration — 33% of executions
-
-```
-[.results[].path.to.field]
-```
-
-Examples from h5m:
-```
-[.results[].rss.avStartupRss]          # extract nested field from each result
-[.results[].load.avThroughput]         # same pattern, different path
-[.results[].build.avBuildTime]         # same pattern, different path
-[.results[].load.maxThroughputDensity] # same pattern, different path
-[.results | to_entries[] | .key]       # variation: object → entries → keys
-```
-
-Now compiled to `COLLECT_ITERATE` fused opcode (item 4). The body also
-benefits from `DOT_FIELD2` fusion, so `.load.avThroughput` becomes a single
-instruction within the iterate body.
-
-#### Shape 3: Object construction with variable binding — 4% of executions
-
-```
-. as $top | .results | keys[] as $key | { field: .[$key].path, ... }
-```
-
-This is the most complex per-call expression. It runs via the general VM
-interpreter with tree-walker fallback for variable binding and conditionals.
-Less amenable to shape fusion due to its dynamic nature, but the absolute
-execution count (100x per benchmark) means it contributes little to overall
-runtime.
-
----
-
-## Future Items
-
-### 8) Deep Field Access Chain Shape (3+ levels)
-
-#### Goal
-
-Add a whole-program shape for field access chains deeper than 2 levels,
-avoiding the general VM interpreter loop for expressions like
-`.results."quarkus3-jvm".load.avThroughput` (4 levels).
-
-#### Current State
-
-The VM currently has three whole-program fast-path shapes:
-- `FIELD_ACCESS`: `.field` (1 level, 4 instructions)
-- `FIELD_ACCESS2`: `.field.field` (2 levels, 4 instructions)
-- `PIPE_FIELD_ARITH`: `.field | . + CONST` (field + arithmetic)
-
-Expressions with 3+ field levels fall through to `GENERAL` and run through the
-full VM interpreter loop. The compiler already emits `DOT_FIELD2` for
-consecutive 2-level pairs, so `.a.b.c.d` compiles to
-`LOAD_INPUT, DOT_FIELD2 a.b, SET_INPUT_PEEK, NOP, DOT_FIELD2 c.d, OUTPUT, HALT`
-(7 instructions). This runs through the interpreter, which is fast but has
-per-instruction dispatch overhead.
-
-#### Candidate
-
-Add `FIELD_ACCESS_N` shape detection that matches any sequence of `DOT_FIELD`
-and `DOT_FIELD2` instructions followed by `OUTPUT, HALT`. The fast path would
-chain field lookups directly in a loop, avoiding all stack manipulation.
-
-#### Criteria
-
-- Only proceed if profiling shows the VM interpreter dispatch overhead is
-  measurable relative to the field lookup cost.
-- h5m currently has ~100 executions of 4-level paths per benchmark run. At
-  ~7ns per execution via the interpreter, total time is ~0.7μs — unlikely to
-  be a bottleneck. May become relevant if h5m adds more complex path
-  expressions or processes higher volumes.
-
-### 9) Profile Real h5m Benchmark Runs with async-profiler
-
-#### Goal
-
-Identify actual CPU and allocation hotspots in a representative h5m pipeline
-benchmark rather than relying on synthetic JMH microbenchmarks.
-
-#### Candidate
-
-Run the h5m qvss upload benchmark (100 uploads, 24 JQ nodes) under
-async-profiler with both CPU and allocation events:
-
-```bash
-# CPU flamegraph
-java -agentpath:libasyncProfiler.so=start,event=cpu,file=cpu.html ...
-
-# Allocation flamegraph
-java -agentpath:libasyncProfiler.so=start,event=alloc,file=alloc.html ...
-```
-
-Focus areas:
-- Confirm that jjq evaluation is no longer a significant fraction of total
-  pipeline time (expect database I/O and Jackson serialization to dominate)
-- Identify any remaining allocation hotspots in the jjq ↔ Jackson conversion
-  path
-- Check whether `ThreadLocal` VM caching is effective under Quarkus's thread
-  model (virtual threads, event loop threads)
-
-#### Criteria
-
-- This is an investigative task, not a go/no-go optimization. Run when h5m's
-  benchmark infrastructure is stable enough for reproducible profiling.
-- Any jjq-specific finding that shows >= 5% of CPU or allocation time should
-  be promoted to a new backlog item with specific measurement criteria.
+- simdjson paper (Langdale & Lemire, VLDB 2019) — tape format, branchless algorithms
+- fastjson2 source analysis — Unsafe string access, thread-local buffers, ASM codegen
+- Jackson 2.x/3.x analysis — deferred parsing, name canonicalization, RecyclerPool
+- Netty SWARUtil — production Java SWAR patterns
+- Cameron's Parabix (CASCON 2008) — parallel bit stream theory
+- Lemire's SWAR digit parsing — 8-digit conversion in 6 operations
+- Parquet SIMD article (Del Monte, 2026) — baseline matters, SuperWord can regress

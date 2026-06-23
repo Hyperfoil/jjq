@@ -7,7 +7,7 @@ CPU hotspots, and hardware counters.
 
 - JDK 21+ with JMH benchmark jar built:
   ```bash
-  mvn package -pl jjq-core,jjq-jackson,jjq-benchmark -DskipTests
+  mvn package -pl jjq-core,jjq-jackson,jjq-fastjson2,jjq-benchmark -DskipTests
   ```
 - async-profiler (optional, for flame graphs): https://github.com/async-profiler/async-profiler
 - Linux `perf` tool (optional, for hardware counters)
@@ -165,6 +165,72 @@ hyperfine --warmup 5 -N \
 
 Note: native-image benchmarking cannot use JMH (no JIT, no warmup). Use
 `hyperfine` or shell-level timing instead.
+
+## Benchmark Classes
+
+| Class | Purpose | Typical run time |
+|-------|---------|-----------------|
+| `JjqBenchmark` | jq VM execution micro-benchmarks (regression guard) | ~10 min |
+| `JjqProductionQueryBenchmark` | jq execution on 14MB production file (15 benchmarks) | ~8 min |
+| `JsonParseComparisonBenchmark` | Parse speed: Jackson vs jjq vs fastjson2 (4 structures x 4 sizes) | ~25 min |
+| `JsonSerializeComparisonBenchmark` | Serialize speed comparison | ~25 min |
+| `JsonAccessComparisonBenchmark` | Field access speed comparison | ~9 min |
+| `JsonConversionBenchmark` | Cross-library conversion overhead | ~9 min |
+| `JsonProductionBenchmark` | Parse/serialize/access on 14MB file | ~7 min |
+
+### Running specific benchmark classes
+
+```bash
+# Library comparison (parse + serialize + access + conversion + production)
+./scripts/run-benchmarks.sh "Json.*Benchmark"
+
+# Production queries only (fastest way to check jq execution at scale)
+./scripts/run-benchmarks.sh JjqProductionQueryBenchmark
+
+# Regression guard only
+./scripts/run-benchmarks.sh JjqBenchmark
+```
+
+### Three-layer profiling (recommended for deep analysis)
+
+Based on the Parquet SIMD article's methodology — throughput alone hides
+allocation pressure and JIT artifacts:
+
+```bash
+BENCH="JjqProductionQueryBenchmark"
+
+# Layer 1: Throughput + allocation rate
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-*.jar $BENCH \
+  -prof gc -rf json -rff results-gc.json
+
+# Layer 2: CPU flame graphs
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-*.jar $BENCH \
+  -prof "async:output=flamegraph;dir=profiles/cpu;event=cpu" \
+  -rf json -rff results-cpu.json
+
+# Layer 3: Allocation flame graphs
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-*.jar $BENCH \
+  -prof "async:output=flamegraph;dir=profiles/alloc;event=alloc" \
+  -rf json -rff results-alloc.json
+
+# Optional Layer 4: Hardware counters (Linux only)
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-*.jar $BENCH \
+  -prof perfnorm -rf json -rff results-perfnorm.json
+```
+
+### Object layout analysis (JOL)
+
+Analyze the exact memory layout of jjq value types:
+
+```bash
+java --enable-preview -cp jjq-benchmark/target/jjq-benchmark-*.jar \
+  io.hyperfoil.tools.jjq.benchmark.JqValueLayoutAnalysis
+
+# With Compact Object Headers (JDK 25)
+java --enable-preview -XX:+UseCompactObjectHeaders \
+  -cp jjq-benchmark/target/jjq-benchmark-*.jar \
+  io.hyperfoil.tools.jjq.benchmark.JqValueLayoutAnalysis
+```
 
 ## Interpreting Results
 
