@@ -107,7 +107,11 @@ public final class JqObject implements JqValue {
      */
     public static JqObject ofArrays(String[] keys, JqValue[] values, int size) {
         if (size == 0) return EMPTY;
-        return new JqObject(keys, values, size, null);
+        var obj = new JqObject(keys, values, size, null);
+        if (size > HASH_THRESHOLD) {
+            obj.ensureHashIndex(); // pre-build at construction to avoid per-query cost
+        }
+        return obj;
     }
 
     public static JqObject of(String key, JqValue value) {
