@@ -140,6 +140,441 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  JqObject.Builder tests
+    // ========================================================================
+
+    @Test
+    void testBuilderEmpty() {
+        var obj = JqObject.builder().build();
+        assertSame(JqObject.EMPTY, obj);
+        assertEquals("{}", obj.toJsonString());
+    }
+
+    @Test
+    void testBuilderSingleField() {
+        var obj = JqObject.builder().put("name", JqString.of("Alice")).build();
+        assertEquals("{\"name\":\"Alice\"}", obj.toJsonString());
+        assertEquals(JqString.of("Alice"), obj.get("name"));
+    }
+
+    @Test
+    void testBuilderMultipleFields() {
+        var obj = JqObject.builder()
+                .put("name", "Alice")
+                .put("age", 30L)
+                .put("score", 9.5)
+                .put("active", true)
+                .putNull("extra")
+                .build();
+        assertEquals(5, obj.length());
+        assertEquals(JqString.of("Alice"), obj.get("name"));
+        assertEquals(JqNumber.of(30), obj.get("age"));
+        assertEquals(JqNumber.of(9.5), obj.get("score"));
+        assertEquals(JqBoolean.TRUE, obj.get("active"));
+        assertEquals(JqNull.NULL, obj.get("extra"));
+    }
+
+    @Test
+    void testBuilderDuplicateKeyLastWins() {
+        var obj = JqObject.builder()
+                .put("x", 1L)
+                .put("y", 2L)
+                .put("x", 99L)
+                .build();
+        assertEquals(2, obj.length());
+        assertEquals(JqNumber.of(99), obj.get("x"));
+        // x should retain its original position (index 0)
+        assertEquals("{\"x\":99,\"y\":2}", obj.toJsonString());
+    }
+
+    @Test
+    void testBuilderPreservesInsertionOrder() {
+        var obj = JqObject.builder()
+                .put("c", 3L)
+                .put("a", 1L)
+                .put("b", 2L)
+                .build();
+        assertEquals("{\"c\":3,\"a\":1,\"b\":2}", obj.toJsonString());
+    }
+
+    @Test
+    void testBuilderWithExpectedSize() {
+        var builder = JqObject.builder(2);
+        for (int i = 0; i < 20; i++) {
+            builder.put("key" + i, (long) i);
+        }
+        var obj = builder.build();
+        assertEquals(20, obj.length());
+        assertEquals(JqNumber.of(0), obj.get("key0"));
+        assertEquals(JqNumber.of(19), obj.get("key19"));
+    }
+
+    // ========================================================================
+    //  JqObject.with() tests
+    // ========================================================================
+
+    @Test
+    void testWithNewField() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        var obj2 = obj.with("b", JqNumber.of(2));
+        // Original unchanged (immutability)
+        assertEquals(1, obj.length());
+        assertFalse(obj.has("b"));
+        // New object has both fields
+        assertEquals(2, obj2.length());
+        assertEquals(JqNumber.of(1), obj2.get("a"));
+        assertEquals(JqNumber.of(2), obj2.get("b"));
+    }
+
+    @Test
+    void testWithReplaceField() {
+        var obj = JqObject.builder()
+                .put("a", 1L)
+                .put("b", 2L)
+                .put("c", 3L)
+                .build();
+        var obj2 = obj.with("b", JqNumber.of(99));
+        assertEquals(3, obj2.length());
+        assertEquals(JqNumber.of(99), obj2.get("b"));
+        // Key order preserved: b stays in position 1
+        assertEquals("{\"a\":1,\"b\":99,\"c\":3}", obj2.toJsonString());
+        // Original unchanged
+        assertEquals(JqNumber.of(2), obj.get("b"));
+    }
+
+    @Test
+    void testWithOnEmpty() {
+        var obj = JqObject.EMPTY.with("x", JqNumber.of(42));
+        assertEquals(1, obj.length());
+        assertEquals(JqNumber.of(42), obj.get("x"));
+    }
+
+    // ========================================================================
+    //  JqObject.without() tests
+    // ========================================================================
+
+    @Test
+    void testWithoutExistingKey() {
+        var obj = JqObject.builder()
+                .put("a", 1L)
+                .put("b", 2L)
+                .put("c", 3L)
+                .build();
+        var obj2 = obj.without("b");
+        assertEquals(2, obj2.length());
+        assertEquals("{\"a\":1,\"c\":3}", obj2.toJsonString());
+        // Original unchanged
+        assertEquals(3, obj.length());
+    }
+
+    @Test
+    void testWithoutMissingKey() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        var obj2 = obj.without("missing");
+        assertSame(obj, obj2); // no-op returns this
+    }
+
+    @Test
+    void testWithoutLastField() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        var obj2 = obj.without("a");
+        assertSame(JqObject.EMPTY, obj2);
+    }
+
+    @Test
+    void testWithoutOnEmpty() {
+        var obj = JqObject.EMPTY.without("anything");
+        assertSame(JqObject.EMPTY, obj);
+    }
+
+    // ========================================================================
+    //  JqObject.merge() tests
+    // ========================================================================
+
+    @Test
+    void testMergeDisjointKeys() {
+        var obj1 = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var obj2 = JqObject.builder().put("c", 3L).put("d", 4L).build();
+        var merged = obj1.merge(obj2);
+        assertEquals(4, merged.length());
+        assertEquals("{\"a\":1,\"b\":2,\"c\":3,\"d\":4}", merged.toJsonString());
+    }
+
+    @Test
+    void testMergeOverlappingKeysPreservesPosition() {
+        // jq semantics: {"a":1,"b":2} + {"b":3,"c":4} = {"a":1,"b":3,"c":4}
+        var obj1 = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var obj2 = JqObject.builder().put("b", 3L).put("c", 4L).build();
+        var merged = obj1.merge(obj2);
+        assertEquals(3, merged.length());
+        assertEquals(JqNumber.of(3), merged.get("b"));
+        // b retains its position from obj1 (index 1)
+        assertEquals("{\"a\":1,\"b\":3,\"c\":4}", merged.toJsonString());
+    }
+
+    @Test
+    void testMergeWithEmpty() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        assertSame(obj, obj.merge(JqObject.EMPTY));
+        assertSame(obj, JqObject.EMPTY.merge(obj));
+    }
+
+    @Test
+    void testMergeFullOverlap() {
+        var obj1 = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var obj2 = JqObject.builder().put("a", 10L).put("b", 20L).build();
+        var merged = obj1.merge(obj2);
+        assertEquals(2, merged.length());
+        assertEquals("{\"a\":10,\"b\":20}", merged.toJsonString());
+    }
+
+    // ========================================================================
+    //  JqObject convenience factories tests
+    // ========================================================================
+
+    @Test
+    void testOfStringValue() {
+        var obj = JqObject.of("key", "value");
+        assertEquals(JqString.of("value"), obj.get("key"));
+    }
+
+    @Test
+    void testOfLongValue() {
+        var obj = JqObject.of("key", 42L);
+        assertEquals(JqNumber.of(42), obj.get("key"));
+    }
+
+    @Test
+    void testOfDoubleValue() {
+        var obj = JqObject.of("key", 3.14);
+        assertEquals(JqNumber.of(3.14), obj.get("key"));
+    }
+
+    // ========================================================================
+    //  JqArray.with() and append() tests
+    // ========================================================================
+
+    @Test
+    void testArrayWithReplace() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3));
+        var arr2 = arr.with(1, JqNumber.of(99));
+        assertEquals("[1,99,3]", arr2.toJsonString());
+        // Original unchanged
+        assertEquals("[1,2,3]", arr.toJsonString());
+    }
+
+    @Test
+    void testArrayWithNegativeIndex() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3));
+        var arr2 = arr.with(-1, JqNumber.of(99));
+        assertEquals("[1,2,99]", arr2.toJsonString());
+    }
+
+    @Test
+    void testArrayWithOutOfBounds() {
+        var arr = JqArray.of(JqNumber.of(1));
+        assertThrows(IndexOutOfBoundsException.class, () -> arr.with(5, JqNumber.of(99)));
+        assertThrows(IndexOutOfBoundsException.class, () -> arr.with(-5, JqNumber.of(99)));
+    }
+
+    @Test
+    void testArrayAppend() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2));
+        var arr2 = arr.append(JqNumber.of(3));
+        assertEquals("[1,2,3]", arr2.toJsonString());
+        // Original unchanged
+        assertEquals("[1,2]", arr.toJsonString());
+    }
+
+    @Test
+    void testArrayAppendToEmpty() {
+        var arr = JqArray.EMPTY.append(JqNumber.of(42));
+        assertEquals("[42]", arr.toJsonString());
+    }
+
+    // ========================================================================
+    //  JqArray.ArrayBuilder tests
+    // ========================================================================
+
+    @Test
+    void testArrayBuilderEmpty() {
+        var arr = JqArray.arrayBuilder().build();
+        assertSame(JqArray.EMPTY, arr);
+    }
+
+    @Test
+    void testArrayBuilderPrimitives() {
+        var arr = JqArray.arrayBuilder()
+                .add("hello")
+                .add(42L)
+                .add(3.14)
+                .add(true)
+                .addNull()
+                .build();
+        assertEquals(5, arr.length());
+        assertEquals("[\"hello\",42,3.14,true,null]", arr.toJsonString());
+    }
+
+    @Test
+    void testArrayBuilderGrowsPastInitialCapacity() {
+        var builder = JqArray.arrayBuilder(2);
+        for (int i = 0; i < 50; i++) {
+            builder.add((long) i);
+        }
+        var arr = builder.build();
+        assertEquals(50, arr.length());
+        assertEquals(JqNumber.of(0), arr.get(0));
+        assertEquals(JqNumber.of(49), arr.get(49));
+    }
+
+    // ========================================================================
+    //  JqValue convenience methods tests
+    // ========================================================================
+
+    @Test
+    void testGetFieldOnObject() {
+        var obj = JqObject.of("name", JqString.of("Alice"));
+        assertEquals(JqString.of("Alice"), obj.getField("name"));
+        assertEquals(JqNull.NULL, obj.getField("missing"));
+    }
+
+    @Test
+    void testGetFieldOnNonObject() {
+        assertThrows(JqTypeError.class, () -> JqNumber.of(42).getField("x"));
+        assertThrows(JqTypeError.class, () -> JqArray.EMPTY.getField("x"));
+        assertThrows(JqTypeError.class, () -> JqString.of("hi").getField("x"));
+    }
+
+    @Test
+    void testWithFieldOnObject() {
+        var obj = JqObject.of("a", JqNumber.of(1));
+        JqValue obj2 = obj.withField("b", JqNumber.of(2));
+        assertTrue(obj2.isObject());
+        assertEquals(JqNumber.of(2), ((JqObject) obj2).get("b"));
+    }
+
+    @Test
+    void testWithFieldOnNonObject() {
+        assertThrows(JqTypeError.class, () -> JqNumber.of(42).withField("x", JqNull.NULL));
+    }
+
+    @Test
+    void testGetElementOnArray() {
+        var arr = JqArray.of(JqNumber.of(10), JqNumber.of(20));
+        assertEquals(JqNumber.of(10), arr.getElement(0));
+        assertEquals(JqNumber.of(20), arr.getElement(-1));
+    }
+
+    @Test
+    void testGetElementOnNonArray() {
+        assertThrows(JqTypeError.class, () -> JqNumber.of(42).getElement(0));
+        assertThrows(JqTypeError.class, () -> JqObject.EMPTY.getElement(0));
+    }
+
+    @Test
+    void testWithElementOnArray() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2));
+        JqValue arr2 = arr.withElement(0, JqNumber.of(99));
+        assertTrue(arr2.isArray());
+        assertEquals(JqNumber.of(99), ((JqArray) arr2).get(0));
+    }
+
+    @Test
+    void testWithElementOnNonArray() {
+        assertThrows(JqTypeError.class, () -> JqObject.EMPTY.withElement(0, JqNull.NULL));
+    }
+
+    // ========================================================================
+    //  Immutability verification
+    // ========================================================================
+
+    @Test
+    void testObjectImmutableAfterWith() {
+        var original = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var modified = original.with("c", JqNumber.of(3));
+        // Verify original is not affected
+        assertEquals(2, original.length());
+        assertFalse(original.has("c"));
+        assertEquals(3, modified.length());
+    }
+
+    @Test
+    void testObjectImmutableAfterWithout() {
+        var original = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var modified = original.without("a");
+        assertEquals(2, original.length());
+        assertTrue(original.has("a"));
+        assertEquals(1, modified.length());
+    }
+
+    @Test
+    void testObjectImmutableAfterMerge() {
+        var obj1 = JqObject.of("a", JqNumber.of(1));
+        var obj2 = JqObject.of("b", JqNumber.of(2));
+        var merged = obj1.merge(obj2);
+        assertEquals(1, obj1.length());
+        assertEquals(1, obj2.length());
+        assertEquals(2, merged.length());
+    }
+
+    @Test
+    void testArrayImmutableAfterWith() {
+        var original = JqArray.of(JqNumber.of(1), JqNumber.of(2));
+        var modified = original.with(0, JqNumber.of(99));
+        assertEquals(JqNumber.of(1), original.get(0));
+        assertEquals(JqNumber.of(99), modified.get(0));
+    }
+
+    @Test
+    void testArrayImmutableAfterAppend() {
+        var original = JqArray.of(JqNumber.of(1));
+        var modified = original.append(JqNumber.of(2));
+        assertEquals(1, original.length());
+        assertEquals(2, modified.length());
+    }
+
+    // ========================================================================
+    //  Map-backed JqObject with/without/merge tests
+    // ========================================================================
+
+    @Test
+    void testWithOnMapBackedObject() {
+        // Create a map-backed object (simulates lazy adapter)
+        var map = new LinkedHashMap<String, JqValue>();
+        map.put("a", JqNumber.of(1));
+        map.put("b", JqNumber.of(2));
+        var obj = JqObject.ofTrusted((java.util.Map<String, JqValue>) map);
+        var obj2 = obj.with("c", JqNumber.of(3));
+        assertEquals(3, obj2.length());
+        assertEquals(JqNumber.of(3), obj2.get("c"));
+    }
+
+    @Test
+    void testWithoutOnMapBackedObject() {
+        var map = new LinkedHashMap<String, JqValue>();
+        map.put("a", JqNumber.of(1));
+        map.put("b", JqNumber.of(2));
+        var obj = JqObject.ofTrusted((java.util.Map<String, JqValue>) map);
+        var obj2 = obj.without("a");
+        assertEquals(1, obj2.length());
+        assertEquals(JqNull.NULL, obj2.get("a"));
+        assertEquals(JqNumber.of(2), obj2.get("b"));
+    }
+
+    @Test
+    void testMergeMapBackedObjects() {
+        var map1 = new LinkedHashMap<String, JqValue>();
+        map1.put("a", JqNumber.of(1));
+        var obj1 = JqObject.ofTrusted((java.util.Map<String, JqValue>) map1);
+
+        var obj2 = JqObject.of("b", JqNumber.of(2));
+        var merged = obj1.merge(obj2);
+        assertEquals(2, merged.length());
+        assertEquals(JqNumber.of(1), merged.get("a"));
+        assertEquals(JqNumber.of(2), merged.get("b"));
+    }
+
+    // ========================================================================
     //  byte[] parser tests -- verify identical output to String parser
     // ========================================================================
 

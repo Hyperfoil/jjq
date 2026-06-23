@@ -80,6 +80,53 @@ public sealed interface JqValue extends Comparable<JqValue>
         return isObject() ? objectValue() : Map.of();
     }
 
+    // ========================================================================
+    //  Convenience methods for object/array manipulation
+    // ========================================================================
+
+    /**
+     * Get a field value from an object. Returns {@link JqNull#NULL} for missing keys.
+     *
+     * @throws JqTypeError if this value is not an object
+     */
+    default JqValue getField(String key) {
+        if (this instanceof JqObject obj) return obj.get(key);
+        throw new JqTypeError("Cannot get field from " + type().jqName());
+    }
+
+    /**
+     * Returns a new object with the field added or replaced.
+     * If the key already exists, the value is replaced at its current position.
+     *
+     * @throws JqTypeError if this value is not an object
+     */
+    default JqValue withField(String key, JqValue value) {
+        if (this instanceof JqObject obj) return obj.with(key, value);
+        throw new JqTypeError("Cannot set field on " + type().jqName());
+    }
+
+    /**
+     * Get an element from an array. Supports negative indexing ({@code -1} = last).
+     *
+     * @throws JqTypeError if this value is not an array
+     */
+    default JqValue getElement(int index) {
+        if (this instanceof JqArray arr) return arr.get(index);
+        throw new JqTypeError("Cannot get element from " + type().jqName());
+    }
+
+    /**
+     * Returns a new array with the element at the given index replaced.
+     * Supports negative indexing ({@code -1} = last).
+     *
+     * @throws JqTypeError if this value is not an array
+     * @throws IndexOutOfBoundsException if the resolved index is out of range
+     */
+    default JqValue withElement(int index, JqValue value) {
+        if (this instanceof JqArray arr) return arr.with(index, value);
+        throw new JqTypeError("Cannot set element on " + type().jqName());
+    }
+
     default int length() {
         return switch (this) {
             case JqNull ignored -> 0;

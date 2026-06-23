@@ -42,6 +42,98 @@ public final class JqArray implements JqValue {
         return new JqArray(List.of(elements));
     }
 
+    // ========================================================================
+    //  Copy-on-write mutation methods
+    // ========================================================================
+
+    /**
+     * Returns a new JqArray with the element at the given index replaced.
+     * Supports negative indexing ({@code -1} = last element).
+     *
+     * @throws IndexOutOfBoundsException if the resolved index is out of range
+     */
+    public JqArray with(int index, JqValue element) {
+        int actualIndex = index < 0 ? elements.size() + index : index;
+        if (actualIndex < 0 || actualIndex >= elements.size()) {
+            throw new IndexOutOfBoundsException("Index " + index + " out of range for array of size " + elements.size());
+        }
+        JqValue[] arr = elements.toArray(new JqValue[0]);
+        arr[actualIndex] = element;
+        return new JqArray(Arrays.asList(arr));
+    }
+
+    /**
+     * Returns a new JqArray with the element appended at the end.
+     */
+    public JqArray append(JqValue element) {
+        JqValue[] arr = new JqValue[elements.size() + 1];
+        for (int i = 0; i < elements.size(); i++) {
+            arr[i] = elements.get(i);
+        }
+        arr[elements.size()] = element;
+        return new JqArray(Arrays.asList(arr));
+    }
+
+    // ========================================================================
+    //  Builder for incremental construction
+    // ========================================================================
+
+    /** Create a builder for constructing a JqArray incrementally. */
+    public static ArrayBuilder arrayBuilder() {
+        return new ArrayBuilder(8);
+    }
+
+    /** Create a builder with a hint for the expected number of elements. */
+    public static ArrayBuilder arrayBuilder(int expectedSize) {
+        return new ArrayBuilder(expectedSize);
+    }
+
+    /**
+     * Builder for constructing a JqArray incrementally using direct array
+     * construction (no intermediate List resizing).
+     */
+    public static final class ArrayBuilder {
+        private JqValue[] elements;
+        private int size;
+
+        ArrayBuilder(int expectedSize) {
+            elements = new JqValue[Math.max(expectedSize, 4)];
+        }
+
+        /** Add a JqValue element. */
+        public ArrayBuilder add(JqValue value) {
+            if (size >= elements.length) {
+                elements = Arrays.copyOf(elements, elements.length * 2);
+            }
+            elements[size++] = value;
+            return this;
+        }
+
+        /** Add a String element. */
+        public ArrayBuilder add(String value) { return add(JqString.of(value)); }
+
+        /** Add a long element. */
+        public ArrayBuilder add(long value) { return add(JqNumber.of(value)); }
+
+        /** Add a double element. */
+        public ArrayBuilder add(double value) { return add(JqNumber.of(value)); }
+
+        /** Add a boolean element. */
+        public ArrayBuilder add(boolean value) { return add(JqBoolean.of(value)); }
+
+        /** Add a null element. */
+        public ArrayBuilder addNull() { return add(JqNull.NULL); }
+
+        /** Build the JqArray. The builder should not be used after this call. */
+        public JqArray build() {
+            return size == 0 ? EMPTY : JqArray.ofTrusted(elements, size);
+        }
+    }
+
+    // ========================================================================
+    //  Core accessors
+    // ========================================================================
+
     @Override
     public Type type() { return Type.ARRAY; }
 

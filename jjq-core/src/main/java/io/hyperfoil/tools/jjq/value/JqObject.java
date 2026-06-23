@@ -121,6 +121,200 @@ public final class JqObject implements JqValue {
     }
 
     // ========================================================================
+    //  Convenience factories with primitive values
+    // ========================================================================
+
+    /** Create a single-field object with a String value. */
+    public static JqObject of(String key, String value) {
+        return of(key, JqString.of(value));
+    }
+
+    /** Create a single-field object with a long value. */
+    public static JqObject of(String key, long value) {
+        return of(key, JqNumber.of(value));
+    }
+
+    /** Create a single-field object with a double value. */
+    public static JqObject of(String key, double value) {
+        return of(key, JqNumber.of(value));
+    }
+
+    // ========================================================================
+    //  Copy-on-write mutation methods
+    // ========================================================================
+
+    /**
+     * Returns a new JqObject with the field added or replaced.
+     * If the key already exists, the value is replaced at its current position
+     * (preserving insertion order). If the key is new, it is appended.
+     */
+    public JqObject with(String key, JqValue value) {
+        if (externalMap != null) {
+            var map = new LinkedHashMap<>(externalMap);
+            map.put(key, value);
+            return JqObject.ofTrusted(map);
+        }
+        // Check if key exists (replace in place)
+        for (int i = 0; i < size; i++) {
+            if (key.equals(keys[i])) {
+                JqValue[] newValues = Arrays.copyOf(values, size);
+                newValues[i] = value;
+                return new JqObject(Arrays.copyOf(keys, size), newValues, size, null);
+            }
+        }
+        // New key: extend arrays by 1
+        String[] newKeys = Arrays.copyOf(keys, size + 1);
+        JqValue[] newValues = Arrays.copyOf(values, size + 1);
+        newKeys[size] = key;
+        newValues[size] = value;
+        return new JqObject(newKeys, newValues, size + 1, null);
+    }
+
+    /**
+     * Returns a new JqObject with the field removed.
+     * No-op (returns this) if the key doesn't exist.
+     *
+     * <p>For bulk removal of multiple keys, prefer building a new object
+     * with selective inclusion via {@link Builder} instead of chaining
+     * {@code without()} calls (each call copies arrays).</p>
+     */
+    public JqObject without(String key) {
+        if (externalMap != null) {
+            if (!externalMap.containsKey(key)) return this;
+            var map = new LinkedHashMap<>(externalMap);
+            map.remove(key);
+            return map.isEmpty() ? EMPTY : JqObject.ofTrusted(map);
+        }
+        // Find key index
+        int idx = -1;
+        for (int i = 0; i < size; i++) {
+            if (key.equals(keys[i])) { idx = i; break; }
+        }
+        if (idx < 0) return this; // key not found
+        if (size == 1) return EMPTY;
+        // Create new arrays without the entry at idx
+        String[] newKeys = new String[size - 1];
+        JqValue[] newValues = new JqValue[size - 1];
+        System.arraycopy(keys, 0, newKeys, 0, idx);
+        System.arraycopy(keys, idx + 1, newKeys, idx, size - idx - 1);
+        System.arraycopy(values, 0, newValues, 0, idx);
+        System.arraycopy(values, idx + 1, newValues, idx, size - idx - 1);
+        return new JqObject(newKeys, newValues, size - 1, null);
+    }
+
+    /**
+     * Returns a new JqObject with all fields from {@code other} merged in.
+     * Shallow merge: overlapping keys take the value from {@code other},
+     * preserving their position from {@code this}. New keys from {@code other}
+     * are appended at the end.
+     *
+     * <p>Matches jq {@code +} operator semantics:
+     * {@code {"a":1,"b":2} + {"b":3,"c":4} = {"a":1,"b":3,"c":4}}</p>
+     *
+     * <p>For deep recursive merge, use the {@code *} operator
+     * ({@link JqValue#multiply}).</p>
+     */
+    public JqObject merge(JqObject other) {
+        if (other.size == 0 && other.externalMap == null) return this;
+        if (other.externalMap != null && other.externalMap.isEmpty()) return this;
+        if (this.size == 0 && this.externalMap == null) return other;
+        if (this.externalMap != null && this.externalMap.isEmpty()) return other;
+
+        // Use builder for clean construction
+        int thisSize = externalMap != null ? externalMap.size() : size;
+        int otherSize = other.externalMap != null ? other.externalMap.size() : other.size;
+        var builder = new Builder(thisSize + otherSize);
+
+        // Add all entries from this
+        if (externalMap != null) {
+            for (var e : externalMap.entrySet()) builder.put(e.getKey(), e.getValue());
+        } else {
+            for (int i = 0; i < size; i++) builder.put(keys[i], values[i]);
+        }
+
+        // Merge entries from other (replaces in place for existing keys, appends new)
+        if (other.externalMap != null) {
+            for (var e : other.externalMap.entrySet()) builder.put(e.getKey(), e.getValue());
+        } else {
+            for (int i = 0; i < other.size; i++) builder.put(other.keys[i], other.values[i]);
+        }
+
+        return builder.build();
+    }
+
+    // ========================================================================
+    //  Builder for incremental construction
+    // ========================================================================
+
+    /** Create a builder for constructing a JqObject incrementally. */
+    public static Builder builder() {
+        return new Builder(8);
+    }
+
+    /** Create a builder with a hint for the expected number of fields. */
+    public static Builder builder(int expectedSize) {
+        return new Builder(expectedSize);
+    }
+
+    /**
+     * Builder for constructing a JqObject incrementally using direct array
+     * construction (no LinkedHashMap intermediate).
+     *
+     * <p>{@code put()} performs scan-and-replace for duplicate keys:
+     * {@code builder.put("x", 1).put("x", 2).build()} produces {@code {"x": 2}}.</p>
+     */
+    public static final class Builder {
+        private String[] keys;
+        private JqValue[] values;
+        private int size;
+
+        Builder(int expectedSize) {
+            keys = new String[Math.max(expectedSize, 4)];
+            values = new JqValue[keys.length];
+        }
+
+        /** Add or replace a field with a JqValue. */
+        public Builder put(String key, JqValue value) {
+            // Scan for existing key (replace in place)
+            for (int i = 0; i < size; i++) {
+                if (key.equals(keys[i])) {
+                    values[i] = value;
+                    return this;
+                }
+            }
+            // New key: append
+            if (size >= keys.length) {
+                keys = Arrays.copyOf(keys, keys.length * 2);
+                values = Arrays.copyOf(values, values.length * 2);
+            }
+            keys[size] = key;
+            values[size] = value;
+            size++;
+            return this;
+        }
+
+        /** Add or replace a field with a String value. */
+        public Builder put(String key, String value) { return put(key, JqString.of(value)); }
+
+        /** Add or replace a field with a long value. */
+        public Builder put(String key, long value) { return put(key, JqNumber.of(value)); }
+
+        /** Add or replace a field with a double value. */
+        public Builder put(String key, double value) { return put(key, JqNumber.of(value)); }
+
+        /** Add or replace a field with a boolean value. */
+        public Builder put(String key, boolean value) { return put(key, JqBoolean.of(value)); }
+
+        /** Add a null-valued field. */
+        public Builder putNull(String key) { return put(key, JqNull.NULL); }
+
+        /** Build the JqObject. The builder should not be used after this call. */
+        public JqObject build() {
+            return size == 0 ? EMPTY : JqObject.ofArrays(keys, values, size);
+        }
+    }
+
+    // ========================================================================
     //  Core accessors
     // ========================================================================
 
