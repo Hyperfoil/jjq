@@ -23,6 +23,32 @@ public final class JqValues {
     private static final int SERIALIZE_BUFFER_INIT = 8192;
     private static final int SERIALIZE_BUFFER_MAX_RETAINED = 1024 * 1024; // 1MB
 
+    // ========================================================================
+    //  Field name interning (issue #10)
+    //  Open-addressing hash table for deduplicating JSON object key strings.
+    //  Reduces allocation for repeated schemas and enables reference equality
+    //  in JqObject.get() via String.equals short-circuit (this == other).
+    // ========================================================================
+
+    private static final int INTERN_TABLE_SIZE = 2048; // power of 2
+    private static final int INTERN_MASK = INTERN_TABLE_SIZE - 1;
+    private static final String[] INTERN_TABLE = new String[INTERN_TABLE_SIZE];
+
+    /**
+     * Intern a field name string. Returns the cached instance if one exists
+     * for this hash slot, or caches and returns the given string.
+     * <p>
+     * Thread-safe via benign races: concurrent writes to the same slot
+     * produce correct results (worst case: one write is lost, no corruption).
+     */
+    public static String internFieldName(String name) {
+        int slot = name.hashCode() & INTERN_MASK;
+        String cached = INTERN_TABLE[slot];
+        if (name.equals(cached)) return cached;
+        INTERN_TABLE[slot] = name;
+        return name;
+    }
+
     private static final ThreadLocal<StringBuilder> SERIALIZER_BUFFER =
             ThreadLocal.withInitial(() -> new StringBuilder(SERIALIZE_BUFFER_INIT));
 
@@ -293,7 +319,7 @@ public final class JqValues {
                 keys = java.util.Arrays.copyOf(keys, keys.length * 2);
                 values = java.util.Arrays.copyOf(values, values.length * 2);
             }
-            keys[count] = parseStringRaw(r);
+            keys[count] = parseAndInternKey(r);
             r.skipWs();
             r.pos++; // skip :
             values[count] = parseValue(r, depth);
@@ -361,6 +387,60 @@ public final class JqValues {
         throw new IllegalArgumentException("Unterminated string");
     }
 
+    /**
+     * Parse a JSON object key with incremental hash computation and intern cache lookup.
+     * On cache hit, returns the cached String instance without calling substring() —
+     * compares directly against source characters. On cache miss, creates the String
+     * and caches it.
+     */
+    private static String parseAndInternKey(JsonReader r) {
+        r.pos++; // skip opening "
+        int start = r.pos;
+        final String s = r.json;
+        final int len = r.len;
+        int hash = 0;
+
+        // Fast path: scan for closing quote, computing hash incrementally
+        while (r.pos < len) {
+            char c = s.charAt(r.pos);
+            if (c == '"') {
+                int keyLen = r.pos - start;
+                int slot = hash & INTERN_MASK;
+                String cached = INTERN_TABLE[slot];
+
+                // Cache hit: verify length + content without substring()
+                if (cached != null && cached.length() == keyLen) {
+                    boolean match = true;
+                    for (int i = 0; i < keyLen; i++) {
+                        if (cached.charAt(i) != s.charAt(start + i)) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        r.pos++; // skip closing "
+                        return cached; // ZERO ALLOCATION
+                    }
+                }
+
+                // Cache miss: create string and cache
+                String result = s.substring(start, r.pos);
+                INTERN_TABLE[slot] = result;
+                r.pos++;
+                return result;
+            }
+            if (c == '\\') break; // fall through to slow path
+            hash = hash * 31 + c;
+            r.pos++;
+        }
+
+        // Slow path: escaped key — parse normally and intern the result
+        // Reset pos to start for parseStringRaw to re-parse
+        r.pos = start - 1; // back to opening "
+        String result = parseStringRaw(r);
+        return internFieldName(result);
+    }
+
     /** Parse a JSON string and return the raw Java String value (without wrapping in JqString). */
     private static String parseStringRaw(JsonReader r) {
         r.pos++; // skip opening "
@@ -369,13 +449,10 @@ public final class JqValues {
         final int len = r.len;
 
         // Fast path: scan for closing quote, bail on backslash.
-        // Uses char-by-char scan rather than String.indexOf because indexOf
-        // would search the entire remaining document for both '"' and '\\',
-        // which is wasteful for short strings (typical JSON values are 5-20 chars).
         while (r.pos < len) {
             char c = s.charAt(r.pos);
             if (c == '"') {
-                // No escapes — direct substring (zero-copy on modern JVMs with compact strings)
+                // No escapes — direct substring
                 String result = s.substring(start, r.pos);
                 r.pos++; // skip closing "
                 return result;
@@ -730,8 +807,8 @@ public final class JqValues {
                 keys = java.util.Arrays.copyOf(keys, keys.length * 2);
                 values = java.util.Arrays.copyOf(values, values.length * 2);
             }
-            // Keys must be eager Strings for JqObject parallel array lookup
-            keys[count] = parseStringRawBytes(r);
+            // Keys interned for deduplication and reference equality in JqObject.get()
+            keys[count] = parseAndInternKeyBytes(r);
             r.skipWs();
             r.pos++; // skip :
             values[count] = parseValueBytes(r, depth);
@@ -806,6 +883,56 @@ public final class JqValues {
     }
 
     /** Parse a JSON string from bytes and return the raw Java String (for object keys). */
+    /**
+     * Parse a JSON object key from bytes with incremental hash and intern cache.
+     * On cache hit, verifies against source bytes and returns cached String (zero allocation).
+     * On cache miss, constructs String and caches it.
+     */
+    private static String parseAndInternKeyBytes(JsonByteReader r) {
+        r.pos++; // skip opening "
+        int start = r.pos;
+        int hash = 0;
+
+        // Scalar scan with incremental hash (no SWAR — need per-byte hash)
+        while (r.pos < r.end) {
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') {
+                int keyLen = r.pos - start;
+                int slot = hash & INTERN_MASK;
+                String cached = INTERN_TABLE[slot];
+
+                // Cache hit: verify length + content without String construction
+                if (cached != null && cached.length() == keyLen) {
+                    boolean match = true;
+                    for (int i = 0; i < keyLen; i++) {
+                        if (cached.charAt(i) != (char) (r.data[start + i] & 0xFF)) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        r.pos++; // skip closing "
+                        return cached; // ZERO ALLOCATION
+                    }
+                }
+
+                // Cache miss: create string and cache
+                String result = new String(r.data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
+                INTERN_TABLE[slot] = result;
+                r.pos++;
+                return result;
+            }
+            if (b == '\\') break; // fall through to slow path
+            hash = hash * 31 + b;
+            r.pos++;
+        }
+
+        // Slow path: escaped key — parse normally and intern
+        r.pos = start - 1; // back to opening "
+        String result = parseStringRawBytes(r);
+        return internFieldName(result);
+    }
+
     private static String parseStringRawBytes(JsonByteReader r) {
         r.pos++; // skip opening "
         int start = r.pos;

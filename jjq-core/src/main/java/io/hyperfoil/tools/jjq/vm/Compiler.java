@@ -61,7 +61,10 @@ public final class Compiler {
     }
 
     private int addName(String name) {
-        return nameIndex.computeIfAbsent(name, n -> {
+        // Intern the name so compiled programs use the same String references
+        // as parsed documents — enables reference equality in JqObject.get()
+        String interned = JqValues.internFieldName(name);
+        return nameIndex.computeIfAbsent(interned, n -> {
             names.add(n);
             return names.size() - 1;
         });
