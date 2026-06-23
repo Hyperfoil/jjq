@@ -79,11 +79,7 @@ public final class BuiltinRegistry {
         register("keys", 0, (input, args, env, eval, out) -> {
             switch (input) {
                 case JqObject obj -> {
-                    var keys = obj.objectValue().keySet().stream()
-                            .sorted()
-                            .map(k -> (JqValue) JqString.of(k))
-                            .toList();
-                    out.accept(JqArray.of(keys));
+                    out.accept(obj.sortedKeysAsArray());
                 }
                 case JqArray arr -> {
                     var indices = new ArrayList<JqValue>();

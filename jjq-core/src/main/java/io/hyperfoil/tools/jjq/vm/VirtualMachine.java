@@ -364,11 +364,7 @@ public final class VirtualMachine {
                     case BUILTIN_KEYS -> {
                         JqValue val = pop();
                         if (val instanceof JqObject obj) {
-                            var keySet = obj.objectValue().keySet();
-                            var keys = new ArrayList<JqValue>(keySet.size());
-                            for (var k : keySet) keys.add(JqString.of(k));
-                            keys.sort(JqValue::compareTo);
-                            push(JqArray.of(keys));
+                            push(obj.sortedKeysAsArray());
                         } else if (val instanceof JqArray arr) {
                             var keys = new ArrayList<JqValue>(arr.arrayValue().size());
                             for (int i = 0; i < arr.arrayValue().size(); i++) keys.add(JqNumber.of(i));
@@ -1058,10 +1054,7 @@ public final class VirtualMachine {
                 case BUILTIN_KEYS -> {
                     JqValue v = pop();
                     if (v instanceof JqObject obj) {
-                        var keys = new java.util.ArrayList<JqValue>();
-                        for (String k : obj.objectValue().keySet()) keys.add(JqString.of(k));
-                        keys.sort(null);
-                        push(JqArray.of(keys));
+                        push(obj.sortedKeysAsArray());
                     } else if (v instanceof JqArray arr) {
                         var keys = new java.util.ArrayList<JqValue>();
                         for (int j = 0; j < arr.arrayValue().size(); j++) keys.add(JqNumber.of(j));

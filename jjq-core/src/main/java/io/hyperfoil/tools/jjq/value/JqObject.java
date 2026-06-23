@@ -32,6 +32,7 @@ public final class JqObject implements JqValue {
 
     // Cached views (lazy)
     private String[] sortedKeysCache;
+    private JqArray cachedKeysArray; // lazy, sorted JqArray of JqString keys for `keys` builtin
     private Map<String, JqValue> mapView;
     private HashMap<String, Integer> hashIndex; // lazy, for large array-backed objects
 
@@ -390,6 +391,25 @@ public final class JqObject implements JqValue {
             hashIndex = idx;
         }
         return idx;
+    }
+
+    /**
+     * Returns a cached JqArray of sorted JqString-wrapped keys.
+     * Used by the {@code keys} builtin to avoid re-sorting and
+     * re-wrapping key strings on repeated calls on the same object.
+     */
+    public JqArray sortedKeysAsArray() {
+        JqArray cached = cachedKeysArray;
+        if (cached == null) {
+            String[] sorted = sortedKeys();
+            JqValue[] wrapped = new JqValue[sorted.length];
+            for (int i = 0; i < sorted.length; i++) {
+                wrapped[i] = JqString.of(sorted[i]);
+            }
+            cached = JqArray.ofTrusted(wrapped);
+            cachedKeysArray = cached;
+        }
+        return cached;
     }
 
     /** Returns sorted keys, cached for reuse in compareTo. */
