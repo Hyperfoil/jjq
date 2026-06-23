@@ -571,9 +571,16 @@ public final class JqObject implements JqValue {
         sb.append('{');
         for (int i = 0; i < size; i++) {
             if (i > 0) sb.append(',');
-            sb.append('"');
-            JqString.escapeJson(keys[i], sb);
-            sb.append("\":");
+            // Try pre-computed JSON key form from intern cache (e.g., "\"user\":")
+            // Eliminates escapeJson scan + 3 separate appends for interned keys
+            String jsonKey = JqValues.internedJsonKey(keys[i]);
+            if (jsonKey != null) {
+                sb.append(jsonKey);
+            } else {
+                sb.append('"');
+                JqString.escapeJson(keys[i], sb);
+                sb.append("\":");
+            }
             // Type-specialize dispatch to help JIT devirtualize the common cases
             // (avoids itable stub overhead for interface method dispatch)
             JqValue v = values[i];
@@ -593,9 +600,14 @@ public final class JqObject implements JqValue {
         for (var e : externalMap.entrySet()) {
             if (!first) sb.append(',');
             first = false;
-            sb.append('"');
-            JqString.escapeJson(e.getKey(), sb);
-            sb.append("\":");
+            String jsonKey = JqValues.internedJsonKey(e.getKey());
+            if (jsonKey != null) {
+                sb.append(jsonKey);
+            } else {
+                sb.append('"');
+                JqString.escapeJson(e.getKey(), sb);
+                sb.append("\":");
+            }
             e.getValue().appendTo(sb);
         }
         sb.append('}');

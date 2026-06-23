@@ -33,10 +33,13 @@ public final class JqValues {
     private static final int INTERN_TABLE_SIZE = 2048; // power of 2
     private static final int INTERN_MASK = INTERN_TABLE_SIZE - 1;
     private static final String[] INTERN_TABLE = new String[INTERN_TABLE_SIZE];
+    // Pre-computed JSON key form: "\"key\":" — eliminates escapeJson + 3 appends in serialization
+    private static final String[] INTERN_JSON_KEY = new String[INTERN_TABLE_SIZE];
 
     /**
      * Intern a field name string. Returns the cached instance if one exists
      * for this hash slot, or caches and returns the given string.
+     * Also pre-computes the JSON key serialization form {@code "\"key\":"}.
      * <p>
      * Thread-safe via benign races: concurrent writes to the same slot
      * produce correct results (worst case: one write is lost, no corruption).
@@ -46,7 +49,47 @@ public final class JqValues {
         String cached = INTERN_TABLE[slot];
         if (name.equals(cached)) return cached;
         INTERN_TABLE[slot] = name;
+        INTERN_JSON_KEY[slot] = buildJsonKey(name);
         return name;
+    }
+
+    /**
+     * Look up the pre-computed JSON key form for an interned field name.
+     * Returns {@code "\"key\":"} if the key is in the intern cache, or null
+     * if it's not interned or was evicted by a hash collision.
+     * <p>
+     * The caller must pass a key that was returned by {@link #internFieldName}
+     * or one of the {@code parseAndInternKey} methods. Reference equality
+     * is used for the cache check (no content comparison).
+     */
+    public static String internedJsonKey(String key) {
+        int slot = key.hashCode() & INTERN_MASK;
+        if (INTERN_TABLE[slot] == key) { // reference equality — interned keys match
+            return INTERN_JSON_KEY[slot];
+        }
+        return null;
+    }
+
+    /** Build the JSON serialization form for an object key: {@code "\"key\":"}. */
+    private static String buildJsonKey(String name) {
+        // Check if key needs escaping (rare for field names)
+        boolean clean = true;
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c == '"' || c == '\\' || c < 0x20) {
+                clean = false;
+                break;
+            }
+        }
+        if (clean) {
+            return "\"" + name + "\":";
+        }
+        // Rare: field name needs escaping
+        var sb = new StringBuilder(name.length() + 4);
+        sb.append('"');
+        JqString.escapeJson(name, sb);
+        sb.append("\":");
+        return sb.toString();
     }
 
     private static final ThreadLocal<StringBuilder> SERIALIZER_BUFFER =
@@ -423,9 +466,10 @@ public final class JqValues {
                     }
                 }
 
-                // Cache miss: create string and cache
+                // Cache miss: create string and cache (with JSON key form)
                 String result = s.substring(start, r.pos);
                 INTERN_TABLE[slot] = result;
+                INTERN_JSON_KEY[slot] = buildJsonKey(result);
                 r.pos++;
                 return result;
             }
@@ -916,9 +960,10 @@ public final class JqValues {
                     }
                 }
 
-                // Cache miss: create string and cache
+                // Cache miss: create string and cache (with JSON key form)
                 String result = new String(r.data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
                 INTERN_TABLE[slot] = result;
+                INTERN_JSON_KEY[slot] = buildJsonKey(result);
                 r.pos++;
                 return result;
             }
