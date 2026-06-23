@@ -70,6 +70,48 @@ final class SwarUtil {
     }
 
     // ========================================================================
+    //  ASCII detection
+    // ========================================================================
+
+    /**
+     * Check if 8 bytes are all ASCII (bit 7 clear on every byte).
+     * A single AND + comparison -- the fastest possible 8-byte ASCII check.
+     */
+    static boolean isAscii8(long word) {
+        return (word & 0x8080808080808080L) == 0;
+    }
+
+    /**
+     * Check if all bytes in a range are ASCII using SWAR.
+     * Processes 8 bytes at a time via {@link #isAscii8}, with a scalar
+     * tail for remaining bytes.
+     *
+     * <p><b>Precondition:</b> {@code offset + length <= data.length}.
+     * The caller must ensure the range is within the array bounds.
+     * The {@link #loadLong} call via VarHandle will throw
+     * {@link ArrayIndexOutOfBoundsException} on out-of-bounds access.</p>
+     *
+     * @param data   the byte array to check
+     * @param offset start position (inclusive)
+     * @param length number of bytes to check
+     * @return true if all bytes in the range have bit 7 clear (are ASCII)
+     */
+    static boolean isAscii(byte[] data, int offset, int length) {
+        int end = offset + length;
+        // SWAR: check 8 bytes at a time
+        while (offset + 8 <= end) {
+            if (!isAscii8(loadLong(data, offset))) return false;
+            offset += 8;
+        }
+        // Scalar tail for remaining < 8 bytes
+        while (offset < end) {
+            if ((data[offset] & 0x80) != 0) return false;
+            offset++;
+        }
+        return true;
+    }
+
+    // ========================================================================
     //  Case conversion (ported from Netty SWARUtil / Facebook Folly)
     // ========================================================================
 
