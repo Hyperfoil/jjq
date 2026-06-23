@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.jakarta;
 
 import io.hyperfoil.tools.jjq.value.JqValue;
+import io.hyperfoil.tools.jjq.value.JqValues;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
@@ -11,15 +12,13 @@ import jakarta.ws.rs.ext.Provider;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.annotation.Annotation;
-import java.lang.reflect.Type;
-import java.nio.charset.StandardCharsets;
-
-/**
+import java.lang.reflect.Type;/**
  * JAX-RS {@link MessageBodyWriter} that serializes {@link JqValue} instances
  * to JSON response bodies using jjq's built-in serializer.
  *
- * <p>Uses {@link JqValue#toJsonString()} for serialization, which benefits from
- * the thread-local StringBuilder reuse and deferred string zero-copy optimizations.</p>
+ * <p>Uses {@link JqValues#serializeTo(JqValue, OutputStream)} for streaming
+ * serialization directly to the response output stream, avoiding the intermediate
+ * {@code String} and {@code byte[]} copies of {@code toJsonString().getBytes()}.</p>
  *
  * <p>Annotated with {@code @Provider} for automatic discovery by JAX-RS
  * implementations (Quarkus RESTEasy, Jersey, etc.).</p>
@@ -42,6 +41,6 @@ public class JqValueMessageBodyWriter implements MessageBodyWriter<JqValue> {
         if (value == null) {
             return;
         }
-        entityStream.write(value.toJsonString().getBytes(StandardCharsets.UTF_8));
+        JqValues.serializeTo(value, entityStream);
     }
 }

@@ -1,6 +1,11 @@
 package io.hyperfoil.tools.jjq.value;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +46,33 @@ public final class JqValues {
             SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
         }
         return result;
+    }
+
+    /**
+     * Serialize a JqValue directly to a Writer without constructing an intermediate String.
+     * Uses the thread-local StringBuilder as a buffer, then writes its contents directly
+     * to the Writer via {@link Writer#append(CharSequence)}, avoiding the {@code toString()}
+     * copy that {@link #serialize(JqValue)} performs.
+     */
+    public static void serializeTo(JqValue value, Writer writer) throws IOException {
+        StringBuilder sb = SERIALIZER_BUFFER.get();
+        sb.setLength(0);
+        value.appendTo(sb);
+        writer.append(sb);
+        if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
+            SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
+        }
+    }
+
+    /**
+     * Serialize a JqValue directly to an OutputStream as UTF-8 without constructing
+     * an intermediate String. Eliminates the {@code toString()} and {@code getBytes()}
+     * copies compared to {@code out.write(value.toJsonString().getBytes(UTF_8))}.
+     */
+    public static void serializeTo(JqValue value, OutputStream out) throws IOException {
+        var writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
+        serializeTo(value, writer);
+        writer.flush();
     }
 
     /** Mutable parser state — avoids int[] indirection on every character access. */
