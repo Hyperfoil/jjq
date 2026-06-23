@@ -294,6 +294,22 @@ Parse allocation comparison on the 14MB production file:
 
 jjq achieves the lowest parse allocation through field name interning (shared String instances across repeated schemas), deferred string values (no allocation for untouched strings), and a lightweight open-addressing hash index (flat `int[]` instead of `HashMap` nodes).
 
+### CLI Performance: jjq native-image vs jq 1.8.1
+
+GraalVM native-image comparison on the 14MB production file (hyperfine, best of 3+ warmup runs):
+
+| Test | jq 1.8.1 | jjq (native) | Notes |
+|------|----------|--------------|-------|
+| Startup (`'.' /dev/null`) | 1.4 ms | 1.7 ms | Both sub-2ms |
+| Field access (`.user`) | 122 ms | 168 ms | Parse-dominated |
+| Deep field (`.a.b[0].c`) | 122 ms | 168 ms | Parse-dominated |
+| Object construction | 123 ms | 168 ms | Parse-dominated |
+| **Identity round-trip** (parse + serialize) | 245 ms | **213 ms** | **jjq 15% faster** |
+
+For CLI one-shot usage, jq 1.8.1's C parser is ~36% faster on parse-dominated workloads. jjq wins on full round-trips (parse + serialize) due to faster serialization. The native-image binary is 15 MB vs jq's 36 KB.
+
+**jjq's strength is the library use case** — parse once, query many times. In h5m, a 14MB upload is parsed once and queried with dozens of jq expressions. The interning, zero-allocation queries, and pre-compiled bytecode VM amortize across all queries, achieving 3 ns field access with zero garbage. This is not measurable in CLI one-shot benchmarks where parse time dominates.
+
 ## Architecture
 
 ```
