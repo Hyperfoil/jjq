@@ -27,8 +27,13 @@ public final class JqObject implements JqValue {
      * O(1) {@code get()} / {@code has()} lookups instead of linear scan.
      * Below this size, linear scan with {@code String.equals()} is faster
      * due to cache locality and no hash computation overhead.
+     * <p>
+     * Set to 32 based on profiling: the 17-key production root object
+     * was slower with HashMap (hashCode + getNode + equals) than with
+     * linear scan. The 127-key PCP time series objects clearly benefit
+     * from hash lookup. The crossover point is somewhere around 20-30 keys.
      */
-    static final int HASH_THRESHOLD = 16;
+    static final int HASH_THRESHOLD = 32;
 
     // Cached views (lazy)
     private String[] sortedKeysCache;
