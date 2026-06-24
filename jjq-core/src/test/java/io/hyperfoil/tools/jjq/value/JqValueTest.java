@@ -209,6 +209,38 @@ class JqValueTest {
         assertEquals(JqNumber.of(19), obj.get("key19"));
     }
 
+    @Test
+    void testBuilderPutAllMap() {
+        var map = new java.util.LinkedHashMap<String, JqValue>();
+        map.put("a", JqNumber.of(1));
+        map.put("b", JqNumber.of(2));
+        var obj = JqObject.builder().put("x", 99L).putAll(map).build();
+        assertEquals(3, obj.size());
+        assertEquals(JqNumber.of(99), obj.get("x"));
+        assertEquals(JqNumber.of(1), obj.get("a"));
+        assertEquals(JqNumber.of(2), obj.get("b"));
+    }
+
+    @Test
+    void testBuilderPutAllJqObject() {
+        var source = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        var obj = JqObject.builder().put("x", 99L).putAll(source).build();
+        assertEquals(3, obj.size());
+        assertEquals(JqNumber.of(99), obj.get("x"));
+        assertEquals(JqNumber.of(1), obj.get("a"));
+        assertEquals(JqNumber.of(2), obj.get("b"));
+    }
+
+    @Test
+    void testBuilderPutAllWithDuplicates() {
+        var source = JqObject.builder().put("a", 10L).put("b", 20L).build();
+        var obj = JqObject.builder().put("a", 1L).putAll(source).build();
+        // putAll replaces existing key "a" with source's value
+        assertEquals(2, obj.size());
+        assertEquals(JqNumber.of(10), obj.get("a"));
+        assertEquals(JqNumber.of(20), obj.get("b"));
+    }
+
     // ========================================================================
     //  JqObject.with() tests
     // ========================================================================

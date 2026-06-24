@@ -352,6 +352,23 @@ public final class JqObject implements JqValue {
             return this;
         }
 
+        /** Add all entries from a Map. Duplicate keys are replaced (last wins). */
+        public Builder putAll(java.util.Map<String, JqValue> map) {
+            for (var entry : map.entrySet()) {
+                put(entry.getKey(), entry.getValue());
+            }
+            return this;
+        }
+
+        /**
+         * Add all fields from a JqObject. Uses zero-allocation iteration
+         * over parallel arrays for array-backed objects. Duplicate keys are replaced.
+         */
+        public Builder putAll(JqObject obj) {
+            obj.forEach(this::put);
+            return this;
+        }
+
         /** Build the JqObject. The builder should not be used after this call. */
         public JqObject build() {
             return size == 0 ? EMPTY : JqObject.ofArrays(keys, values, size);
