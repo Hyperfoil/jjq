@@ -31,6 +31,10 @@ public sealed interface JqValue extends Comparable<JqValue>
     default boolean isContainer() { return isArray() || isObject(); }
     /** True for null, boolean, number, and string (leaf types). */
     default boolean isScalar() { return !isContainer(); }
+    /** True for integral numbers (backed by long). False for non-numbers and floating-point. */
+    default boolean isIntegralNumber() { return this instanceof JqNumber n && n.isIntegral(); }
+    /** True for floating-point numbers. False for non-numbers and integral numbers. */
+    default boolean isFloatingPointNumber() { return this instanceof JqNumber n && !n.isIntegral(); }
 
     default boolean booleanValue() { throw new JqTypeError("Cannot get boolean from " + type()); }
     default long longValue() { throw new JqTypeError("Cannot get number from " + type()); }
@@ -225,6 +229,79 @@ public sealed interface JqValue extends Comparable<JqValue>
      */
     default boolean has(int index) {
         return this instanceof JqArray arr && arr.has(index);
+    }
+
+    /**
+     * Navigate a JSON Pointer path (RFC 6901). Tokens are separated by {@code /}.
+     * Array elements are accessed by numeric tokens. Returns {@link JqNull#NULL}
+     * for missing paths or type mismatches (null-safe).
+     *
+     * <p>Supports RFC 6901 escape sequences: {@code ~0} for {@code ~}, {@code ~1} for {@code /}.</p>
+     *
+     * <p>Examples:</p>
+     * <pre>{@code
+     * data.at("/users/0/name")           // equivalent to data.getField("users").getElement(0).getField("name")
+     * data.at("/config/database~1pool")  // field name containing "/" → "database/pool"
+     * }</pre>
+     *
+     * @param pointer a JSON Pointer string starting with {@code /}, or empty string for this value
+     * @return the value at the pointer path, or {@link JqNull#NULL} if not found
+     */
+    default JqValue at(String pointer) {
+        if (pointer == null || pointer.isEmpty()) return this;
+        JqValue current = this;
+        int start = pointer.charAt(0) == '/' ? 1 : 0;
+        while (start <= pointer.length()) {
+            int end = pointer.indexOf('/', start);
+            if (end < 0) end = pointer.length();
+            String token = pointer.substring(start, end);
+            // Unescape RFC 6901: ~1 → /, ~0 → ~ (order matters per spec)
+            if (token.indexOf('~') >= 0) {
+                token = token.replace("~1", "/").replace("~0", "~");
+            }
+            if (current instanceof JqArray arr) {
+                try {
+                    current = arr.get(Integer.parseInt(token));
+                } catch (NumberFormatException e) {
+                    return JqNull.NULL;
+                }
+            } else {
+                current = current.getField(token);
+            }
+            if (current instanceof JqNull) return JqNull.NULL;
+            start = end + 1;
+        }
+        return current;
+    }
+
+    /**
+     * Get a required field value from an object. Like {@link #getField(String)} but
+     * throws {@link JqTypeError} if the field is missing or this is not an object.
+     *
+     * @throws JqTypeError if the field is missing, the value is null, or this is not an object
+     */
+    default JqValue required(String key) {
+        JqValue val = getField(key);
+        if (val instanceof JqNull) {
+            throw new JqTypeError("Required field '" + key + "' is missing or null");
+        }
+        return val;
+    }
+
+    /**
+     * Get a required element from an array. Like {@link #getElement(int)} but
+     * throws {@link JqTypeError} if the index is out of bounds or this is not an array.
+     *
+     * @throws JqTypeError if the index is out of bounds or this is not an array
+     */
+    default JqValue required(int index) {
+        if (this instanceof JqArray arr) {
+            if (!arr.has(index)) {
+                throw new JqTypeError("Required index " + index + " is out of bounds (size: " + arr.size() + ")");
+            }
+            return arr.get(index);
+        }
+        throw new JqTypeError("Cannot index " + type().jqName() + " with number");
     }
 
     default int length() {
