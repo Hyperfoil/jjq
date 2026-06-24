@@ -171,9 +171,9 @@ Tested against the upstream [JSONata conformance test suite](https://github.com/
 
 | Status | Count | % |
 |--------|-------|---|
-| **Passing** | 295 | 56.0% |
-| Skipped (unsupported features) | 143 | 27.1% |
-| Skipped (implementation gaps) | 89 | 16.9% |
+| **Passing** | 316 | 60.0% |
+| Skipped (unsupported features) | 126 | 23.9% |
+| Skipped (implementation gaps) | 85 | 16.1% |
 
 Run the conformance tests:
 ```bash
@@ -205,7 +205,6 @@ mvn test -Pjsonata -pl jjq-jsonata -Dtest=JsonataConformanceTest
 | Division precision | IEEE 754 double | BigDecimal (higher precision) |
 | Number formatting | `1e+100` | `1E+100` (case difference) |
 | Unicode `$substring` | Counts codepoints | Counts code units (surrogate pair issue) |
-| `$round` with precision | Supports 2nd precision arg | Only 1-arg supported (Phase 2) |
 
 ### Implicit Array Mapping Limitations
 
