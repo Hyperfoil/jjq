@@ -339,11 +339,10 @@ final class JsonataToJq {
         String jqBuiltin = BUILTIN_FUNCTIONS.get(name);
         if (jqBuiltin != null && args.size() <= 1) {
             if (args.isEmpty()) {
-                // No arg — apply to current input: . | builtin
-                sb.append(jqBuiltin);
+                // No arg — apply to current input with null guard
+                sb.append("if . == null then null else ").append(jqBuiltin).append(" end");
             } else {
-                // Single arg — pipe arg to builtin
-                // Wrap collection functions with null guard for JSONata compatibility
+                // Single arg — pipe arg to builtin with null guard
                 if (isCollectionFunction(name)) {
                     sb.append("(");
                     emitIteratingArg(args.get(0), sb);
@@ -352,7 +351,7 @@ final class JsonataToJq {
                 } else {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | ").append(jqBuiltin).append(')');
+                    sb.append(" | if . == null then null else ").append(jqBuiltin).append(" end)");
                 }
             }
             return;
@@ -503,7 +502,7 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | fabs)");
+                    sb.append(" | if . == null then null else fabs end)");
                 } else {
                     throw new JsonataException("$abs requires exactly 1 argument");
                 }
@@ -512,7 +511,7 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | floor)");
+                    sb.append(" | if . == null then null else floor end)");
                 } else {
                     throw new JsonataException("$floor requires exactly 1 argument");
                 }
@@ -521,7 +520,7 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | ceil)");
+                    sb.append(" | if . == null then null else ceil end)");
                 } else {
                     throw new JsonataException("$ceil requires exactly 1 argument");
                 }
@@ -530,7 +529,7 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | round)");
+                    sb.append(" | if . == null then null else round end)");
                 } else if (args.size() == 2) {
                     // $round(number, precision) — round to N decimal places
                     // Note: uses jq's round (banker's rounding / half-to-even).
