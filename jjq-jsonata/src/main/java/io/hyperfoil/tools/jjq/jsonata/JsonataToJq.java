@@ -1,0 +1,533 @@
+package io.hyperfoil.tools.jjq.jsonata;
+
+import io.hyperfoil.tools.jjq.jsonata.JsonataParser.*;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Translates a JSONata AST to a jq expression string.
+ */
+final class JsonataToJq {
+
+    private static final Map<String, String> BUILTIN_FUNCTIONS = Map.ofEntries(
+            // Aggregation
+            Map.entry("$sum", "add"),
+            Map.entry("$max", "max"),
+            Map.entry("$min", "min"),
+            Map.entry("$count", "length"),
+            // String
+            Map.entry("$string", "tostring"),
+            Map.entry("$length", "length"),
+            Map.entry("$uppercase", "ascii_upcase"),
+            Map.entry("$lowercase", "ascii_downcase"),
+            Map.entry("$trim", "ltrimstr(\" \") | rtrimstr(\" \")"),
+            Map.entry("$number", "tonumber"),
+            // Type
+            Map.entry("$type", "type"),
+            // Array
+            Map.entry("$sort", "sort"),
+            Map.entry("$reverse", "reverse"),
+            Map.entry("$distinct", "unique"),
+            Map.entry("$keys", "keys"),
+            Map.entry("$values", "[.[]]"),
+            // Boolean
+            Map.entry("$not", "not"),
+            Map.entry("$boolean", "if . == null or . == false then false else true end")
+    );
+
+    static String translate(Node node) {
+        var sb = new StringBuilder();
+        emit(node, sb, false);
+        return sb.toString();
+    }
+
+    private static void emit(Node node, StringBuilder sb, boolean inPath) {
+        switch (node) {
+            case FieldNode f -> {
+                if (!inPath) sb.append('.');
+                if (needsQuoting(f.name())) {
+                    sb.append('"').append(escapeJqString(f.name())).append('"');
+                } else {
+                    sb.append(f.name());
+                }
+            }
+
+            case QuotedFieldNode f -> {
+                if (!inPath) sb.append('.');
+                sb.append('"').append(escapeJqString(f.name())).append('"');
+            }
+
+            case PathNode p -> emitPath(p.steps(), sb);
+
+            case IndexNode idx -> {
+                emit(idx.base(), sb, false);
+                sb.append('[');
+                emit(idx.index(), sb, false);
+                sb.append(']');
+            }
+
+            case PredicateNode pred -> {
+                // Phone[type='mobile'] → [.Phone[] | select(.type == "mobile")]
+                sb.append('[');
+                emit(pred.base(), sb, false);
+                sb.append("[] | select(");
+                emitPredicate(pred.predicate(), sb);
+                sb.append(")]");
+            }
+
+            case NumberNode n -> sb.append(n.value());
+
+            case StringNode s -> sb.append('"').append(escapeJqString(s.value())).append('"');
+
+            case BooleanNode b -> sb.append(b.value() ? "true" : "false");
+
+            case NullNode ignored -> sb.append("null");
+
+            case VariableNode v -> {
+                if ("$".equals(v.name())) {
+                    sb.append('.');
+                } else {
+                    // JSONata $var → jq $var (same syntax for variable references)
+                    sb.append(v.name());
+                }
+            }
+
+            case FunctionCallNode fn -> emitFunctionCall(fn, sb);
+
+            case BinaryNode bin -> emitBinary(bin, sb);
+
+            case UnaryNode un -> {
+                if ("-".equals(un.op())) {
+                    sb.append("-(");
+                    emit(un.operand(), sb, false);
+                    sb.append(')');
+                } else if ("not".equals(un.op())) {
+                    sb.append('(');
+                    emit(un.operand(), sb, false);
+                    sb.append(" | not)");
+                }
+            }
+
+            case TernaryNode ter -> {
+                sb.append("if ");
+                emit(ter.condition(), sb, false);
+                sb.append(" then ");
+                emit(ter.then(), sb, false);
+                sb.append(" else ");
+                emit(ter.otherwise(), sb, false);
+                sb.append(" end");
+            }
+
+            case ArrayNode arr -> {
+                sb.append('[');
+                for (int i = 0; i < arr.elements().size(); i++) {
+                    if (i > 0) sb.append(", ");
+                    emit(arr.elements().get(i), sb, false);
+                }
+                sb.append(']');
+            }
+
+            case ObjectNode obj -> {
+                sb.append('{');
+                for (int i = 0; i < obj.entries().size(); i++) {
+                    if (i > 0) sb.append(", ");
+                    Entry entry = obj.entries().get(i);
+                    emit(entry.key(), sb, false);
+                    sb.append(": ");
+                    emit(entry.value(), sb, false);
+                }
+                sb.append('}');
+            }
+
+            case RangeNode range -> {
+                sb.append("[range(");
+                emit(range.start(), sb, false);
+                sb.append("; ");
+                emit(range.end(), sb, false);
+                sb.append(" + 1)]"); // JSONata range is inclusive, jq range is exclusive
+            }
+
+            case GroupNode g -> {
+                sb.append('(');
+                emit(g.expr(), sb, false);
+                sb.append(')');
+            }
+
+            case WildcardNode ignored -> {
+                if (!inPath) sb.append('.');
+                sb.append("[]");
+            }
+
+            case DescendantNode ignored -> {
+                throw new JsonataException("Unsupported JSONata feature: recursive descent (**)");
+            }
+        }
+    }
+
+    /**
+     * Emit a path expression, handling implicit array mapping.
+     * When a path step follows another step, we assume the intermediate could be
+     * an array and generate [.A[] | .B] (collect-iterate pattern).
+     * For simple two-step paths (A.B), we use direct field access (.A.B).
+     */
+    private static void emitPath(List<Node> steps, StringBuilder sb) {
+        if (steps.isEmpty()) return;
+
+        // Simple case: all steps are field names → direct path (.A.B.C)
+        if (isSimpleFieldPath(steps)) {
+            sb.append('.');
+            for (int i = 0; i < steps.size(); i++) {
+                if (i > 0) sb.append('.');
+                emitFieldName(steps.get(i), sb);
+            }
+            return;
+        }
+
+        // Complex case: may contain array traversal, predicates, function calls
+        // Emit first step
+        emit(steps.get(0), sb, false);
+        for (int i = 1; i < steps.size(); i++) {
+            Node step = steps.get(i);
+            Node prevStep = steps.get(i - 1);
+
+            if (step instanceof FieldNode || step instanceof QuotedFieldNode) {
+                // Check if we need implicit array iteration
+                // If the previous step could produce an array, iterate
+                if (needsImplicitIteration(prevStep)) {
+                    // Wrap in collect: [prev[] | .field]
+                    String soFar = sb.toString();
+                    sb.setLength(0);
+                    sb.append('[').append(soFar).append("[] | .");
+                    emitFieldName(step, sb);
+                    // Consume remaining steps within the collect
+                    for (int j = i + 1; j < steps.size(); j++) {
+                        Node nextStep = steps.get(j);
+                        if (nextStep instanceof FieldNode || nextStep instanceof QuotedFieldNode) {
+                            sb.append('.');
+                            emitFieldName(nextStep, sb);
+                        } else {
+                            // Non-field step breaks the collect
+                            sb.append(']');
+                            for (int k = j; k < steps.size(); k++) {
+                                emit(steps.get(k), sb, true);
+                            }
+                            return;
+                        }
+                    }
+                    sb.append(']');
+                    return;
+                } else {
+                    sb.append('.');
+                    emitFieldName(step, sb);
+                }
+            } else if (step instanceof FunctionCallNode fn) {
+                sb.append(" | ");
+                emitFunctionCall(fn, sb);
+            } else {
+                emit(step, sb, true);
+            }
+        }
+    }
+
+    private static boolean isSimpleFieldPath(List<Node> steps) {
+        for (Node step : steps) {
+            if (!(step instanceof FieldNode) && !(step instanceof QuotedFieldNode)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean needsImplicitIteration(Node step) {
+        // For Phase 1, we don't do implicit iteration for standalone paths.
+        // Implicit iteration is handled in function calls via emitIteratingArg().
+        return false;
+    }
+
+    /**
+     * Emit a function argument that should iterate if it's a multi-step path.
+     * JSONata: $sum(orders.price) means "iterate orders, collect price, sum them".
+     * jq: [.orders[] | .price] | add
+     */
+    private static void emitIteratingArg(Node arg, StringBuilder sb) {
+        if (arg instanceof PathNode p && p.steps().size() >= 2 && isSimpleFieldPath(p.steps())) {
+            // Multi-step path → iterate first step, pipe remaining fields
+            // orders.price → [.orders[] | .price]
+            sb.append("[.");
+            emitFieldName(p.steps().get(0), sb);
+            sb.append("[] | .");
+            for (int i = 1; i < p.steps().size(); i++) {
+                if (i > 1) sb.append('.');
+                emitFieldName(p.steps().get(i), sb);
+            }
+            sb.append(']');
+        } else {
+            emit(arg, sb, false);
+        }
+    }
+
+    private static void emitFieldName(Node step, StringBuilder sb) {
+        if (step instanceof FieldNode f) {
+            if (needsQuoting(f.name())) {
+                sb.append('"').append(escapeJqString(f.name())).append('"');
+            } else {
+                sb.append(f.name());
+            }
+        } else if (step instanceof QuotedFieldNode f) {
+            sb.append('"').append(escapeJqString(f.name())).append('"');
+        }
+    }
+
+    private static void emitPredicate(Node pred, StringBuilder sb) {
+        if (pred instanceof BinaryNode bin) {
+            // Translate predicate comparison
+            sb.append('.');
+            emit(bin.left(), sb, true);
+            sb.append(' ');
+            sb.append(translateComparisonOp(bin.op()));
+            sb.append(' ');
+            emit(bin.right(), sb, false);
+        } else {
+            emit(pred, sb, false);
+        }
+    }
+
+    private static void emitBinary(BinaryNode bin, StringBuilder sb) {
+        if ("&".equals(bin.op())) {
+            // String concatenation: a & b → ((a | tostring) + (b | tostring))
+            sb.append("((");
+            emit(bin.left(), sb, false);
+            sb.append(" | tostring) + (");
+            emit(bin.right(), sb, false);
+            sb.append(" | tostring))");
+        } else if ("in".equals(bin.op())) {
+            // a in b → (b | index(a)) != null
+            sb.append("((");
+            emit(bin.right(), sb, false);
+            sb.append(" | index(");
+            emit(bin.left(), sb, false);
+            sb.append(")) != null)");
+        } else {
+            sb.append('(');
+            emit(bin.left(), sb, false);
+            sb.append(' ');
+            sb.append(translateComparisonOp(bin.op()));
+            sb.append(' ');
+            emit(bin.right(), sb, false);
+            sb.append(')');
+        }
+    }
+
+    private static void emitFunctionCall(FunctionCallNode fn, StringBuilder sb) {
+        String name = fn.name();
+        List<Node> args = fn.args();
+
+        // Check built-in single-arg pipe functions
+        String jqBuiltin = BUILTIN_FUNCTIONS.get(name);
+        if (jqBuiltin != null && args.size() <= 1) {
+            if (args.isEmpty()) {
+                // No arg — apply to current input: . | builtin
+                sb.append(jqBuiltin);
+            } else {
+                // Single arg — pipe arg to builtin
+                sb.append('(');
+                if (isCollectionFunction(name)) {
+                    // Collection functions may need implicit iteration on path args
+                    emitIteratingArg(args.get(0), sb);
+                } else {
+                    emit(args.get(0), sb, false);
+                }
+                sb.append(" | ").append(jqBuiltin).append(')');
+            }
+            return;
+        }
+
+        // Special multi-arg functions
+        switch (name) {
+            case "$average" -> {
+                if (args.size() == 1) {
+                    sb.append("(");
+                    emitIteratingArg(args.get(0), sb);
+                    sb.append(" | (add / length))");
+                } else {
+                    throw new JsonataException("$average requires exactly 1 argument");
+                }
+            }
+            case "$contains" -> {
+                if (args.size() == 2) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | contains(");
+                    emit(args.get(1), sb, false);
+                    sb.append("))");
+                } else {
+                    throw new JsonataException("$contains requires exactly 2 arguments");
+                }
+            }
+            case "$split" -> {
+                if (args.size() == 2) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | split(");
+                    emit(args.get(1), sb, false);
+                    sb.append("))");
+                } else {
+                    throw new JsonataException("$split requires exactly 2 arguments");
+                }
+            }
+            case "$join" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | join(\"\"))");
+                } else if (args.size() == 2) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | join(");
+                    emit(args.get(1), sb, false);
+                    sb.append("))");
+                } else {
+                    throw new JsonataException("$join requires 1 or 2 arguments");
+                }
+            }
+            case "$substring" -> {
+                if (args.size() == 2) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append('[');
+                    emit(args.get(1), sb, false);
+                    sb.append(":])");
+                } else if (args.size() == 3) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append('[');
+                    emit(args.get(1), sb, false);
+                    sb.append(":(");
+                    emit(args.get(1), sb, false);
+                    sb.append(" + ");
+                    emit(args.get(2), sb, false);
+                    sb.append(")])");
+                } else {
+                    throw new JsonataException("$substring requires 2 or 3 arguments");
+                }
+            }
+            case "$append" -> {
+                if (args.size() == 2) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" + ");
+                    emit(args.get(1), sb, false);
+                    sb.append(')');
+                } else {
+                    throw new JsonataException("$append requires exactly 2 arguments");
+                }
+            }
+            case "$merge" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | add)");
+                } else {
+                    throw new JsonataException("$merge requires exactly 1 argument (array of objects)");
+                }
+            }
+            case "$exists" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" != null)");
+                } else {
+                    throw new JsonataException("$exists requires exactly 1 argument");
+                }
+            }
+            case "$abs" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | fabs)");
+                } else {
+                    throw new JsonataException("$abs requires exactly 1 argument");
+                }
+            }
+            case "$floor" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | floor)");
+                } else {
+                    throw new JsonataException("$floor requires exactly 1 argument");
+                }
+            }
+            case "$ceil" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | ceil)");
+                } else {
+                    throw new JsonataException("$ceil requires exactly 1 argument");
+                }
+            }
+            case "$round" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | round)");
+                } else {
+                    throw new JsonataException("$round requires 1 argument");
+                }
+            }
+            default -> throw new JsonataException("Unsupported JSONata function: " + name);
+        }
+    }
+
+    private static boolean isCollectionFunction(String name) {
+        return "$sum".equals(name) || "$max".equals(name) || "$min".equals(name)
+                || "$count".equals(name) || "$sort".equals(name)
+                || "$reverse".equals(name) || "$distinct".equals(name);
+    }
+
+    private static String translateComparisonOp(String op) {
+        return switch (op) {
+            case "=" -> "==";
+            case "!=" -> "!=";
+            default -> op; // <, >, <=, >=, and, or — same in jq
+        };
+    }
+
+    private static boolean needsQuoting(String name) {
+        if (name.isEmpty()) return true;
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (i == 0) {
+                if (!Character.isLetter(c) && c != '_') return true;
+            } else {
+                if (!Character.isLetterOrDigit(c) && c != '_') return true;
+            }
+        }
+        // Check for jq keywords
+        return switch (name) {
+            case "and", "or", "not", "if", "then", "else", "end",
+                 "as", "def", "reduce", "foreach", "try", "catch",
+                 "import", "include", "label", "break", "null",
+                 "true", "false" -> true;
+            default -> false;
+        };
+    }
+
+    private static String escapeJqString(String s) {
+        var sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+}

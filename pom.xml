@@ -171,6 +171,12 @@
             </modules>
         </profile>
         <profile>
+            <id>jsonata</id>
+            <modules>
+                <module>jjq-jsonata</module>
+            </modules>
+        </profile>
+        <profile>
             <id>release</id>
             <activation>
                 <property>
