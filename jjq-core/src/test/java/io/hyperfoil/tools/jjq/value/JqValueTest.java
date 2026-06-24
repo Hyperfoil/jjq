@@ -714,6 +714,142 @@ class JqValueTest {
     }
 
     @Test
+    void testTryDouble() {
+        // From JqNumber
+        assertEquals(42.0, JqNumber.of(42).tryDouble());
+        assertEquals(3.14, JqNumber.of(3.14).tryDouble());
+        // From numeric JqString
+        assertEquals(42.0, JqString.of("42").tryDouble());
+        assertEquals(3.14, JqString.of("3.14").tryDouble());
+        assertEquals(-1.5, JqString.of("-1.5").tryDouble());
+        // From non-numeric JqString
+        assertNull(JqString.of("hello").tryDouble());
+        assertNull(JqString.of("").tryDouble());
+        // From other types
+        assertNull(JqNull.NULL.tryDouble());
+        assertNull(JqBoolean.TRUE.tryDouble());
+        assertNull(JqArray.EMPTY.tryDouble());
+        assertNull(JqObject.EMPTY.tryDouble());
+    }
+
+    @Test
+    void testTryLong() {
+        // From JqNumber (integral)
+        assertEquals(Long.valueOf(42), JqNumber.of(42).tryLong());
+        assertEquals(Long.valueOf(-1), JqNumber.of(-1).tryLong());
+        // From JqNumber (non-integral — truncates)
+        assertEquals(Long.valueOf(3), JqNumber.of(3.7).tryLong());
+        // From numeric JqString
+        assertEquals(Long.valueOf(42), JqString.of("42").tryLong());
+        assertEquals(Long.valueOf(-100), JqString.of("-100").tryLong());
+        // From non-integer string
+        assertNull(JqString.of("3.14").tryLong());
+        assertNull(JqString.of("hello").tryLong());
+        assertNull(JqString.of("").tryLong());
+        // From other types
+        assertNull(JqNull.NULL.tryLong());
+        assertNull(JqBoolean.TRUE.tryLong());
+        assertNull(JqArray.EMPTY.tryLong());
+        assertNull(JqObject.EMPTY.tryLong());
+    }
+
+    @Test
+    void testTryInt() {
+        // From JqNumber (integral)
+        assertEquals(Integer.valueOf(42), JqNumber.of(42).tryInt());
+        assertEquals(Integer.valueOf(-1), JqNumber.of(-1).tryInt());
+        // From JqNumber (non-integral — truncates)
+        assertEquals(Integer.valueOf(3), JqNumber.of(3.7).tryInt());
+        // From numeric JqString
+        assertEquals(Integer.valueOf(42), JqString.of("42").tryInt());
+        assertEquals(Integer.valueOf(-100), JqString.of("-100").tryInt());
+        // From non-integer string
+        assertNull(JqString.of("3.14").tryInt());
+        assertNull(JqString.of("hello").tryInt());
+        assertNull(JqString.of("").tryInt());
+        // From other types
+        assertNull(JqNull.NULL.tryInt());
+        assertNull(JqBoolean.TRUE.tryInt());
+    }
+
+    @Test
+    void testForEachOnObject() {
+        var obj = JqObject.builder().put("a", 1L).put("b", 2L).put("c", 3L).build();
+        var keys = new java.util.ArrayList<String>();
+        var vals = new java.util.ArrayList<Long>();
+        obj.forEach((k, v) -> { keys.add(k); vals.add(v.longValue()); });
+        assertEquals(List.of("a", "b", "c"), keys);
+        assertEquals(List.of(1L, 2L, 3L), vals);
+    }
+
+    @Test
+    void testForEachOnEmptyObject() {
+        var keys = new java.util.ArrayList<String>();
+        JqObject.EMPTY.forEach((k, v) -> keys.add(k));
+        assertTrue(keys.isEmpty());
+    }
+
+    @Test
+    void testAtJsonPointer() {
+        var json = JqValues.parse("{\"a\":{\"b\":[{\"c\":42},{\"c\":99}]}}");
+        // Deep navigation
+        assertEquals(JqNumber.of(42), json.at("/a/b/0/c"));
+        assertEquals(JqNumber.of(99), json.at("/a/b/1/c"));
+        // Missing path
+        assertEquals(JqNull.NULL, json.at("/a/x/y"));
+        assertEquals(JqNull.NULL, json.at("/a/b/99"));
+        // Empty pointer returns self (RFC 6901: "" references whole document)
+        assertSame(json, json.at(""));
+        // "/" references the empty-string key (RFC 6901 section 5)
+        assertEquals(JqNull.NULL, json.at("/"));  // no "" key in this object
+    }
+
+    @Test
+    void testAtWithEscapedTokens() {
+        // RFC 6901: ~0 = ~, ~1 = /
+        var json = JqValues.parse("{\"a/b\":{\"c~d\":42}}");
+        assertEquals(JqNumber.of(42), json.at("/a~1b/c~0d"));
+    }
+
+    @Test
+    void testAtOnArray() {
+        var json = JqValues.parse("[[1,2],[3,4]]");
+        assertEquals(JqNumber.of(3), json.at("/1/0"));
+    }
+
+    @Test
+    void testRequiredString() {
+        var obj = JqObject.of("name", JqString.of("Alice"));
+        assertEquals(JqString.of("Alice"), obj.required("name"));
+        assertThrows(JqTypeError.class, () -> obj.required("missing"));
+    }
+
+    @Test
+    void testRequiredInt() {
+        var arr = JqArray.of(JqNumber.of(10), JqNumber.of(20));
+        assertEquals(JqNumber.of(10), arr.required(0));
+        assertEquals(JqNumber.of(20), arr.required(1));
+        assertThrows(JqTypeError.class, () -> arr.required(5));
+        assertThrows(JqTypeError.class, () -> JqObject.EMPTY.required(0));
+    }
+
+    @Test
+    void testIsIntegralNumber() {
+        assertTrue(JqNumber.of(42).isIntegralNumber());
+        assertFalse(JqNumber.of(3.14).isIntegralNumber());
+        assertFalse(JqString.of("42").isIntegralNumber());
+        assertFalse(JqNull.NULL.isIntegralNumber());
+    }
+
+    @Test
+    void testIsFloatingPointNumber() {
+        assertFalse(JqNumber.of(42).isFloatingPointNumber());
+        assertTrue(JqNumber.of(3.14).isFloatingPointNumber());
+        assertFalse(JqString.of("3.14").isFloatingPointNumber());
+        assertFalse(JqNull.NULL.isFloatingPointNumber());
+    }
+
+    @Test
     void testFluentNavigation() {
         var json = JqValues.parse("{\"a\":{\"b\":[{\"c\":42}]}}");
         assertEquals(JqNumber.of(42), json.getField("a").getField("b").getElement(0).getField("c"));
