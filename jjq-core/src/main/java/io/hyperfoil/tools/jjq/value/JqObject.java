@@ -368,6 +368,18 @@ public final class JqObject implements JqValue {
     /** Return the number of fields. */
     public int size() { return externalMap != null ? externalMap.size() : size; }
 
+    /**
+     * Iterate all fields with zero allocation for array-backed objects.
+     * Avoids {@link java.util.Map.Entry} creation that {@link #entries()} requires.
+     */
+    public void forEach(java.util.function.BiConsumer<String, JqValue> action) {
+        if (externalMap != null) {
+            externalMap.forEach(action);
+        } else {
+            for (int i = 0; i < size; i++) action.accept(keys[i], values[i]);
+        }
+    }
+
     /** Return the field names as a Set (insertion order preserved). */
     public java.util.Set<String> keys() { return objectValue().keySet(); }
 

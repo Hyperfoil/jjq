@@ -70,6 +70,36 @@ public sealed interface JqValue extends Comparable<JqValue>
         return isBoolean() ? booleanValue() : defaultValue;
     }
 
+    // Coercing extractors — try to extract a numeric value from numbers or numeric strings
+
+    /**
+     * Try to extract a double from this value. Returns the double for numbers,
+     * tries to parse {@code stringValue()} for strings, returns {@code null} otherwise.
+     * Useful for data that may arrive as either a JSON number or a quoted numeric string.
+     */
+    default Double tryDouble() {
+        if (this instanceof JqNumber n) return n.doubleValue();
+        if (this instanceof JqString s) {
+            try { return Double.parseDouble(s.stringValue()); }
+            catch (NumberFormatException e) { return null; }
+        }
+        return null;
+    }
+
+    /**
+     * Try to extract a long from this value. Returns the long for integral numbers,
+     * truncates non-integral numbers, tries to parse {@code stringValue()} for strings,
+     * returns {@code null} otherwise.
+     */
+    default Long tryLong() {
+        if (this instanceof JqNumber n) return n.longValue();
+        if (this instanceof JqString s) {
+            try { return Long.parseLong(s.stringValue()); }
+            catch (NumberFormatException e) { return null; }
+        }
+        return null;
+    }
+
     /**
      * Return the string representation: {@code stringValue()} for strings,
      * {@code null} for null, {@code toJsonString()} for all other types.
@@ -99,8 +129,8 @@ public sealed interface JqValue extends Comparable<JqValue>
     default boolean isEmpty() {
         return switch (this) {
             case JqNull ignored -> true;
-            case JqArray a -> a.arrayValue().isEmpty();
-            case JqObject o -> o.objectValue().isEmpty();
+            case JqArray a -> a.size() == 0;
+            case JqObject o -> o.size() == 0;
             case JqString s -> s.stringValue().isEmpty();
             default -> false;
         };
@@ -178,11 +208,7 @@ public sealed interface JqValue extends Comparable<JqValue>
      * Supports negative indexing. Returns {@code false} for non-array values.
      */
     default boolean has(int index) {
-        if (this instanceof JqArray arr) {
-            int actual = index < 0 ? arr.arrayValue().size() + index : index;
-            return actual >= 0 && actual < arr.arrayValue().size();
-        }
-        return false;
+        return this instanceof JqArray arr && arr.has(index);
     }
 
     default int length() {
@@ -191,8 +217,8 @@ public sealed interface JqValue extends Comparable<JqValue>
             case JqBoolean ignored -> throw new JqTypeError("boolean has no length");
             case JqNumber ignored -> throw new JqTypeError("number has no length");
             case JqString s -> s.stringValue().length();
-            case JqArray a -> a.arrayValue().size();
-            case JqObject o -> o.objectValue().size();
+            case JqArray a -> a.size();
+            case JqObject o -> o.size();
         };
     }
 
