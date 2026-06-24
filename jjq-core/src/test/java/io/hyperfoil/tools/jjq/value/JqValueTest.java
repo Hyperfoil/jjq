@@ -440,9 +440,10 @@ class JqValueTest {
 
     @Test
     void testGetFieldOnNonObject() {
-        assertThrows(JqTypeError.class, () -> JqNumber.of(42).getField("x"));
-        assertThrows(JqTypeError.class, () -> JqArray.EMPTY.getField("x"));
-        assertThrows(JqTypeError.class, () -> JqString.of("hi").getField("x"));
+        // getField returns JqNull.NULL for non-objects (null-safe navigation)
+        assertEquals(JqNull.NULL, JqNumber.of(42).getField("x"));
+        assertEquals(JqNull.NULL, JqArray.EMPTY.getField("x"));
+        assertEquals(JqNull.NULL, JqString.of("hi").getField("x"));
     }
 
     @Test
@@ -467,8 +468,9 @@ class JqValueTest {
 
     @Test
     void testGetElementOnNonArray() {
-        assertThrows(JqTypeError.class, () -> JqNumber.of(42).getElement(0));
-        assertThrows(JqTypeError.class, () -> JqObject.EMPTY.getElement(0));
+        // getElement returns JqNull.NULL for non-arrays (null-safe navigation)
+        assertEquals(JqNull.NULL, JqNumber.of(42).getElement(0));
+        assertEquals(JqNull.NULL, JqObject.EMPTY.getElement(0));
     }
 
     @Test
@@ -615,12 +617,43 @@ class JqValueTest {
 
     @Test
     void testGetFieldOnNull() {
-        assertThrows(JqTypeError.class, () -> JqNull.NULL.getField("x"));
+        assertEquals(JqNull.NULL, JqNull.NULL.getField("x"));
     }
 
     @Test
     void testGetFieldOnBoolean() {
-        assertThrows(JqTypeError.class, () -> JqBoolean.TRUE.getField("x"));
+        assertEquals(JqNull.NULL, JqBoolean.TRUE.getField("x"));
+    }
+
+    @Test
+    void testFluentNavigation() {
+        var json = JqValues.parse("{\"a\":{\"b\":[{\"c\":42}]}}");
+        assertEquals(JqNumber.of(42), json.getField("a").getField("b").getElement(0).getField("c"));
+        // Non-existent path returns JqNull.NULL at each step
+        assertEquals(JqNull.NULL, json.getField("x").getField("y").getElement(0));
+    }
+
+    @Test
+    void testHasOnJqValue() {
+        var obj = JqObject.of("name", JqString.of("Alice"));
+        assertTrue(obj.has("name"));
+        assertFalse(obj.has("missing"));
+        // has(String) on non-objects returns false
+        assertFalse(JqNumber.of(42).has("x"));
+        assertFalse(JqNull.NULL.has("x"));
+    }
+
+    @Test
+    void testHasIntOnJqValue() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3));
+        assertTrue(arr.has(0));
+        assertTrue(arr.has(2));
+        assertTrue(arr.has(-1)); // last element
+        assertFalse(arr.has(5));
+        assertFalse(arr.has(-5));
+        // has(int) on non-arrays returns false
+        assertFalse(JqObject.EMPTY.has(0));
+        assertFalse(JqNull.NULL.has(0));
     }
 
     @Test
@@ -635,12 +668,12 @@ class JqValueTest {
 
     @Test
     void testGetElementOnNull() {
-        assertThrows(JqTypeError.class, () -> JqNull.NULL.getElement(0));
+        assertEquals(JqNull.NULL, JqNull.NULL.getElement(0));
     }
 
     @Test
     void testGetElementOnString() {
-        assertThrows(JqTypeError.class, () -> JqString.of("hi").getElement(0));
+        assertEquals(JqNull.NULL, JqString.of("hi").getElement(0));
     }
 
     @Test

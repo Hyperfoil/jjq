@@ -150,6 +150,12 @@ public final class JqArray implements JqValue {
         return elements.get(index);
     }
 
+    /** Check if the given index is within bounds. Supports negative indexing. */
+    public boolean has(int index) {
+        int actual = index < 0 ? elements.size() + index : index;
+        return actual >= 0 && actual < elements.size();
+    }
+
     public JqArray slice(Integer from, Integer to) {
         int size = elements.size();
         int start = from == null ? 0 : (from < 0 ? Math.max(0, size + from) : from);

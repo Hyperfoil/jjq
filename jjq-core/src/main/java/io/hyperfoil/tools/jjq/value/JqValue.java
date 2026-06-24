@@ -85,13 +85,12 @@ public sealed interface JqValue extends Comparable<JqValue>
     // ========================================================================
 
     /**
-     * Get a field value from an object. Returns {@link JqNull#NULL} for missing keys.
-     *
-     * @throws JqTypeError if this value is not an object
+     * Get a field value from an object. Returns {@link JqNull#NULL} for missing keys
+     * and for non-object values (enables fluent navigation chains).
      */
     default JqValue getField(String key) {
         if (this instanceof JqObject obj) return obj.get(key);
-        throw new JqTypeError("Cannot get field from " + type().jqName());
+        return JqNull.NULL;
     }
 
     /**
@@ -107,12 +106,11 @@ public sealed interface JqValue extends Comparable<JqValue>
 
     /**
      * Get an element from an array. Supports negative indexing ({@code -1} = last).
-     *
-     * @throws JqTypeError if this value is not an array
+     * Returns {@link JqNull#NULL} for non-array values (enables fluent navigation chains).
      */
     default JqValue getElement(int index) {
         if (this instanceof JqArray arr) return arr.get(index);
-        throw new JqTypeError("Cannot get element from " + type().jqName());
+        return JqNull.NULL;
     }
 
     /**
@@ -125,6 +123,26 @@ public sealed interface JqValue extends Comparable<JqValue>
     default JqValue withElement(int index, JqValue value) {
         if (this instanceof JqArray arr) return arr.with(index, value);
         throw new JqTypeError("Cannot set element on " + type().jqName());
+    }
+
+    /**
+     * Check if this object contains a field with the given key.
+     * Returns {@code false} for non-object values.
+     */
+    default boolean has(String key) {
+        return this instanceof JqObject obj && obj.has(key);
+    }
+
+    /**
+     * Check if this array contains an element at the given index.
+     * Supports negative indexing. Returns {@code false} for non-array values.
+     */
+    default boolean has(int index) {
+        if (this instanceof JqArray arr) {
+            int actual = index < 0 ? arr.arrayValue().size() + index : index;
+            return actual >= 0 && actual < arr.arrayValue().size();
+        }
+        return false;
     }
 
     default int length() {
