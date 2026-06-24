@@ -188,16 +188,26 @@ final class JsonataToJq {
             return;
         }
 
-        // Simple field-only path with >= 2 steps: use auto-mapping
-        // Generate: [.step1 | (auto-map intermediate steps) | .lastStep]
-        //           | singleton-unwrap
         if (steps.size() <= 1) {
             sb.append('.');
             emitFieldName(steps.get(0), sb);
             return;
         }
 
-        // Wrap in collect + singleton unwrap for implicit array mapping
+        // Two-step paths (A.B): use simple direct access (.A.B)
+        // This is the common case for object field access and avoids
+        // the auto-mapping overhead that breaks binary expressions.
+        if (steps.size() == 2) {
+            sb.append('.');
+            emitFieldName(steps.get(0), sb);
+            sb.append('.');
+            emitFieldName(steps.get(1), sb);
+            return;
+        }
+
+        // 3+ step paths: use auto-mapping with singleton unwrap
+        // Generate: [.step1 | (auto-map intermediate steps) | .lastStep]
+        //           | singleton-unwrap
         sb.append("[.");
         emitFieldName(steps.get(0), sb);
         for (int i = 1; i < steps.size(); i++) {
@@ -334,14 +344,17 @@ final class JsonataToJq {
                 sb.append(jqBuiltin);
             } else {
                 // Single arg — pipe arg to builtin
-                sb.append('(');
+                // Wrap collection functions with null guard for JSONata compatibility
                 if (isCollectionFunction(name)) {
-                    // Collection functions may need implicit iteration on path args
+                    sb.append("(");
                     emitIteratingArg(args.get(0), sb);
+                    sb.append(" | if . == null then null elif type != \"array\" then [.] else . end | ");
+                    sb.append(jqBuiltin).append(')');
                 } else {
+                    sb.append('(');
                     emit(args.get(0), sb, false);
+                    sb.append(" | ").append(jqBuiltin).append(')');
                 }
-                sb.append(" | ").append(jqBuiltin).append(')');
             }
             return;
         }
@@ -352,7 +365,7 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append("(");
                     emitIteratingArg(args.get(0), sb);
-                    sb.append(" | (add / length))");
+                    sb.append(" | if . == null then null elif type != \"array\" then . else (add / length) end)");
                 } else {
                     throw new JsonataException("$average requires exactly 1 argument");
                 }
@@ -433,6 +446,15 @@ final class JsonataToJq {
                     sb.append(" | add)");
                 } else {
                     throw new JsonataException("$merge requires exactly 1 argument (array of objects)");
+                }
+            }
+            case "$number" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | if type == \"number\" then . elif type == \"boolean\" then if . then 1 else 0 end elif type == \"string\" then tonumber elif . == null then null else null end)");
+                } else {
+                    throw new JsonataException("$number requires exactly 1 argument");
                 }
             }
             case "$exists" -> {
