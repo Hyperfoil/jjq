@@ -385,8 +385,8 @@ final class JsonataToJq {
                 if (isCollectionFunction(name)) {
                     sb.append("(");
                     emitIteratingArg(args.get(0), sb);
-                    sb.append(" | if . == null then null elif type != \"array\" then [.] else . end | ");
-                    sb.append(jqBuiltin).append(')');
+                    sb.append(" | if . == null then null elif type != \"array\" then [.] else . end | if . == null then null else ");
+                    sb.append(jqBuiltin).append(" end)");
                 } else {
                     sb.append('(');
                     emit(args.get(0), sb, false);
@@ -402,7 +402,7 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append("(");
                     emitIteratingArg(args.get(0), sb);
-                    sb.append(" | if . == null then null elif type != \"array\" then . else (add / length) end)");
+                    sb.append(" | if . == null then null elif type != \"array\" then . elif length == 0 then null else (add / length) end)");
                 } else {
                     throw new JsonataException("$average requires exactly 1 argument");
                 }
