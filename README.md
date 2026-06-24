@@ -85,24 +85,32 @@ byte[] jsonBytes = Files.readAllBytes(Path.of("data.json"));
 JqValue data = JqValues.parse(jsonBytes);
 ```
 
-### Navigate JSON values
+### Navigate and extract values
+
+For repeated queries, **always use `JqProgram.compile()`** -- it compiles once and executes in nanoseconds:
 
 ```java
-// Fluent null-safe navigation (returns JqNull.NULL for missing paths)
-JqValue data = JqValues.parse(jsonBytes);
-JqValue results = data.getField("autobench_workload")
-                      .getField("data")
-                      .getElement(0)
-                      .getField("results");
+// Compile once at startup (thread-safe, reusable)
+JqProgram getName = JqProgram.compile(".user");
+JqProgram getResults = JqProgram.compile(".autobench_workload.data[0].results");
 
-// Type checks and value extraction
-if (results.isObject() && !results.isEmpty()) {
-    String text = results.getField("summary").asText();  // string or toJsonString()
-    int count = results.getField("count").intValue();     // narrowing from long
-}
+// Apply many times (3 ns per field access, zero allocation)
+JqValue user = getName.apply(data);
+JqValue results = getResults.apply(data);
+```
+
+For **programmatic navigation** (traversing results, iterating dynamic field names), use the null-safe `getField()`/`getElement()` convenience methods:
+
+```java
+// Null-safe chaining -- returns JqNull.NULL for missing paths or type mismatches
+JqValue results = data.getField("workload").getField("data").getElement(0).getField("results");
+
+// Safe value extraction with defaults
+String name = data.getField("user").asString("unknown");
+long count = data.getField("count").asLong(0);
 
 // Check existence
-if (data.has("user") && data.has("uuid")) {
+if (data.has("user") && !data.getField("items").isEmpty()) {
     // ...
 }
 
@@ -113,9 +121,10 @@ for (JqValue item : items) {
 }
 
 // Stream support
-long activeCount = items.stream()
+List<String> names = items.stream()
     .filter(item -> item.getField("active").asBoolean(false))
-    .count();
+    .map(item -> item.getField("name").asText())
+    .toList();
 
 // Object accessors
 JqObject config = (JqObject) data.getField("config");
