@@ -15,23 +15,23 @@ final class JsonataToJq {
             Map.entry("$sum", "add"),
             Map.entry("$max", "max"),
             Map.entry("$min", "min"),
-            Map.entry("$count", "length"),
+            // $count handled as special case (returns 0 for null, not null)
             // String ($string handled as special case in emitFunctionCall)
             Map.entry("$length", "length"),
             Map.entry("$uppercase", "ascii_upcase"),
             Map.entry("$lowercase", "ascii_downcase"),
             Map.entry("$trim", "gsub(\"[\\\\s]+\"; \" \") | ltrimstr(\" \") | rtrimstr(\" \")"),
-            Map.entry("$number", "tonumber"),
+            // $number handled as special case in emitFunctionCall (boolean/null support)
             // Type
             Map.entry("$type", "type"),
             // Array
             Map.entry("$sort", "sort"),
             Map.entry("$reverse", "reverse"),
             Map.entry("$distinct", "unique"),
-            Map.entry("$keys", "keys"),
+            Map.entry("$keys", "if type == \"object\" then keys elif type == \"array\" then keys else null end"),
             Map.entry("$values", "[.[]]"),
             // Boolean
-            Map.entry("$not", "not"),
+            Map.entry("$not", "if . == null or . == false then true else (. | not) end"),
             Map.entry("$boolean", "if . == null or . == false then false else true end")
     );
 
@@ -68,11 +68,14 @@ final class JsonataToJq {
 
             case PredicateNode pred -> {
                 // Phone[type='mobile'] → [.Phone[] | select(.type == "mobile")]
-                sb.append('[');
+                // Null-safe: if base is null, return empty array
+                sb.append("(");
                 emit(pred.base(), sb, false);
-                sb.append("[] | select(");
+                sb.append(" | if . == null then [] elif type == \"array\" then [.[] | select(");
                 emitPredicate(pred.predicate(), sb);
-                sb.append(")]");
+                sb.append(")] elif type == \"object\" then if ");
+                emitPredicate(pred.predicate(), sb);
+                sb.append(" then [.] else [] end else [] end)");
             }
 
             case NumberNode n -> sb.append(n.value());
@@ -98,9 +101,16 @@ final class JsonataToJq {
 
             case UnaryNode un -> {
                 if ("-".equals(un.op())) {
-                    sb.append("-(");
-                    emit(un.operand(), sb, false);
-                    sb.append(')');
+                    if (un.operand() instanceof NumberNode) {
+                        // Simple negative number — no null guard needed
+                        sb.append("-(");
+                        emit(un.operand(), sb, false);
+                        sb.append(')');
+                    } else {
+                        sb.append("((");
+                        emit(un.operand(), sb, false);
+                        sb.append(") | if . == null then null else -. end)");
+                    }
                 } else if ("not".equals(un.op())) {
                     sb.append('(');
                     emit(un.operand(), sb, false);
@@ -434,9 +444,9 @@ final class JsonataToJq {
                 if (args.size() == 2) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | split(");
+                    sb.append(" | if . == null then null elif type != \"string\" then null else split(");
                     emit(args.get(1), sb, false);
-                    sb.append("))");
+                    sb.append(") end)");
                 } else if (args.size() == 3) {
                     // $split(str, sep, limit) — split and take first N elements
                     sb.append('(');
@@ -454,13 +464,13 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | join(\"\"))");
+                    sb.append(" | if type == \"string\" then . elif type == \"array\" then join(\"\") else null end)");
                 } else if (args.size() == 2) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | join(");
+                    sb.append(" | if type == \"string\" then . elif type == \"array\" then join(");
                     emit(args.get(1), sb, false);
-                    sb.append("))");
+                    sb.append(") else null end)");
                 } else {
                     throw new JsonataException("$join requires 1 or 2 arguments");
                 }
@@ -492,12 +502,12 @@ final class JsonataToJq {
             }
             case "$append" -> {
                 if (args.size() == 2) {
-                    // Wrap non-array args in [.] before concatenation
+                    // Skip null args, return the other; wrap non-array for concatenation
                     sb.append("((");
                     emit(args.get(0), sb, false);
-                    sb.append(" | if type != \"array\" then [.] else . end) + (");
+                    sb.append(") as $__a | (");
                     emit(args.get(1), sb, false);
-                    sb.append(" | if type != \"array\" then [.] else . end))");
+                    sb.append(") as $__b | if $__a == null and $__b == null then null elif $__a == null then $__b elif $__b == null then $__a else (($__a | if type != \"array\" then [.] else . end) + ($__b | if type != \"array\" then [.] else . end)) end)");
                 } else {
                     throw new JsonataException("$append requires exactly 2 arguments");
                 }
@@ -506,9 +516,20 @@ final class JsonataToJq {
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | add)");
+                    sb.append(" | if . == null then null elif type == \"object\" then . elif type == \"array\" then add else null end)");
                 } else {
                     throw new JsonataException("$merge requires exactly 1 argument (array of objects)");
+                }
+            }
+            case "$count" -> {
+                if (args.size() == 1) {
+                    sb.append("(");
+                    emitIteratingArg(args.get(0), sb);
+                    sb.append(" | if . == null then 0 elif type != \"array\" then 1 else length end)");
+                } else if (args.isEmpty()) {
+                    sb.append("(if . == null then 0 elif type != \"array\" then 1 else length end)");
+                } else {
+                    throw new JsonataException("$count requires 0 or 1 arguments");
                 }
             }
             case "$string" -> {
@@ -538,13 +559,26 @@ final class JsonataToJq {
             }
             case "$exists" -> {
                 if (args.size() == 1) {
-                    // JSONata: $exists returns true if the value is not undefined/missing
-                    // In jq, missing fields return null. $exists(null_literal) should be true
-                    // but $exists(missing_field) should be false.
-                    // Best approximation: check if result is not null
-                    sb.append("((");
-                    emit(args.get(0), sb, false);
-                    sb.append(") != null)");
+                    Node arg = args.get(0);
+                    if (arg instanceof NullNode || arg instanceof BooleanNode
+                            || arg instanceof NumberNode || arg instanceof StringNode
+                            || arg instanceof ArrayNode || arg instanceof ObjectNode) {
+                        // Literal value always exists
+                        sb.append("true");
+                    } else if (arg instanceof FieldNode f) {
+                        // Check if field exists using has()
+                        sb.append("has(\"").append(escapeJqString(f.name())).append("\")");
+                    } else if (arg instanceof PathNode p && p.steps().size() == 2
+                            && p.steps().get(0) instanceof FieldNode f1
+                            && p.steps().get(1) instanceof FieldNode f2) {
+                        // Two-step path: .a.b — check has on nested
+                        sb.append("(.").append(f1.name()).append(" | has(\"").append(escapeJqString(f2.name())).append("\"))");
+                    } else {
+                        // General case: evaluate and check not null
+                        sb.append("((");
+                        emit(arg, sb, false);
+                        sb.append(") != null)");
+                    }
                 } else {
                     throw new JsonataException("$exists requires exactly 1 argument");
                 }
@@ -577,19 +611,23 @@ final class JsonataToJq {
                 }
             }
             case "$round" -> {
+                // JSONata uses banker's rounding (half-to-even)
+                String bankersRound = "((. | floor) as $f | (. | ceil) as $c | " +
+                        "if (. - $f) == 0.5 then (if ($f % 2) == 0 then $f else $c end) " +
+                        "elif ($c - .) == 0.5 then (if ($c % 2) == 0 then $c else $f end) " +
+                        "else round end)";
                 if (args.size() == 1) {
                     sb.append('(');
                     emit(args.get(0), sb, false);
-                    sb.append(" | if . == null then null else round end)");
+                    sb.append(" | if . == null then null else ").append(bankersRound).append(" end)");
                 } else if (args.size() == 2) {
-                    // $round(number, precision) — round to N decimal places
-                    // Note: uses jq's round (banker's rounding / half-to-even).
-                    // JSONata uses half-away-from-zero — documented as known difference.
                     sb.append("((");
                     emit(args.get(0), sb, false);
                     sb.append(") as $__n | (");
                     emit(args.get(1), sb, false);
-                    sb.append(") as $__p | ($__n * pow(10; $__p) | round) / pow(10; $__p))");
+                    sb.append(") as $__p | if $__n == null then null else ($__n * pow(10; $__p) | ");
+                    sb.append(bankersRound);
+                    sb.append(") / pow(10; $__p) end)");
                 } else {
                     throw new JsonataException("$round requires 1 or 2 arguments");
                 }
