@@ -167,60 +167,62 @@ final class JsonataToJq {
 
     /**
      * Emit a path expression, handling implicit array mapping.
-     * When a path step follows another step, we assume the intermediate could be
-     * an array and generate [.A[] | .B] (collect-iterate pattern).
-     * For simple two-step paths (A.B), we use direct field access (.A.B).
+     *
+     * <p>JSONata automatically iterates arrays encountered in a path: {@code foo.blah.baz}
+     * where {@code blah} is an array iterates each element and collects {@code .baz} values.
+     * Since we can't know at compile time which steps are arrays, we generate jq that
+     * handles both cases at each intermediate step:</p>
+     *
+     * <pre>{@code
+     * foo.blah.baz → [.foo | (.blah? // empty | if type == "array" then .[] else . end)
+     *                      | (.baz? // empty)] | <singleton-unwrap>
+     * }</pre>
      */
     private static void emitPath(List<Node> steps, StringBuilder sb) {
         if (steps.isEmpty()) return;
 
-        // Simple case: all steps are field names → direct path (.A.B.C)
-        if (isSimpleFieldPath(steps)) {
-            sb.append('.');
-            for (int i = 0; i < steps.size(); i++) {
-                if (i > 0) sb.append('.');
-                emitFieldName(steps.get(i), sb);
-            }
+        // If path contains non-field steps (predicates, functions, indices),
+        // handle them in the complex path
+        if (!isSimpleFieldPath(steps)) {
+            emitComplexPath(steps, sb);
             return;
         }
 
-        // Complex case: may contain array traversal, predicates, function calls
-        // Emit first step
+        // Simple field-only path with >= 2 steps: use auto-mapping
+        // Generate: [.step1 | (auto-map intermediate steps) | .lastStep]
+        //           | singleton-unwrap
+        if (steps.size() <= 1) {
+            sb.append('.');
+            emitFieldName(steps.get(0), sb);
+            return;
+        }
+
+        // Wrap in collect + singleton unwrap for implicit array mapping
+        sb.append("[.");
+        emitFieldName(steps.get(0), sb);
+        for (int i = 1; i < steps.size(); i++) {
+            sb.append(" | (.");
+            emitFieldName(steps.get(i), sb);
+            sb.append("? // empty");
+            if (i < steps.size() - 1) {
+                // Intermediate step: auto-map arrays
+                sb.append(" | if type == \"array\" then .[] else . end");
+            }
+            sb.append(')');
+        }
+        sb.append("] | if length == 0 then null elif length == 1 then .[0] else . end");
+    }
+
+    /**
+     * Emit a complex path containing non-field steps (indices, predicates, functions).
+     */
+    private static void emitComplexPath(List<Node> steps, StringBuilder sb) {
         emit(steps.get(0), sb, false);
         for (int i = 1; i < steps.size(); i++) {
             Node step = steps.get(i);
-            Node prevStep = steps.get(i - 1);
-
             if (step instanceof FieldNode || step instanceof QuotedFieldNode) {
-                // Check if we need implicit array iteration
-                // If the previous step could produce an array, iterate
-                if (needsImplicitIteration(prevStep)) {
-                    // Wrap in collect: [prev[] | .field]
-                    String soFar = sb.toString();
-                    sb.setLength(0);
-                    sb.append('[').append(soFar).append("[] | .");
-                    emitFieldName(step, sb);
-                    // Consume remaining steps within the collect
-                    for (int j = i + 1; j < steps.size(); j++) {
-                        Node nextStep = steps.get(j);
-                        if (nextStep instanceof FieldNode || nextStep instanceof QuotedFieldNode) {
-                            sb.append('.');
-                            emitFieldName(nextStep, sb);
-                        } else {
-                            // Non-field step breaks the collect
-                            sb.append(']');
-                            for (int k = j; k < steps.size(); k++) {
-                                emit(steps.get(k), sb, true);
-                            }
-                            return;
-                        }
-                    }
-                    sb.append(']');
-                    return;
-                } else {
-                    sb.append('.');
-                    emitFieldName(step, sb);
-                }
+                sb.append('.');
+                emitFieldName(step, sb);
             } else if (step instanceof FunctionCallNode fn) {
                 sb.append(" | ");
                 emitFunctionCall(fn, sb);
@@ -246,20 +248,21 @@ final class JsonataToJq {
     }
 
     /**
-     * Emit a function argument that should iterate if it's a multi-step path.
-     * JSONata: $sum(orders.price) means "iterate orders, collect price, sum them".
-     * jq: [.orders[] | .price] | add
+     * Emit a function argument that should produce an array for collection functions.
+     * For multi-step paths, generates the auto-mapping collection WITHOUT singleton unwrap.
+     * JSONata: $sum(orders.price) → [.orders | (.price? // empty | ...)] | add
      */
     private static void emitIteratingArg(Node arg, StringBuilder sb) {
         if (arg instanceof PathNode p && p.steps().size() >= 2 && isSimpleFieldPath(p.steps())) {
-            // Multi-step path → iterate first step, pipe remaining fields
-            // orders.price → [.orders[] | .price]
+            // Emit the auto-mapping collection without singleton unwrap
+            // Every intermediate step (including the first field) gets array auto-mapping
             sb.append("[.");
             emitFieldName(p.steps().get(0), sb);
-            sb.append("[] | .");
             for (int i = 1; i < p.steps().size(); i++) {
-                if (i > 1) sb.append('.');
+                // Auto-map the PREVIOUS step (it might be an array)
+                sb.append(" | if type == \"array\" then .[] else . end | (.");
                 emitFieldName(p.steps().get(i), sb);
+                sb.append("? // empty)");
             }
             sb.append(']');
         } else {

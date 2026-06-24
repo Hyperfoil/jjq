@@ -113,7 +113,29 @@ final class JsonataLexer {
                 while (i < len && input.charAt(i) != quote) {
                     if (input.charAt(i) == '\\' && i + 1 < len) {
                         i++;
-                        sb.append(input.charAt(i));
+                        char esc = input.charAt(i);
+                        switch (esc) {
+                            case 'n' -> sb.append('\n');
+                            case 't' -> sb.append('\t');
+                            case 'r' -> sb.append('\r');
+                            case 'b' -> sb.append('\b');
+                            case 'f' -> sb.append('\f');
+                            case '\\' -> sb.append('\\');
+                            case '\'' -> sb.append('\'');
+                            case '"' -> sb.append('"');
+                            case '/' -> sb.append('/');
+                            case 'u' -> {
+                                // Unicode escape: 4-digit hex
+                                if (i + 4 < len) {
+                                    String hex = input.substring(i + 1, i + 5);
+                                    sb.append((char) Integer.parseInt(hex, 16));
+                                    i += 4;
+                                } else {
+                                    sb.append(esc);
+                                }
+                            }
+                            default -> sb.append(esc);
+                        }
                     } else {
                         sb.append(input.charAt(i));
                     }
