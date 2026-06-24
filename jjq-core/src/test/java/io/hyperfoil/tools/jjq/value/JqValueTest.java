@@ -882,6 +882,95 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  JqValues.parse(InputStream) tests
+    // ========================================================================
+
+    @Test
+    void testParseInputStream() throws Exception {
+        String json = "{\"name\":\"Alice\",\"age\":30}";
+        var stream = new java.io.ByteArrayInputStream(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        JqValue result = JqValues.parse(stream);
+        assertEquals(JqString.of("Alice"), result.getField("name"));
+        assertEquals(JqNumber.of(30), result.getField("age"));
+    }
+
+    @Test
+    void testParseInputStreamEmpty() throws Exception {
+        var stream = new java.io.ByteArrayInputStream("null".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(JqNull.NULL, JqValues.parse(stream));
+    }
+
+    // ========================================================================
+    //  JqValue.asInt(int) tests
+    // ========================================================================
+
+    @Test
+    void testAsInt() {
+        assertEquals(42, JqNumber.of(42).asInt(0));
+        assertEquals(3, JqNumber.of(3.7).asInt(0));
+        assertEquals(0, JqString.of("hello").asInt(0));
+        assertEquals(-1, JqNull.NULL.asInt(-1));
+        assertEquals(99, JqBoolean.TRUE.asInt(99));
+    }
+
+    // ========================================================================
+    //  JqValues.toPrettyJsonString() tests
+    // ========================================================================
+
+    @Test
+    void testPrettyPrintScalar() {
+        assertEquals("42", JqValues.toPrettyJsonString(JqNumber.of(42)));
+        assertEquals("\"hello\"", JqValues.toPrettyJsonString(JqString.of("hello")));
+        assertEquals("null", JqValues.toPrettyJsonString(JqNull.NULL));
+    }
+
+    @Test
+    void testPrettyPrintObject() {
+        var obj = JqObject.builder().put("name", "Alice").put("age", 30L).build();
+        String pretty = JqValues.toPrettyJsonString(obj);
+        assertEquals("""
+                {
+                  "name": "Alice",
+                  "age": 30
+                }""", pretty);
+    }
+
+    @Test
+    void testPrettyPrintArray() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3));
+        String pretty = JqValues.toPrettyJsonString(arr);
+        assertEquals("""
+                [
+                  1,
+                  2,
+                  3
+                ]""", pretty);
+    }
+
+    @Test
+    void testPrettyPrintNested() {
+        var json = JqValues.parse("{\"users\":[{\"name\":\"Alice\"},{\"name\":\"Bob\"}]}");
+        String pretty = JqValues.toPrettyJsonString(json);
+        assertEquals("""
+                {
+                  "users": [
+                    {
+                      "name": "Alice"
+                    },
+                    {
+                      "name": "Bob"
+                    }
+                  ]
+                }""", pretty);
+    }
+
+    @Test
+    void testPrettyPrintEmpty() {
+        assertEquals("{}", JqValues.toPrettyJsonString(JqObject.EMPTY));
+        assertEquals("[]", JqValues.toPrettyJsonString(JqArray.EMPTY));
+    }
+
+    // ========================================================================
     //  JqNumber.of(Number) tests
     // ========================================================================
 

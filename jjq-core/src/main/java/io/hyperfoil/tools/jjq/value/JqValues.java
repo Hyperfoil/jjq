@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.value;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
@@ -144,6 +145,71 @@ public final class JqValues {
         var writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
         serializeTo(value, writer);
         writer.flush();
+    }
+
+    // ========================================================================
+    //  Pretty-print serialization
+    // ========================================================================
+
+    private static final String INDENT = "  ";
+
+    /**
+     * Serialize a JqValue to an indented, human-readable JSON string.
+     * Uses 2-space indentation. Scalars produce compact output (same as {@link JqValue#toJsonString()}).
+     * Objects and arrays are formatted with newlines and indentation.
+     *
+     * <p>This method is intended for export files, debugging, and CLI output.
+     * For performance-sensitive serialization, use {@link JqValue#toJsonString()} instead.</p>
+     */
+    public static String toPrettyJsonString(JqValue value) {
+        if (value.isScalar()) return value.toJsonString();
+        StringBuilder sb = SERIALIZER_BUFFER.get();
+        sb.setLength(0);
+        appendPretty(value, sb, 0);
+        String result = sb.toString();
+        if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
+            SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
+        }
+        return result;
+    }
+
+    private static void appendPretty(JqValue value, StringBuilder sb, int depth) {
+        switch (value) {
+            case JqObject obj -> {
+                if (obj.size() == 0) { sb.append("{}"); return; }
+                sb.append("{\n");
+                boolean first = true;
+                for (var entry : obj.objectValue().entrySet()) {
+                    if (!first) sb.append(",\n");
+                    first = false;
+                    appendIndent(sb, depth + 1);
+                    sb.append('"');
+                    JqString.escapeJson(entry.getKey(), sb);
+                    sb.append("\": ");
+                    appendPretty(entry.getValue(), sb, depth + 1);
+                }
+                sb.append('\n');
+                appendIndent(sb, depth);
+                sb.append('}');
+            }
+            case JqArray arr -> {
+                if (arr.size() == 0) { sb.append("[]"); return; }
+                sb.append("[\n");
+                for (int i = 0; i < arr.size(); i++) {
+                    if (i > 0) sb.append(",\n");
+                    appendIndent(sb, depth + 1);
+                    appendPretty(arr.get(i), sb, depth + 1);
+                }
+                sb.append('\n');
+                appendIndent(sb, depth);
+                sb.append(']');
+            }
+            default -> value.appendTo(sb);
+        }
+    }
+
+    private static void appendIndent(StringBuilder sb, int depth) {
+        for (int i = 0; i < depth; i++) sb.append(INDENT);
     }
 
     /** Mutable parser state — avoids int[] indirection on every character access. */
@@ -751,6 +817,16 @@ public final class JqValues {
                 pos++;
             }
         }
+    }
+
+    /**
+     * Parse a JSON value from an InputStream. Reads all bytes and delegates
+     * to the byte[]-based parser.
+     *
+     * @throws IOException if reading from the stream fails
+     */
+    public static JqValue parse(InputStream in) throws IOException {
+        return parse(in.readAllBytes());
     }
 
     /**

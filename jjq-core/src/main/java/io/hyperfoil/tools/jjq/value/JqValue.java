@@ -61,6 +61,13 @@ public sealed interface JqValue extends Comparable<JqValue>
     }
 
     /**
+     * Return the int value (narrowed from long), or the default if this is not a number.
+     */
+    default int asInt(int defaultValue) {
+        return isNumber() ? (int) longValue() : defaultValue;
+    }
+
+    /**
      * Return the double value, or the default if this is not a number.
      */
     default double asDouble(double defaultValue) {
