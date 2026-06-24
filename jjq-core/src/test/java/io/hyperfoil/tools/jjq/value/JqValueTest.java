@@ -626,6 +626,53 @@ class JqValueTest {
     }
 
     @Test
+    void testAsText() {
+        assertEquals("hello", JqString.of("hello").asText());
+        assertNull(JqNull.NULL.asText());
+        assertEquals("42", JqNumber.of(42).asText());
+        assertEquals("true", JqBoolean.TRUE.asText());
+        assertEquals("[1,2]", JqArray.of(JqNumber.of(1), JqNumber.of(2)).asText());
+    }
+
+    @Test
+    void testIntValue() {
+        assertEquals(42, JqNumber.of(42).intValue());
+        assertEquals(3, JqNumber.of(3.7).intValue());
+        assertThrows(JqTypeError.class, () -> JqString.of("x").intValue());
+    }
+
+    @Test
+    void testIsEmpty() {
+        assertTrue(JqNull.NULL.isEmpty());
+        assertTrue(JqArray.EMPTY.isEmpty());
+        assertTrue(JqObject.EMPTY.isEmpty());
+        assertTrue(JqString.of("").isEmpty());
+        assertFalse(JqArray.of(JqNumber.of(1)).isEmpty());
+        assertFalse(JqObject.of("a", JqNumber.of(1)).isEmpty());
+        assertFalse(JqString.of("x").isEmpty());
+        assertFalse(JqNumber.of(0).isEmpty());
+        assertFalse(JqBoolean.FALSE.isEmpty());
+    }
+
+    @Test
+    void testArraySizeFirstLast() {
+        var arr = JqArray.of(JqNumber.of(10), JqNumber.of(20), JqNumber.of(30));
+        assertEquals(3, arr.size());
+        assertEquals(JqNumber.of(10), arr.first());
+        assertEquals(JqNumber.of(30), arr.last());
+        // Empty
+        assertEquals(0, JqArray.EMPTY.size());
+        assertEquals(JqNull.NULL, JqArray.EMPTY.first());
+        assertEquals(JqNull.NULL, JqArray.EMPTY.last());
+    }
+
+    @Test
+    void testObjectSize() {
+        assertEquals(0, JqObject.EMPTY.size());
+        assertEquals(2, JqObject.builder().put("a", 1L).put("b", 2L).build().size());
+    }
+
+    @Test
     void testFluentNavigation() {
         var json = JqValues.parse("{\"a\":{\"b\":[{\"c\":42}]}}");
         assertEquals(JqNumber.of(42), json.getField("a").getField("b").getElement(0).getField("c"));

@@ -365,6 +365,9 @@ public final class JqObject implements JqValue {
     @Override
     public Type type() { return Type.OBJECT; }
 
+    /** Return the number of fields. */
+    public int size() { return externalMap != null ? externalMap.size() : size; }
+
     @Override
     public Map<String, JqValue> objectValue() {
         if (externalMap != null) return externalMap;

@@ -67,6 +67,42 @@ public sealed interface JqValue extends Comparable<JqValue>
     }
 
     /**
+     * Return the string representation: {@code stringValue()} for strings,
+     * {@code null} for null, {@code toJsonString()} for all other types.
+     * Useful for display, logging, and string extraction without requiring
+     * the caller to check the type.
+     */
+    default String asText() {
+        return switch (this) {
+            case JqString s -> s.stringValue();
+            case JqNull ignored -> null;
+            default -> toJsonString();
+        };
+    }
+
+    /**
+     * Return the int value, narrowing from long.
+     * @throws JqTypeError if this value is not a number
+     */
+    default int intValue() {
+        return (int) longValue();
+    }
+
+    /**
+     * Return true if this value is empty: empty array, empty object, empty string, or null.
+     * Numbers and booleans are never empty.
+     */
+    default boolean isEmpty() {
+        return switch (this) {
+            case JqNull ignored -> true;
+            case JqArray a -> a.arrayValue().isEmpty();
+            case JqObject o -> o.objectValue().isEmpty();
+            case JqString s -> s.stringValue().isEmpty();
+            default -> false;
+        };
+    }
+
+    /**
      * Return the array elements, or an empty list if this is not an array.
      */
     default List<JqValue> asList() {

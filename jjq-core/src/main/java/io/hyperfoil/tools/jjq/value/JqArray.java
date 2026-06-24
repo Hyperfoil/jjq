@@ -144,6 +144,15 @@ public final class JqArray implements JqValue {
     @Override
     public List<JqValue> arrayValue() { return elements; }
 
+    /** Return the number of elements. */
+    public int size() { return elements.size(); }
+
+    /** Return the first element, or {@link JqNull#NULL} if empty. */
+    public JqValue first() { return elements.isEmpty() ? JqNull.NULL : elements.getFirst(); }
+
+    /** Return the last element, or {@link JqNull#NULL} if empty. */
+    public JqValue last() { return elements.isEmpty() ? JqNull.NULL : elements.getLast(); }
+
     public JqValue get(int index) {
         if (index < 0) index = elements.size() + index;
         if (index < 0 || index >= elements.size()) return JqNull.NULL;
