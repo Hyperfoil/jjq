@@ -232,31 +232,43 @@ final class JsonataToJq {
 
     /**
      * Emit a complex path containing non-field steps (indices, predicates, functions, map).
+     * Uses auto-mapping at each field step to handle arrays transparently.
      */
     private static void emitComplexPath(List<Node> steps, StringBuilder sb) {
+        // Wrap in collection with singleton unwrap for implicit array mapping
+        sb.append("[");
         emit(steps.get(0), sb, false);
         for (int i = 1; i < steps.size(); i++) {
             Node step = steps.get(i);
             Node prevStep = steps.get(i - 1);
             if (step instanceof FieldNode || step instanceof QuotedFieldNode) {
-                // If previous step was a predicate (produces array), need to iterate
+                // Auto-map: if previous result is array, iterate
                 if (prevStep instanceof PredicateNode) {
                     sb.append("[] | .");
-                    emitFieldName(step, sb);
                 } else {
-                    sb.append('.');
-                    emitFieldName(step, sb);
+                    sb.append(" | if type == \"array\" then .[] else . end | .");
                 }
+                emitFieldName(step, sb);
             } else if (step instanceof FunctionCallNode fn) {
                 sb.append(" | ");
                 emitFunctionCall(fn, sb);
             } else if (step instanceof JsonataParser.MapNode m) {
-                sb.append("[] | ");
+                sb.append(" | if type == \"array\" then .[] else . end | ");
                 emit(m.expr(), sb, false);
+            } else if (step instanceof PredicateNode pred) {
+                // Predicate in path: iterate and select
+                sb.append(" | if type == \"array\" then .[] else . end | select(");
+                emitPredicate(pred.predicate(), sb);
+                sb.append(")");
+            } else if (step instanceof IndexNode idx) {
+                sb.append("[");
+                emit(idx.index(), sb, false);
+                sb.append("]");
             } else {
                 emit(step, sb, true);
             }
         }
+        sb.append("] | if length == 0 then null elif length == 1 then .[0] else . end");
     }
 
     private static boolean isSimpleFieldPath(List<Node> steps) {
