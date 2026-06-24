@@ -127,6 +127,14 @@
                     <version>3.5.2</version>
                 </plugin>
                 <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>${version.maven.javadoc}</version>
+                    <configuration>
+                        <release>22</release>
+                    </configuration>
+                </plugin>
+                <plugin>
                     <groupId>org.sonatype.central</groupId>
                     <artifactId>central-publishing-maven-plugin</artifactId>
                     <version>${version.sonatype.central}</version>

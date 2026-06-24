@@ -27,6 +27,9 @@ import java.lang.reflect.Type;/**
 @Produces(MediaType.APPLICATION_JSON)
 public class JqValueMessageBodyWriter implements MessageBodyWriter<JqValue> {
 
+    /** Creates a new JqValueMessageBodyWriter. */
+    public JqValueMessageBodyWriter() {}
+
     @Override
     public boolean isWriteable(Class<?> type, Type genericType,
                                 Annotation[] annotations, MediaType mediaType) {

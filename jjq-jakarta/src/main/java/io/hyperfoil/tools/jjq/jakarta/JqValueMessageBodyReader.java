@@ -28,6 +28,9 @@ import java.lang.reflect.Type;
 @Consumes(MediaType.APPLICATION_JSON)
 public class JqValueMessageBodyReader implements MessageBodyReader<JqValue> {
 
+    /** Creates a new JqValueMessageBodyReader. */
+    public JqValueMessageBodyReader() {}
+
     @Override
     public boolean isReadable(Class<?> type, Type genericType,
                                Annotation[] annotations, MediaType mediaType) {

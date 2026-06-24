@@ -21,7 +21,7 @@ import org.hibernate.type.format.FormatMapper;
  *   <li><b>Plain Hibernate:</b> Set via {@code hibernate.type.json_format_mapper} property</li>
  * </ul>
  *
- * <h3>Quarkus example</h3>
+ * <p><b>Quarkus example:</b></p>
  * <pre>{@code
  * @ApplicationScoped
  * @PersistenceUnitExtension
@@ -30,6 +30,9 @@ import org.hibernate.type.format.FormatMapper;
  * }</pre>
  */
 public class JqValueFormatMapper implements FormatMapper {
+
+    /** Creates a new JqValueFormatMapper. */
+    public JqValueFormatMapper() {}
 
     @Override
     public <T> T fromString(CharSequence charSequence, JavaType<T> javaType,
