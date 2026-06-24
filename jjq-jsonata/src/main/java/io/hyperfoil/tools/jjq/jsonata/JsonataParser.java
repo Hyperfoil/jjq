@@ -73,6 +73,9 @@ final class JsonataParser {
     /** Parenthesized group: `(expr)` */
     record GroupNode(Node expr) implements Node {}
 
+    /** Map operator: `.(expr)` — evaluate expr for each element */
+    record MapNode(Node expr) implements Node {}
+
     /** Wildcard: `*` in path context */
     record WildcardNode() implements Node {}
 
@@ -148,6 +151,9 @@ final class JsonataParser {
 
             case NAME -> { advance(); yield new FieldNode(t.value()); }
 
+            // and/or as field names when in primary position (not infix)
+            case AND, OR -> { advance(); yield new FieldNode(t.value()); }
+
             case BACKTICK_NAME -> { advance(); yield new QuotedFieldNode(t.value()); }
 
             case VARIABLE -> {
@@ -206,12 +212,22 @@ final class JsonataParser {
             if (t.type() == TokenType.DOT) {
                 advance();
                 Token field = peek();
-                if (field.type() == TokenType.NAME) {
+                if (field.type() == TokenType.NAME || field.type() == TokenType.AND || field.type() == TokenType.OR) {
                     advance();
                     node = new PathNode(flattenPath(node, new FieldNode(field.value())));
                 } else if (field.type() == TokenType.BACKTICK_NAME) {
                     advance();
                     node = new PathNode(flattenPath(node, new QuotedFieldNode(field.value())));
+                } else if (field.type() == TokenType.STRING) {
+                    // Product."Product Name" — quoted field access with double quotes
+                    advance();
+                    node = new PathNode(flattenPath(node, new QuotedFieldNode(field.value())));
+                } else if (field.type() == TokenType.LPAREN) {
+                    // .(expr) — map operator: evaluate expr in context of each element
+                    advance();
+                    Node mapExpr = parseExpression(0);
+                    expect(TokenType.RPAREN, "Expected ')' in map expression");
+                    node = new PathNode(flattenPath(node, new MapNode(mapExpr)));
                 } else if (field.type() == TokenType.STAR) {
                     advance();
                     if (peek().type() == TokenType.STAR) {
@@ -268,12 +284,30 @@ final class JsonataParser {
     }
 
     private boolean isPredicate(Node node) {
-        return node instanceof BinaryNode b &&
-                (b.op().equals("=") || b.op().equals("!=") ||
-                 b.op().equals("<") || b.op().equals(">") ||
-                 b.op().equals("<=") || b.op().equals(">=") ||
-                 b.op().equals("and") || b.op().equals("or") ||
-                 b.op().equals("in"));
+        if (node instanceof BinaryNode b) {
+            return b.op().equals("=") || b.op().equals("!=") ||
+                   b.op().equals("<") || b.op().equals(">") ||
+                   b.op().equals("<=") || b.op().equals(">=") ||
+                   b.op().equals("and") || b.op().equals("or") ||
+                   b.op().equals("in") || b.op().equals("%");
+        }
+        // Unary minus on a number is NOT a predicate (it's a negative index)
+        if (node instanceof UnaryNode u && "-".equals(u.op()) && u.operand() instanceof NumberNode) {
+            return false;
+        }
+        // Expressions involving $ in brackets are predicates
+        if (containsVariable(node)) return true;
+        return false;
+    }
+
+    private boolean containsVariable(Node node) {
+        return switch (node) {
+            case VariableNode _ -> true;
+            case BinaryNode b -> containsVariable(b.left()) || containsVariable(b.right());
+            case UnaryNode u -> containsVariable(u.operand());
+            case GroupNode g -> containsVariable(g.expr());
+            default -> false;
+        };
     }
 
     private Node parseFunctionCall(String name) {

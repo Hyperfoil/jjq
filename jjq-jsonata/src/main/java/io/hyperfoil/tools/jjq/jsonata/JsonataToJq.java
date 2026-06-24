@@ -153,6 +153,14 @@ final class JsonataToJq {
                 sb.append(')');
             }
 
+            case JsonataParser.MapNode m -> {
+                // .(expr) — map operator: iterate and evaluate expr for each element
+                // In a path context, this was preceded by a field/path
+                if (!inPath) sb.append(".");
+                sb.append("[] | ");
+                emit(m.expr(), sb, false);
+            }
+
             case WildcardNode ignored -> {
                 if (!inPath) sb.append('.');
                 sb.append("[]");
@@ -223,18 +231,28 @@ final class JsonataToJq {
     }
 
     /**
-     * Emit a complex path containing non-field steps (indices, predicates, functions).
+     * Emit a complex path containing non-field steps (indices, predicates, functions, map).
      */
     private static void emitComplexPath(List<Node> steps, StringBuilder sb) {
         emit(steps.get(0), sb, false);
         for (int i = 1; i < steps.size(); i++) {
             Node step = steps.get(i);
+            Node prevStep = steps.get(i - 1);
             if (step instanceof FieldNode || step instanceof QuotedFieldNode) {
-                sb.append('.');
-                emitFieldName(step, sb);
+                // If previous step was a predicate (produces array), need to iterate
+                if (prevStep instanceof PredicateNode) {
+                    sb.append("[] | .");
+                    emitFieldName(step, sb);
+                } else {
+                    sb.append('.');
+                    emitFieldName(step, sb);
+                }
             } else if (step instanceof FunctionCallNode fn) {
                 sb.append(" | ");
                 emitFunctionCall(fn, sb);
+            } else if (step instanceof JsonataParser.MapNode m) {
+                sb.append("[] | ");
+                emit(m.expr(), sb, false);
             } else {
                 emit(step, sb, true);
             }
@@ -294,14 +312,35 @@ final class JsonataToJq {
     private static void emitPredicate(Node pred, StringBuilder sb) {
         if (pred instanceof BinaryNode bin) {
             // Translate predicate comparison
-            sb.append('.');
-            emit(bin.left(), sb, true);
+            // Handle $ as current element (.) in predicate context
+            emitPredicateExpr(bin.left(), sb);
             sb.append(' ');
             sb.append(translateComparisonOp(bin.op()));
             sb.append(' ');
-            emit(bin.right(), sb, false);
+            emitPredicateExpr(bin.right(), sb);
         } else {
-            emit(pred, sb, false);
+            emitPredicateExpr(pred, sb);
+        }
+    }
+
+    private static void emitPredicateExpr(Node node, StringBuilder sb) {
+        if (node instanceof VariableNode v && "$".equals(v.name())) {
+            sb.append('.'); // $ in predicate = current element
+        } else if (node instanceof FieldNode f) {
+            sb.append('.');
+            if (needsQuoting(f.name())) {
+                sb.append('"').append(escapeJqString(f.name())).append('"');
+            } else {
+                sb.append(f.name());
+            }
+        } else if (node instanceof PathNode p) {
+            sb.append('.');
+            for (int i = 0; i < p.steps().size(); i++) {
+                if (i > 0) sb.append('.');
+                emitFieldName(p.steps().get(i), sb);
+            }
+        } else {
+            emit(node, sb, false);
         }
     }
 
