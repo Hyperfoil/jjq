@@ -87,14 +87,30 @@ public sealed interface JqValue extends Comparable<JqValue>
     }
 
     /**
-     * Try to extract a long from this value. Returns the long for integral numbers,
-     * truncates non-integral numbers, tries to parse {@code stringValue()} for strings,
-     * returns {@code null} otherwise.
+     * Try to extract a long from this value. Returns the long for numbers
+     * (truncating non-integral values, e.g. 3.14 becomes 3), tries to parse
+     * {@code stringValue()} for strings, returns {@code null} otherwise.
+     * Useful for data that may arrive as either a JSON number or a quoted numeric string.
      */
     default Long tryLong() {
         if (this instanceof JqNumber n) return n.longValue();
         if (this instanceof JqString s) {
             try { return Long.parseLong(s.stringValue()); }
+            catch (NumberFormatException e) { return null; }
+        }
+        return null;
+    }
+
+    /**
+     * Try to extract an int from this value. Returns the int for numbers
+     * (truncating non-integral values and narrowing from long), tries to parse
+     * {@code stringValue()} for strings, returns {@code null} otherwise.
+     * Useful for data that may arrive as either a JSON number or a quoted numeric string.
+     */
+    default Integer tryInt() {
+        if (this instanceof JqNumber n) return (int) n.longValue();
+        if (this instanceof JqString s) {
+            try { return Integer.parseInt(s.stringValue()); }
             catch (NumberFormatException e) { return null; }
         }
         return null;
