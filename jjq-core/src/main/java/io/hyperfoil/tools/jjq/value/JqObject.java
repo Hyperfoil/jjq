@@ -299,10 +299,10 @@ public final class JqObject implements JqValue {
             values = new JqValue[keys.length];
         }
 
-        /** Add or replace a field with a JqValue. */
+        /** Add or replace a field with a JqValue. Java {@code null} is treated as {@link JqNull#NULL}. */
         public Builder put(String key, JqValue value) {
             Objects.requireNonNull(key, "key");
-            Objects.requireNonNull(value, "value");
+            if (value == null) value = JqNull.NULL;
             // Scan for existing key (replace in place)
             for (int i = 0; i < size; i++) {
                 if (key.equals(keys[i])) {

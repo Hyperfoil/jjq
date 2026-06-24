@@ -546,9 +546,10 @@ class JqValueTest {
     }
 
     @Test
-    void testBuilderNullValueThrows() {
-        var builder = JqObject.builder();
-        assertThrows(NullPointerException.class, () -> builder.put("key", (JqValue) null));
+    void testBuilderNullValueBecomesJqNull() {
+        var obj = JqObject.builder().put("key", (JqValue) null).build();
+        assertEquals(JqNull.NULL, obj.get("key"));
+        assertEquals(1, obj.size());
     }
 
     @Test
