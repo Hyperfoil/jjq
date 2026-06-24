@@ -171,9 +171,9 @@ Tested against the upstream [JSONata conformance test suite](https://github.com/
 
 | Status | Count | % |
 |--------|-------|---|
-| **Passing** | 254 | 48.2% |
-| Skipped (unsupported features) | 187 | 35.5% |
-| Skipped (implementation gaps) | 86 | 16.3% |
+| **Passing** | 295 | 56.0% |
+| Skipped (unsupported features) | 143 | 27.1% |
+| Skipped (implementation gaps) | 89 | 16.9% |
 
 Run the conformance tests:
 ```bash
