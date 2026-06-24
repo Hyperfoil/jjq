@@ -881,6 +881,191 @@ class JqValueTest {
         assertFalse(JqNull.NULL.isFloatingPointNumber());
     }
 
+    // ========================================================================
+    //  JqNumber.of(Number) tests
+    // ========================================================================
+
+    @Test
+    void testNumberOfInteger() {
+        assertEquals(JqNumber.of(42L), JqNumber.of((Number) Integer.valueOf(42)));
+        assertEquals(JqNumber.of(-1L), JqNumber.of((Number) Integer.valueOf(-1)));
+    }
+
+    @Test
+    void testNumberOfFloat() {
+        // Float 3.14f has limited precision — verify it converts to a double-backed JqNumber
+        JqNumber n = JqNumber.of((Number) Float.valueOf(3.14f));
+        assertFalse(n.isIntegral());
+        assertEquals(3.14f, (float) n.doubleValue(), 0.0001f);
+    }
+
+    @Test
+    void testNumberOfShortAndByte() {
+        assertEquals(JqNumber.of(7L), JqNumber.of((Number) Short.valueOf((short) 7)));
+        assertEquals(JqNumber.of(3L), JqNumber.of((Number) Byte.valueOf((byte) 3)));
+    }
+
+    @Test
+    void testNumberOfBigDecimal() {
+        assertEquals(JqNumber.of(new java.math.BigDecimal("3.14159")), JqNumber.of((Number) new java.math.BigDecimal("3.14159")));
+    }
+
+    @Test
+    void testNumberOfIntegralDouble() {
+        // Integer-valued doubles should be promoted to long-backed
+        JqNumber n = JqNumber.of((Number) Double.valueOf(42.0));
+        assertTrue(n.isIntegral());
+        assertEquals(42L, n.longValue());
+    }
+
+    // ========================================================================
+    //  JqValue.toJavaObject() tests
+    // ========================================================================
+
+    @Test
+    void testToJavaObjectNull() {
+        assertNull(JqNull.NULL.toJavaObject());
+    }
+
+    @Test
+    void testToJavaObjectBoolean() {
+        assertEquals(Boolean.TRUE, JqBoolean.TRUE.toJavaObject());
+        assertEquals(Boolean.FALSE, JqBoolean.FALSE.toJavaObject());
+    }
+
+    @Test
+    void testToJavaObjectNumber() {
+        // Integral → Long
+        assertEquals(42L, JqNumber.of(42).toJavaObject());
+        // Floating point → Double
+        assertEquals(3.14, JqNumber.of(3.14).toJavaObject());
+    }
+
+    @Test
+    void testToJavaObjectString() {
+        assertEquals("hello", JqString.of("hello").toJavaObject());
+    }
+
+    @Test
+    void testToJavaObjectArray() {
+        var arr = JqArray.of(JqNumber.of(1), JqString.of("two"), JqBoolean.TRUE);
+        Object result = arr.toJavaObject();
+        assertInstanceOf(java.util.ArrayList.class, result);
+        @SuppressWarnings("unchecked")
+        var list = (java.util.List<Object>) result;
+        assertEquals(3, list.size());
+        assertEquals(1L, list.get(0));
+        assertEquals("two", list.get(1));
+        assertEquals(Boolean.TRUE, list.get(2));
+    }
+
+    @Test
+    void testToJavaObjectObject() {
+        var obj = JqObject.builder().put("name", "Alice").put("age", 30L).build();
+        Object result = obj.toJavaObject();
+        assertInstanceOf(java.util.LinkedHashMap.class, result);
+        @SuppressWarnings("unchecked")
+        var map = (java.util.Map<String, Object>) result;
+        assertEquals(2, map.size());
+        assertEquals("Alice", map.get("name"));
+        assertEquals(30L, map.get("age"));
+    }
+
+    @Test
+    void testToJavaObjectNested() {
+        var json = JqValues.parse("{\"users\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]}");
+        Object result = json.toJavaObject();
+        assertInstanceOf(java.util.LinkedHashMap.class, result);
+        @SuppressWarnings("unchecked")
+        var map = (java.util.Map<String, Object>) result;
+        @SuppressWarnings("unchecked")
+        var users = (java.util.List<Object>) map.get("users");
+        assertEquals(2, users.size());
+        @SuppressWarnings("unchecked")
+        var alice = (java.util.Map<String, Object>) users.get(0);
+        assertEquals("Alice", alice.get("name"));
+        assertEquals(30L, alice.get("age"));
+    }
+
+    // ========================================================================
+    //  JqValues.fromJavaObject() tests
+    // ========================================================================
+
+    @Test
+    void testFromJavaObjectNull() {
+        assertEquals(JqNull.NULL, JqValues.fromJavaObject(null));
+    }
+
+    @Test
+    void testFromJavaObjectPassthrough() {
+        JqValue original = JqString.of("passthrough");
+        assertSame(original, JqValues.fromJavaObject(original));
+    }
+
+    @Test
+    void testFromJavaObjectPrimitives() {
+        assertEquals(JqString.of("hello"), JqValues.fromJavaObject("hello"));
+        assertEquals(JqNumber.of(42), JqValues.fromJavaObject(42));
+        assertEquals(JqNumber.of(42L), JqValues.fromJavaObject(42L));
+        assertEquals(JqNumber.of(3.14), JqValues.fromJavaObject(3.14));
+        assertEquals(JqBoolean.TRUE, JqValues.fromJavaObject(true));
+        assertEquals(JqBoolean.FALSE, JqValues.fromJavaObject(false));
+    }
+
+    @Test
+    void testFromJavaObjectMap() {
+        var map = new java.util.LinkedHashMap<String, Object>();
+        map.put("name", "Alice");
+        map.put("age", 30);
+        JqValue result = JqValues.fromJavaObject(map);
+        assertInstanceOf(JqObject.class, result);
+        assertEquals(JqString.of("Alice"), result.getField("name"));
+        assertEquals(JqNumber.of(30), result.getField("age"));
+    }
+
+    @Test
+    void testFromJavaObjectList() {
+        var list = java.util.List.of(1, "two", true);
+        JqValue result = JqValues.fromJavaObject(list);
+        assertInstanceOf(JqArray.class, result);
+        assertEquals(JqNumber.of(1), result.getElement(0));
+        assertEquals(JqString.of("two"), result.getElement(1));
+        assertEquals(JqBoolean.TRUE, result.getElement(2));
+    }
+
+    @Test
+    void testFromJavaObjectNested() {
+        var inner = new java.util.LinkedHashMap<String, Object>();
+        inner.put("x", 1);
+        inner.put("y", 2);
+        var outer = new java.util.LinkedHashMap<String, Object>();
+        outer.put("point", inner);
+        outer.put("labels", java.util.List.of("a", "b"));
+        JqValue result = JqValues.fromJavaObject(outer);
+        assertEquals(JqNumber.of(1), result.getField("point").getField("x"));
+        assertEquals(JqString.of("b"), result.getField("labels").getElement(1));
+    }
+
+    @Test
+    void testFromJavaObjectFallback() {
+        // Unknown type → toString()
+        var sb = new StringBuilder("hello");
+        assertEquals(JqString.of("hello"), JqValues.fromJavaObject(sb));
+    }
+
+    // ========================================================================
+    //  Round-trip: toJavaObject() → fromJavaObject()
+    // ========================================================================
+
+    @Test
+    void testRoundTrip() {
+        var original = JqValues.parse("{\"name\":\"Alice\",\"scores\":[1,2,3],\"active\":true,\"extra\":null}");
+        Object java = original.toJavaObject();
+        JqValue roundTripped = JqValues.fromJavaObject(java);
+        // Note: JqNull fields become null in Java Map, then back to JqNull.NULL
+        assertEquals(original.toJsonString(), roundTripped.toJsonString());
+    }
+
     @Test
     void testFluentNavigation() {
         var json = JqValues.parse("{\"a\":{\"b\":[{\"c\":42}]}}");

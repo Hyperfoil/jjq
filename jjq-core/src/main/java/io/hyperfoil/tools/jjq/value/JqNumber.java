@@ -44,6 +44,29 @@ public final class JqNumber implements JqValue {
         return new JqNumber(0, null, value, false);
     }
 
+    /**
+     * Create a JqNumber from any {@link Number} subtype.
+     * {@link Integer}, {@link Long}, {@link Short}, and {@link Byte} are treated as integral (long-backed).
+     * {@link Float} and {@link Double} are treated as floating-point.
+     * {@link BigDecimal} preserves its exact value.
+     * Other Number types are converted via {@link Number#doubleValue()}.
+     */
+    public static JqNumber of(Number value) {
+        if (value instanceof Long l) return of(l.longValue());
+        if (value instanceof Integer i) return of((long) i.intValue());
+        if (value instanceof Double d) return of(d.doubleValue());
+        if (value instanceof Float f) return of((double) f.floatValue());
+        if (value instanceof BigDecimal bd) return of(bd);
+        if (value instanceof Short s) return of((long) s.shortValue());
+        if (value instanceof Byte b) return of((long) b.byteValue());
+        // Fallback for AtomicInteger, AtomicLong, BigInteger, etc.
+        double d = value.doubleValue();
+        if (d == Math.floor(d) && !Double.isInfinite(d) && d >= Long.MIN_VALUE && d <= Long.MAX_VALUE) {
+            return of(value.longValue());
+        }
+        return of(d);
+    }
+
     public static JqNumber of(BigDecimal value) {
         try {
             long l = value.longValueExact();

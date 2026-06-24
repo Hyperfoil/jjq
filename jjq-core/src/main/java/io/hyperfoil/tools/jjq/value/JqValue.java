@@ -171,6 +171,48 @@ public sealed interface JqValue extends Comparable<JqValue>
     }
 
     // ========================================================================
+    //  Recursive Java type bridge
+    // ========================================================================
+
+    /**
+     * Recursively convert this JqValue to plain Java types.
+     * <ul>
+     *   <li>{@link JqNull} → {@code null}</li>
+     *   <li>{@link JqBoolean} → {@link Boolean}</li>
+     *   <li>{@link JqNumber} → {@link Long} (if integral) or {@link Double}</li>
+     *   <li>{@link JqString} → {@link String}</li>
+     *   <li>{@link JqArray} → {@link java.util.ArrayList}{@code <Object>} (recursively converted)</li>
+     *   <li>{@link JqObject} → {@link java.util.LinkedHashMap}{@code <String, Object>} (recursively converted, insertion order preserved)</li>
+     * </ul>
+     *
+     * <p>Unlike {@link #objectValue()} and {@link #arrayValue()} which return one-level-deep
+     * {@code JqValue}-typed collections, this method is fully recursive — the returned
+     * structure contains only standard Java types.</p>
+     *
+     * @return the recursively unwrapped Java representation, or {@code null} for {@link JqNull}
+     */
+    default Object toJavaObject() {
+        return switch (this) {
+            case JqNull ignored -> null;
+            case JqBoolean b -> b.booleanValue();
+            case JqNumber n -> n.isIntegral() ? (Object) n.longValue() : n.doubleValue();
+            case JqString s -> s.stringValue();
+            case JqArray a -> {
+                var list = new java.util.ArrayList<>(a.size());
+                for (JqValue element : a) {
+                    list.add(element.toJavaObject());
+                }
+                yield list;
+            }
+            case JqObject o -> {
+                var map = new java.util.LinkedHashMap<String, Object>();
+                o.forEach((key, val) -> map.put(key, val.toJavaObject()));
+                yield map;
+            }
+        };
+    }
+
+    // ========================================================================
     //  Convenience methods for object/array manipulation
     // ========================================================================
 

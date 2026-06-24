@@ -8,7 +8,9 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Utility for parsing JSON strings into JqValue without external dependencies.
@@ -171,6 +173,57 @@ public final class JqValues {
             pos = p;
         }
     }
+
+    // ========================================================================
+    //  Recursive Java type bridge
+    // ========================================================================
+
+    /**
+     * Recursively convert a plain Java object to a JqValue.
+     * <ul>
+     *   <li>{@code null} → {@link JqNull#NULL}</li>
+     *   <li>{@link JqValue} → returned as-is (passthrough, avoids double-wrapping)</li>
+     *   <li>{@link Map} → {@link JqObject} (via builder, insertion order preserved for {@link LinkedHashMap})</li>
+     *   <li>{@link List} → {@link JqArray} (recursively converted)</li>
+     *   <li>{@link String} → {@link JqString}</li>
+     *   <li>{@link Number} → {@link JqNumber} (integral values promoted to long-backed)</li>
+     *   <li>{@link Boolean} → {@link JqBoolean}</li>
+     *   <li>Other types → {@link JqString} via {@code toString()} (fallback)</li>
+     * </ul>
+     *
+     * <p>This is the inverse of {@link JqValue#toJavaObject()}.</p>
+     *
+     * @param value the Java object to convert
+     * @return the corresponding JqValue, never null ({@code null} input returns {@link JqNull#NULL})
+     */
+    @SuppressWarnings("unchecked")
+    public static JqValue fromJavaObject(Object value) {
+        if (value == null) return JqNull.NULL;
+        if (value instanceof JqValue jv) return jv;
+        if (value instanceof String s) return JqString.of(s);
+        if (value instanceof Number n) return JqNumber.of(n);
+        if (value instanceof Boolean b) return JqBoolean.of(b);
+        if (value instanceof Map<?, ?> map) {
+            var builder = JqObject.builder(map.size());
+            for (var entry : map.entrySet()) {
+                builder.put(String.valueOf(entry.getKey()), fromJavaObject(entry.getValue()));
+            }
+            return builder.build();
+        }
+        if (value instanceof List<?> list) {
+            JqValue[] elements = new JqValue[list.size()];
+            for (int i = 0; i < list.size(); i++) {
+                elements[i] = fromJavaObject(list.get(i));
+            }
+            return JqArray.of(elements);
+        }
+        // Fallback: serialize to string
+        return JqString.of(value.toString());
+    }
+
+    // ========================================================================
+    //  JSON parsing
+    // ========================================================================
 
     public static JqValue parse(String json) {
         json = json.trim();
