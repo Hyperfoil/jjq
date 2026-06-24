@@ -445,21 +445,65 @@ JqValue user = JqObject.of(Map.of(
 ));
 ```
 
-**Extracting values from results:**
+**Navigating values (fluent, null-safe):**
 
 ```java
-JqProgram program = JqProgram.compile("{name, age}");
-JqValue result = program.apply(input);
+JqValue data = JqValues.parse(jsonBytes);
 
-// Type-check before extracting
-if (result.isObject()) {
-    Map<String, JqValue> obj = result.objectValue();
-    String name = obj.get("name").stringValue();
-    long age = obj.get("age").longValue();
+// Fluent navigation — getField/getElement return JqNull.NULL for type mismatches
+JqValue results = data.getField("autobench_workload")
+                      .getField("data")
+                      .getElement(0)
+                      .getField("results");
+
+// Safe value extraction with defaults
+String name = data.getField("user").asString("unknown");
+long count = data.getField("count").asLong(0);
+double score = data.getField("score").asDouble(0.0);
+
+// asText() — string value or JSON representation
+String text = data.getField("description").asText();  // null for JqNull
+
+// Check existence
+if (data.has("user") && !data.getField("items").isEmpty()) {
+    // ...
+}
+```
+
+**Working with arrays:**
+
+```java
+JqArray items = (JqArray) data.getField("items");
+
+// Direct access
+int count = items.size();
+JqValue first = items.first();   // JqNull.NULL if empty
+JqValue last = items.last();     // JqNull.NULL if empty
+boolean hasThird = items.has(2); // bounds check
+
+// Iterate directly (JqArray implements Iterable<JqValue>)
+for (JqValue item : items) {
+    System.out.println(item.getField("name").asText());
 }
 
-// Or use JqObject.get() which returns JqNull for missing keys
-JqValue nameVal = ((JqObject) result).get("name");  // never null, returns JqNull.NULL if missing
+// Stream support
+List<String> names = items.stream()
+    .filter(item -> item.getField("active").asBoolean(false))
+    .map(item -> item.getField("name").asText())
+    .toList();
+```
+
+**Working with objects:**
+
+```java
+JqObject config = (JqObject) data.getField("config");
+
+int fieldCount = config.size();
+for (String key : config.keys()) { /* ... */ }
+for (JqValue val : config.values()) { /* ... */ }
+for (var entry : config.entries()) {
+    System.out.println(entry.getKey() + " = " + entry.getValue().asText());
+}
 ```
 
 **Type checking:**
@@ -467,29 +511,50 @@ JqValue nameVal = ((JqObject) result).get("name");  // never null, returns JqNul
 ```java
 JqValue val = program.apply(input);
 
-switch (val.type()) {
-    case NULL    -> handleNull();
-    case BOOLEAN -> handleBoolean(val.booleanValue());
-    case NUMBER  -> handleNumber(val.longValue());
-    case STRING  -> handleString(val.stringValue());
-    case ARRAY   -> handleArray(val.arrayValue());
-    case OBJECT  -> handleObject(val.objectValue());
-}
+// Convenience type checks
+val.isObject();     // true for JqObject
+val.isArray();      // true for JqArray
+val.isString();     // true for JqString
+val.isNumber();     // true for JqNumber
+val.isNull();       // true for JqNull
+val.isContainer();  // true for arrays and objects
+val.isScalar();     // true for null, boolean, number, string
+val.isTruthy();     // jq truthiness: everything except false and null
 
-// Or use pattern matching
-if (val instanceof JqString s) {
-    System.out.println(s.stringValue());
-} else if (val instanceof JqNumber n) {
-    System.out.println(n.longValue());
+// Pattern matching
+switch (val) {
+    case JqString s  -> handleString(s.stringValue());
+    case JqNumber n  -> handleNumber(n.longValue());
+    case JqObject o  -> handleObject(o);
+    case JqArray a   -> handleArray(a);
+    case JqNull ignored -> handleNull();
+    case JqBoolean b -> handleBoolean(b.booleanValue());
 }
+```
+
+**Building and modifying values:**
+
+```java
+// Builder (null values become JqNull.NULL)
+JqObject result = JqObject.builder()
+    .put("name", "Alice")
+    .put("age", 30)
+    .put("data", someNullableValue)  // null → JqNull.NULL
+    .build();
+
+// Copy-on-write modification (immutable — returns new instances)
+JqObject updated = result.with("status", JqString.of("verified"));
+JqObject merged = result.merge(otherObject);           // shallow (jq + operator)
+JqObject deepMerged = result.deepMerge(otherObject);   // recursive (jq * operator)
+JqObject without = result.without("age");
 ```
 
 **Value properties:**
 
 - All `JqValue` instances are **immutable** — safe to cache, store, and share.
 - `JqNumber` uses a `long` fast-path internally, falling back to `BigDecimal` for decimals. NaN and Infinity are supported.
-- `JqObject` preserves insertion order (backed by `LinkedHashMap`).
-- `JqArray` is backed by an unmodifiable `List<JqValue>`.
+- `JqObject` preserves insertion order (parallel `String[]` keys + `JqValue[]` values).
+- `JqArray` is backed by an unmodifiable `List<JqValue>` and implements `Iterable<JqValue>`.
 
 ### Variables and Parameterized Queries
 
@@ -1230,19 +1295,42 @@ static List<JqValue> parseAll(String json)     // parse JSONL / whitespace-separ
 ### JqValue
 
 ```java
-// Type
+// Type checks
 Type type()                          // NULL, BOOLEAN, NUMBER, STRING, ARRAY, OBJECT
 boolean isNull(), isBoolean(), isNumber(), isString(), isArray(), isObject()
+boolean isContainer()                // true for arrays and objects
+boolean isScalar()                   // true for null, boolean, number, string
 boolean isTruthy()                   // false and null are falsy
 
-// Value extraction
+// Strict value extraction (throws JqTypeError on wrong type)
 boolean booleanValue()
 long longValue()
+int intValue()                       // (int) longValue()
 double doubleValue()
 BigDecimal decimalValue()
 String stringValue()
 List<JqValue> arrayValue()
 Map<String, JqValue> objectValue()
+
+// Safe value extraction (returns default on wrong type)
+String asString(String defaultValue)
+long asLong(long defaultValue)
+double asDouble(double defaultValue)
+boolean asBoolean(boolean defaultValue)
+List<JqValue> asList()               // empty list for non-arrays
+Map<String, JqValue> asMap()         // empty map for non-objects
+String asText()                      // stringValue() or toJsonString(), null for JqNull
+
+// Navigation (null-safe — returns JqNull.NULL for type mismatches)
+JqValue getField(String key)         // object field access
+JqValue getElement(int index)        // array element access (negative index supported)
+boolean has(String key)              // false for non-objects
+boolean has(int index)               // false for non-arrays
+boolean isEmpty()                    // empty array/object/string/null
+
+// Mutation (copy-on-write, throws JqTypeError on wrong type)
+JqValue withField(String key, JqValue value)
+JqValue withElement(int index, JqValue value)
 
 // Operators
 JqValue add(JqValue other)           // +
@@ -1255,6 +1343,43 @@ JqValue negate()                     // unary -
 // Output
 String toJsonString()
 int length()
+```
+
+### JqArray
+
+```java
+int size()
+JqValue get(int index)               // negative index supported, JqNull.NULL for out-of-bounds
+JqValue first(), last()              // JqNull.NULL if empty
+boolean has(int index)               // bounds check
+JqArray slice(Integer from, Integer to)
+JqArray with(int index, JqValue element)  // copy-on-write replace
+JqArray append(JqValue element)           // copy-on-write append
+Iterator<JqValue> iterator()              // implements Iterable<JqValue>
+Stream<JqValue> stream()
+```
+
+### JqObject
+
+```java
+int size()
+JqValue get(String key)              // JqNull.NULL for missing keys
+boolean has(String key)
+Set<String> keys()                   // insertion order preserved
+Collection<JqValue> values()
+Set<Map.Entry<String, JqValue>> entries()
+JqObject with(String key, JqValue value)      // copy-on-write add/replace
+JqObject without(String key)                   // copy-on-write remove
+JqObject merge(JqObject other)                 // shallow merge (jq +)
+JqObject deepMerge(JqObject other)             // recursive merge (jq *)
+JqArray sortedKeysAsArray()                    // cached sorted keys for keys builtin
+
+// Builder
+static Builder builder()
+static Builder builder(int expectedSize)
+Builder.put(String key, JqValue/String/long/double/boolean value)
+Builder.putNull(String key)
+Builder.build()                                // returns JqObject
 ```
 
 ### Environment

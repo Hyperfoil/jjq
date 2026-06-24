@@ -85,6 +85,44 @@ byte[] jsonBytes = Files.readAllBytes(Path.of("data.json"));
 JqValue data = JqValues.parse(jsonBytes);
 ```
 
+### Navigate JSON values
+
+```java
+// Fluent null-safe navigation (returns JqNull.NULL for missing paths)
+JqValue data = JqValues.parse(jsonBytes);
+JqValue results = data.getField("autobench_workload")
+                      .getField("data")
+                      .getElement(0)
+                      .getField("results");
+
+// Type checks and value extraction
+if (results.isObject() && !results.isEmpty()) {
+    String text = results.getField("summary").asText();  // string or toJsonString()
+    int count = results.getField("count").intValue();     // narrowing from long
+}
+
+// Check existence
+if (data.has("user") && data.has("uuid")) {
+    // ...
+}
+
+// Iterate arrays directly (JqArray implements Iterable<JqValue>)
+JqArray items = (JqArray) data.getField("items");
+for (JqValue item : items) {
+    System.out.println(item.getField("name").asText());
+}
+
+// Stream support
+long activeCount = items.stream()
+    .filter(item -> item.getField("active").asBoolean(false))
+    .count();
+
+// Object accessors
+JqObject config = (JqObject) data.getField("config");
+for (String key : config.keys()) { /* ... */ }
+for (var entry : config.entries()) { /* ... */ }
+```
+
 ### Build JSON values
 
 ```java
@@ -96,6 +134,7 @@ JqObject result = JqObject.builder()
     .put("age", 30)
     .put("score", 95.5)
     .put("active", true)
+    .put("data", someJqValue)   // null is treated as JqNull.NULL
     .build();
 
 // Array builder
@@ -108,6 +147,7 @@ JqArray items = JqArray.arrayBuilder()
 // Copy-on-write modification (immutable — returns new instances)
 JqObject updated = result.with("status", JqString.of("verified"));
 JqObject merged = result.merge(otherObject);
+JqObject deepMerged = result.deepMerge(otherObject);  // recursive merge for nested objects
 JqObject without = result.without("age");
 ```
 
