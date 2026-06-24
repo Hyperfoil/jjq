@@ -408,22 +408,26 @@ final class JsonataToJq {
                 }
             }
             case "$substring" -> {
+                // JSONata $substring uses JavaScript substr semantics:
+                // - negative start counts from end, clamped to 0
+                // - length is max chars to return (not end position)
+                // - negative length = empty string
                 if (args.size() == 2) {
-                    sb.append('(');
+                    // $substring(str, start) — no length limit
+                    sb.append("(");
                     emit(args.get(0), sb, false);
-                    sb.append('[');
+                    sb.append(" as $__s | ");
                     emit(args.get(1), sb, false);
-                    sb.append(":])");
+                    sb.append(" as $__i | $__s[(if $__i < 0 then ([($__s | length) + $__i, 0] | max) else $__i end):])");
                 } else if (args.size() == 3) {
-                    sb.append('(');
+                    // $substring(str, start, length)
+                    sb.append("(");
                     emit(args.get(0), sb, false);
-                    sb.append('[');
+                    sb.append(" as $__s | ");
                     emit(args.get(1), sb, false);
-                    sb.append(":(");
-                    emit(args.get(1), sb, false);
-                    sb.append(" + ");
+                    sb.append(" as $__i | ");
                     emit(args.get(2), sb, false);
-                    sb.append(")])");
+                    sb.append(" as $__l | if $__l <= 0 then \"\" else $__s[(if $__i < 0 then ([($__s | length) + $__i, 0] | max) else $__i end):(if $__i < 0 then ([($__s | length) + $__i, 0] | max) else $__i end) + $__l] end)");
                 } else {
                     throw new JsonataException("$substring requires 2 or 3 arguments");
                 }
