@@ -16,12 +16,11 @@ final class JsonataToJq {
             Map.entry("$max", "max"),
             Map.entry("$min", "min"),
             Map.entry("$count", "length"),
-            // String
-            Map.entry("$string", "tostring"),
+            // String ($string handled as special case in emitFunctionCall)
             Map.entry("$length", "length"),
             Map.entry("$uppercase", "ascii_upcase"),
             Map.entry("$lowercase", "ascii_downcase"),
-            Map.entry("$trim", "ltrimstr(\" \") | rtrimstr(\" \")"),
+            Map.entry("$trim", "gsub(\"[\\\\s]+\"; \" \") | ltrimstr(\" \") | rtrimstr(\" \")"),
             Map.entry("$number", "tonumber"),
             // Type
             Map.entry("$type", "type"),
@@ -388,8 +387,17 @@ final class JsonataToJq {
                     sb.append(" | split(");
                     emit(args.get(1), sb, false);
                     sb.append("))");
+                } else if (args.size() == 3) {
+                    // $split(str, sep, limit) — split and take first N elements
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | split(");
+                    emit(args.get(1), sb, false);
+                    sb.append(")[:"); 
+                    emit(args.get(2), sb, false);
+                    sb.append("])");
                 } else {
-                    throw new JsonataException("$split requires exactly 2 arguments");
+                    throw new JsonataException("$split requires 2 or 3 arguments");
                 }
             }
             case "$join" -> {
@@ -434,11 +442,12 @@ final class JsonataToJq {
             }
             case "$append" -> {
                 if (args.size() == 2) {
-                    sb.append('(');
+                    // Wrap non-array args in [.] before concatenation
+                    sb.append("((");
                     emit(args.get(0), sb, false);
-                    sb.append(" + ");
+                    sb.append(" | if type != \"array\" then [.] else . end) + (");
                     emit(args.get(1), sb, false);
-                    sb.append(')');
+                    sb.append(" | if type != \"array\" then [.] else . end))");
                 } else {
                     throw new JsonataException("$append requires exactly 2 arguments");
                 }
@@ -452,6 +461,22 @@ final class JsonataToJq {
                     throw new JsonataException("$merge requires exactly 1 argument (array of objects)");
                 }
             }
+            case "$string" -> {
+                if (args.isEmpty()) {
+                    sb.append("tostring");
+                } else if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | tostring)");
+                } else if (args.size() == 2) {
+                    // $string(value, prettify) — ignore prettify flag, just stringify
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | tostring)");
+                } else {
+                    throw new JsonataException("$string requires 0-2 arguments");
+                }
+            }
             case "$number" -> {
                 if (args.size() == 1) {
                     sb.append('(');
@@ -463,9 +488,13 @@ final class JsonataToJq {
             }
             case "$exists" -> {
                 if (args.size() == 1) {
-                    sb.append('(');
+                    // JSONata: $exists returns true if the value is not undefined/missing
+                    // In jq, missing fields return null. $exists(null_literal) should be true
+                    // but $exists(missing_field) should be false.
+                    // Best approximation: check if result is not null
+                    sb.append("((");
                     emit(args.get(0), sb, false);
-                    sb.append(" != null)");
+                    sb.append(") != null)");
                 } else {
                     throw new JsonataException("$exists requires exactly 1 argument");
                 }
@@ -502,8 +531,59 @@ final class JsonataToJq {
                     sb.append('(');
                     emit(args.get(0), sb, false);
                     sb.append(" | round)");
+                } else if (args.size() == 2) {
+                    // $round(number, precision) — round to N decimal places
+                    // Note: uses jq's round (banker's rounding / half-to-even).
+                    // JSONata uses half-away-from-zero — documented as known difference.
+                    sb.append("((");
+                    emit(args.get(0), sb, false);
+                    sb.append(") as $__n | (");
+                    emit(args.get(1), sb, false);
+                    sb.append(") as $__p | ($__n * pow(10; $__p) | round) / pow(10; $__p))");
                 } else {
-                    throw new JsonataException("$round requires 1 argument");
+                    throw new JsonataException("$round requires 1 or 2 arguments");
+                }
+            }
+            case "$substringBefore" -> {
+                if (args.size() == 2) {
+                    sb.append("((");
+                    emit(args.get(0), sb, false);
+                    sb.append(") as $__s | (");
+                    emit(args.get(1), sb, false);
+                    sb.append(") as $__c | if ($__s | contains($__c)) then $__s | split($__c) | .[0] else $__s end)");
+                } else {
+                    throw new JsonataException("$substringBefore requires exactly 2 arguments");
+                }
+            }
+            case "$substringAfter" -> {
+                if (args.size() == 2) {
+                    sb.append("((");
+                    emit(args.get(0), sb, false);
+                    sb.append(") as $__s | (");
+                    emit(args.get(1), sb, false);
+                    sb.append(") as $__c | if ($__s | contains($__c)) then $__s | split($__c) | .[1:] | join($__c) else $__s end)");
+                } else {
+                    throw new JsonataException("$substringAfter requires exactly 2 arguments");
+                }
+            }
+            case "$power" -> {
+                if (args.size() == 2) {
+                    sb.append("pow(");
+                    emit(args.get(0), sb, false);
+                    sb.append("; ");
+                    emit(args.get(1), sb, false);
+                    sb.append(')');
+                } else {
+                    throw new JsonataException("$power requires exactly 2 arguments");
+                }
+            }
+            case "$sqrt" -> {
+                if (args.size() == 1) {
+                    sb.append('(');
+                    emit(args.get(0), sb, false);
+                    sb.append(" | sqrt)");
+                } else {
+                    throw new JsonataException("$sqrt requires exactly 1 argument");
                 }
             }
             default -> throw new JsonataException("Unsupported JSONata function: " + name);
