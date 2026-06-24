@@ -368,6 +368,15 @@ public final class JqObject implements JqValue {
     /** Return the number of fields. */
     public int size() { return externalMap != null ? externalMap.size() : size; }
 
+    /** Return the field names as a Set (insertion order preserved). */
+    public java.util.Set<String> keys() { return objectValue().keySet(); }
+
+    /** Return the field values as a Collection (insertion order preserved). */
+    public java.util.Collection<JqValue> values() { return objectValue().values(); }
+
+    /** Return the field entries as a Set (insertion order preserved). */
+    public java.util.Set<Map.Entry<String, JqValue>> entries() { return objectValue().entrySet(); }
+
     @Override
     public Map<String, JqValue> objectValue() {
         if (externalMap != null) return externalMap;

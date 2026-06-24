@@ -27,6 +27,10 @@ public sealed interface JqValue extends Comparable<JqValue>
     default boolean isString() { return this instanceof JqString; }
     default boolean isArray() { return this instanceof JqArray; }
     default boolean isObject() { return this instanceof JqObject; }
+    /** True for arrays and objects (composite types that contain other values). */
+    default boolean isContainer() { return isArray() || isObject(); }
+    /** True for null, boolean, number, and string (leaf types). */
+    default boolean isScalar() { return !isContainer(); }
 
     default boolean booleanValue() { throw new JqTypeError("Cannot get boolean from " + type()); }
     default long longValue() { throw new JqTypeError("Cannot get number from " + type()); }

@@ -2,10 +2,12 @@ package io.hyperfoil.tools.jjq.value;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Stream;
 
-public final class JqArray implements JqValue {
+public final class JqArray implements JqValue, Iterable<JqValue> {
     public static final JqArray EMPTY = new JqArray(List.of());
 
     private final List<JqValue> elements;
@@ -152,6 +154,12 @@ public final class JqArray implements JqValue {
 
     /** Return the last element, or {@link JqNull#NULL} if empty. */
     public JqValue last() { return elements.isEmpty() ? JqNull.NULL : elements.getLast(); }
+
+    @Override
+    public Iterator<JqValue> iterator() { return elements.iterator(); }
+
+    /** Return a stream over the elements. */
+    public Stream<JqValue> stream() { return elements.stream(); }
 
     public JqValue get(int index) {
         if (index < 0) index = elements.size() + index;

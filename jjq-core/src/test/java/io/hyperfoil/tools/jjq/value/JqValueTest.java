@@ -667,6 +667,46 @@ class JqValueTest {
     }
 
     @Test
+    void testIsContainerAndScalar() {
+        assertTrue(JqArray.EMPTY.isContainer());
+        assertTrue(JqObject.EMPTY.isContainer());
+        assertFalse(JqNull.NULL.isContainer());
+        assertFalse(JqNumber.of(1).isContainer());
+        assertFalse(JqString.of("x").isContainer());
+        assertFalse(JqBoolean.TRUE.isContainer());
+        // isScalar is the inverse
+        assertTrue(JqNull.NULL.isScalar());
+        assertTrue(JqNumber.of(1).isScalar());
+        assertFalse(JqArray.EMPTY.isScalar());
+        assertFalse(JqObject.EMPTY.isScalar());
+    }
+
+    @Test
+    void testArrayIterable() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3));
+        int sum = 0;
+        for (JqValue v : arr) {
+            sum += ((JqNumber) v).intValue();
+        }
+        assertEquals(6, sum);
+    }
+
+    @Test
+    void testArrayStream() {
+        var arr = JqArray.of(JqNumber.of(1), JqNumber.of(2), JqNumber.of(3));
+        long count = arr.stream().filter(v -> v instanceof JqNumber n && n.longValue() > 1).count();
+        assertEquals(2, count);
+    }
+
+    @Test
+    void testObjectKeysValuesEntries() {
+        var obj = JqObject.builder().put("a", 1L).put("b", 2L).build();
+        assertEquals(java.util.Set.of("a", "b"), obj.keys());
+        assertEquals(2, obj.values().size());
+        assertEquals(2, obj.entries().size());
+    }
+
+    @Test
     void testObjectSize() {
         assertEquals(0, JqObject.EMPTY.size());
         assertEquals(2, JqObject.builder().put("a", 1L).put("b", 2L).build().size());
