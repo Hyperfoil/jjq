@@ -474,14 +474,16 @@ jq expression string
 
 ### Value System
 
+All JqValue types implement `Serializable` for Hibernate second-level cache support. Singletons (`JqNull.NULL`, `JqBoolean.TRUE/FALSE`, cached `JqNumber` instances) preserve identity across serialization via `readResolve()`.
+
 | Type | Implementation | Key optimization |
 |------|---------------|-----------------|
 | `JqNull` | Singleton | Zero allocation |
 | `JqBoolean` | TRUE/FALSE constants | Zero allocation |
-| `JqNumber` | `long` fast-path with cache [-128, 1023], `double` for decimals, `BigDecimal` fallback | Direct digit accumulation avoids `new BigDecimal()` for 99% of numbers |
-| `JqString` | Deferred: holds `(source, start, end)` reference, materializes lazily | Zero-copy serialization via `sb.append(source, start, end)` for untouched strings |
+| `JqNumber` | `long` fast-path with cache [-128, 1023], `double` for decimals, `BigDecimal` fallback. `of(Number)` accepts any Number subtype. | Direct digit accumulation avoids `new BigDecimal()` for 99% of numbers |
+| `JqString` | Deferred: holds `(source, start, end)` reference, materializes lazily. Serialization proxy materializes before writing. | Zero-copy serialization via `sb.append(source, start, end)` for untouched strings |
 | `JqArray` | `List<JqValue>` via raw `JqValue[]` | `ofTrusted()` avoids defensive copying |
-| `JqObject` | Parallel `String[]` keys + `JqValue[]` values, `Builder` for zero-intermediate construction | Linear scan for ≤32 keys, hash index for larger objects. Interned field names enable reference equality. Pre-computed `"key":` JSON form eliminates escapeJson scanning. Copy-on-write `with()`/`without()`/`merge()`/`deepMerge()`. |
+| `JqObject` | Parallel `String[]` keys + `JqValue[]` values, `Builder` for zero-intermediate construction. Serialization proxy converts map-backed to array-backed. | Linear scan for ≤32 keys, hash index for larger objects. Interned field names enable reference equality. Pre-computed `"key":` JSON form eliminates escapeJson scanning. Copy-on-write `with()`/`without()`/`merge()`/`deepMerge()`. `forEach(BiConsumer)` for zero-allocation iteration. |
 
 ### Parser Optimizations
 
