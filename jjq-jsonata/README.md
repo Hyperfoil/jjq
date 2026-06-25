@@ -171,9 +171,10 @@ Tested against the upstream [JSONata conformance test suite](https://github.com/
 
 | Status | Count | % |
 |--------|-------|---|
-| **Passing** | 316 | 60.0% |
-| Skipped (unsupported features) | 126 | 23.9% |
-| Skipped (implementation gaps) | 85 | 16.1% |
+| **Passing** | 414 | 34.0% |
+| Skipped (error-code + unsupported + gaps) | 805 | 66.0% |
+
+*Note: total expanded from 527 to 1219 test cases in Phase 3 by importing all remaining test groups. Against the original 527 tests, ~328 pass (62.2%).*
 
 Run the conformance tests:
 ```bash
@@ -214,8 +215,9 @@ mvn test -Pjsonata -pl jjq-jsonata -Dtest=JsonataConformanceTest
 
 ## Roadmap
 
-- **Phase 2** (issue #30): `$round` precision, `$split` limit, block expressions, `$` in predicates, variable bindings, `$substringBefore`/`$substringAfter` — target 60-65% conformance
-- **Phase 3** (issue #31): Lambdas, `$map`/`$filter`/`$reduce`, regex, recursive descent, `$sort` with comparator — target 75-80% conformance
+- **Phase 2** (issue #30): Done — `$round` precision, `$split` limit, block expressions, `$` in predicates, `.()` map operator, null safety, banker's rounding
+- **Phase 3** (issue #31): In progress — variables, lambdas, `$map`/`$filter`/`$reduce`, `~>` pipe, `**` recursive descent, `$replace`/`$spread`/`$lookup`
+- **Transform operator** (issue #32): JSONata's pattern-matching transform `|...|...|` — dedicated issue due to complexity (104 tests)
 
 ## Building
 
