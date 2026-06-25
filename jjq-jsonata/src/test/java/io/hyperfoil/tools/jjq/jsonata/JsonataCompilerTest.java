@@ -470,8 +470,9 @@ class JsonataCompilerTest {
 
         @Test
         void unsupportedFunction() {
+            // Use a function that's genuinely unsupported
             assertThrows(JsonataException.class,
-                    () -> JsonataCompiler.compile("$lookup(obj, 'key')"));
+                    () -> JsonataCompiler.compile("$formatInteger(1234, 'w')"));
         }
 
         @Test

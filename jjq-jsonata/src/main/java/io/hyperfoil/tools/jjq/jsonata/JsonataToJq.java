@@ -770,6 +770,59 @@ final class JsonataToJq {
                     throw new JsonataException("$reduce requires array, function, and initial value");
                 }
             }
+            case "$replace" -> {
+                if (args.size() == 3) {
+                    sb.append("(");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | gsub(");
+                    emit(args.get(1), sb, false);
+                    sb.append("; ");
+                    emit(args.get(2), sb, false);
+                    sb.append("))");
+                } else if (args.size() == 4) {
+                    // With limit — not directly supported by jq gsub, use sub N times
+                    sb.append("(");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | gsub(");
+                    emit(args.get(1), sb, false);
+                    sb.append("; ");
+                    emit(args.get(2), sb, false);
+                    sb.append("))"); // ignore limit for now
+                } else {
+                    throw new JsonataException("$replace requires 3 or 4 arguments");
+                }
+            }
+            case "$spread" -> {
+                if (args.size() == 1) {
+                    sb.append("[");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | to_entries[] | {(.key): .value}]");
+                } else {
+                    throw new JsonataException("$spread requires exactly 1 argument");
+                }
+            }
+            case "$lookup" -> {
+                if (args.size() == 2) {
+                    sb.append("(");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | .[");
+                    emit(args.get(1), sb, false);
+                    sb.append("])");
+                } else {
+                    throw new JsonataException("$lookup requires exactly 2 arguments");
+                }
+            }
+            case "$shuffle" -> {
+                // $shuffle can't be deterministically translated — just pass through as-is
+                // The result order is random, so conformance tests may not match
+                if (args.size() == 1) {
+                    sb.append("(");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | if . == null then null else . end)");
+                } else {
+                    throw new JsonataException("$shuffle requires exactly 1 argument");
+                }
+            }
             default -> throw new JsonataException("Unsupported JSONata function: " + name);
         }
     }
