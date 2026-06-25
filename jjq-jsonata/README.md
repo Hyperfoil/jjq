@@ -171,10 +171,10 @@ Tested against the upstream [JSONata conformance test suite](https://github.com/
 
 | Status | Count | % |
 |--------|-------|---|
-| **Passing** | 460 | 37.7% |
-| Skipped (error-code + unsupported + gaps) | 759 | 62.3% |
+| **Passing** | 468 | 38.4% |
+| Skipped (error-code + unsupported + gaps) | 751 | 61.6% |
 
-*Note: 1219 total test cases from the full upstream JSONata test suite. Against the original 527 tests from Phases 1-2, ~345 pass (65.5%).*
+*Note: 1219 total test cases from the full upstream JSONata test suite. Against the original 527 tests from Phases 1-2, ~350 pass (66.4%).*
 
 Run the conformance tests:
 ```bash
