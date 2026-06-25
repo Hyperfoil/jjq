@@ -26,6 +26,7 @@ final class JsonataLexer {
         QUESTION, COLON_PAIR, // ? and : for ternary
         ASSIGN,         // :=
         CHAIN,          // ~> (transform/pipe operator)
+        DEFAULT,        // // (default/coalescing operator)
         DOTDOT,         // .. (range in array index)
         // Keywords
         AND, OR, IN, NOT,
@@ -93,6 +94,12 @@ final class JsonataLexer {
             // ~> (chain/transform operator)
             if (c == '~' && i + 1 < len && input.charAt(i + 1) == '>') {
                 tokens.add(new Token(TokenType.CHAIN, "~>", i));
+                i += 2; continue;
+            }
+
+            // // (default/coalescing operator)
+            if (c == '/' && i + 1 < len && input.charAt(i + 1) == '/') {
+                tokens.add(new Token(TokenType.DEFAULT, "//", i));
                 i += 2; continue;
             }
 

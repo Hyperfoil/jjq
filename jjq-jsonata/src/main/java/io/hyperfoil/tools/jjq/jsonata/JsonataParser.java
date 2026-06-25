@@ -442,6 +442,7 @@ final class JsonataParser {
     private int infixPrecedence(TokenType type) {
         return switch (type) {
             case CHAIN -> 3; // ~> (lowest precedence, right-associative pipe)
+            case DEFAULT -> 4; // // (default/coalescing)
             case QUESTION -> 5; // ternary
             case OR -> 10;
             case AND -> 20;
@@ -472,6 +473,7 @@ final class JsonataParser {
             case OR -> "or";
             case IN -> "in";
             case CHAIN -> "~>";
+            case DEFAULT -> "//";
             default -> null;
         };
     }

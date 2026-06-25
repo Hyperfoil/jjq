@@ -281,6 +281,12 @@ final class JsonataToJq {
                 // Auto-map: if previous result is array, iterate
                 if (prevStep instanceof PredicateNode) {
                     sb.append("[] | .");
+                } else if (prevStep instanceof DescendantNode || prevStep instanceof WildcardNode) {
+                    // After ** or *, use ? to suppress errors on non-objects
+                    sb.append(" | .");
+                    emitFieldName(step, sb);
+                    sb.append("? // empty");
+                    continue; // skip the normal emitFieldName below
                 } else {
                     sb.append(" | if type == \"array\" then .[] else . end | .");
                 }
