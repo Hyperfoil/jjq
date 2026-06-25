@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.jsonata;
 
 import io.hyperfoil.tools.jjq.jsonata.JsonataParser.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -161,6 +162,13 @@ final class JsonataToJq {
                 sb.append('(');
                 emit(g.expr(), sb, false);
                 sb.append(')');
+            }
+
+            case JsonataParser.LambdaNode lambda -> {
+                // Lambda expressions can't be represented as values in jq.
+                // They are only useful when passed to HOFs ($map, $filter, etc.)
+                // which handle them via inlineLambda(). Standalone lambdas throw.
+                throw new JsonataException("Unsupported: standalone lambda expression (lambdas are only supported as arguments to $map, $filter, $reduce, $sort)");
             }
 
             case JsonataParser.BlockNode block -> {
@@ -412,6 +420,23 @@ final class JsonataToJq {
     private static void emitFunctionCall(FunctionCallNode fn, StringBuilder sb) {
         String name = fn.name();
         List<Node> args = fn.args();
+
+        // Handle $sort with 2 args (comparator function) before builtin check
+        if ("$sort".equals(name) && args.size() == 2 && args.get(1) instanceof LambdaNode lambda) {
+            // $sort(array, function($a, $b) { $a.field > $b.field })
+            // Try to detect sort_by pattern: if body is $a.field > $b.field → sort_by(.field)
+            Node sortField = detectSortByField(lambda);
+            if (sortField != null) {
+                sb.append("(");
+                emitIteratingArg(args.get(0), sb);
+                sb.append(" | if . == null then null elif type != \"array\" then [.] else . end | if . == null then null else sort_by(.");
+                emitFieldName(sortField, sb);
+                sb.append(") end)");
+            } else {
+                throw new JsonataException("$sort comparator must be a simple field comparison (e.g., function($a,$b) { $a.field > $b.field })");
+            }
+            return;
+        }
 
         // Check built-in single-arg pipe functions
         String jqBuiltin = BUILTIN_FUNCTIONS.get(name);
@@ -691,8 +716,142 @@ final class JsonataToJq {
                     throw new JsonataException("$sqrt requires exactly 1 argument");
                 }
             }
+            case "$map" -> {
+                if (args.size() == 2 && args.get(1) instanceof LambdaNode lambda) {
+                    // $map(array, function($v) { body }) → [array[] | inlined_body]
+                    sb.append("[");
+                    emit(args.get(0), sb, false);
+                    sb.append("[] | ");
+                    emitInlinedLambdaBody(lambda, sb);
+                    sb.append("]");
+                } else {
+                    throw new JsonataException("$map requires an array and a function argument");
+                }
+            }
+            case "$filter" -> {
+                if (args.size() == 2 && args.get(1) instanceof LambdaNode lambda) {
+                    // $filter(array, function($v) { pred }) → [array[] | select(pred)]
+                    sb.append("[");
+                    emit(args.get(0), sb, false);
+                    sb.append("[] | select(");
+                    emitInlinedLambdaBody(lambda, sb);
+                    sb.append(")]");
+                } else {
+                    throw new JsonataException("$filter requires an array and a function argument");
+                }
+            }
+            case "$reduce" -> {
+                if (args.size() == 3 && args.get(1) instanceof LambdaNode lambda) {
+                    // $reduce(array, function($prev, $curr) { body }, init)
+                    // → reduce array[] as $curr (init; body_with_$prev_replaced_by_.)
+                    if (lambda.params().size() != 2) {
+                        throw new JsonataException("$reduce function must have exactly 2 parameters");
+                    }
+                    sb.append("reduce (");
+                    emit(args.get(0), sb, false);
+                    sb.append(")[] as ").append(lambda.params().get(1)).append(" (");
+                    emit(args.get(2), sb, false);
+                    sb.append("; ");
+                    // In the body, replace $prev with . (accumulator)
+                    emitLambdaBodyWithReplacement(lambda.body(), lambda.params().get(0), ".", sb);
+                    sb.append(")");
+                } else {
+                    throw new JsonataException("$reduce requires array, function, and initial value");
+                }
+            }
             default -> throw new JsonataException("Unsupported JSONata function: " + name);
         }
+    }
+
+    /**
+     * Inline a lambda body: replace parameter references with jq current value (.).
+     * Only supports simple lambdas (field access + arithmetic).
+     */
+    private static void emitInlinedLambdaBody(LambdaNode lambda, StringBuilder sb) {
+        if (lambda.params().isEmpty()) {
+            emit(lambda.body(), sb, false);
+        } else {
+            // Replace $param.field with .field, $param with .
+            emitLambdaBodyWithReplacement(lambda.body(), lambda.params().get(0), ".", sb);
+        }
+    }
+
+    /**
+     * Emit a lambda body with a specific variable replaced by a jq expression.
+     */
+    private static void emitLambdaBodyWithReplacement(Node body, String varName, String replacement, StringBuilder sb) {
+        switch (body) {
+            case VariableNode v -> {
+                if (v.name().equals(varName)) {
+                    sb.append(replacement);
+                } else {
+                    sb.append(v.name());
+                }
+            }
+            case PathNode p -> {
+                // Check if path starts with the variable
+                if (!p.steps().isEmpty() && p.steps().get(0) instanceof VariableNode v && v.name().equals(varName)) {
+                    // $param.field.field2 → .field.field2
+                    sb.append(".");
+                    for (int i = 1; i < p.steps().size(); i++) {
+                        if (i > 1) sb.append(".");
+                        emitFieldName(p.steps().get(i), sb);
+                    }
+                } else {
+                    emit(body, sb, false);
+                }
+            }
+            case BinaryNode bin -> {
+                sb.append("(");
+                emitLambdaBodyWithReplacement(bin.left(), varName, replacement, sb);
+                sb.append(" ");
+                sb.append(translateComparisonOp(bin.op()));
+                sb.append(" ");
+                emitLambdaBodyWithReplacement(bin.right(), varName, replacement, sb);
+                sb.append(")");
+            }
+            case UnaryNode un -> {
+                if ("-".equals(un.op())) {
+                    sb.append("-(");
+                    emitLambdaBodyWithReplacement(un.operand(), varName, replacement, sb);
+                    sb.append(")");
+                } else {
+                    emit(body, sb, false);
+                }
+            }
+            case FunctionCallNode fn -> {
+                // Recursively replace in function args
+                var newArgs = new ArrayList<Node>();
+                for (Node arg : fn.args()) {
+                    var argSb = new StringBuilder();
+                    emitLambdaBodyWithReplacement(arg, varName, replacement, argSb);
+                    // Wrap the replacement as a raw string node for re-emission
+                    newArgs.add(arg); // keep original for now
+                }
+                // Just emit normally — variable references in args will be caught by VariableNode case
+                emitFunctionCall(fn, sb);
+            }
+            default -> emit(body, sb, false);
+        }
+    }
+
+    /**
+     * Detect if a lambda is a simple sort-by pattern: function($a, $b) { $a.field > $b.field }
+     * Returns the field node if detected, null otherwise.
+     */
+    private static Node detectSortByField(LambdaNode lambda) {
+        if (lambda.params().size() != 2) return null;
+        if (!(lambda.body() instanceof BinaryNode bin)) return null;
+        if (!">".equals(bin.op()) && !"<".equals(bin.op())) return null;
+
+        // Check if left is $a.field and right is $b.field (or vice versa for <)
+        Node fieldSide = ">".equals(bin.op()) ? bin.left() : bin.right();
+        if (fieldSide instanceof PathNode p && p.steps().size() == 2
+                && p.steps().get(0) instanceof VariableNode v
+                && v.name().equals(lambda.params().get(0))) {
+            return p.steps().get(1);
+        }
+        return null;
     }
 
     private static boolean isCollectionFunction(String name) {

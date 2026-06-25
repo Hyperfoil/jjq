@@ -85,6 +85,9 @@ final class JsonataParser {
     /** Variable assignment: `$var := expr` */
     record AssignNode(String varName, Node value) implements Node {}
 
+    /** Lambda expression: `function($a, $b) { body }` */
+    record LambdaNode(List<String> params, Node body) implements Node {}
+
     /** Descendant: `**` */
     record DescendantNode() implements Node {}
 
@@ -155,7 +158,13 @@ final class JsonataParser {
             case FALSE -> { advance(); yield new BooleanNode(false); }
             case NULL -> { advance(); yield new NullNode(); }
 
-            case NAME -> { advance(); yield new FieldNode(t.value()); }
+            case NAME -> {
+                advance();
+                if ("function".equals(t.value()) && peek().type() == TokenType.LPAREN) {
+                    yield parseLambda();
+                }
+                yield new FieldNode(t.value());
+            }
 
             // and/or as field names when in primary position (not infix)
             case AND, OR -> { advance(); yield new FieldNode(t.value()); }
@@ -332,6 +341,31 @@ final class JsonataParser {
             case GroupNode g -> containsVariable(g.expr());
             default -> false;
         };
+    }
+
+    private Node parseLambda() {
+        expect(TokenType.LPAREN, "Expected '(' after 'function'");
+        var params = new ArrayList<String>();
+        if (peek().type() != TokenType.RPAREN) {
+            Token p = peek();
+            if (p.type() == TokenType.VARIABLE) {
+                advance();
+                params.add(p.value());
+            }
+            while (peek().type() == TokenType.COMMA) {
+                advance();
+                Token p2 = peek();
+                if (p2.type() == TokenType.VARIABLE) {
+                    advance();
+                    params.add(p2.value());
+                }
+            }
+        }
+        expect(TokenType.RPAREN, "Expected ')' after lambda parameters");
+        expect(TokenType.LBRACE, "Expected '{' for lambda body");
+        Node body = parseExpression(0);
+        expect(TokenType.RBRACE, "Expected '}' after lambda body");
+        return new LambdaNode(params, body);
     }
 
     private Node parseFunctionCall(String name) {
