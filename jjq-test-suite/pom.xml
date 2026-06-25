@@ -12,6 +12,11 @@
     <name>jjq :: Test Suite</name>
     <description>Conformance tests from official jq test suite</description>
 
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>false</maven.install.skip>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.hyperfoil.tools</groupId>
