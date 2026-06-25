@@ -116,7 +116,7 @@ class JsonataConformanceTest {
             return;
         }
 
-        // Load the dataset
+        // Load the dataset (from external file or inline data)
         JqValue input = JqNull.NULL;
         if (datasetName != null && !datasetName.isEmpty()) {
             String datasetPath = DATASETS_PATH + "/" + datasetName + ".json";
@@ -124,6 +124,12 @@ class JsonataConformanceTest {
                 if (is != null) {
                     input = JqValues.parse(new String(is.readAllBytes(), StandardCharsets.UTF_8));
                 }
+            }
+        } else {
+            // Try inline data field (some test cases embed data directly)
+            JqValue inlineData = testCase.getField("data");
+            if (!inlineData.isNull()) {
+                input = inlineData;
             }
         }
 
