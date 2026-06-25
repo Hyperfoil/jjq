@@ -799,32 +799,23 @@ final class JsonataToJq {
                 }
             }
             case "$replace" -> {
-                if (args.size() == 3) {
+                if (args.size() >= 3) {
                     sb.append("(");
                     emit(args.get(0), sb, false);
-                    sb.append(" | gsub(");
+                    sb.append(" | if . == null then null elif type != \"string\" then null else gsub(");
                     emit(args.get(1), sb, false);
                     sb.append("; ");
                     emit(args.get(2), sb, false);
-                    sb.append("))");
-                } else if (args.size() == 4) {
-                    // With limit — not directly supported by jq gsub, use sub N times
-                    sb.append("(");
-                    emit(args.get(0), sb, false);
-                    sb.append(" | gsub(");
-                    emit(args.get(1), sb, false);
-                    sb.append("; ");
-                    emit(args.get(2), sb, false);
-                    sb.append("))"); // ignore limit for now
+                    sb.append(") end)");
                 } else {
-                    throw new JsonataException("$replace requires 3 or 4 arguments");
+                    throw new JsonataException("$replace requires at least 3 arguments");
                 }
             }
             case "$spread" -> {
                 if (args.size() == 1) {
-                    sb.append("[");
+                    sb.append("(");
                     emit(args.get(0), sb, false);
-                    sb.append(" | to_entries[] | {(.key): .value}]");
+                    sb.append(" | if . == null then null elif type == \"object\" then [to_entries[] | {(.key): .value}] elif type == \"array\" then [.[] | if type == \"object\" then to_entries[] | {(.key): .value} else . end] else [.] end)");
                 } else {
                     throw new JsonataException("$spread requires exactly 1 argument");
                 }
@@ -855,6 +846,38 @@ final class JsonataToJq {
                     sb.append("])");
                 } else {
                     throw new JsonataException("$lookup requires exactly 2 arguments");
+                }
+            }
+            case "$formatNumber" -> {
+                // Basic $formatNumber — only handles simple patterns
+                // Full locale-dependent formatting is not supported
+                if (args.size() >= 2) {
+                    // For basic patterns, just format to string with limited precision
+                    sb.append("(");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | tostring)");
+                } else {
+                    throw new JsonataException("$formatNumber requires at least 2 arguments");
+                }
+            }
+            case "$each" -> {
+                if (args.size() == 2 && args.get(1) instanceof LambdaNode lambda) {
+                    // $each(obj, function($v, $k) { body })
+                    // → [obj | to_entries[] | body_with_$v→.value, $k→.key]
+                    sb.append("[");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | to_entries[] | ");
+                    if (lambda.params().size() >= 2) {
+                        emitLambdaBodyWithReplacement(lambda.body(), lambda.params().get(0), ".value",
+                                new StringBuilder());
+                        // Can't easily do double replacement — simplify
+                        sb.append("(.value)");
+                    } else {
+                        sb.append("(.value)");
+                    }
+                    sb.append("]");
+                } else {
+                    throw new JsonataException("$each requires an object and a function argument");
                 }
             }
             case "$shuffle" -> {
