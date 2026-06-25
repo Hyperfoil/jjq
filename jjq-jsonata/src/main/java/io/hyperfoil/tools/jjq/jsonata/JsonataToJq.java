@@ -776,6 +776,28 @@ final class JsonataToJq {
                     throw new JsonataException("$reduce requires array, function, and initial value");
                 }
             }
+            case "$pad" -> {
+                // $pad(str, width [, char])
+                // Positive width: right-pad. Negative width: left-pad.
+                if (args.size() >= 2) {
+                    String padChar = args.size() >= 3 ? null : "\" \"";
+                    sb.append("((");
+                    emit(args.get(0), sb, false);
+                    sb.append(") as $__s | (");
+                    emit(args.get(1), sb, false);
+                    sb.append(") as $__w | ");
+                    if (args.size() >= 3) {
+                        sb.append("(");
+                        emit(args.get(2), sb, false);
+                        sb.append(") as $__c | ");
+                    } else {
+                        sb.append("\" \" as $__c | ");
+                    }
+                    sb.append("if $__w > 0 then ($__s + ($__c * ([($__w - ($__s | length)), 0] | max))) else (($__c * ([(- $__w - ($__s | length)), 0] | max)) + $__s) end)");
+                } else {
+                    throw new JsonataException("$pad requires at least 2 arguments");
+                }
+            }
             case "$replace" -> {
                 if (args.size() == 3) {
                     sb.append("(");
@@ -805,6 +827,23 @@ final class JsonataToJq {
                     sb.append(" | to_entries[] | {(.key): .value}]");
                 } else {
                     throw new JsonataException("$spread requires exactly 1 argument");
+                }
+            }
+            case "$formatBase" -> {
+                if (args.size() == 1) {
+                    // Default base 10
+                    sb.append("(");
+                    emit(args.get(0), sb, false);
+                    sb.append(" | tostring)");
+                } else if (args.size() == 2) {
+                    // $formatBase(number, radix) — convert to base representation
+                    sb.append("((");
+                    emit(args.get(0), sb, false);
+                    sb.append(") as $__n | (");
+                    emit(args.get(1), sb, false);
+                    sb.append(") as $__r | if $__r == 10 then ($__n | tostring) elif $__r == 16 then (def hex: if . < 10 then (48 + .) elif . < 16 then (87 + .) else . end | implode; if $__n == 0 then \"0\" else ({n: $__n, s: \"\"} | until(.n == 0; {n: (.n / $__r | floor), s: ((.n % $__r | hex) + .s)}) | .s) end) elif $__r == 2 then (if $__n == 0 then \"0\" else ({n: $__n, s: \"\"} | until(.n == 0; {n: (.n / 2 | floor), s: ((if (.n % 2) == 0 then \"0\" else \"1\" end) + .s)}) | .s) end) elif $__r == 8 then (if $__n == 0 then \"0\" else ({n: $__n, s: \"\"} | until(.n == 0; {n: (.n / 8 | floor), s: (((.n % 8) | tostring) + .s)}) | .s) end) else ($__n | tostring) end)");
+                } else {
+                    throw new JsonataException("$formatBase requires 1 or 2 arguments");
                 }
             }
             case "$lookup" -> {
