@@ -24,6 +24,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion with lazy wrapping |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-jakarta` | Hibernate `FormatMapper` and JAX-RS `MessageBodyReader`/`Writer` for `JqValue` persistence and REST |
+| `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (96.7% passing) |
 | `jjq-benchmark` | JMH benchmarks: library comparison, production queries, allocation profiling |
@@ -50,6 +51,13 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jakarta</artifactId>
+    <version>0.1.4-SNAPSHOT</version>
+</dependency>
+
+<!-- For JSONata support -->
+<dependency>
+    <groupId>io.hyperfoil.tools</groupId>
+    <artifactId>jjq-jsonata</artifactId>
     <version>0.1.4-SNAPSHOT</version>
 </dependency>
 ```
@@ -99,15 +107,35 @@ JqValue user = getName.apply(data);
 JqValue results = getResults.apply(data);
 ```
 
-For **programmatic navigation** (traversing results, iterating dynamic field names), use the null-safe `getField()`/`getElement()` convenience methods:
+For **programmatic navigation** (traversing results, iterating dynamic field names), use the null-safe convenience methods:
 
 ```java
 // Null-safe chaining -- returns JqNull.NULL for missing paths or type mismatches
 JqValue results = data.getField("workload").getField("data").getElement(0).getField("results");
 
+// JSON Pointer navigation (RFC 6901)
+JqValue results = data.at("/workload/data/0/results");
+
 // Safe value extraction with defaults
 String name = data.getField("user").asString("unknown");
 long count = data.getField("count").asLong(0);
+int page = data.getField("page").asInt(1);
+double score = data.getField("score").asDouble(0.0);
+
+// Coercing extractors -- extract numbers from JqNumber or numeric strings
+Double value = data.getField("metric").tryDouble();   // null if not numeric
+Long id = data.getField("id").tryLong();               // null if not parseable
+Integer port = data.getField("port").tryInt();          // null if not parseable
+
+// Fail-fast access -- throws JqTypeError if missing
+JqValue required = data.required("user");              // throws if missing
+JqValue element = data.required(0);                    // throws if out of bounds
+
+// Type checks
+data.isNull();              data.isString();
+data.isNumber();            data.isBoolean();
+data.isArray();             data.isObject();
+data.isIntegralNumber();    data.isFloatingPointNumber();
 
 // Check existence
 if (data.has("user") && !data.getField("items").isEmpty()) {
@@ -126,10 +154,50 @@ List<String> names = items.stream()
     .map(item -> item.getField("name").asText())
     .toList();
 
-// Object accessors
+// Object accessors — forEach avoids Map.Entry allocation for array-backed objects
 JqObject config = (JqObject) data.getField("config");
+config.forEach((key, val) -> System.out.println(key + "=" + val));
 for (String key : config.keys()) { /* ... */ }
 for (var entry : config.entries()) { /* ... */ }
+```
+
+### Parse from InputStream
+
+```java
+// Parse directly from an InputStream (reads all bytes, then parses)
+try (InputStream in = connection.getInputStream()) {
+    JqValue data = JqValues.parse(in);
+}
+```
+
+### Pretty-print JSON
+
+```java
+// Compact (default)
+String compact = value.toJsonString();  // {"name":"Alice","age":30}
+
+// Pretty-printed with 2-space indentation
+String pretty = JqValues.toPrettyJsonString(value);
+// {
+//   "name": "Alice",
+//   "age": 30
+// }
+```
+
+### Convert between JqValue and Java types
+
+Recursive conversion for integrating with libraries that operate on `Map`/`List`/primitives (JSONata engines, GraalVM polyglot, JDBC, template engines):
+
+```java
+// Java → JqValue (null → JqNull.NULL, Map → JqObject, List → JqArray, etc.)
+Map<String, Object> javaMap = Map.of("name", "Alice", "scores", List.of(1, 2, 3));
+JqValue value = JqValues.fromJavaObject(javaMap);
+
+// JqValue → Java (JqNull → null, JqObject → LinkedHashMap, JqArray → ArrayList, etc.)
+Object javaObj = value.toJavaObject();
+
+// JqNumber.of(Number) — accepts any Number subtype (Integer, Long, Double, Float, BigDecimal, etc.)
+JqNumber n = JqNumber.of(someNumber);  // auto-promotes integral types to long-backed
 ```
 
 ### Build JSON values
@@ -174,6 +242,22 @@ JqProgram program = engine.compile(".users[] | {name, email}");
 JsonNode input = mapper.readTree(requestBody);
 List<JsonNode> results = engine.apply(program, input);
 ```
+
+### JSONata support (jjq-jsonata)
+
+Run [JSONata](https://jsonata.org) expressions through jjq's optimized bytecode VM. The transpiler converts JSONata to jq at compile time — zero runtime overhead:
+
+```java
+import io.hyperfoil.tools.jjq.jsonata.JsonataCompiler;
+
+// Compile JSONata to jq (one-time cost, ~microseconds)
+JqProgram program = JsonataCompiler.compile("$sum(orders.price)");
+
+// Execute through jjq's bytecode VM — same performance as native jq
+JqValue result = program.apply(data);
+```
+
+Supports navigation, operators, predicates, 35+ built-in functions, implicit array mapping, variable binding, lambdas (`$map`/`$filter`/`$reduce`), `~>` pipe operator, `**` recursive descent, and more. See the [jjq-jsonata README](jjq-jsonata/README.md) for full details and conformance status.
 
 ### Hibernate / JAX-RS integration (jjq-jakarta)
 
