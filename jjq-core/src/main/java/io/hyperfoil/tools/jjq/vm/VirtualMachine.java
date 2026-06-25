@@ -23,6 +23,7 @@ public final class VirtualMachine {
     private final ExprEvaluator treeWalker;
     private final ProgramShape shape;
     private final boolean needsEnv;
+    private final boolean needsMutableEnv;
     private final boolean[] uniqueLayouts; // per object layout: true if all name indices are distinct
     private final String fastField1;  // cached for FIELD_ACCESS / FIELD_ACCESS2 / PIPE_FIELD_ARITH
     private final String fastField2;  // cached for FIELD_ACCESS2
@@ -86,6 +87,7 @@ public final class VirtualMachine {
         this.varSlots = bytecode.varSlotCount() > 0 ? new JqValue[bytecode.varSlotCount()] : null;
         this.shape = detectShape();
         this.needsEnv = detectNeedsEnv();
+        this.needsMutableEnv = detectNeedsMutableEnv();
         this.uniqueLayouts = computeUniqueLayouts();
 
         // Cache field names for fast-path shapes
@@ -169,6 +171,25 @@ public final class VirtualMachine {
         return false;
     }
 
+    /**
+     * Detect whether the program needs a mutable (freshly allocated) Environment.
+     * Programs that only use CALL_FUNC/EVAL_AST (builtin function calls) can share
+     * the immutable {@link Environment#EMPTY} singleton. Programs that use
+     * PUSH_SCOPE/POP_SCOPE/LOAD_VAR/STORE_VAR need a fresh mutable Environment
+     * because they create child scopes and write variables.
+     */
+    private boolean detectNeedsMutableEnv() {
+        for (int i = 0; i < bytecode.size(); i++) {
+            switch (bytecode.get(i).op()) {
+                case PUSH_SCOPE, POP_SCOPE, LOAD_VAR, STORE_VAR:
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
+    }
+
     /** Pre-compute which object layouts have all-distinct name indices. */
     private boolean[] computeUniqueLayouts() {
         int[][] layouts = bytecode.objectLayouts();
@@ -203,7 +224,7 @@ public final class VirtualMachine {
             default:
                 break;
         }
-        return execute(inputValue, needsEnv ? new Environment() : null);
+        return execute(inputValue, needsEnv ? (needsMutableEnv ? new Environment() : Environment.EMPTY) : null);
     }
 
     /**
@@ -226,7 +247,7 @@ public final class VirtualMachine {
             default:
                 break;
         }
-        return executeOne(inputValue, needsEnv ? new Environment() : null);
+        return executeOne(inputValue, needsEnv ? (needsMutableEnv ? new Environment() : Environment.EMPTY) : null);
     }
 
     public JqValue executeOne(JqValue inputValue, Environment environment) {

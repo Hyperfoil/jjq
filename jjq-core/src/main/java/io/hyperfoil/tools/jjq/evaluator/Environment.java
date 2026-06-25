@@ -8,6 +8,16 @@ import java.util.List;
 import java.util.Map;
 
 public final class Environment {
+
+    /**
+     * Shared empty Environment for programs that don't use variables.
+     * Avoids allocating a new Environment + HashMap on every {@code apply()} call.
+     * Safe to share: read-only methods ({@code getVariable}, {@code getFunction},
+     * {@code getFilterArg}) return null/throw on the empty maps. Mutation methods
+     * ({@code child()}, {@code setVariable}) create new Environment instances.
+     */
+    public static final Environment EMPTY = new Environment(null, 0);
+
     private final Environment parent;
     private final int depth;
     private final Map<String, JqValue> variables;

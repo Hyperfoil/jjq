@@ -120,7 +120,7 @@ public final class JqProgram {
     }
 
     public JqValue apply(JqValue input, Environment env) {
-        return getVM().executeOne(input, env != null ? env : new Environment());
+        return getVM().executeOne(input, env != null ? env : Environment.EMPTY);
     }
 
     /**
@@ -138,7 +138,7 @@ public final class JqProgram {
     }
 
     public List<JqValue> applyAll(JqValue input, Environment env) {
-        return getVM().execute(input, env != null ? env : new Environment());
+        return getVM().execute(input, env != null ? env : Environment.EMPTY);
     }
 
     private static JqValue fieldAccess(JqValue val, String field) {
