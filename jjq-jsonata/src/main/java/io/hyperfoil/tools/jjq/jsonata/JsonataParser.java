@@ -298,6 +298,11 @@ final class JsonataParser {
                         node = new IndexNode(node, indexExpr);
                     }
                 }
+            } else if (t.type() == TokenType.LBRACE) {
+                // Object grouping: path{key: val, ...}
+                // Constructs an object for each element of the path result
+                Node objConstruct = parseObjectConstruction();
+                node = new PathNode(flattenPath(node, new MapNode(objConstruct)));
             } else {
                 break;
             }
