@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 
 public final class JqNumber implements JqValue {
+    private static final long serialVersionUID = 1L;
+
     private static final int CACHE_LOW = -128;
     private static final int CACHE_HIGH = 1023;
     private static final JqNumber[] CACHE = new JqNumber[CACHE_HIGH - CACHE_LOW + 1];
@@ -17,7 +19,7 @@ public final class JqNumber implements JqValue {
     private final BigDecimal decimalVal;
     private final double rawDouble; // used for NaN/Infinity
     private final boolean isLong;
-    private BigDecimal cachedDecimal; // lazy cache for long-backed numbers
+    private transient BigDecimal cachedDecimal; // lazy cache for long-backed numbers
 
     private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong) {
         this.longVal = longVal;
@@ -74,6 +76,14 @@ public final class JqNumber implements JqValue {
         } catch (ArithmeticException e) {
             return new JqNumber(0, value, value.doubleValue(), false);
         }
+    }
+
+    /** Preserve cached instance identity across serialization. */
+    private Object readResolve() {
+        if (isLong && longVal >= CACHE_LOW && longVal <= CACHE_HIGH) {
+            return CACHE[(int) longVal - CACHE_LOW];
+        }
+        return this;
     }
 
     public boolean isNaN() {

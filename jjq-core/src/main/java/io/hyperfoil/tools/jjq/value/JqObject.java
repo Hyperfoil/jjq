@@ -12,6 +12,8 @@ import java.util.*;
  * </ul>
  */
 public final class JqObject implements JqValue {
+    private static final long serialVersionUID = 1L;
+
     public static final JqObject EMPTY = new JqObject(new String[0], new JqValue[0], 0, null);
 
     // Array-backed representation (null when map-backed)
@@ -35,15 +37,15 @@ public final class JqObject implements JqValue {
      */
     static final int HASH_THRESHOLD = 32;
 
-    // Cached views (lazy)
-    private String[] sortedKeysCache;
-    private JqArray cachedKeysArray; // lazy, sorted JqArray of JqString keys for `keys` builtin
-    private Map<String, JqValue> mapView;
+    // Cached views (lazy, transient — rebuilt on demand, not serialized)
+    private transient String[] sortedKeysCache;
+    private transient JqArray cachedKeysArray; // lazy, sorted JqArray of JqString keys for `keys` builtin
+    private transient Map<String, JqValue> mapView;
     // Open-addressing hash index for O(1) key lookup on large objects.
     // hashSlots[hash & mask] = key index into keys[]/values[], or -1 if empty.
     // Collisions use linear probing. Cheaper than HashMap (no Node/Integer allocation).
-    private int[] hashSlots;
-    private int hashMask;
+    private transient int[] hashSlots;
+    private transient int hashMask;
 
     private JqObject(String[] keys, JqValue[] values, int size, Map<String, JqValue> externalMap) {
         this.keys = keys;
@@ -859,6 +861,47 @@ public final class JqObject implements JqValue {
                 }
                 @Override public int size() { return size; }
             };
+        }
+    }
+
+    /**
+     * Serialization proxy: converts map-backed objects to array-backed and
+     * serializes the parallel arrays. Transient caches (hash index, sorted keys,
+     * map view) are rebuilt lazily after deserialization via ofArrays().
+     */
+    private Object writeReplace() {
+        if (externalMap != null) {
+            // Convert map-backed to array-backed for serialization
+            int n = externalMap.size();
+            String[] k = new String[n];
+            JqValue[] v = new JqValue[n];
+            int i = 0;
+            for (var entry : externalMap.entrySet()) {
+                k[i] = entry.getKey();
+                v[i] = entry.getValue();
+                i++;
+            }
+            return new SerializedForm(k, v, n);
+        }
+        return new SerializedForm(
+                java.util.Arrays.copyOf(keys, size),
+                java.util.Arrays.copyOf(values, size),
+                size);
+    }
+
+    private static class SerializedForm implements java.io.Serializable {
+        private static final long serialVersionUID = 1L;
+        private final String[] keys;
+        private final JqValue[] values;
+        private final int size;
+        SerializedForm(String[] keys, JqValue[] values, int size) {
+            this.keys = keys;
+            this.values = values;
+            this.size = size;
+        }
+        private Object readResolve() {
+            if (size == 0) return EMPTY;
+            return JqObject.ofArrays(keys, values, size);
         }
     }
 }

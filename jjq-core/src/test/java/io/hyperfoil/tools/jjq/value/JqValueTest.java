@@ -882,6 +882,132 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  Serialization round-trip tests (issue #34)
+    // ========================================================================
+
+    @Test
+    void testSerializationNull() throws Exception {
+        assertSame(JqNull.NULL, roundTripSerialize(JqNull.NULL));
+    }
+
+    @Test
+    void testSerializationBooleans() throws Exception {
+        assertSame(JqBoolean.TRUE, roundTripSerialize(JqBoolean.TRUE));
+        assertSame(JqBoolean.FALSE, roundTripSerialize(JqBoolean.FALSE));
+    }
+
+    @Test
+    void testSerializationCachedNumber() throws Exception {
+        JqNumber original = JqNumber.of(42);
+        JqNumber deserialized = (JqNumber) roundTripSerialize(original);
+        assertSame(original, deserialized, "Cached numbers should preserve identity");
+    }
+
+    @Test
+    void testSerializationLargeNumber() throws Exception {
+        JqNumber original = JqNumber.of(999999L);
+        JqNumber deserialized = (JqNumber) roundTripSerialize(original);
+        assertEquals(original, deserialized);
+        assertEquals(999999L, deserialized.longValue());
+    }
+
+    @Test
+    void testSerializationDouble() throws Exception {
+        JqNumber original = JqNumber.of(3.14);
+        JqNumber deserialized = (JqNumber) roundTripSerialize(original);
+        assertEquals(3.14, deserialized.doubleValue());
+    }
+
+    @Test
+    void testSerializationString() throws Exception {
+        JqString original = JqString.of("hello world");
+        JqString deserialized = (JqString) roundTripSerialize(original);
+        assertEquals("hello world", deserialized.stringValue());
+    }
+
+    @Test
+    void testSerializationDeferredString() throws Exception {
+        // Parse creates deferred strings — verify they survive serialization
+        JqValue parsed = JqValues.parse("{\"name\":\"Alice\"}");
+        JqValue deserialized = roundTripSerialize(parsed);
+        assertEquals("Alice", deserialized.getField("name").stringValue());
+    }
+
+    @Test
+    void testSerializationArray() throws Exception {
+        JqArray original = JqArray.of(JqNumber.of(1), JqString.of("two"), JqBoolean.TRUE);
+        JqArray deserialized = (JqArray) roundTripSerialize(original);
+        assertEquals(3, deserialized.size());
+        assertEquals(JqNumber.of(1), deserialized.get(0));
+        assertEquals(JqString.of("two"), deserialized.get(1));
+        assertSame(JqBoolean.TRUE, deserialized.get(2));
+    }
+
+    @Test
+    void testSerializationObject() throws Exception {
+        JqObject original = JqObject.builder().put("name", "Alice").put("age", 30L).build();
+        JqObject deserialized = (JqObject) roundTripSerialize(original);
+        assertEquals(2, deserialized.size());
+        assertEquals(JqString.of("Alice"), deserialized.get("name"));
+        assertEquals(JqNumber.of(30), deserialized.get("age"));
+        // Verify insertion order preserved
+        assertEquals("{\"name\":\"Alice\",\"age\":30}", deserialized.toJsonString());
+    }
+
+    @Test
+    void testSerializationLargeObjectHashIndex() throws Exception {
+        // Object with >32 keys — verifies hash index is rebuilt after deserialization
+        var builder = JqObject.builder(40);
+        for (int i = 0; i < 40; i++) builder.put("field_" + i, (long) i);
+        JqObject original = builder.build();
+        JqObject deserialized = (JqObject) roundTripSerialize(original);
+        assertEquals(40, deserialized.size());
+        for (int i = 0; i < 40; i++) {
+            assertEquals(JqNumber.of(i), deserialized.get("field_" + i));
+        }
+    }
+
+    @Test
+    void testSerializationMapBackedObject() throws Exception {
+        // Map-backed object (simulates lazy adapter) — verifies conversion to array-backed
+        var map = new java.util.LinkedHashMap<String, JqValue>();
+        map.put("x", JqNumber.of(1));
+        map.put("y", JqNumber.of(2));
+        JqObject original = JqObject.ofTrusted((java.util.Map<String, JqValue>) map);
+        JqObject deserialized = (JqObject) roundTripSerialize(original);
+        assertEquals(2, deserialized.size());
+        assertEquals(JqNumber.of(1), deserialized.get("x"));
+        assertEquals(JqNumber.of(2), deserialized.get("y"));
+    }
+
+    @Test
+    void testSerializationNestedDocument() throws Exception {
+        JqValue original = JqValues.parse(
+                "{\"users\":[{\"name\":\"Alice\",\"scores\":[1,2,3]},{\"name\":\"Bob\",\"scores\":[4,5]}],\"active\":true}");
+        JqValue deserialized = roundTripSerialize(original);
+        assertEquals(original.toJsonString(), deserialized.toJsonString());
+        assertEquals(original, deserialized);
+    }
+
+    @Test
+    void testSerializationEmptyContainers() throws Exception {
+        assertSame(JqObject.EMPTY, ((JqObject) roundTripSerialize(JqObject.EMPTY)));
+        // JqArray.EMPTY may not preserve identity (no readResolve for EMPTY), but should be equal
+        JqArray emptyArr = (JqArray) roundTripSerialize(JqArray.EMPTY);
+        assertEquals(0, emptyArr.size());
+    }
+
+    private static JqValue roundTripSerialize(JqValue value) throws Exception {
+        var baos = new java.io.ByteArrayOutputStream();
+        try (var oos = new java.io.ObjectOutputStream(baos)) {
+            oos.writeObject(value);
+        }
+        try (var ois = new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(baos.toByteArray()))) {
+            return (JqValue) ois.readObject();
+        }
+    }
+
+    // ========================================================================
     //  JqValues.parse(InputStream) tests
     // ========================================================================
 

@@ -8,6 +8,8 @@ import java.util.Objects;
 import java.util.stream.Stream;
 
 public final class JqArray implements JqValue, Iterable<JqValue> {
+    private static final long serialVersionUID = 1L;
+
     public static final JqArray EMPTY = new JqArray(List.of());
 
     private final List<JqValue> elements;

@@ -1,9 +1,14 @@
 package io.hyperfoil.tools.jjq.value;
 
 public final class JqNull implements JqValue {
+    private static final long serialVersionUID = 1L;
+
     public static final JqNull NULL = new JqNull();
 
     private JqNull() {}
+
+    /** Preserve singleton identity across serialization. */
+    private Object readResolve() { return NULL; }
 
     @Override
     public Type type() { return Type.NULL; }

@@ -1,10 +1,11 @@
 package io.hyperfoil.tools.jjq.value;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
-public sealed interface JqValue extends Comparable<JqValue>
+public sealed interface JqValue extends Comparable<JqValue>, Serializable
         permits JqNull, JqBoolean, JqNumber, JqString, JqArray, JqObject {
 
     enum Type {

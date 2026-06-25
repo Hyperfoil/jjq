@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
  * the source directly (zero-copy) for strings without escapes.
  */
 public final class JqString implements JqValue {
+    private static final long serialVersionUID = 1L;
     // Eager: value is set, source is null
     // Deferred: value is null (until materialized), source is String or byte[]
     private volatile String value;
@@ -235,4 +236,20 @@ public final class JqString implements JqValue {
 
     @Override
     public int hashCode() { return stringValue().hashCode(); }
+
+    /**
+     * Serialization proxy: materializes the deferred string before serialization.
+     * This avoids serializing the entire source buffer (e.g., a 14MB JSON input)
+     * for each deferred JqString — only the materialized String is written.
+     */
+    private Object writeReplace() {
+        return new SerializedForm(stringValue());
+    }
+
+    private static class SerializedForm implements java.io.Serializable {
+        private static final long serialVersionUID = 1L;
+        private final String value;
+        SerializedForm(String v) { this.value = v; }
+        private Object readResolve() { return JqString.of(value); }
+    }
 }
