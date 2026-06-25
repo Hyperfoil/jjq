@@ -250,7 +250,7 @@ final class JsonataToJq {
 
         // 3+ step paths: use auto-mapping with singleton unwrap
         // Generate: [.step1 | (auto-map intermediate steps) | .lastStep]
-        //           | singleton-unwrap
+        //           | remove nulls | singleton-unwrap
         sb.append("[.");
         emitFieldName(steps.get(0), sb);
         for (int i = 1; i < steps.size(); i++) {
@@ -263,7 +263,7 @@ final class JsonataToJq {
             }
             sb.append(')');
         }
-        sb.append("] | if length == 0 then null elif length == 1 then .[0] else . end");
+        sb.append("] | [.[] | select(. != null)] | if length == 0 then null elif length == 1 then .[0] else . end");
     }
 
     /**
@@ -310,7 +310,7 @@ final class JsonataToJq {
                 emit(step, sb, true);
             }
         }
-        sb.append("] | if length == 0 then null elif length == 1 then .[0] else . end");
+        sb.append("] | [.[] | select(. != null)] | if length == 0 then null elif length == 1 then .[0] else . end");
     }
 
     private static boolean isSimpleFieldPath(List<Node> steps) {
