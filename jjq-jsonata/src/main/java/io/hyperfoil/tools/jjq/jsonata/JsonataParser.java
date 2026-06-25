@@ -79,6 +79,12 @@ final class JsonataParser {
     /** Wildcard: `*` in path context */
     record WildcardNode() implements Node {}
 
+    /** Block expression: `(expr1; expr2; expr3)` — evaluates sequentially, returns last */
+    record BlockNode(List<Node> statements) implements Node {}
+
+    /** Variable assignment: `$var := expr` */
+    record AssignNode(String varName, Node value) implements Node {}
+
     /** Descendant: `**` */
     record DescendantNode() implements Node {}
 
@@ -161,6 +167,12 @@ final class JsonataParser {
                 if (t.value().equals("$")) {
                     yield new VariableNode("$");
                 }
+                // Check for assignment: $var := expr
+                if (peek().type() == TokenType.ASSIGN) {
+                    advance(); // skip :=
+                    Node value = parseExpression(0);
+                    yield new AssignNode(t.value(), value);
+                }
                 // Check if this is a function call: $func(...)
                 if (peek().type() == TokenType.LPAREN) {
                     yield parseFunctionCall(t.value());
@@ -184,6 +196,18 @@ final class JsonataParser {
             case LPAREN -> {
                 advance();
                 Node expr = parseExpression(0);
+                if (peek().type() == TokenType.SEMICOLON) {
+                    // Block expression: (expr1; expr2; expr3)
+                    var stmts = new ArrayList<Node>();
+                    stmts.add(expr);
+                    while (peek().type() == TokenType.SEMICOLON) {
+                        advance(); // skip ;
+                        if (peek().type() == TokenType.RPAREN) break; // trailing semicolon
+                        stmts.add(parseExpression(0));
+                    }
+                    expect(TokenType.RPAREN, "Expected ')'");
+                    yield new BlockNode(stmts);
+                }
                 expect(TokenType.RPAREN, "Expected ')'");
                 yield new GroupNode(expr);
             }

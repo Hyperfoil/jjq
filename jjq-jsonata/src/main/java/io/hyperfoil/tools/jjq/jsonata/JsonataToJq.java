@@ -163,6 +163,23 @@ final class JsonataToJq {
                 sb.append(')');
             }
 
+            case JsonataParser.BlockNode block -> {
+                // (expr1; expr2; expr3) → chain with | pipe, assignments become "as $var"
+                sb.append('(');
+                for (int i = 0; i < block.statements().size(); i++) {
+                    if (i > 0) sb.append(" | ");
+                    emit(block.statements().get(i), sb, false);
+                }
+                sb.append(')');
+            }
+
+            case JsonataParser.AssignNode assign -> {
+                // $var := expr → (expr) as $var
+                sb.append('(');
+                emit(assign.value(), sb, false);
+                sb.append(") as ").append(assign.varName());
+            }
+
             case JsonataParser.MapNode m -> {
                 // .(expr) — map operator: iterate and evaluate expr for each element
                 // In a path context, this was preceded by a field/path

@@ -24,6 +24,7 @@ final class JsonataLexer {
         NEQ,            // !=
         LT, GT, LE, GE,
         QUESTION, COLON_PAIR, // ? and : for ternary
+        ASSIGN,         // :=
         DOTDOT,         // .. (range in array index)
         // Keywords
         AND, OR, IN, NOT,
@@ -62,7 +63,16 @@ final class JsonataLexer {
                     continue;
                 }
                 case ',' -> { tokens.add(new Token(TokenType.COMMA, ",", i)); i++; continue; }
-                case ':' -> { tokens.add(new Token(TokenType.COLON, ":", i)); i++; continue; }
+                case ':' -> {
+                    if (i + 1 < len && input.charAt(i + 1) == '=') {
+                        tokens.add(new Token(TokenType.ASSIGN, ":=", i));
+                        i += 2;
+                    } else {
+                        tokens.add(new Token(TokenType.COLON, ":", i));
+                        i++;
+                    }
+                    continue;
+                }
                 case ';' -> { tokens.add(new Token(TokenType.SEMICOLON, ";", i)); i++; continue; }
                 case '[' -> { tokens.add(new Token(TokenType.LBRACKET, "[", i)); i++; continue; }
                 case ']' -> { tokens.add(new Token(TokenType.RBRACKET, "]", i)); i++; continue; }
@@ -207,7 +217,7 @@ final class JsonataLexer {
                     case "not" -> TokenType.NOT;
                     case "true" -> TokenType.TRUE;
                     case "false" -> TokenType.FALSE;
-                    case "null" -> TokenType.NULL;
+                    case "null", "undefined" -> TokenType.NULL; // undefined → null in jq
                     default -> TokenType.NAME;
                 };
                 tokens.add(new Token(type, word, start));
