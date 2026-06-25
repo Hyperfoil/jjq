@@ -25,6 +25,7 @@ final class JsonataLexer {
         LT, GT, LE, GE,
         QUESTION, COLON_PAIR, // ? and : for ternary
         ASSIGN,         // :=
+        CHAIN,          // ~> (transform/pipe operator)
         DOTDOT,         // .. (range in array index)
         // Keywords
         AND, OR, IN, NOT,
@@ -87,6 +88,12 @@ final class JsonataLexer {
                 case '%' -> { tokens.add(new Token(TokenType.PERCENT, "%", i)); i++; continue; }
                 case '&' -> { tokens.add(new Token(TokenType.AMPERSAND, "&", i)); i++; continue; }
                 case '?' -> { tokens.add(new Token(TokenType.QUESTION, "?", i)); i++; continue; }
+            }
+
+            // ~> (chain/transform operator)
+            if (c == '~' && i + 1 < len && input.charAt(i + 1) == '>') {
+                tokens.add(new Token(TokenType.CHAIN, "~>", i));
+                i += 2; continue;
             }
 
             // Multi-char operators

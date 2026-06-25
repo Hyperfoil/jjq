@@ -202,7 +202,8 @@ final class JsonataToJq {
             }
 
             case DescendantNode ignored -> {
-                throw new JsonataException("Unsupported JSONata feature: recursive descent (**)");
+                // ** (recursive descent) → .. in jq
+                sb.append("..");
             }
         }
     }
@@ -392,6 +393,16 @@ final class JsonataToJq {
     }
 
     private static void emitBinary(BinaryNode bin, StringBuilder sb) {
+        if ("~>".equals(bin.op())) {
+            // Chain/transform: A ~> B → (A | B)
+            // If B is a function call, pipe A into it
+            sb.append('(');
+            emit(bin.left(), sb, false);
+            sb.append(" | ");
+            emit(bin.right(), sb, false);
+            sb.append(')');
+            return;
+        }
         if ("&".equals(bin.op())) {
             // String concatenation: a & b → ((a | tostring) + (b | tostring))
             sb.append("((");

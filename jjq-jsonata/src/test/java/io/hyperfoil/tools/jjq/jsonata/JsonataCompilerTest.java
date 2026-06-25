@@ -482,8 +482,9 @@ class JsonataCompilerTest {
 
         @Test
         void descendantOperator() {
-            assertThrows(JsonataException.class,
-                    () -> JsonataCompiler.compile("**.name"));
+            // ** (recursive descent) is now supported
+            String jq = JsonataCompiler.toJq("**.name");
+            assertTrue(jq.contains(".."));
         }
     }
 
