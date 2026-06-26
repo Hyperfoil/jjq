@@ -38,6 +38,8 @@ public final class JqValues {
     private static final String[] INTERN_TABLE = new String[INTERN_TABLE_SIZE];
     // Pre-computed JSON key form: "\"key\":" — eliminates escapeJson + 3 appends in serialization
     private static final String[] INTERN_JSON_KEY = new String[INTERN_TABLE_SIZE];
+    // Stored key bytes for fast quad-style cache verification (avoids char-by-char crossing)
+    private static final byte[][] INTERN_KEY_BYTES = new byte[INTERN_TABLE_SIZE][];
 
     /**
      * Intern a field name string. Returns the cached instance if one exists
@@ -53,6 +55,7 @@ public final class JqValues {
         if (name.equals(cached)) return cached;
         INTERN_TABLE[slot] = name;
         INTERN_JSON_KEY[slot] = buildJsonKey(name);
+        INTERN_KEY_BYTES[slot] = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         return name;
     }
 
@@ -604,10 +607,11 @@ public final class JqValues {
             if (match) return cached; // ZERO ALLOCATION
         }
 
-        // Cache miss: create string and cache (with JSON key form)
+        // Cache miss: create string and cache (with JSON key form + key bytes)
         String result = s.substring(start, end);
         INTERN_TABLE[slot] = result;
         INTERN_JSON_KEY[slot] = buildJsonKey(result);
+        INTERN_KEY_BYTES[slot] = result.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         return result;
     }
 
@@ -1064,38 +1068,53 @@ public final class JqValues {
 
     /** Parse a JSON string from bytes and return the raw Java String (for object keys). */
     /**
-     * Parse a JSON object key from bytes with SWAR scanning and intern cache.
-     * Two-pass approach: (1) SWAR scan to find closing quote, (2) compute hash
-     * and do intern lookup over the known range (data in L1 cache from scan).
-     * On cache hit, returns cached String instance (zero allocation).
+     * Parse a JSON object key from bytes with fused SWAR scanning + hash computation.
+     * Single-pass approach: hash is computed during the SWAR scan, eliminating
+     * a separate pass over the key bytes. Cache verification uses byte-level
+     * comparison via stored key bytes (quad-style, avoids char-by-char crossing).
      */
     private static String parseAndInternKeyBytes(JsonByteReader r) {
         r.pos++; // skip opening "
         int start = r.pos;
+        int hash = 0;
 
-        // Pass 1: SWAR scan to find closing quote (8 bytes at a time)
+        // Fused SWAR scan + hash: compute hash DURING the scan
         while (r.pos + 8 <= r.end) {
             long word = SwarUtil.loadLong(r.data, r.pos);
             long quoteHits = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN);
             long bsHits = SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
             long anyHit = quoteHits | bsHits;
             if (anyHit != 0) {
-                r.pos += SwarUtil.getIndex(anyHit);
+                // Process partial word: hash bytes up to the hit
+                int hitIdx = SwarUtil.getIndex(anyHit);
+                for (int j = 0; j < hitIdx; j++) {
+                    hash = hash * 31 + (r.data[r.pos + j] & 0xFF);
+                }
+                r.pos += hitIdx;
                 if ((r.data[r.pos] & 0xFF) == '"') {
-                    // Found closing quote — pass 2: hash + intern
-                    return internKeyFromBytes(r.data, start, r.pos++);
+                    return internKeyWithHash(r.data, start, r.pos++, hash);
                 }
                 break; // backslash — slow path
             }
+            // No special chars in 8 bytes — accumulate hash inline
+            hash = hash * 31 + (r.data[r.pos] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 1] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 2] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 3] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 4] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 5] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 6] & 0xFF);
+            hash = hash * 31 + (r.data[r.pos + 7] & 0xFF);
             r.pos += 8;
         }
-        // Scalar tail for remaining < 8 bytes
+        // Scalar tail with fused hash
         while (r.pos < r.end) {
             int b = r.data[r.pos] & 0xFF;
             if (b == '"') {
-                return internKeyFromBytes(r.data, start, r.pos++);
+                return internKeyWithHash(r.data, start, r.pos++, hash);
             }
             if (b == '\\') break;
+            hash = hash * 31 + b;
             r.pos++;
         }
 
@@ -1106,37 +1125,50 @@ public final class JqValues {
     }
 
     /**
-     * Compute hash over a known byte range and do intern cache lookup.
-     * Called after SWAR scan has already found the closing quote, so
-     * the data is in L1 cache.
+     * Intern a key using a pre-computed hash and byte-level verification.
+     * The hash was computed during the SWAR scan (no separate pass needed).
+     * Cache verification uses stored key bytes for fast comparison.
      */
-    private static String internKeyFromBytes(byte[] data, int start, int end) {
+    private static String internKeyWithHash(byte[] data, int start, int end, int hash) {
         int keyLen = end - start;
-        // Compute hash over known range (data in L1 cache from SWAR scan)
-        int hash = 0;
-        for (int i = start; i < end; i++) {
-            hash = hash * 31 + (data[i] & 0xFF);
-        }
         int slot = hash & INTERN_MASK;
         String cached = INTERN_TABLE[slot];
 
-        // Cache hit: verify length + content without String construction
-        if (cached != null && cached.length() == keyLen) {
-            boolean match = true;
-            for (int i = 0; i < keyLen; i++) {
-                if (cached.charAt(i) != (char) (data[start + i] & 0xFF)) {
-                    match = false;
-                    break;
+        // Cache hit: verify using stored key bytes (quad-style, no char crossing)
+        if (cached != null) {
+            byte[] cachedBytes = INTERN_KEY_BYTES[slot];
+            if (cachedBytes != null && cachedBytes.length == keyLen) {
+                if (matchBytes(cachedBytes, data, start, keyLen)) {
+                    return cached; // ZERO ALLOCATION
                 }
             }
-            if (match) return cached; // ZERO ALLOCATION
         }
 
-        // Cache miss: create string and cache (with JSON key form)
+        // Cache miss: create string and cache (with JSON key form + key bytes)
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
+        result.hashCode(); // force JDK to cache hashCode (Fix 4: reuse computed hash)
         INTERN_TABLE[slot] = result;
         INTERN_JSON_KEY[slot] = buildJsonKey(result);
+        INTERN_KEY_BYTES[slot] = java.util.Arrays.copyOfRange(data, start, end);
         return result;
+    }
+
+    /**
+     * Fast byte-level comparison using long reads (8 bytes at a time).
+     * Avoids the char-by-char crossing from byte[] to String.charAt()
+     * that the previous verification used.
+     */
+    private static boolean matchBytes(byte[] cached, byte[] data, int start, int len) {
+        // Long-word comparison (8 bytes at a time via SwarUtil)
+        int i = 0;
+        for (; i + 8 <= len; i += 8) {
+            if (SwarUtil.loadLong(cached, i) != SwarUtil.loadLong(data, start + i)) return false;
+        }
+        // Byte tail
+        for (; i < len; i++) {
+            if (cached[i] != data[start + i]) return false;
+        }
+        return true;
     }
 
     private static String parseStringRawBytes(JsonByteReader r) {
