@@ -421,15 +421,22 @@ public final class JqObject implements JqValue {
 
     /**
      * Get a field value by key. Returns {@link JqNull#NULL} for missing keys.
-     * For array-backed objects with {@code size <= HASH_THRESHOLD} (16), uses
-     * linear scan with equals. For larger objects, builds and caches a hash
-     * index for O(1) lookups.
+     *
+     * <p>Lookup strategy (following SwissTable/IndexMap patterns):</p>
+     * <ul>
+     *   <li>Size 0: immediate return</li>
+     *   <li>Size 1: direct equals check (no loop, no hash)</li>
+     *   <li>Size 2-{@value #HASH_THRESHOLD}: linear scan with String.equals</li>
+     *   <li>Size &gt; {@value #HASH_THRESHOLD}: open-addressing hash index (int[] with linear probing)</li>
+     * </ul>
      */
     public JqValue get(String key) {
         if (externalMap != null) {
             JqValue v = externalMap.get(key);
             return v != null ? v : JqNull.NULL;
         }
+        if (size == 0) return JqNull.NULL;
+        if (size == 1) return key.equals(keys[0]) ? values[0] : JqNull.NULL;
         if (size <= HASH_THRESHOLD) {
             for (int i = 0; i < size; i++) {
                 if (key.equals(keys[i])) return values[i];
@@ -442,6 +449,8 @@ public final class JqObject implements JqValue {
 
     public boolean has(String key) {
         if (externalMap != null) return externalMap.containsKey(key);
+        if (size == 0) return false;
+        if (size == 1) return key.equals(keys[0]);
         if (size <= HASH_THRESHOLD) {
             for (int i = 0; i < size; i++) {
                 if (key.equals(keys[i])) return true;
