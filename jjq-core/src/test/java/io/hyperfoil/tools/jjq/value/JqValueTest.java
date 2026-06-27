@@ -2196,4 +2196,146 @@ class JqValueTest {
         assertEquals(JqString.of("number"), result.get("value")); // integer + number → number
         assertEquals(JqString.of("boolean"), result.get("extra")); // from doc2 only
     }
+
+    // --- edge cases ---
+
+    @Test
+    void testTypeStructureNullJavaInputThrowsNPE() {
+        assertThrows(NullPointerException.class, () -> JqValues.typeStructure(null));
+    }
+
+    @Test
+    void testMergeTypeStructuresNullFirstArgThrowsNPE() {
+        JqValue a = JqString.of("string");
+        assertThrows(NullPointerException.class, () -> JqValues.mergeTypeStructures(null, a));
+    }
+
+    @Test
+    void testMergeTypeStructuresNullSecondArgReturnFirst() {
+        // When b is null, a.equals(null) returns false, instanceof checks fail,
+        // and the method returns a (first argument). This matches "keep first" semantics.
+        JqValue a = JqString.of("string");
+        assertEquals(a, JqValues.mergeTypeStructures(a, null));
+    }
+
+    @Test
+    void testTypeStructureSingleElementArray() {
+        JqValue input = JqValues.parse("[42]");
+        JqValue expected = JqValues.parse("[\"integer\"]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureAllNullObject() {
+        JqValue input = JqValues.parse("{\"a\":null,\"b\":null,\"c\":null}");
+        JqValue expected = JqValues.parse("{\"a\":\"null\",\"b\":\"null\",\"c\":\"null\"}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureEmptyStringValue() {
+        JqValue input = JqValues.parse("{\"name\":\"\"}");
+        JqValue expected = JqValues.parse("{\"name\":\"string\"}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureLargeInteger() {
+        // Long.MAX_VALUE is still integral
+        JqValue input = JqNumber.of(Long.MAX_VALUE);
+        assertEquals(JqString.of("integer"), JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureBigDecimalNumber() {
+        // Parsed from JSON: high-precision decimal is "number"
+        JqValue input = JqValues.parse("3.14159265358979323846");
+        assertEquals(JqString.of("number"), JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureDeeplyNested() {
+        JqValue input = JqValues.parse("{\"a\":{\"b\":{\"c\":{\"d\":42}}}}");
+        JqValue expected = JqValues.parse("{\"a\":{\"b\":{\"c\":{\"d\":\"integer\"}}}}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureArrayOfMixedObjects() {
+        // Objects with different key sets → merged keys
+        JqValue input = JqValues.parse("[{\"a\":1},{\"b\":\"x\"},{\"a\":2,\"c\":true}]");
+        JqValue result = JqValues.typeStructure(input);
+        JqObject elem = (JqObject) ((JqArray) result).get(0);
+        assertEquals(JqString.of("integer"), elem.get("a"));
+        assertEquals(JqString.of("string"), elem.get("b"));
+        assertEquals(JqString.of("boolean"), elem.get("c"));
+    }
+
+    @Test
+    void testTypeStructureIdempotent() {
+        // Applying typeStructure twice should be stable
+        JqValue input = JqValues.parse("{\"name\":\"Alice\",\"scores\":[1,2,3]}");
+        JqValue once = JqValues.typeStructure(input);
+        JqValue twice = JqValues.typeStructure(once);
+        // Second pass: all leaves are strings → all become "string"
+        JqObject obj = (JqObject) twice;
+        assertEquals(JqString.of("string"), obj.get("name"));
+        // scores was ["integer"], second pass: ["string"]
+        JqArray scores = (JqArray) obj.get("scores");
+        assertEquals(JqString.of("string"), scores.get(0));
+    }
+
+    @Test
+    void testMergeObjectWithNonObject() {
+        // Container mismatch: object vs string → keep first
+        JqValue a = JqValues.parse("{\"x\":\"string\"}");
+        JqValue b = JqString.of("string");
+        assertEquals(a, JqValues.mergeTypeStructures(a, b));
+        assertEquals(b, JqValues.mergeTypeStructures(b, a));
+    }
+
+    @Test
+    void testMergeArrayWithNonArray() {
+        // Container mismatch: array vs string → keep first
+        JqValue a = JqValues.parse("[\"integer\"]");
+        JqValue b = JqString.of("string");
+        assertEquals(a, JqValues.mergeTypeStructures(a, b));
+        assertEquals(b, JqValues.mergeTypeStructures(b, a));
+    }
+
+    @Test
+    void testMergeNullTypeStructures() {
+        // Both "null" type → identical, return as-is
+        JqValue a = JqString.of("null");
+        JqValue b = JqString.of("null");
+        assertEquals(a, JqValues.mergeTypeStructures(a, b));
+    }
+
+    @Test
+    void testMergeNullWithOtherType() {
+        // "null" + "string" → incompatible, keep first
+        JqValue a = JqString.of("null");
+        JqValue b = JqString.of("string");
+        assertEquals(a, JqValues.mergeTypeStructures(a, b));
+        assertEquals(b, JqValues.mergeTypeStructures(b, a));
+    }
+
+    @Test
+    void testTypeStructureArrayOfNulls() {
+        JqValue input = JqValues.parse("[null, null, null]");
+        JqValue expected = JqValues.parse("[\"null\"]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testMergeObjectsWithOverlappingAndUniqueKeys() {
+        // a has {x, y}, b has {y, z} → merged has {x, y, z}
+        JqValue a = JqValues.parse("{\"x\":\"string\",\"y\":\"integer\"}");
+        JqValue b = JqValues.parse("{\"y\":\"number\",\"z\":\"boolean\"}");
+        JqValue merged = JqValues.mergeTypeStructures(a, b);
+        JqObject obj = (JqObject) merged;
+        assertEquals(JqString.of("string"), obj.get("x"));    // only in a
+        assertEquals(JqString.of("number"), obj.get("y"));     // integer + number → number
+        assertEquals(JqString.of("boolean"), obj.get("z"));    // only in b
+    }
 }
