@@ -1820,4 +1820,380 @@ class JqValueTest {
         assertEquals(fromString, fromBytes,
                 "Byte parser value not equal for: " + json);
     }
+
+    // ========================================================================
+    //  SwarUtil.loadInt + packPartialQuad tests
+    // ========================================================================
+
+    @Test
+    void testLoadIntBigEndian() {
+        byte[] data = { 'a', 'b', 'c', 'd', 'e', 'f' }; // 0x61 0x62 0x63 0x64 ...
+        int q = SwarUtil.loadInt(data, 0);
+        // big-endian: first byte in highest 8 bits
+        assertEquals(0x61626364, q, "loadInt should be big-endian");
+        int q2 = SwarUtil.loadInt(data, 2);
+        assertEquals(0x63646566, q2, "loadInt at offset 2");
+    }
+
+    @Test
+    void testPackPartialQuad() {
+        byte[] data = { 'i', 'd' }; // "id" — 2 bytes
+        int q = SwarUtil.packPartialQuad(data, 0, 2);
+        // big-endian zero-padded: 0x69640000
+        assertEquals(0x69640000, q, "packPartialQuad for 2-byte key");
+
+        byte[] data3 = { 'a', 'b', 'c' };
+        int q3 = SwarUtil.packPartialQuad(data3, 0, 3);
+        assertEquals(0x61626300, q3, "packPartialQuad for 3-byte key");
+
+        byte[] data1 = { 'x' };
+        int q1 = SwarUtil.packPartialQuad(data1, 0, 1);
+        assertEquals(0x78000000, q1, "packPartialQuad for 1-byte key");
+    }
+
+    @Test
+    void testPackPartialQuadMatchesLoadInt() {
+        // For a 4-byte key, packPartialQuad(0, 4) should produce the same result as loadInt
+        byte[] data = { 't', 'y', 'p', 'e' }; // "type"
+        int fromLoad = SwarUtil.loadInt(data, 0);
+        int fromPack = SwarUtil.packPartialQuad(data, 0, 4);
+        assertEquals(fromLoad, fromPack, "loadInt and packPartialQuad should agree for 4 bytes");
+    }
+
+    // ========================================================================
+    //  Intern table: quad-based verification + multi-slot probing
+    // ========================================================================
+
+    @Test
+    void testInternFieldNameCacheHit() {
+        // Intern a name, then re-intern — should return same reference
+        String name = "testInternHit_" + System.nanoTime(); // unique to avoid collisions
+        String interned1 = JqValues.internFieldName(name);
+        String interned2 = JqValues.internFieldName(name);
+        assertSame(interned1, interned2, "Same name should return cached reference");
+    }
+
+    @Test
+    void testInternFieldNameShortKeys() {
+        // Short keys (1-3 bytes) go through packPartialQuad
+        String k1 = "a_" + System.nanoTime();
+        String k2 = "ab_" + System.nanoTime();
+        String k3 = "abc_" + System.nanoTime();
+        assertSame(JqValues.internFieldName(k1), JqValues.internFieldName(k1));
+        assertSame(JqValues.internFieldName(k2), JqValues.internFieldName(k2));
+        assertSame(JqValues.internFieldName(k3), JqValues.internFieldName(k3));
+    }
+
+    @Test
+    void testInternFieldNameLongKey() {
+        // Key > 12 bytes — exercises matchBytesFrom path
+        String longKey = "very_long_field_name_" + System.nanoTime();
+        assertTrue(longKey.length() > 12, "Key should be > 12 bytes");
+        String interned1 = JqValues.internFieldName(longKey);
+        String interned2 = JqValues.internFieldName(longKey);
+        assertSame(interned1, interned2, "Long key should still cache-hit");
+    }
+
+    @Test
+    void testInternedJsonKeyWithProbing() {
+        // Intern a name, then verify internedJsonKey returns the pre-computed form
+        String name = "qtest_" + System.nanoTime();
+        String interned = JqValues.internFieldName(name);
+        String jsonKey = JqValues.internedJsonKey(interned);
+        assertNotNull(jsonKey, "internedJsonKey should find the entry");
+        assertEquals("\"" + name + "\":", jsonKey, "JSON key form should match");
+    }
+
+    @Test
+    void testByteParserInternQuadVerification() {
+        // Parse JSON with byte[] — exercises internKeyWithHash with quad verification
+        // Key lengths: 2-byte, 4-byte, 8-byte, 13-byte (crosses quad boundary)
+        String json = "{\"id\":1,\"type\":\"x\",\"hostname\":\"server01\",\"mem.util.used\":42}";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+
+        // Parse twice — second parse should hit quad cache
+        JqValue v1 = JqValues.parse(bytes);
+        JqValue v2 = JqValues.parse(bytes);
+
+        assertEquals(v1.toJsonString(), v2.toJsonString(), "Repeated parses should produce same output");
+
+        // Verify field access works correctly (uses interned keys)
+        JqObject obj = (JqObject) v2;
+        assertEquals(1, obj.get("id").intValue());
+        assertEquals("x", obj.get("type").stringValue());
+        assertEquals("server01", obj.get("hostname").stringValue());
+        assertEquals(42, obj.get("mem.util.used").intValue());
+    }
+
+    @Test
+    void testByteParserVariedKeyLengths() {
+        // Exercises all quad paths: 1-byte, 2-byte, 3-byte, 4-byte, 5-byte,
+        // 8-byte, 12-byte (exactly 3 quads), 13-byte (overflow to matchBytesFrom)
+        String json = "{" +
+                "\"a\":1," +
+                "\"ab\":2," +
+                "\"abc\":3," +
+                "\"abcd\":4," +
+                "\"abcde\":5," +
+                "\"abcdefgh\":8," +
+                "\"abcdefghijkl\":12," +
+                "\"abcdefghijklm\":13" +
+                "}";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+
+        // Parse 3 times to exercise cache hit paths
+        for (int i = 0; i < 3; i++) {
+            JqValue v = JqValues.parse(bytes);
+            JqObject obj = (JqObject) v;
+            assertEquals(1, obj.get("a").intValue(), "1-byte key");
+            assertEquals(2, obj.get("ab").intValue(), "2-byte key");
+            assertEquals(3, obj.get("abc").intValue(), "3-byte key");
+            assertEquals(4, obj.get("abcd").intValue(), "4-byte key");
+            assertEquals(5, obj.get("abcde").intValue(), "5-byte key");
+            assertEquals(8, obj.get("abcdefgh").intValue(), "8-byte key");
+            assertEquals(12, obj.get("abcdefghijkl").intValue(), "12-byte key (exact 3 quads)");
+            assertEquals(13, obj.get("abcdefghijklm").intValue(), "13-byte key (overflow)");
+        }
+    }
+
+    @Test
+    void testStringAndByteParserInternConsistency() {
+        // Parse same JSON with String and byte[] parsers — both should produce
+        // identical results and share interned field names
+        String json = "{\"name\":\"test\",\"value\":42,\"nested\":{\"deep\":true}}";
+        JqValue fromString = JqValues.parse(json);
+        JqValue fromBytes = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(fromString.toJsonString(), fromBytes.toJsonString());
+        assertEquals(fromString, fromBytes);
+
+        // Both should be able to get internedJsonKey for the same field names
+        JqObject sObj = (JqObject) fromString;
+        JqObject bObj = (JqObject) fromBytes;
+        assertEquals(sObj.get("name"), bObj.get("name"));
+        assertEquals(sObj.get("value"), bObj.get("value"));
+        assertEquals(sObj.get("nested"), bObj.get("nested"));
+    }
+
+    @Test
+    void testHighLoadInternTable() {
+        // Intern many unique keys to exercise probing and potential evictions
+        // With 1024 slots and max 4 probes, ~250 unique keys should be manageable
+        for (int i = 0; i < 250; i++) {
+            String key = "field_" + i;
+            String interned = JqValues.internFieldName(key);
+            // Re-intern should return same reference (if not evicted)
+            String interned2 = JqValues.internFieldName(key);
+            assertEquals(interned, interned2, "Key should survive re-interning: " + key);
+        }
+    }
+
+    @Test
+    void testByteParserHighUniqueKeyDocument() {
+        // Build a JSON document with 100 unique keys and parse it
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < 100; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("\"unique_field_").append(i).append("\":").append(i);
+        }
+        sb.append("}");
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+
+        // Parse twice — second should hit cache for all keys
+        JqValue v1 = JqValues.parse(bytes);
+        JqValue v2 = JqValues.parse(bytes);
+
+        JqObject obj1 = (JqObject) v1;
+        JqObject obj2 = (JqObject) v2;
+        for (int i = 0; i < 100; i++) {
+            assertEquals(i, obj1.get("unique_field_" + i).intValue());
+            assertEquals(i, obj2.get("unique_field_" + i).intValue());
+        }
+    }
+
+    // ========================================================================
+    //  typeStructure + mergeTypeStructures tests
+    // ========================================================================
+
+    @Test
+    void testTypeStructureScalars() {
+        assertEquals(JqString.of("null"), JqValues.typeStructure(JqNull.NULL));
+        assertEquals(JqString.of("boolean"), JqValues.typeStructure(JqBoolean.TRUE));
+        assertEquals(JqString.of("boolean"), JqValues.typeStructure(JqBoolean.FALSE));
+        assertEquals(JqString.of("string"), JqValues.typeStructure(JqString.of("hello")));
+        assertEquals(JqString.of("integer"), JqValues.typeStructure(JqNumber.of(42)));
+        assertEquals(JqString.of("integer"), JqValues.typeStructure(JqNumber.of(0)));
+        assertEquals(JqString.of("integer"), JqValues.typeStructure(JqNumber.of(-1)));
+        assertEquals(JqString.of("number"), JqValues.typeStructure(JqNumber.of(3.14)));
+        assertEquals(JqString.of("number"), JqValues.typeStructure(JqNumber.of(0.5)));
+        // Note: JqNumber.of(0.0) produces an integral number (0L), so it's "integer"
+        assertEquals(JqString.of("integer"), JqValues.typeStructure(JqNumber.of(0.0)));
+    }
+
+    @Test
+    void testTypeStructureEmptyContainers() {
+        assertEquals(JqArray.EMPTY, JqValues.typeStructure(JqArray.EMPTY));
+        assertEquals(JqValues.parse("{}"), JqValues.typeStructure(JqValues.parse("{}")));
+    }
+
+    @Test
+    void testTypeStructureFlatObject() {
+        JqValue input = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}");
+        JqValue expected = JqValues.parse("{\"name\":\"string\",\"age\":\"integer\",\"active\":\"boolean\"}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureNestedObject() {
+        JqValue input = JqValues.parse("{\"user\":{\"name\":\"Bob\",\"score\":9.5},\"ok\":true}");
+        JqValue expected = JqValues.parse("{\"user\":{\"name\":\"string\",\"score\":\"number\"},\"ok\":\"boolean\"}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureHomogeneousArray() {
+        JqValue input = JqValues.parse("[1, 2, 3]");
+        JqValue expected = JqValues.parse("[\"integer\"]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureMixedNumericArray() {
+        // integer + number promotes to number
+        JqValue input = JqValues.parse("[1, 2.5, 3]");
+        JqValue expected = JqValues.parse("[\"number\"]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureMixedTypeArray() {
+        // Incompatible types: first wins (integer), but number promotes
+        JqValue input = JqValues.parse("[1, \"hello\", 2.5]");
+        // Element 0: "integer", element 1: merge("integer","string") → "integer" (first wins)
+        // Element 2: merge("integer","number") → "number" (promotion)
+        JqValue expected = JqValues.parse("[\"number\"]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureArrayOfObjects() {
+        JqValue input = JqValues.parse("[{\"a\":1,\"b\":\"x\"},{\"a\":2,\"b\":\"y\"}]");
+        JqValue expected = JqValues.parse("[{\"a\":\"integer\",\"b\":\"string\"}]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureNestedArrays() {
+        JqValue input = JqValues.parse("[[1,2],[3,4]]");
+        JqValue expected = JqValues.parse("[[\"integer\"]]");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureNullInObject() {
+        JqValue input = JqValues.parse("{\"a\":null,\"b\":1}");
+        JqValue expected = JqValues.parse("{\"a\":\"null\",\"b\":\"integer\"}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    @Test
+    void testTypeStructureProductionLike() {
+        // Mimics h5m production shape: nested objects with arrays of metrics
+        JqValue input = JqValues.parse(
+                "{\"name\":\"test\",\"data\":[{\"cpu\":0.5,\"mem\":1024},{\"cpu\":0.8,\"mem\":2048}]}");
+        JqValue expected = JqValues.parse(
+                "{\"name\":\"string\",\"data\":[{\"cpu\":\"number\",\"mem\":\"integer\"}]}");
+        assertEquals(expected, JqValues.typeStructure(input));
+    }
+
+    // --- mergeTypeStructures tests ---
+
+    @Test
+    void testMergeIdenticalStructures() {
+        JqValue a = JqValues.parse("{\"name\":\"string\",\"age\":\"integer\"}");
+        assertEquals(a, JqValues.mergeTypeStructures(a, a));
+    }
+
+    @Test
+    void testMergeSupersetKeys() {
+        JqValue a = JqValues.parse("{\"name\":\"string\"}");
+        JqValue b = JqValues.parse("{\"name\":\"string\",\"age\":\"integer\"}");
+        JqValue merged = JqValues.mergeTypeStructures(a, b);
+        JqObject obj = (JqObject) merged;
+        assertEquals(JqString.of("string"), obj.get("name"));
+        assertEquals(JqString.of("integer"), obj.get("age"));
+    }
+
+    @Test
+    void testMergeTypeStructureDisjointKeys() {
+        JqValue a = JqValues.parse("{\"x\":\"string\"}");
+        JqValue b = JqValues.parse("{\"y\":\"integer\"}");
+        JqValue merged = JqValues.mergeTypeStructures(a, b);
+        JqObject obj = (JqObject) merged;
+        assertEquals(JqString.of("string"), obj.get("x"));
+        assertEquals(JqString.of("integer"), obj.get("y"));
+    }
+
+    @Test
+    void testMergeIntegerNumberPromotion() {
+        JqValue a = JqString.of("integer");
+        JqValue b = JqString.of("number");
+        assertEquals(JqString.of("number"), JqValues.mergeTypeStructures(a, b));
+        assertEquals(JqString.of("number"), JqValues.mergeTypeStructures(b, a)); // symmetric
+    }
+
+    @Test
+    void testMergeIncompatibleLeafTypes() {
+        JqValue a = JqString.of("string");
+        JqValue b = JqString.of("boolean");
+        // Incompatible: keeps first
+        assertEquals(JqString.of("string"), JqValues.mergeTypeStructures(a, b));
+        assertEquals(JqString.of("boolean"), JqValues.mergeTypeStructures(b, a));
+    }
+
+    @Test
+    void testMergeEmptyWithNonEmptyArray() {
+        JqValue empty = JqArray.EMPTY;
+        JqValue nonEmpty = JqValues.parse("[\"integer\"]");
+        assertEquals(nonEmpty, JqValues.mergeTypeStructures(empty, nonEmpty));
+        assertEquals(nonEmpty, JqValues.mergeTypeStructures(nonEmpty, empty));
+    }
+
+    @Test
+    void testMergeArraysWithDifferentElementTypes() {
+        JqValue a = JqValues.parse("[\"integer\"]");
+        JqValue b = JqValues.parse("[\"number\"]");
+        JqValue expected = JqValues.parse("[\"number\"]");
+        assertEquals(expected, JqValues.mergeTypeStructures(a, b));
+    }
+
+    @Test
+    void testMergeNestedObjectStructures() {
+        JqValue a = JqValues.parse("{\"data\":{\"cpu\":\"number\"}}");
+        JqValue b = JqValues.parse("{\"data\":{\"cpu\":\"number\",\"mem\":\"integer\"}}");
+        JqValue merged = JqValues.mergeTypeStructures(a, b);
+        JqObject data = (JqObject) ((JqObject) merged).get("data");
+        assertEquals(JqString.of("number"), data.get("cpu"));
+        assertEquals(JqString.of("integer"), data.get("mem"));
+    }
+
+    @Test
+    void testMergeMultipleDocuments() {
+        // Simulates FolderService.structure() — merging schemas from multiple uploads
+        JqValue doc1 = JqValues.parse("{\"name\":\"test1\",\"value\":42}");
+        JqValue doc2 = JqValues.parse("{\"name\":\"test2\",\"value\":3.14,\"extra\":true}");
+        JqValue doc3 = JqValues.parse("{\"name\":\"test3\",\"value\":100}");
+
+        JqValue s1 = JqValues.typeStructure(doc1);
+        JqValue s2 = JqValues.typeStructure(doc2);
+        JqValue s3 = JqValues.typeStructure(doc3);
+
+        JqValue merged = JqValues.mergeTypeStructures(s1, s2);
+        merged = JqValues.mergeTypeStructures(merged, s3);
+
+        JqObject result = (JqObject) merged;
+        assertEquals(JqString.of("string"), result.get("name"));
+        assertEquals(JqString.of("number"), result.get("value")); // integer + number → number
+        assertEquals(JqString.of("boolean"), result.get("extra")); // from doc2 only
+    }
 }

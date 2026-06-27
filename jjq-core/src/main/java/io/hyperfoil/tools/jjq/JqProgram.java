@@ -6,9 +6,7 @@ import io.hyperfoil.tools.jjq.evaluator.Environment;
 import io.hyperfoil.tools.jjq.evaluator.JqException;
 
 import io.hyperfoil.tools.jjq.parser.Parser;
-import io.hyperfoil.tools.jjq.value.JqNull;
-import io.hyperfoil.tools.jjq.value.JqObject;
-import io.hyperfoil.tools.jjq.value.JqValue;
+import io.hyperfoil.tools.jjq.value.*;
 import io.hyperfoil.tools.jjq.vm.Bytecode;
 import io.hyperfoil.tools.jjq.vm.Compiler;
 import io.hyperfoil.tools.jjq.vm.Opcode;
@@ -33,7 +31,7 @@ import java.util.stream.StreamSupport;
  */
 public final class JqProgram {
 
-    private enum ProgramShape { IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, GENERAL }
+    private enum ProgramShape { IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, BUILTIN, GENERAL }
 
     private final String expression;
     private final JqExpr ast;
@@ -44,6 +42,7 @@ public final class JqProgram {
     private final ProgramShape shape;
     private final String fastField1; // cached for FIELD_ACCESS / FIELD_ACCESS2
     private final String fastField2; // cached for FIELD_ACCESS2
+    private final int builtinOp;     // cached for BUILTIN shape
 
     /**
      * Per-thread cached VM instance. Each thread gets its own VM to avoid
@@ -67,6 +66,7 @@ public final class JqProgram {
             this.shape = ProgramShape.IDENTITY;
             this.fastField1 = null;
             this.fastField2 = null;
+            this.builtinOp = 0;
         } else if (bc.size() == 4
                 && bc.get(0).op() == Opcode.LOAD_INPUT
                 && bc.get(1).op() == Opcode.DOT_FIELD
@@ -75,6 +75,7 @@ public final class JqProgram {
             this.shape = ProgramShape.FIELD_ACCESS;
             this.fastField1 = bc.name(bc.get(1).arg1());
             this.fastField2 = null;
+            this.builtinOp = 0;
         } else if (bc.size() == 4
                 && bc.get(0).op() == Opcode.LOAD_INPUT
                 && bc.get(1).op() == Opcode.DOT_FIELD2
@@ -83,10 +84,21 @@ public final class JqProgram {
             this.shape = ProgramShape.FIELD_ACCESS2;
             this.fastField1 = bc.name(bc.get(1).arg1());
             this.fastField2 = bc.name(bc.get(1).arg2());
+            this.builtinOp = 0;
+        } else if (bc.size() == 4
+                && bc.get(0).op() == Opcode.LOAD_INPUT
+                && isInlinableBuiltin(bc.get(1).op())
+                && bc.get(2).op() == Opcode.OUTPUT
+                && bc.get(3).op() == Opcode.HALT) {
+            this.shape = ProgramShape.BUILTIN;
+            this.fastField1 = null;
+            this.fastField2 = null;
+            this.builtinOp = bc.get(1).op();
         } else {
             this.shape = ProgramShape.GENERAL;
             this.fastField1 = null;
             this.fastField2 = null;
+            this.builtinOp = 0;
         }
     }
 
@@ -115,6 +127,7 @@ public final class JqProgram {
             case IDENTITY -> input;
             case FIELD_ACCESS -> fieldAccess(input, fastField1);
             case FIELD_ACCESS2 -> fieldAccess(fieldAccess(input, fastField1), fastField2);
+            case BUILTIN -> applyBuiltin(input, builtinOp);
             case GENERAL -> getVM().executeOne(input);
         };
     }
@@ -133,6 +146,10 @@ public final class JqProgram {
             case IDENTITY -> List.of(input);
             case FIELD_ACCESS -> List.of(fieldAccess(input, fastField1));
             case FIELD_ACCESS2 -> List.of(fieldAccess(fieldAccess(input, fastField1), fastField2));
+            case BUILTIN -> {
+                if (builtinOp == Opcode.BUILTIN_EMPTY) yield List.of();
+                yield List.of(applyBuiltin(input, builtinOp));
+            }
             case GENERAL -> getVM().execute(input);
         };
     }
@@ -145,6 +162,70 @@ public final class JqProgram {
         if (val instanceof JqObject obj) return obj.get(field);
         if (val instanceof JqNull) return JqNull.NULL;
         throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + field + "\")");
+    }
+
+    private static boolean isInlinableBuiltin(int op) {
+        return op == Opcode.BUILTIN_LENGTH || op == Opcode.BUILTIN_KEYS
+                || op == Opcode.BUILTIN_TYPE || op == Opcode.BUILTIN_NOT
+                || op == Opcode.BUILTIN_TOSTRING || op == Opcode.BUILTIN_REVERSE
+                || op == Opcode.BUILTIN_SORT || op == Opcode.BUILTIN_ABS
+                || op == Opcode.BUILTIN_EMPTY;
+    }
+
+    /** Execute a single builtin inline — no VM, no ThreadLocal. */
+    private static JqValue applyBuiltin(JqValue input, int op) {
+        return switch (op) {
+            case Opcode.BUILTIN_LENGTH -> {
+                if (input instanceof JqNumber n) {
+                    if (n.isNaN() || n.isInfinite()) yield JqNumber.of(Math.abs(n.doubleValue()));
+                    else if (n.isIntegral()) yield JqNumber.of(Math.abs(n.longValue()));
+                    else yield JqNumber.of(n.decimalValue().abs());
+                }
+                yield JqNumber.of(input.length());
+            }
+            case Opcode.BUILTIN_KEYS -> {
+                if (input instanceof JqObject obj) yield obj.sortedKeysAsArray();
+                if (input instanceof JqArray arr) {
+                    var keys = new java.util.ArrayList<JqValue>(arr.arrayValue().size());
+                    for (int i = 0; i < arr.arrayValue().size(); i++) keys.add(JqNumber.of(i));
+                    yield JqArray.of(keys);
+                }
+                throw new JqException(input.type().jqName() + " has no keys");
+            }
+            case Opcode.BUILTIN_TYPE -> JqString.of(input.type().jqName());
+            case Opcode.BUILTIN_NOT -> JqBoolean.of(!input.isTruthy());
+            case Opcode.BUILTIN_TOSTRING -> {
+                if (input instanceof JqString) yield input;
+                yield JqString.of(input.toJsonString());
+            }
+            case Opcode.BUILTIN_REVERSE -> {
+                if (input instanceof JqArray arr) {
+                    var list = new java.util.ArrayList<>(arr.arrayValue());
+                    java.util.Collections.reverse(list);
+                    yield JqArray.of(list);
+                }
+                throw new JqException(input.type().jqName() + " cannot be reversed");
+            }
+            case Opcode.BUILTIN_SORT -> {
+                if (input instanceof JqArray arr) {
+                    var list = new java.util.ArrayList<>(arr.arrayValue());
+                    list.sort(JqValue::compareTo);
+                    yield JqArray.of(list);
+                }
+                throw new JqException(input.type().jqName() + " cannot be sorted");
+            }
+            case Opcode.BUILTIN_ABS -> {
+                if (input instanceof JqNumber n) {
+                    if (n.isNaN() || n.isInfinite()) yield JqNumber.of(Math.abs(n.doubleValue()));
+                    else if (n.isIntegral()) yield JqNumber.of(Math.abs(n.longValue()));
+                    else yield JqNumber.of(n.decimalValue().abs());
+                }
+                if (input instanceof JqNull) yield JqNull.NULL;
+                yield input;
+            }
+            case Opcode.BUILTIN_EMPTY -> JqNull.NULL; // should not reach here — handled in applyAll
+            default -> throw new JqException("Unknown builtin op: " + op);
+        };
     }
 
     // ========================================================================

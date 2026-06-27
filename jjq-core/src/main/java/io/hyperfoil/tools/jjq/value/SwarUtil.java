@@ -24,6 +24,10 @@ final class SwarUtil {
     static final VarHandle LONG_HANDLE =
             MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
+    /** VarHandle for reading 4 bytes from a byte[] as a big-endian int (for quad packing). */
+    static final VarHandle INT_BE_HANDLE =
+            MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.BIG_ENDIAN);
+
     /** Pre-compiled patterns for common JSON bytes. */
     static final long QUOTE_PATTERN = compilePattern((byte) '"');
     static final long BACKSLASH_PATTERN = compilePattern((byte) '\\');
@@ -67,6 +71,27 @@ final class SwarUtil {
      */
     static long loadLong(byte[] data, int offset) {
         return (long) LONG_HANDLE.get(data, offset);
+    }
+
+    /**
+     * Load 4 bytes as a big-endian int (for quad packing in field name canonicalization).
+     * Big-endian preserves natural string byte order: first byte in highest bits.
+     * The caller must ensure {@code offset + 4 <= data.length}.
+     */
+    static int loadInt(byte[] data, int offset) {
+        return (int) INT_BE_HANDLE.get(data, offset);
+    }
+
+    /**
+     * Pack 1-3 bytes into a big-endian int, zero-padded.
+     * Used for the last partial quad of short field names.
+     */
+    static int packPartialQuad(byte[] data, int offset, int len) {
+        int q = 0;
+        for (int i = 0; i < len && i < 4; i++) {
+            q |= (data[offset + i] & 0xFF) << (24 - i * 8);
+        }
+        return q;
     }
 
     // ========================================================================

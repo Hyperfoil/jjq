@@ -16,6 +16,14 @@ public final class VirtualMachine {
     private static final int INIT_TRY = 16;
     private static final int INIT_COLLECT = 16;
 
+    // Cached JqString singletons for type names (avoids allocation per `type` call)
+    private static final JqString TYPE_NULL = JqString.of("null");
+    private static final JqString TYPE_BOOLEAN = JqString.of("boolean");
+    private static final JqString TYPE_NUMBER = JqString.of("number");
+    private static final JqString TYPE_STRING = JqString.of("string");
+    private static final JqString TYPE_ARRAY = JqString.of("array");
+    private static final JqString TYPE_OBJECT = JqString.of("object");
+
     private enum ProgramShape { IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, PIPE_FIELD_ARITH, GENERAL }
 
     private final Bytecode bytecode;
@@ -49,6 +57,8 @@ public final class VirtualMachine {
     private boolean singleOutputMode;
     private JqValue firstOutput;
     private ArrayList<JqValue> multiOutputs;
+    // Reusable scratch array for BUILD_OBJECT / STRING_CONCAT (avoids per-op allocation)
+    private JqValue[] scratchValues;
 
     private static final class BacktrackPoint {
         int pc, sp, tryDepth, collectDepth, iterIndex;
@@ -72,7 +82,13 @@ public final class VirtualMachine {
 
         void clear() { input = null; env = null; pushValue = null; iterItems = null; }
     }
-    private record TryPoint(int catchPc, int btDepth) {}
+    private static final class TryPoint {
+        int catchPc, btDepth;
+        void set(int catchPc, int btDepth) {
+            this.catchPc = catchPc;
+            this.btDepth = btDepth;
+        }
+    }
 
     @SuppressWarnings("unchecked")
     public VirtualMachine(Bytecode bytecode, BuiltinRegistry builtins) {
@@ -83,8 +99,10 @@ public final class VirtualMachine {
         this.btStack = new BacktrackPoint[INIT_BT];
         for (int i = 0; i < INIT_BT; i++) btStack[i] = new BacktrackPoint();
         this.tryStack = new TryPoint[INIT_TRY];
+        for (int i = 0; i < INIT_TRY; i++) tryStack[i] = new TryPoint();
         this.collectStack = new List[INIT_COLLECT];
         this.varSlots = bytecode.varSlotCount() > 0 ? new JqValue[bytecode.varSlotCount()] : null;
+        this.scratchValues = new JqValue[computeMaxScratchSize(bytecode)];
         this.shape = detectShape();
         this.needsEnv = detectNeedsEnv();
         this.needsMutableEnv = detectNeedsMutableEnv();
@@ -114,6 +132,19 @@ public final class VirtualMachine {
             fastConst = null;
             fastArithOp = 0;
         }
+    }
+
+    /** Scan bytecode for max BUILD_OBJECT/STRING_CONCAT operand count to pre-size scratch array. */
+    private static int computeMaxScratchSize(Bytecode bc) {
+        int max = 0;
+        int[] ops = bc.ops();
+        int[] arg1s = bc.arg1s();
+        for (int i = 0; i < ops.length; i++) {
+            if (ops[i] == Opcode.BUILD_OBJECT || ops[i] == Opcode.STRING_CONCAT) {
+                max = Math.max(max, arg1s[i]);
+            }
+        }
+        return Math.max(max, 4); // minimum 4 to avoid zero-length edge cases
     }
 
     private ProgramShape detectShape() {
@@ -268,6 +299,17 @@ public final class VirtualMachine {
         return firstOutput != null ? firstOutput : JqNull.NULL;
     }
 
+    private static JqString typeString(JqValue val) {
+        return switch (val.type()) {
+            case NULL -> TYPE_NULL;
+            case BOOLEAN -> TYPE_BOOLEAN;
+            case NUMBER -> TYPE_NUMBER;
+            case STRING -> TYPE_STRING;
+            case ARRAY -> TYPE_ARRAY;
+            case OBJECT -> TYPE_OBJECT;
+        };
+    }
+
     private static JqValue applyArith(JqValue left, JqValue right, int op) {
         return switch (op) {
             case Opcode.ADD -> left.add(right);
@@ -368,7 +410,7 @@ public final class VirtualMachine {
                                 doBacktrack();
                             }
                         } else if (val instanceof JqObject obj) {
-                            var values = new ArrayList<>(obj.objectValue().values());
+                            var values = obj.valuesAsList(); // zero-copy for array-backed objects
                             if (!values.isEmpty()) {
                                 if (values.size() > 1) {
                                     btPushIterator(pc, sp, input, env, values, 1);
@@ -391,7 +433,13 @@ public final class VirtualMachine {
                     case BUILTIN_LENGTH -> {
                         JqValue val = pop();
                         if (val instanceof JqNumber n) {
-                            push((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
+                            if (n.isNaN() || n.isInfinite()) {
+                                push(JqNumber.of(Math.abs(n.doubleValue())));
+                            } else if (n.isIntegral()) {
+                                push(JqNumber.of(Math.abs(n.longValue())));
+                            } else {
+                                push(JqNumber.of(n.decimalValue().abs()));
+                            }
                         } else {
                             push(JqNumber.of(val.length()));
                         }
@@ -399,7 +447,7 @@ public final class VirtualMachine {
 
                     case BUILTIN_TYPE -> {
                         JqValue val = pop();
-                        push(JqString.of(val.type().jqName()));
+                        push(typeString(val));
                     }
 
                     case BUILTIN_KEYS -> {
@@ -574,6 +622,7 @@ public final class VirtualMachine {
                         JqValue val = pop();
                         if (val instanceof JqNumber n) {
                             if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
+                            else if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
                             else push(JqNumber.of(n.decimalValue().abs()));
                         } else if (val instanceof JqNull) {
                             push(JqNull.NULL);
@@ -747,19 +796,18 @@ public final class VirtualMachine {
                         int count = arg1s[curPc];
                         int[] layout = objLayouts[arg2s[curPc]];
                         // Values are on stack with first field's value deepest.
-                        // Pop all values (reverse order), then insert in layout order.
-                        JqValue[] vals = new JqValue[count];
+                        // Pop all values into reusable scratch array (reverse order).
                         for (int i = count - 1; i >= 0; i--) {
-                            vals[i] = pop();
+                            scratchValues[i] = pop();
                         }
                         var builder = JqObject.builder(count);
                         if (uniqueLayouts[arg2s[curPc]]) {
                             for (int i = 0; i < count; i++) {
-                                builder.putUnchecked(names[layout[i]], vals[i]);
+                                builder.putUnchecked(names[layout[i]], scratchValues[i]);
                             }
                         } else {
                             for (int i = 0; i < count; i++) {
-                                builder.put(names[layout[i]], vals[i]);
+                                builder.put(names[layout[i]], scratchValues[i]);
                             }
                         }
                         push(builder.build());
@@ -768,14 +816,13 @@ public final class VirtualMachine {
                     // String interpolation
                     case STRING_CONCAT -> {
                         int partCount = arg1s[curPc];
-                        // Parts are on stack with first part deepest
-                        JqValue[] parts = new JqValue[partCount];
+                        // Parts are on stack with first part deepest — use reusable scratch array
                         for (int i = partCount - 1; i >= 0; i--) {
-                            parts[i] = pop();
+                            scratchValues[i] = pop();
                         }
                         var sb = new StringBuilder();
                         for (int i = 0; i < partCount; i++) {
-                            JqValue v = parts[i];
+                            JqValue v = scratchValues[i];
                             if (v instanceof JqString s) sb.append(s.stringValue());
                             else sb.append(v.toJsonString());
                         }
@@ -783,14 +830,17 @@ public final class VirtualMachine {
                     }
 
                     // Try-catch
-                    case TRY_BEGIN -> tryStack[tp++] = new TryPoint(arg1s[curPc], btp);
+                    case TRY_BEGIN -> {
+                        if (tp >= tryStack.length) growTryStack();
+                        tryStack[tp++].set(arg1s[curPc], btp);
+                    }
 
                     case TRY_END -> tp--;
 
-                    // Function calls (delegate to tree-walker)
+                    // Function calls (delegate to tree-walker via cached expr)
                     case CALL_FUNC -> {
                         var ci = bytecode.callInfo(arg1s[curPc]);
-                        evalViaTreeWalker(ci.name(), ci.arity(), ci.args());
+                        evalViaTreeWalker(ci.cachedExpr());
                     }
 
                     // Sub-expression evaluation (delegate to tree-walker)
@@ -816,9 +866,8 @@ public final class VirtualMachine {
         }
     }
 
-    private void evalViaTreeWalker(String name, int arity, List<JqExpr> args) {
-        var fc = new JqExpr.FuncCallExpr(name, args);
-        evalSubExpr(fc);
+    private void evalViaTreeWalker(JqExpr cachedExpr) {
+        evalSubExpr(cachedExpr);
     }
 
     private void evalSubExpr(JqExpr subExpr) {
@@ -862,6 +911,12 @@ public final class VirtualMachine {
         int oldLen = btStack.length;
         btStack = java.util.Arrays.copyOf(btStack, oldLen * 2);
         for (int i = oldLen; i < btStack.length; i++) btStack[i] = new BacktrackPoint();
+    }
+
+    private void growTryStack() {
+        int oldLen = tryStack.length;
+        tryStack = java.util.Arrays.copyOf(tryStack, oldLen * 2);
+        for (int i = oldLen; i < tryStack.length; i++) tryStack[i] = new TryPoint();
     }
 
     private void doBacktrack() {
@@ -1067,12 +1122,14 @@ public final class VirtualMachine {
                 case BUILTIN_LENGTH -> {
                     JqValue v = pop();
                     if (v instanceof JqNumber n) {
-                        push((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
+                        if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
+                        else if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
+                        else push(JqNumber.of(n.decimalValue().abs()));
                     } else {
                         push(JqNumber.of(v.length()));
                     }
                 }
-                case BUILTIN_TYPE -> { JqValue v = pop(); push(JqString.of(v.type().jqName())); }
+                case BUILTIN_TYPE -> { JqValue v = pop(); push(typeString(v)); }
                 case BUILTIN_TOSTRING -> {
                     JqValue v = pop();
                     if (v instanceof JqString) push(v);
@@ -1182,23 +1239,21 @@ public final class VirtualMachine {
                 case BUILD_OBJECT -> {
                     int count = arg1s[bpc];
                     int[] layout = bytecode.objectLayout(arg2s[bpc]);
-                    JqValue[] vals = new JqValue[count];
-                    for (int j = count - 1; j >= 0; j--) vals[j] = pop();
+                    for (int j = count - 1; j >= 0; j--) scratchValues[j] = pop();
                     var builder = JqObject.builder(count);
                     if (uniqueLayouts[arg2s[bpc]]) {
-                        for (int j = 0; j < count; j++) builder.putUnchecked(names[layout[j]], vals[j]);
+                        for (int j = 0; j < count; j++) builder.putUnchecked(names[layout[j]], scratchValues[j]);
                     } else {
-                        for (int j = 0; j < count; j++) builder.put(names[layout[j]], vals[j]);
+                        for (int j = 0; j < count; j++) builder.put(names[layout[j]], scratchValues[j]);
                     }
                     push(builder.build());
                 }
                 case STRING_CONCAT -> {
                     int partCount = arg1s[bpc];
-                    JqValue[] parts = new JqValue[partCount];
-                    for (int j = partCount - 1; j >= 0; j--) parts[j] = pop();
+                    for (int j = partCount - 1; j >= 0; j--) scratchValues[j] = pop();
                     var sb = new StringBuilder();
                     for (int j = 0; j < partCount; j++) {
-                        JqValue v = parts[j];
+                        JqValue v = scratchValues[j];
                         if (v instanceof JqString s) sb.append(s.stringValue());
                         else sb.append(v.toJsonString());
                     }

@@ -33,13 +33,20 @@ public final class JqValues {
     //  in JqObject.get() via String.equals short-circuit (this == other).
     // ========================================================================
 
-    private static final int INTERN_TABLE_SIZE = 2048; // power of 2
+    private static final int INTERN_TABLE_SIZE = 1024; // power of 2
     private static final int INTERN_MASK = INTERN_TABLE_SIZE - 1;
+    private static final int INTERN_MAX_PROBES = 4; // linear probing depth before eviction
     private static final String[] INTERN_TABLE = new String[INTERN_TABLE_SIZE];
     // Pre-computed JSON key form: "\"key\":" — eliminates escapeJson + 3 appends in serialization
     private static final String[] INTERN_JSON_KEY = new String[INTERN_TABLE_SIZE];
-    // Stored key bytes for fast quad-style cache verification (avoids char-by-char crossing)
+    // Stored key bytes for verification of keys > 12 bytes
     private static final byte[][] INTERN_KEY_BYTES = new byte[INTERN_TABLE_SIZE][];
+    // Quad-based verification fields (Jackson-inspired):
+    private static final int[] INTERN_HASH = new int[INTERN_TABLE_SIZE]; // pre-computed hash
+    private static final int[] INTERN_Q1 = new int[INTERN_TABLE_SIZE];   // bytes 0-3 (big-endian)
+    private static final int[] INTERN_Q2 = new int[INTERN_TABLE_SIZE];   // bytes 4-7
+    private static final int[] INTERN_Q3 = new int[INTERN_TABLE_SIZE];   // bytes 8-11
+    private static final int[] INTERN_QLEN = new int[INTERN_TABLE_SIZE]; // key byte length
 
     /**
      * Intern a field name string. Returns the cached instance if one exists
@@ -50,13 +57,34 @@ public final class JqValues {
      * produce correct results (worst case: one write is lost, no corruption).
      */
     public static String internFieldName(String name) {
-        int slot = name.hashCode() & INTERN_MASK;
-        String cached = INTERN_TABLE[slot];
-        if (name.equals(cached)) return cached;
+        int hash = name.hashCode();
+        // Multi-slot probing
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (hash + probe) & INTERN_MASK;
+            String cached = INTERN_TABLE[s];
+            if (cached == null) {
+                // Empty slot — store here
+                storeInternEntry(s, name, hash);
+                return name;
+            }
+            if (name.equals(cached)) return cached;
+        }
+        // All probes occupied — evict first slot
+        int s = hash & INTERN_MASK;
+        storeInternEntry(s, name, hash);
+        return name;
+    }
+
+    private static void storeInternEntry(int slot, String name, int hash) {
+        byte[] keyBytes = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         INTERN_TABLE[slot] = name;
         INTERN_JSON_KEY[slot] = buildJsonKey(name);
-        INTERN_KEY_BYTES[slot] = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return name;
+        INTERN_KEY_BYTES[slot] = keyBytes;
+        INTERN_HASH[slot] = hash;
+        INTERN_QLEN[slot] = keyBytes.length;
+        INTERN_Q1[slot] = keyBytes.length >= 4 ? SwarUtil.loadInt(keyBytes, 0) : SwarUtil.packPartialQuad(keyBytes, 0, keyBytes.length);
+        INTERN_Q2[slot] = keyBytes.length >= 8 ? SwarUtil.loadInt(keyBytes, 4) : (keyBytes.length > 4 ? SwarUtil.packPartialQuad(keyBytes, 4, keyBytes.length - 4) : 0);
+        INTERN_Q3[slot] = keyBytes.length >= 12 ? SwarUtil.loadInt(keyBytes, 8) : (keyBytes.length > 8 ? SwarUtil.packPartialQuad(keyBytes, 8, keyBytes.length - 8) : 0);
     }
 
     /**
@@ -69,9 +97,13 @@ public final class JqValues {
      * is used for the cache check (no content comparison).
      */
     public static String internedJsonKey(String key) {
-        int slot = key.hashCode() & INTERN_MASK;
-        if (INTERN_TABLE[slot] == key) { // reference equality — interned keys match
-            return INTERN_JSON_KEY[slot];
+        int hash = key.hashCode();
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (hash + probe) & INTERN_MASK;
+            if (INTERN_TABLE[s] == key) { // reference equality — interned keys match
+                return INTERN_JSON_KEY[s];
+            }
+            if (INTERN_TABLE[s] == null) break; // empty slot — not interned
         }
         return null;
     }
@@ -288,6 +320,108 @@ public final class JqValues {
         }
         // Fallback: serialize to string
         return JqString.of(value.toString());
+    }
+
+    // ========================================================================
+    //  Type structure (schema inference)
+    // ========================================================================
+
+    /**
+     * Compute a type-structure schema from a JqValue tree.
+     * Replaces leaf values with their type names, preserving the object/array structure.
+     *
+     * <p>Type mapping:</p>
+     * <ul>
+     *   <li>{@code null} → {@code "null"}</li>
+     *   <li>{@code boolean} → {@code "boolean"}</li>
+     *   <li>integral number → {@code "integer"}</li>
+     *   <li>floating-point number → {@code "number"}</li>
+     *   <li>{@code string} → {@code "string"}</li>
+     *   <li>object → recurse, preserving keys</li>
+     *   <li>array → recurse, merging element schemas into a single representative</li>
+     * </ul>
+     *
+     * <p>Example: {@code {"name":"Alice","age":30,"scores":[95,87]}}
+     * → {@code {"name":"string","age":"integer","scores":["integer"]}}</p>
+     *
+     * @param value the value to compute the type structure for
+     * @return a JqValue tree where all leaf values are replaced by type name strings
+     */
+    public static JqValue typeStructure(JqValue value) {
+        return switch (value) {
+            case JqNull ignored -> JqString.of("null");
+            case JqBoolean ignored -> JqString.of("boolean");
+            case JqNumber n -> JqString.of(n.isIntegral() ? "integer" : "number");
+            case JqString ignored -> JqString.of("string");
+            case JqArray arr -> {
+                if (arr.size() == 0) yield JqArray.EMPTY;
+                JqValue elementSchema = typeStructure(arr.get(0));
+                for (int i = 1; i < arr.size(); i++) {
+                    elementSchema = mergeTypeStructures(elementSchema, typeStructure(arr.get(i)));
+                }
+                yield JqArray.of(elementSchema);
+            }
+            case JqObject obj -> {
+                var builder = JqObject.builder(obj.size());
+                obj.forEach((key, val) -> builder.put(key, typeStructure(val)));
+                yield builder.build();
+            }
+        };
+    }
+
+    /**
+     * Merge two type-structure schemas into a combined schema.
+     * Used to build a unified type structure from multiple JSON documents.
+     *
+     * <p>Merge rules:</p>
+     * <ul>
+     *   <li>Identical structures → return as-is</li>
+     *   <li>Both objects → merge keys recursively (union of keys)</li>
+     *   <li>Both arrays → merge representative element schemas</li>
+     *   <li>{@code "integer"} + {@code "number"} → {@code "number"} (widening promotion)</li>
+     *   <li>Incompatible leaf types → keep first</li>
+     * </ul>
+     *
+     * @param a the first type structure
+     * @param b the second type structure
+     * @return the merged type structure
+     */
+    public static JqValue mergeTypeStructures(JqValue a, JqValue b) {
+        if (a.equals(b)) return a;
+        // Both objects: merge keys recursively
+        if (a instanceof JqObject objA && b instanceof JqObject objB) {
+            var builder = JqObject.builder(objA.size() + objB.size());
+            objA.forEach((key, val) -> {
+                if (objB.has(key)) {
+                    builder.put(key, mergeTypeStructures(val, objB.get(key)));
+                } else {
+                    builder.put(key, val);
+                }
+            });
+            objB.forEach((key, val) -> {
+                if (!objA.has(key)) {
+                    builder.put(key, val);
+                }
+            });
+            return builder.build();
+        }
+        // Both arrays: merge representative element schemas
+        if (a instanceof JqArray arrA && b instanceof JqArray arrB) {
+            if (arrA.size() == 0) return b;
+            if (arrB.size() == 0) return a;
+            return JqArray.of(mergeTypeStructures(arrA.get(0), arrB.get(0)));
+        }
+        // Type promotion: "integer" + "number" → "number"
+        if (a instanceof JqString sa && b instanceof JqString sb) {
+            String ta = sa.stringValue();
+            String tb = sb.stringValue();
+            if (("integer".equals(ta) && "number".equals(tb)) ||
+                    ("number".equals(ta) && "integer".equals(tb))) {
+                return JqString.of("number");
+            }
+        }
+        // Incompatible types at same path — keep first
+        return a;
     }
 
     // ========================================================================
@@ -592,27 +726,26 @@ public final class JqValues {
         for (int i = start; i < end; i++) {
             hash = hash * 31 + s.charAt(i);
         }
-        int slot = hash & INTERN_MASK;
-        String cached = INTERN_TABLE[slot];
-
-        // Cache hit: verify length + content without substring()
-        if (cached != null && cached.length() == keyLen) {
-            boolean match = true;
-            for (int i = 0; i < keyLen; i++) {
-                if (cached.charAt(i) != s.charAt(start + i)) {
-                    match = false;
-                    break;
+        // Use internFieldName for consistent probing + quad storage
+        // First check if already interned (fast path)
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int slot = (hash + probe) & INTERN_MASK;
+            String cached = INTERN_TABLE[slot];
+            if (cached == null) break;
+            if (cached.length() == keyLen) {
+                boolean match = true;
+                for (int i = 0; i < keyLen; i++) {
+                    if (cached.charAt(i) != s.charAt(start + i)) {
+                        match = false;
+                        break;
+                    }
                 }
+                if (match) return cached;
             }
-            if (match) return cached; // ZERO ALLOCATION
         }
-
-        // Cache miss: create string and cache (with JSON key form + key bytes)
+        // Cache miss
         String result = s.substring(start, end);
-        INTERN_TABLE[slot] = result;
-        INTERN_JSON_KEY[slot] = buildJsonKey(result);
-        INTERN_KEY_BYTES[slot] = result.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return result;
+        return internFieldName(result);
     }
 
     /** Parse a JSON string and return the raw Java String value (without wrapping in JqString). */
@@ -1125,48 +1258,69 @@ public final class JqValues {
     }
 
     /**
-     * Intern a key using a pre-computed hash and byte-level verification.
-     * The hash was computed during the SWAR scan (no separate pass needed).
-     * Cache verification uses stored key bytes for fast comparison.
+     * Intern a key using a pre-computed hash and quad-based verification.
+     * The hash was computed during the SWAR scan (fused, no separate pass).
+     *
+     * <p>Verification strategy (Jackson-inspired):</p>
+     * <ul>
+     *   <li>Fast reject: compare hash (1 int) and length (1 int)</li>
+     *   <li>Keys ≤ 12 bytes: compare 1-3 quads (int comparisons, no byte crossing)</li>
+     *   <li>Keys &gt; 12 bytes: compare first 3 quads + matchBytes for remainder</li>
+     * </ul>
+     *
+     * <p>Multi-slot linear probing (max 4 probes) replaces single-slot eviction.</p>
      */
     private static String internKeyWithHash(byte[] data, int start, int end, int hash) {
         int keyLen = end - start;
-        int slot = hash & INTERN_MASK;
-        String cached = INTERN_TABLE[slot];
 
-        // Cache hit: verify using stored key bytes (quad-style, no char crossing)
-        if (cached != null) {
-            byte[] cachedBytes = INTERN_KEY_BYTES[slot];
-            if (cachedBytes != null && cachedBytes.length == keyLen) {
-                if (matchBytes(cachedBytes, data, start, keyLen)) {
-                    return cached; // ZERO ALLOCATION
-                }
+        // Compute quads for this key
+        int q1 = keyLen >= 4 ? SwarUtil.loadInt(data, start) : SwarUtil.packPartialQuad(data, start, keyLen);
+        int q2 = keyLen >= 8 ? SwarUtil.loadInt(data, start + 4) : (keyLen > 4 ? SwarUtil.packPartialQuad(data, start + 4, keyLen - 4) : 0);
+        int q3 = keyLen >= 12 ? SwarUtil.loadInt(data, start + 8) : (keyLen > 8 ? SwarUtil.packPartialQuad(data, start + 8, keyLen - 8) : 0);
+
+        // Multi-slot probing with quad verification
+        int firstEmpty = -1;
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (hash + probe) & INTERN_MASK;
+            if (INTERN_TABLE[s] == null) {
+                if (firstEmpty < 0) firstEmpty = s;
+                break; // empty slot — no further probing needed
             }
+            // Fast reject: hash + length
+            if (INTERN_HASH[s] != hash || INTERN_QLEN[s] != keyLen) continue;
+            // Quad verification
+            if (q1 != INTERN_Q1[s]) continue;
+            if (keyLen > 4 && q2 != INTERN_Q2[s]) continue;
+            if (keyLen > 8 && q3 != INTERN_Q3[s]) continue;
+            // For keys > 12 bytes, verify remainder
+            if (keyLen > 12) {
+                byte[] cachedBytes = INTERN_KEY_BYTES[s];
+                if (cachedBytes == null || !matchBytesFrom(cachedBytes, data, start, 12, keyLen)) continue;
+            }
+            return INTERN_TABLE[s]; // CACHE HIT — zero allocation
         }
 
-        // Cache miss: create string and cache (with JSON key form + key bytes)
+        // Cache miss: create string and store
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
-        result.hashCode(); // force JDK to cache hashCode (Fix 4: reuse computed hash)
-        INTERN_TABLE[slot] = result;
-        INTERN_JSON_KEY[slot] = buildJsonKey(result);
-        INTERN_KEY_BYTES[slot] = java.util.Arrays.copyOfRange(data, start, end);
+        result.hashCode(); // force JDK to cache hashCode
+        int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK); // evict first slot if all probes full
+        INTERN_TABLE[storeSlot] = result;
+        INTERN_JSON_KEY[storeSlot] = buildJsonKey(result);
+        INTERN_KEY_BYTES[storeSlot] = java.util.Arrays.copyOfRange(data, start, end);
+        INTERN_HASH[storeSlot] = hash;
+        INTERN_Q1[storeSlot] = q1;
+        INTERN_Q2[storeSlot] = q2;
+        INTERN_Q3[storeSlot] = q3;
+        INTERN_QLEN[storeSlot] = keyLen;
         return result;
     }
 
     /**
-     * Fast byte-level comparison using long reads (8 bytes at a time).
-     * Avoids the char-by-char crossing from byte[] to String.charAt()
-     * that the previous verification used.
+     * Compare bytes from a given offset (for keys > 12 bytes where quads cover first 12).
      */
-    private static boolean matchBytes(byte[] cached, byte[] data, int start, int len) {
-        // Long-word comparison (8 bytes at a time via SwarUtil)
-        int i = 0;
-        for (; i + 8 <= len; i += 8) {
-            if (SwarUtil.loadLong(cached, i) != SwarUtil.loadLong(data, start + i)) return false;
-        }
-        // Byte tail
-        for (; i < len; i++) {
-            if (cached[i] != data[start + i]) return false;
+    private static boolean matchBytesFrom(byte[] cached, byte[] data, int dataStart, int fromOffset, int totalLen) {
+        for (int i = fromOffset; i < totalLen; i++) {
+            if (cached[i] != data[dataStart + i]) return false;
         }
         return true;
     }

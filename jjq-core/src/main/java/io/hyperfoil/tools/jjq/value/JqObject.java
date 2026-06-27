@@ -402,6 +402,20 @@ public final class JqObject implements JqValue {
     /** Return the field values as a Collection (insertion order preserved). */
     public java.util.Collection<JqValue> values() { return objectValue().values(); }
 
+    /**
+     * Return field values as a List (zero-copy for array-backed objects).
+     * For array-backed objects, returns a lightweight wrapper over the internal values array.
+     * For map-backed objects, copies values into a new ArrayList.
+     * Used by the VM's EACH opcode to avoid ArrayList copy on every {@code .[]}.
+     */
+    public java.util.List<JqValue> valuesAsList() {
+        if (externalMap != null) {
+            return new java.util.ArrayList<>(externalMap.values());
+        }
+        if (size == 0) return java.util.List.of();
+        return java.util.Arrays.asList(values).subList(0, size);
+    }
+
     /** Return the field entries as a Set (insertion order preserved). */
     public java.util.Set<Map.Entry<String, JqValue>> entries() { return objectValue().entrySet(); }
 

@@ -12,7 +12,11 @@ public final class Bytecode {
         public Instruction(int op, int arg1) { this(op, arg1, 0); }
     }
 
-    public record CallInfo(String name, int arity, List<JqExpr> args) {}
+    public record CallInfo(String name, int arity, List<JqExpr> args, JqExpr cachedExpr) {
+        public CallInfo(String name, int arity, List<JqExpr> args) {
+            this(name, arity, args, new JqExpr.FuncCallExpr(name, args));
+        }
+    }
 
     private final Instruction[] code;
     // Parallel arrays for zero-overhead dispatch (avoids record accessor calls in hot loop)
