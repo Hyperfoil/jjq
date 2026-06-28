@@ -200,6 +200,34 @@ Object javaObj = value.toJavaObject();
 JqNumber n = JqNumber.of(someNumber);  // auto-promotes integral types to long-backed
 ```
 
+### Type structure (schema inference)
+
+Compute a type skeleton from a JSON document — replaces leaf values with their type names while preserving the object/array structure. Useful for schema inference, data profiling, and structural comparison:
+
+```java
+JqValue input = JqValues.parse("""
+    {"name": "Alice", "age": 30, "scores": [95, 87.5]}
+    """);
+
+JqValue schema = JqValues.typeStructure(input);
+// {"name":"string","age":"integer","scores":["number"]}
+```
+
+Type mapping: `null` -> `"null"`, `boolean` -> `"boolean"`, integral number -> `"integer"`, floating-point -> `"number"`, `string` -> `"string"`. Arrays merge element schemas into a single representative.
+
+Merge schemas from multiple documents to build a unified type structure:
+
+```java
+JqValue doc1 = JqValues.parse("{\"value\": 42}");
+JqValue doc2 = JqValues.parse("{\"value\": 3.14, \"extra\": true}");
+
+JqValue merged = JqValues.mergeTypeStructures(
+    JqValues.typeStructure(doc1),
+    JqValues.typeStructure(doc2));
+// {"value":"number","extra":"boolean"}
+// "integer" + "number" promoted to "number"; keys unioned
+```
+
 ### Build JSON values
 
 ```java
@@ -468,7 +496,7 @@ jq expression string
 - **74 opcodes** with fused iteration (COLLECT_ITERATE, REDUCE_ITERATE, COLLECT_SELECT_ITERATE)
 - **21 inlined builtin opcodes** (length, type, keys, sort, add, etc.)
 - **Compound instructions** (DOT_FIELD2 for `.a.b`, BUILD_OBJECT with pre-computed layouts)
-- **Whole-program shape detection** — IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, PIPE_FIELD_ARITH bypass the VM loop entirely
+- **Whole-program shape detection** — IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, PIPE_FIELD_ARITH, BUILTIN bypass the VM loop entirely
 - **Constant folding** and **peephole optimization** at compile time
 - **Pre-allocated growable stacks** with pre-ensured capacity for hot loops
 
@@ -490,7 +518,7 @@ All JqValue types implement `Serializable` for Hibernate second-level cache supp
 - **byte[]-based parser** (`JqValues.parse(byte[])`) — parses UTF-8 bytes directly, no intermediate String
 - **SWAR scanning** — finds `"` and `\` in 8 bytes per iteration using Netty-style bit manipulation
 - **Deferred string values** — string values hold source references, materialized only when accessed
-- **Field name interning** — open-addressing hash table (2048 slots) with incremental hash computation. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
+- **Field name interning** — open-addressing hash table (1024 slots, 4-probe linear probing) with fused SWAR+hash computation. Quad-based cache verification (1-3 int comparisons for keys <=12 bytes) with hash fast-reject. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
 - **Direct digit accumulation** — integers and decimals parsed to `long`/`double` without `BigDecimal` or `substring()` for numbers with ≤15 significant digits
 - **Thread-local StringBuilder reuse** — serialization buffer grows once and is reused across calls
 
