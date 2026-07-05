@@ -1,6 +1,6 @@
 # jjq-jakarta
 
-Jakarta EE integration for jjq — provides a Hibernate `FormatMapper` and JAX-RS providers
+Jakarta EE integration for jjq — provides Hibernate persistence types and JAX-RS providers
 that enable `JqValue` as a first-class JSON type in persistence and REST layers.
 
 ## Dependencies
@@ -16,42 +16,67 @@ that enable `JqValue` as a first-class JSON type in persistence and REST layers.
 The module depends on `hibernate-core` and `jakarta.ws.rs-api` with `provided` scope —
 your application's runtime (Quarkus, Spring, WildFly) supplies the actual versions.
 
-## Hibernate FormatMapper
+## Hibernate Persistence
 
-`JqValueFormatMapper` implements Hibernate's `FormatMapper` SPI to serialize and
-deserialize `JqValue` instances for `@JdbcTypeCode(SqlTypes.JSON)` columns. It uses
-jjq's built-in parser (`JqValues.parse()`) and serializer (`JqValue.toJsonString()`),
-eliminating Jackson from the persistence path.
+Two approaches for persisting `JqValue` fields:
 
-The class has no framework-specific annotations. Register it with your framework:
+### Option 1: BYTEA with JdbcType (recommended)
 
-### Quarkus
-
-Create a subclass with Quarkus CDI annotations:
+Uses direct `byte[]` JDBC I/O — no intermediate String allocation. Deferred string values
+from byte parsing are copied as raw bytes during serialization, making the
+`parse(byte[])` -> `serializeToBytes()` round-trip optimal.
 
 ```java
-import io.hyperfoil.tools.jjq.jakarta.JqValueFormatMapper;
-import io.quarkus.hibernate.orm.JsonFormat;
-import io.quarkus.hibernate.orm.PersistenceUnitExtension;
-import jakarta.enterprise.context.ApplicationScoped;
+import io.hyperfoil.tools.jjq.jakarta.JqValueJdbcType;
+import io.hyperfoil.tools.jjq.jakarta.JqValueJavaType;
+import io.hyperfoil.tools.jjq.value.JqValue;
+import org.hibernate.annotations.Mutability;
+import org.hibernate.type.descriptor.java.Immutability;
 
+@Entity
+public class MyEntity {
+
+    @Column(columnDefinition = "BYTEA")
+    @org.hibernate.annotations.JdbcType(JqValueJdbcType.class)
+    @org.hibernate.annotations.JavaType(JqValueJavaType.class)
+    @Mutability(Immutability.class)
+    public JqValue data;
+}
+```
+
+- **Write:** `JqValues.serializeToBytes(value)` -> `PreparedStatement.setBytes()`
+- **Read:** `ResultSet.getBytes()` -> `JqValues.parse(byte[])`
+- **2LC compatible:** `JqValue` implements `Serializable` with proper singleton preservation
+- **No FormatMapper registration needed** — the `@JdbcType` and `@JavaType` annotations are self-contained
+
+### Option 2: JSONB with FormatMapper
+
+Uses String-based I/O via Hibernate's `FormatMapper` SPI. Suitable when you need
+PostgreSQL JSONB operators or GIN indexes on the column.
+
+```java
+@Entity
+public class MyEntity {
+
+    @Column(columnDefinition = "JSONB")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Mutability(Immutability.class)
+    public JqValue data;
+}
+```
+
+The FormatMapper requires registration with your framework:
+
+**Quarkus:**
+```java
 @ApplicationScoped
 @PersistenceUnitExtension
 @JsonFormat
 public class MyJsonFormatMapper extends JqValueFormatMapper {}
 ```
 
-Quarkus discovers this bean automatically and registers it as the Hibernate JSON format mapper.
-
-### Spring Boot
-
-Register as a Spring bean:
-
+**Spring Boot:**
 ```java
-import io.hyperfoil.tools.jjq.jakarta.JqValueFormatMapper;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
 @Configuration
 public class HibernateConfig {
     @Bean
@@ -61,30 +86,9 @@ public class HibernateConfig {
 }
 ```
 
-### Plain Hibernate
-
-Set the format mapper via Hibernate properties:
-
+**Plain Hibernate:**
 ```properties
 hibernate.type.json_format_mapper=io.hyperfoil.tools.jjq.jakarta.JqValueFormatMapper
-```
-
-### Entity mapping
-
-Once the `FormatMapper` is registered, use `JqValue` as the field type for JSON columns:
-
-```java
-import io.hyperfoil.tools.jjq.value.JqValue;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
-
-@Entity
-public class MyEntity {
-
-    @Column(columnDefinition = "JSONB")
-    @JdbcTypeCode(SqlTypes.JSON)
-    public JqValue data;
-}
 ```
 
 ## JAX-RS Providers
@@ -148,12 +152,19 @@ JqObject response = JqObject.builder()
 The module leverages jjq's optimized parser and serializer:
 
 - **Parsing:** `JqValueMessageBodyReader` uses `JqValues.parse(byte[])` for zero-intermediate-String
-  parsing directly from the HTTP input stream. jjq's byte parser is 1.9x faster than Jackson on
-  production-scale data.
+  parsing directly from the HTTP input stream. jjq's byte parser is 1.3-2.4x faster than Jackson on
+  10KB inputs with 26% less allocation.
 
-- **Serialization:** `JqValueMessageBodyWriter` uses `JqValue.toJsonString()` which benefits from
-  thread-local StringBuilder reuse and deferred string zero-copy optimizations.
+- **Serialization:** `JqValueMessageBodyWriter` uses `JqValues.serializeTo(value, outputStream)` which
+  uses the direct byte serialization path — no intermediate String or StringBuilder.
 
-- **Persistence:** `JqValueFormatMapper` eliminates Jackson's `ObjectMapper` from the Hibernate
-  serialization path. Combined with `@Mutability(Immutability.class)` on the entity field,
-  this avoids the `FormatMapperBasedJavaType.deepCopy` overhead that can dominate persistence CPU.
+- **BYTEA persistence (JdbcType):** `JqValueJdbcType` uses `serializeToBytes()` for writes and
+  `parse(byte[])` for reads. Deferred string values from byte parsing are copied as raw bytes
+  during serialization — zero String construction, zero UTF-8 re-encoding. This is the fastest
+  persistence path for pass-through workloads (parse JSON upload, store, retrieve, serialize).
+
+- **JSONB persistence (FormatMapper):** `JqValueFormatMapper` eliminates Jackson's `ObjectMapper`
+  from the Hibernate serialization path.
+
+- **Immutability:** Combined with `@Mutability(Immutability.class)` on the entity field,
+  both approaches avoid `deepCopy` overhead for second-level cache and dirty checking.
