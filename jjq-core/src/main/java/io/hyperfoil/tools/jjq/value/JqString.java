@@ -227,6 +227,31 @@ public final class JqString implements JqValue {
     }
 
     @Override
+    public void appendToBytes(BytOutput out) {
+        out.writeByte('"');
+        String v = value;
+        if (v != null) {
+            // Materialized (eager or already accessed deferred) — escape + encode to bytes
+            out.escapeJsonToBytes(v);
+        } else if (source instanceof byte[] bytes && !hasEscapes) {
+            // Deferred from bytes, no escapes — ZERO-COPY: raw byte copy
+            // Source bytes are already valid UTF-8 JSON content (no escape sequences).
+            // This is the key optimization: for the parse→query→serialize round-trip,
+            // most strings are never touched by jq filters, so their original bytes
+            // can be copied directly to the output without ever constructing a Java String.
+            out.writeBytes(bytes, start, end - start);
+        } else if (source instanceof String s && !hasEscapes) {
+            // Deferred from String, no escapes — encode source region as UTF-8
+            out.escapeJsonToBytes(s.substring(start, end));
+        } else if (source != null) {
+            // Deferred with escapes — materialize first, then re-escape to bytes
+            v = stringValue();
+            out.escapeJsonToBytes(v);
+        }
+        out.writeByte('"');
+    }
+
+    @Override
     public String toString() { return toJsonString(); }
 
     @Override

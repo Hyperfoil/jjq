@@ -2338,4 +2338,120 @@ class JqValueTest {
         assertEquals(JqString.of("number"), obj.get("y"));     // integer + number → number
         assertEquals(JqString.of("boolean"), obj.get("z"));    // only in b
     }
+
+    // ========================================================================
+    //  serializeToBytes tests
+    // ========================================================================
+
+    @Test
+    void testSerializeToBytesScalars() {
+        assertBytesEquivalent(JqNull.NULL);
+        assertBytesEquivalent(JqBoolean.TRUE);
+        assertBytesEquivalent(JqBoolean.FALSE);
+        assertBytesEquivalent(JqNumber.of(0));
+        assertBytesEquivalent(JqNumber.of(42));
+        assertBytesEquivalent(JqNumber.of(-1));
+        assertBytesEquivalent(JqNumber.of(Long.MAX_VALUE));
+        assertBytesEquivalent(JqNumber.of(Long.MIN_VALUE));
+        assertBytesEquivalent(JqNumber.of(3.14));
+        assertBytesEquivalent(JqString.of("hello"));
+        assertBytesEquivalent(JqString.of(""));
+    }
+
+    @Test
+    void testSerializeToBytesObject() {
+        assertBytesEquivalent(JqValues.parse("{\"name\":\"Alice\",\"age\":30}"));
+        assertBytesEquivalent(JqValues.parse("{}"));
+    }
+
+    @Test
+    void testSerializeToBytesArray() {
+        assertBytesEquivalent(JqValues.parse("[1,2,3]"));
+        assertBytesEquivalent(JqValues.parse("[]"));
+        assertBytesEquivalent(JqValues.parse("[\"a\",\"b\",\"c\"]"));
+    }
+
+    @Test
+    void testSerializeToBytesNested() {
+        assertBytesEquivalent(JqValues.parse(
+                "{\"users\":[{\"name\":\"Alice\",\"scores\":[95,87]},{\"name\":\"Bob\",\"scores\":[]}]}"));
+    }
+
+    @Test
+    void testSerializeToBytesUnicode() {
+        // Multi-byte UTF-8: café, emoji, CJK
+        assertBytesEquivalent(JqString.of("caf\u00e9"));       // 2-byte UTF-8
+        assertBytesEquivalent(JqString.of("\u4e16\u754c"));     // 3-byte UTF-8 (Chinese: 世界)
+        assertBytesEquivalent(JqString.of("hello \ud83d\ude00")); // 4-byte UTF-8 (emoji)
+    }
+
+    @Test
+    void testSerializeToBytesEscapedStrings() {
+        assertBytesEquivalent(JqString.of("line1\nline2"));
+        assertBytesEquivalent(JqString.of("tab\there"));
+        assertBytesEquivalent(JqString.of("quote\"inside"));
+        assertBytesEquivalent(JqString.of("back\\slash"));
+        assertBytesEquivalent(JqString.of("\b\f\r"));
+    }
+
+    @Test
+    void testSerializeToBytesRoundTrip() {
+        // Parse from bytes, serialize back to bytes, parse again — must be equal
+        String json = "{\"name\":\"Alice\",\"age\":30,\"scores\":[95,87.5],\"active\":true,\"data\":null}";
+        byte[] original = json.getBytes(StandardCharsets.UTF_8);
+        JqValue parsed = JqValues.parse(original);
+        byte[] serialized = JqValues.serializeToBytes(parsed);
+        JqValue reparsed = JqValues.parse(serialized);
+        assertEquals(parsed, reparsed, "Round-trip parse→bytes→parse should produce equal values");
+    }
+
+    @Test
+    void testSerializeToBytesRoundTripFromBytes() {
+        // Parse from bytes (creates deferred-bytes strings), serialize to bytes
+        // This exercises the zero-copy path for deferred-bytes strings
+        String json = "{\"host\":\"server01\",\"cpu\":0.75,\"mem\":1024,\"tags\":[\"prod\",\"us-east\"]}";
+        byte[] input = json.getBytes(StandardCharsets.UTF_8);
+        JqValue parsed = JqValues.parse(input);
+        byte[] output = JqValues.serializeToBytes(parsed);
+        // Verify byte-for-byte equivalence with the char-based path
+        String fromBytes = new String(output, StandardCharsets.UTF_8);
+        assertEquals(parsed.toJsonString(), fromBytes,
+                "Byte serialization should produce same output as char serialization");
+    }
+
+    @Test
+    void testSerializeToBytesLargeDocument() {
+        // Build a ~100KB document
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < 1000; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("\"field_").append(i).append("\":\"value_").append(i).append("\"");
+        }
+        sb.append("}");
+        JqValue large = JqValues.parse(sb.toString());
+        assertBytesEquivalent(large);
+    }
+
+    @Test
+    void testSerializeToBytesNullValues() {
+        assertBytesEquivalent(JqValues.parse("{\"a\":null,\"b\":[null,null]}"));
+    }
+
+    @Test
+    void testSerializeToBytesNumberFormats() {
+        // Various number formats
+        assertBytesEquivalent(JqValues.parse("0"));
+        assertBytesEquivalent(JqValues.parse("-0"));
+        assertBytesEquivalent(JqValues.parse("1e10"));
+        assertBytesEquivalent(JqValues.parse("3.14159265358979323846"));
+    }
+
+    /** Assert that serializeToBytes produces the same output as toJsonString().getBytes(UTF_8) */
+    private void assertBytesEquivalent(JqValue value) {
+        byte[] fromBytes = JqValues.serializeToBytes(value);
+        byte[] fromString = value.toJsonString().getBytes(StandardCharsets.UTF_8);
+        assertArrayEquals(fromString, fromBytes,
+                "serializeToBytes should produce same output as toJsonString().getBytes() for: "
+                        + value.toJsonString());
+    }
 }

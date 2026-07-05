@@ -35,6 +35,11 @@ public final class JqBoolean implements JqValue {
     public void appendTo(StringBuilder sb) { sb.append(value); }
 
     @Override
+    public void appendToBytes(BytOutput out) {
+        if (value) out.writeTrue(); else out.writeFalse();
+    }
+
+    @Override
     public String toString() { return String.valueOf(value); }
 
     @Override

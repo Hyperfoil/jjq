@@ -41,6 +41,8 @@ public final class JqValues {
     private static final String[] INTERN_JSON_KEY = new String[INTERN_TABLE_SIZE];
     // Stored key bytes for verification of keys > 12 bytes
     private static final byte[][] INTERN_KEY_BYTES = new byte[INTERN_TABLE_SIZE][];
+    // Pre-computed JSON key form as UTF-8 bytes: "\"key\":" — for direct byte serialization
+    private static final byte[][] INTERN_JSON_KEY_BYTES = new byte[INTERN_TABLE_SIZE][];
     // Quad-based verification fields (Jackson-inspired):
     private static final int[] INTERN_HASH = new int[INTERN_TABLE_SIZE]; // pre-computed hash
     private static final int[] INTERN_Q1 = new int[INTERN_TABLE_SIZE];   // bytes 0-3 (big-endian)
@@ -79,6 +81,7 @@ public final class JqValues {
         byte[] keyBytes = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         INTERN_TABLE[slot] = name;
         INTERN_JSON_KEY[slot] = buildJsonKey(name);
+        INTERN_JSON_KEY_BYTES[slot] = buildJsonKey(name).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         INTERN_KEY_BYTES[slot] = keyBytes;
         INTERN_HASH[slot] = hash;
         INTERN_QLEN[slot] = keyBytes.length;
@@ -108,6 +111,22 @@ public final class JqValues {
         return null;
     }
 
+    /**
+     * Look up the pre-computed JSON key form as UTF-8 bytes for an interned field name.
+     * Returns the byte form of {@code "\"key\":"} if interned, or null otherwise.
+     */
+    static byte[] internedJsonKeyBytes(String key) {
+        int hash = key.hashCode();
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (hash + probe) & INTERN_MASK;
+            if (INTERN_TABLE[s] == key) {
+                return INTERN_JSON_KEY_BYTES[s];
+            }
+            if (INTERN_TABLE[s] == null) break;
+        }
+        return null;
+    }
+
     /** Build the JSON serialization form for an object key: {@code "\"key\":"}. */
     private static String buildJsonKey(String name) {
         // Check if key needs escaping (rare for field names)
@@ -132,6 +151,9 @@ public final class JqValues {
 
     private static final ThreadLocal<StringBuilder> SERIALIZER_BUFFER =
             ThreadLocal.withInitial(() -> new StringBuilder(SERIALIZE_BUFFER_INIT));
+
+    private static final ThreadLocal<BytOutput> BYTE_SERIALIZER_BUFFER =
+            ThreadLocal.withInitial(() -> new BytOutput(SERIALIZE_BUFFER_INIT));
 
     private JqValues() {}
 
@@ -172,14 +194,40 @@ public final class JqValues {
     }
 
     /**
-     * Serialize a JqValue directly to an OutputStream as UTF-8 without constructing
-     * an intermediate String. Eliminates the {@code toString()} and {@code getBytes()}
-     * copies compared to {@code out.write(value.toJsonString().getBytes(UTF_8))}.
+     * Serialize a JqValue directly to an OutputStream as UTF-8 bytes.
+     * Uses the direct byte serialization path — no intermediate String or StringBuilder.
+     * Deferred-bytes string values are copied as raw bytes (zero encoding overhead).
      */
     public static void serializeTo(JqValue value, OutputStream out) throws IOException {
-        var writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
-        serializeTo(value, writer);
-        writer.flush();
+        byte[] bytes = serializeToBytes(value);
+        out.write(bytes);
+    }
+
+    /**
+     * Serialize a JqValue directly to a UTF-8 byte array.
+     * This is the most efficient serialization path — no intermediate String allocation.
+     *
+     * <p>Key optimizations vs {@code toJsonString().getBytes(UTF_8)}:</p>
+     * <ul>
+     *   <li>Deferred-bytes string values copy raw source bytes (zero UTF-8 encoding)</li>
+     *   <li>Interned field names use pre-computed byte forms</li>
+     *   <li>Numbers serialize directly to ASCII bytes (no StringBuilder)</li>
+     *   <li>Thread-local byte buffer reused across calls</li>
+     *   <li>Only one allocation: the final result {@code byte[]}</li>
+     * </ul>
+     *
+     * @param value the JqValue to serialize
+     * @return UTF-8 encoded JSON byte array
+     */
+    public static byte[] serializeToBytes(JqValue value) {
+        BytOutput out = BYTE_SERIALIZER_BUFFER.get();
+        out.reset();
+        value.appendToBytes(out);
+        byte[] result = out.toByteArray();
+        if (out.buf.length > SERIALIZE_BUFFER_MAX_RETAINED) {
+            BYTE_SERIALIZER_BUFFER.set(new BytOutput(SERIALIZE_BUFFER_INIT));
+        }
+        return result;
     }
 
     // ========================================================================
@@ -1305,7 +1353,9 @@ public final class JqValues {
         result.hashCode(); // force JDK to cache hashCode
         int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK); // evict first slot if all probes full
         INTERN_TABLE[storeSlot] = result;
-        INTERN_JSON_KEY[storeSlot] = buildJsonKey(result);
+        String jsonKey = buildJsonKey(result);
+        INTERN_JSON_KEY[storeSlot] = jsonKey;
+        INTERN_JSON_KEY_BYTES[storeSlot] = jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         INTERN_KEY_BYTES[storeSlot] = java.util.Arrays.copyOfRange(data, start, end);
         INTERN_HASH[storeSlot] = hash;
         INTERN_Q1[storeSlot] = q1;

@@ -93,6 +93,18 @@ byte[] jsonBytes = Files.readAllBytes(Path.of("data.json"));
 JqValue data = JqValues.parse(jsonBytes);
 ```
 
+### Serialize to byte[] (zero-copy path)
+
+```java
+// Serialize directly to UTF-8 bytes — no intermediate String allocation
+byte[] output = JqValues.serializeToBytes(data);
+
+// Also works with OutputStream (uses the byte path internally)
+JqValues.serializeTo(data, outputStream);
+```
+
+For documents parsed from `byte[]`, deferred string values are copied as raw bytes without constructing Java Strings or re-encoding UTF-8. This makes the `parse(byte[])` -> `serializeToBytes()` round-trip optimal for pass-through workloads like database persistence and message queues.
+
 ### Navigate and extract values
 
 For repeated queries, **always use `JqProgram.compile()`** -- it compiles once and executes in nanoseconds:
@@ -520,7 +532,8 @@ All JqValue types implement `Serializable` for Hibernate second-level cache supp
 - **Deferred string values** — string values hold source references, materialized only when accessed
 - **Field name interning** — open-addressing hash table (1024 slots, 4-probe linear probing) with fused SWAR+hash computation. Quad-based cache verification (1-3 int comparisons for keys <=12 bytes) with hash fast-reject. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
 - **Direct digit accumulation** — integers and decimals parsed to `long`/`double` without `BigDecimal` or `substring()` for numbers with ≤15 significant digits
-- **Thread-local StringBuilder reuse** — serialization buffer grows once and is reused across calls
+- **Thread-local buffer reuse** — both char-based (StringBuilder) and byte-based (BytOutput) serialization buffers grow once and are reused across calls
+- **Direct byte serialization** (`JqValues.serializeToBytes(byte[])`) — serializes directly to UTF-8 bytes without intermediate String. Deferred-bytes strings copy raw source bytes (zero encoding). Interned field names use pre-computed byte forms. Numbers serialize directly to ASCII digits.
 
 ## Building
 

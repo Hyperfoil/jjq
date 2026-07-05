@@ -614,7 +614,20 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * recursively on child values, writing everything into the single shared buffer
      * without creating intermediate StringBuilders.
      */
-    void appendTo(StringBuilder sb);
+     void appendTo(StringBuilder sb);
+
+    /**
+     * Serialize this value directly to a UTF-8 byte buffer.
+     * This is the byte-oriented counterpart to {@link #appendTo(StringBuilder)}.
+     * <p>
+     * Optimizations vs the char-based path:
+     * <ul>
+     *   <li>Deferred-bytes {@link JqString} values copy raw source bytes (zero encoding)</li>
+     *   <li>{@link JqObject} writes pre-computed interned key bytes directly</li>
+     *   <li>No intermediate {@code String} or {@code StringBuilder} allocation</li>
+     * </ul>
+     */
+    void appendToBytes(BytOutput out);
 
     /** Truncate value string for error messages (jq uses 25 chars + "...") */
     private static String truncateForError(String jsonStr) {

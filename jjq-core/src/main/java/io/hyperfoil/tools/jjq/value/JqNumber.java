@@ -218,6 +218,45 @@ public final class JqNumber implements JqValue {
         }
     }
 
+    @Override
+    public void appendToBytes(BytOutput out) {
+        if (isLong) {
+            out.writeLong(longVal);
+            return;
+        }
+        if (isSpecial()) {
+            out.writeNull();
+            return;
+        }
+        if (decimalVal == null) {
+            appendDoubleBytes(out, rawDouble);
+            return;
+        }
+        BigDecimal stripped = decimalVal.stripTrailingZeros();
+        if (stripped.scale() <= 0) {
+            if (stripped.scale() < -20) {
+                out.writeAsciiString(stripped.toString());
+            } else {
+                out.writeAsciiString(stripped.toBigInteger().toString());
+            }
+        } else if (stripped.scale() > 20) {
+            out.writeAsciiString(stripped.toString());
+        } else {
+            out.writeAsciiString(stripped.toPlainString());
+        }
+    }
+
+    private static void appendDoubleBytes(BytOutput out, double d) {
+        long asLong = (long) d;
+        if ((double) asLong == d) {
+            out.writeLong(asLong); // 3.0 -> "3"
+        } else if ((d > 1e-3 && d < 1e15) || (d < -1e-3 && d > -1e15)) {
+            out.writeAsciiString(Double.toString(d));
+        } else {
+            out.writeAsciiString(BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
+        }
+    }
+
     /** Append a double to StringBuilder, matching jq's plain notation for common values. */
     private static void appendDouble(StringBuilder sb, double d) {
         long asLong = (long) d;

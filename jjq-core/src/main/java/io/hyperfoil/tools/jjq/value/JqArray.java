@@ -202,6 +202,27 @@ public final class JqArray implements JqValue, Iterable<JqValue> {
         sb.append(']');
     }
 
+    @Override
+    public void appendToBytes(BytOutput out) {
+        int size = elements.size();
+        if (size == 0) { out.writeByte('['); out.writeByte(']'); return; }
+        out.writeByte('[');
+        appendValueBytes(elements.get(0), out);
+        for (int i = 1; i < size; i++) {
+            out.writeByte(',');
+            appendValueBytes(elements.get(i), out);
+        }
+        out.writeByte(']');
+    }
+
+    private static void appendValueBytes(JqValue v, BytOutput out) {
+        if (v instanceof JqString s) s.appendToBytes(out);
+        else if (v instanceof JqNumber n) n.appendToBytes(out);
+        else if (v instanceof JqBoolean b) { if (b.booleanValue()) out.writeTrue(); else out.writeFalse(); }
+        else if (v instanceof JqNull) out.writeNull();
+        else v.appendToBytes(out);
+    }
+
     /** Type-specialize dispatch to help JIT devirtualize common cases (avoids itable stub). */
     private static void appendValue(JqValue v, StringBuilder sb) {
         if (v instanceof JqString s) s.appendTo(sb);

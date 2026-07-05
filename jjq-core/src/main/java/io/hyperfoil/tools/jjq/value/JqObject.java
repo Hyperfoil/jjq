@@ -688,6 +688,58 @@ public final class JqObject implements JqValue {
         sb.append('}');
     }
 
+    @Override
+    public void appendToBytes(BytOutput out) {
+        if (externalMap != null) {
+            appendFromMapBytes(out);
+            return;
+        }
+        if (size == 0) { out.writeByte('{'); out.writeByte('}'); return; }
+        out.writeByte('{');
+        for (int i = 0; i < size; i++) {
+            if (i > 0) out.writeByte(',');
+            // Try pre-computed interned key bytes (e.g., "\"user\":" as UTF-8)
+            byte[] keyBytes = JqValues.internedJsonKeyBytes(keys[i]);
+            if (keyBytes != null) {
+                out.writeBytes(keyBytes);
+            } else {
+                out.writeByte('"');
+                out.escapeJsonToBytes(keys[i]);
+                out.writeByte('"');
+                out.writeByte(':');
+            }
+            // Type-specialized dispatch (same pattern as appendTo)
+            JqValue v = values[i];
+            if (v instanceof JqString s) s.appendToBytes(out);
+            else if (v instanceof JqNumber n) n.appendToBytes(out);
+            else if (v instanceof JqBoolean b) { if (b.booleanValue()) out.writeTrue(); else out.writeFalse(); }
+            else if (v instanceof JqNull) out.writeNull();
+            else v.appendToBytes(out);
+        }
+        out.writeByte('}');
+    }
+
+    private void appendFromMapBytes(BytOutput out) {
+        if (externalMap.isEmpty()) { out.writeByte('{'); out.writeByte('}'); return; }
+        out.writeByte('{');
+        boolean first = true;
+        for (var e : externalMap.entrySet()) {
+            if (!first) out.writeByte(',');
+            first = false;
+            byte[] keyBytes = JqValues.internedJsonKeyBytes(e.getKey());
+            if (keyBytes != null) {
+                out.writeBytes(keyBytes);
+            } else {
+                out.writeByte('"');
+                out.escapeJsonToBytes(e.getKey());
+                out.writeByte('"');
+                out.writeByte(':');
+            }
+            e.getValue().appendToBytes(out);
+        }
+        out.writeByte('}');
+    }
+
     private void appendFromMap(StringBuilder sb) {
         if (externalMap.isEmpty()) { sb.append("{}"); return; }
         sb.append('{');

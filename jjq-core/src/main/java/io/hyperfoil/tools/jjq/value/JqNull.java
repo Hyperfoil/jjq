@@ -23,6 +23,9 @@ public final class JqNull implements JqValue {
     public void appendTo(StringBuilder sb) { sb.append("null"); }
 
     @Override
+    public void appendToBytes(BytOutput out) { out.writeNull(); }
+
+    @Override
     public String toString() { return "null"; }
 
     @Override
