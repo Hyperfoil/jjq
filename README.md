@@ -301,10 +301,26 @@ Supports navigation, operators, predicates, 35+ built-in functions, implicit arr
 
 ### Hibernate / JAX-RS integration (jjq-jakarta)
 
-Use `JqValue` directly as a Hibernate entity field type and in REST endpoints:
+Use `JqValue` directly as a Hibernate entity field type and in REST endpoints.
+
+**BYTEA column with byte[] I/O (recommended)** — zero-String persistence using direct byte serialization:
 
 ```java
-// Entity with JqValue field (mapped to JSONB column)
+@Entity
+public class MyEntity {
+    @Column(columnDefinition = "BYTEA")
+    @org.hibernate.annotations.JdbcType(JqValueJdbcType.class)
+    @org.hibernate.annotations.JavaType(JqValueJavaType.class)
+    @Mutability(Immutability.class)
+    public JqValue data;
+}
+```
+
+This uses `JqValues.serializeToBytes()` for writes and `JqValues.parse(byte[])` for reads — no intermediate String allocation. Deferred string values from byte parsing are copied as raw bytes during serialization.
+
+**JSONB column with FormatMapper (alternative)** — uses String I/O via Hibernate's FormatMapper SPI:
+
+```java
 @Entity
 public class MyEntity {
     @Column(columnDefinition = "JSONB")
@@ -312,8 +328,19 @@ public class MyEntity {
     @Mutability(Immutability.class)
     public JqValue data;
 }
+```
 
-// REST endpoint accepting and returning JqValue (auto-parsed/serialized)
+Register the FormatMapper for Quarkus:
+```java
+@ApplicationScoped
+@PersistenceUnitExtension
+@JsonFormat
+public class MyFormatMapper extends JqValueFormatMapper {}
+```
+
+**REST endpoints** (both approaches):
+
+```java
 @POST @Path("/upload")
 public Response upload(JqValue data) {
     service.store(data);
@@ -324,14 +351,6 @@ public Response upload(JqValue data) {
 public JqValue get(@PathParam("id") long id) {
     return service.load(id);
 }
-```
-
-Register the FormatMapper for Quarkus:
-```java
-@ApplicationScoped
-@PersistenceUnitExtension
-@JsonFormat
-public class MyFormatMapper extends JqValueFormatMapper {}
 ```
 
 See the [jjq-jakarta README](jjq-jakarta/README.md) for full setup details.
