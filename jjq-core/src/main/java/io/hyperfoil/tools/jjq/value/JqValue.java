@@ -629,6 +629,20 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      */
     void appendToBytes(BytOutput out);
 
+    /**
+     * Estimated size in bytes of the source this value was parsed from.
+     * Returns the source byte length for values created by {@link JqValues#parse(byte[])}
+     * or the source string length (char count, approximating byte count for ASCII JSON)
+     * for values created by {@link JqValues#parse(String)}.
+     *
+     * <p>Returns {@code 1} for programmatically constructed values, deserialized values,
+     * or scalar root values. This is safe for direct use as a Caffeine cache weight
+     * (which requires positive values).</p>
+     *
+     * <p>O(1) — no tree walking, no serialization. Designed for cache weighers.</p>
+     */
+    default int estimatedSizeInBytes() { return 1; }
+
     /** Truncate value string for error messages (jq uses 25 chars + "...") */
     private static String truncateForError(String jsonStr) {
         // jq truncation: if the full JSON representation exceeds 30 UTF-8 bytes,

@@ -47,6 +47,10 @@ public final class JqObject implements JqValue {
     private transient int[] hashSlots;
     private transient int hashMask;
 
+    // Source byte length — set by JqValues.parse() on root values for cache weighing.
+    // 0 = not set (Java default), getter returns 1 for unset values.
+    private transient int sourceLengthBytes;
+
     private JqObject(String[] keys, JqValue[] values, int size, Map<String, JqValue> externalMap) {
         this.keys = keys;
         this.values = values;
@@ -383,6 +387,12 @@ public final class JqObject implements JqValue {
 
     /** Return the number of fields. */
     public int size() { return externalMap != null ? externalMap.size() : size; }
+
+    @Override
+    public int estimatedSizeInBytes() { return sourceLengthBytes > 0 ? sourceLengthBytes : 1; }
+
+    /** Package-private — called by JqValues.parse() to set source byte length on root values. */
+    void setSourceLengthBytes(int len) { this.sourceLengthBytes = len; }
 
     /**
      * Iterate all fields with zero allocation for array-backed objects.

@@ -483,7 +483,9 @@ public final class JqValues {
             json = json.substring(1);
         }
         var reader = new JsonReader(json);
-        return parseValue(reader, 0);
+        JqValue result = parseValue(reader, 0);
+        setSourceLength(result, json.length()); // char count ≈ byte count for ASCII JSON
+        return result;
     }
 
     /**
@@ -519,7 +521,10 @@ public final class JqValues {
         while (true) {
             reader.skipWs();
             if (reader.pos >= reader.len) break;
-            results.add(parseValue(reader, 0));
+            int startPos = reader.pos;
+            JqValue value = parseValue(reader, 0);
+            setSourceLength(value, reader.pos - startPos);
+            results.add(value);
         }
         return results;
     }
@@ -1037,7 +1042,9 @@ public final class JqValues {
         // Skip whitespace after BOM
         while (offset < end && isWsByte(bytes[offset])) offset++;
         var reader = new JsonByteReader(bytes, offset, end);
-        return parseValueBytes(reader, 0);
+        JqValue result = parseValueBytes(reader, 0);
+        setSourceLength(result, length);
+        return result;
     }
 
     /**
@@ -1057,13 +1064,22 @@ public final class JqValues {
         while (true) {
             reader.skipWs();
             if (reader.pos >= reader.end) break;
-            results.add(parseValueBytes(reader, 0));
+            int startPos = reader.pos;
+            JqValue value = parseValueBytes(reader, 0);
+            setSourceLength(value, reader.pos - startPos);
+            results.add(value);
         }
         return results;
     }
 
     private static boolean isWsByte(byte b) {
         return b == ' ' || b == '\n' || b == '\r' || b == '\t';
+    }
+
+    /** Set source byte length on root values for cache weighing. No-op for scalars and singletons. */
+    private static void setSourceLength(JqValue value, int length) {
+        if (value instanceof JqObject obj && obj != JqObject.EMPTY) obj.setSourceLengthBytes(length);
+        else if (value instanceof JqArray arr && arr != JqArray.EMPTY) arr.setSourceLengthBytes(length);
     }
 
     private static JqValue parseValueBytes(JsonByteReader r, int depth) {

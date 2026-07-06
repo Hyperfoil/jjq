@@ -2454,4 +2454,108 @@ class JqValueTest {
                 "serializeToBytes should produce same output as toJsonString().getBytes() for: "
                         + value.toJsonString());
     }
+
+    // ========================================================================
+    //  estimatedSizeInBytes tests
+    // ========================================================================
+
+    @Test
+    void testEstimatedSizeBytesParseByteArray() {
+        String json = "{\"name\":\"Alice\",\"age\":30}";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqValue value = JqValues.parse(bytes);
+        assertEquals(bytes.length, value.estimatedSizeInBytes(),
+                "parse(byte[]) should set estimatedSizeInBytes to input length");
+    }
+
+    @Test
+    void testEstimatedSizeBytesParseByteArrayOffset() {
+        String json = "{\"x\":1}";
+        byte[] padded = ("   " + json + "   ").getBytes(StandardCharsets.UTF_8);
+        // parse(byte[], offset, length) — length is the full region including whitespace
+        JqValue value = JqValues.parse(padded, 0, padded.length);
+        assertEquals(padded.length, value.estimatedSizeInBytes());
+    }
+
+    @Test
+    void testEstimatedSizeBytesParseString() {
+        String json = "{\"name\":\"Alice\",\"age\":30}";
+        JqValue value = JqValues.parse(json);
+        assertEquals(json.length(), value.estimatedSizeInBytes(),
+                "parse(String) should set estimatedSizeInBytes to string length");
+    }
+
+    @Test
+    void testEstimatedSizeBytesParseArrayRoot() {
+        String json = "[1,2,3,4,5]";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqValue value = JqValues.parse(bytes);
+        assertInstanceOf(JqArray.class, value);
+        assertEquals(bytes.length, value.estimatedSizeInBytes());
+    }
+
+    @Test
+    void testEstimatedSizeBytesProgrammaticObject() {
+        JqObject obj = JqObject.builder().put("a", 1).build();
+        assertEquals(1, obj.estimatedSizeInBytes(),
+                "Programmatic values should return 1 (default)");
+    }
+
+    @Test
+    void testEstimatedSizeBytesProgrammaticArray() {
+        JqArray arr = JqArray.of(JqNumber.of(1), JqNumber.of(2));
+        assertEquals(1, arr.estimatedSizeInBytes(),
+                "Programmatic values should return 1 (default)");
+    }
+
+    @Test
+    void testEstimatedSizeBytesScalars() {
+        assertEquals(1, JqNull.NULL.estimatedSizeInBytes());
+        assertEquals(1, JqBoolean.TRUE.estimatedSizeInBytes());
+        assertEquals(1, JqBoolean.FALSE.estimatedSizeInBytes());
+        assertEquals(1, JqNumber.of(42).estimatedSizeInBytes());
+        assertEquals(1, JqString.of("hello").estimatedSizeInBytes());
+    }
+
+    @Test
+    void testEstimatedSizeBytesNestedNotSet() {
+        // Only root values get the source length — nested values return default
+        String json = "{\"inner\":{\"a\":1}}";
+        JqValue root = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        JqValue inner = ((JqObject) root).get("inner");
+        assertEquals(1, inner.estimatedSizeInBytes(),
+                "Nested objects should return 1 (only root has source length)");
+    }
+
+    @Test
+    void testEstimatedSizeBytesEmptyContainers() {
+        assertEquals(1, JqObject.EMPTY.estimatedSizeInBytes());
+        assertEquals(1, JqArray.EMPTY.estimatedSizeInBytes());
+    }
+
+    @Test
+    void testEstimatedSizeBytesParseAll() {
+        // JSONL: each root value gets its own source length
+        String jsonl = "{\"a\":1}\n{\"b\":2,\"c\":3}";
+        byte[] bytes = jsonl.getBytes(StandardCharsets.UTF_8);
+        List<JqValue> values = JqValues.parseAll(bytes);
+        assertEquals(2, values.size());
+        assertEquals("{\"a\":1}".length(), values.get(0).estimatedSizeInBytes());
+        assertEquals("{\"b\":2,\"c\":3}".length(), values.get(1).estimatedSizeInBytes());
+    }
+
+    @Test
+    void testEstimatedSizeBytesLargeDocument() {
+        // Build a multi-KB document
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < 500; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("\"field_").append(i).append("\":\"value_").append(i).append("\"");
+        }
+        sb.append("}");
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        JqValue value = JqValues.parse(bytes);
+        assertEquals(bytes.length, value.estimatedSizeInBytes());
+        assertTrue(value.estimatedSizeInBytes() > 5000, "Should be > 5KB");
+    }
 }

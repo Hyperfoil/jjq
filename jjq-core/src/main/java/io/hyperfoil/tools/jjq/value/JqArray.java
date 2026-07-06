@@ -14,6 +14,9 @@ public final class JqArray implements JqValue, Iterable<JqValue> {
 
     private final List<JqValue> elements;
 
+    // Source byte length — set by JqValues.parse() on root values for cache weighing.
+    private transient int sourceLengthBytes;
+
     private JqArray(List<JqValue> elements) {
         this.elements = elements;
     }
@@ -150,6 +153,12 @@ public final class JqArray implements JqValue, Iterable<JqValue> {
 
     /** Return the number of elements. */
     public int size() { return elements.size(); }
+
+    @Override
+    public int estimatedSizeInBytes() { return sourceLengthBytes > 0 ? sourceLengthBytes : 1; }
+
+    /** Package-private — called by JqValues.parse() to set source byte length on root values. */
+    void setSourceLengthBytes(int len) { this.sourceLengthBytes = len; }
 
     /** Return the first element, or {@link JqNull#NULL} if empty. */
     public JqValue first() { return elements.isEmpty() ? JqNull.NULL : elements.getFirst(); }
