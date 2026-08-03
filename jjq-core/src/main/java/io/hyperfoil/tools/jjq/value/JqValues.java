@@ -36,58 +36,52 @@ public final class JqValues {
     private static final int INTERN_TABLE_SIZE = 1024; // power of 2
     private static final int INTERN_MASK = INTERN_TABLE_SIZE - 1;
     private static final int INTERN_MAX_PROBES = 4; // linear probing depth before eviction
-    private static final String[] INTERN_TABLE = new String[INTERN_TABLE_SIZE];
-    // Pre-computed JSON key form: "\"key\":" — eliminates escapeJson + 3 appends in serialization
-    private static final String[] INTERN_JSON_KEY = new String[INTERN_TABLE_SIZE];
-    // Stored key bytes for verification of keys > 12 bytes
-    private static final byte[][] INTERN_KEY_BYTES = new byte[INTERN_TABLE_SIZE][];
-    // Pre-computed JSON key form as UTF-8 bytes: "\"key\":" — for direct byte serialization
-    private static final byte[][] INTERN_JSON_KEY_BYTES = new byte[INTERN_TABLE_SIZE][];
-    // Quad-based verification fields (Jackson-inspired):
-    private static final int[] INTERN_HASH = new int[INTERN_TABLE_SIZE]; // pre-computed hash
-    private static final int[] INTERN_Q1 = new int[INTERN_TABLE_SIZE];   // bytes 0-3 (big-endian)
-    private static final int[] INTERN_Q2 = new int[INTERN_TABLE_SIZE];   // bytes 4-7
-    private static final int[] INTERN_Q3 = new int[INTERN_TABLE_SIZE];   // bytes 8-11
-    private static final int[] INTERN_QLEN = new int[INTERN_TABLE_SIZE]; // key byte length
+
+    /**
+     * Immutable snapshot of all interned data for a single field name slot.
+     * Stored as a single reference in the intern table — atomic writes prevent
+     * torn reads under concurrent parsing (see issue #50).
+     */
+    private record InternSlot(String key, String jsonKey, byte[] jsonKeyBytes,
+                              byte[] keyBytes, int hash, int q1, int q2, int q3, int qlen) {}
+
+    private static final InternSlot[] INTERN_SLOTS = new InternSlot[INTERN_TABLE_SIZE];
 
     /**
      * Intern a field name string. Returns the cached instance if one exists
      * for this hash slot, or caches and returns the given string.
      * Also pre-computes the JSON key serialization form {@code "\"key\":"}.
      * <p>
-     * Thread-safe via benign races: concurrent writes to the same slot
-     * produce correct results (worst case: one write is lost, no corruption).
+     * Thread-safe: each slot is an immutable {@link InternSlot} record written
+     * as a single atomic reference. Concurrent writes to the same slot are benign
+     * (worst case: one write is lost, no corruption or torn reads).
      */
     public static String internFieldName(String name) {
         int hash = name.hashCode();
-        // Multi-slot probing
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            String cached = INTERN_TABLE[s];
-            if (cached == null) {
-                // Empty slot — store here
-                storeInternEntry(s, name, hash);
+            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            if (slot == null) {
+                INTERN_SLOTS[s] = createInternSlot(name, hash);
                 return name;
             }
-            if (name.equals(cached)) return cached;
+            if (name.equals(slot.key)) return slot.key;
         }
         // All probes occupied — evict first slot
         int s = hash & INTERN_MASK;
-        storeInternEntry(s, name, hash);
+        INTERN_SLOTS[s] = createInternSlot(name, hash);
         return name;
     }
 
-    private static void storeInternEntry(int slot, String name, int hash) {
+    private static InternSlot createInternSlot(String name, int hash) {
         byte[] keyBytes = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        INTERN_TABLE[slot] = name;
-        INTERN_JSON_KEY[slot] = buildJsonKey(name);
-        INTERN_JSON_KEY_BYTES[slot] = buildJsonKey(name).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        INTERN_KEY_BYTES[slot] = keyBytes;
-        INTERN_HASH[slot] = hash;
-        INTERN_QLEN[slot] = keyBytes.length;
-        INTERN_Q1[slot] = keyBytes.length >= 4 ? SwarUtil.loadInt(keyBytes, 0) : SwarUtil.packPartialQuad(keyBytes, 0, keyBytes.length);
-        INTERN_Q2[slot] = keyBytes.length >= 8 ? SwarUtil.loadInt(keyBytes, 4) : (keyBytes.length > 4 ? SwarUtil.packPartialQuad(keyBytes, 4, keyBytes.length - 4) : 0);
-        INTERN_Q3[slot] = keyBytes.length >= 12 ? SwarUtil.loadInt(keyBytes, 8) : (keyBytes.length > 8 ? SwarUtil.packPartialQuad(keyBytes, 8, keyBytes.length - 8) : 0);
+        String jsonKey = buildJsonKey(name);
+        byte[] jsonKeyBytes = jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int qlen = keyBytes.length;
+        int q1 = qlen >= 4 ? SwarUtil.loadInt(keyBytes, 0) : SwarUtil.packPartialQuad(keyBytes, 0, qlen);
+        int q2 = qlen >= 8 ? SwarUtil.loadInt(keyBytes, 4) : (qlen > 4 ? SwarUtil.packPartialQuad(keyBytes, 4, qlen - 4) : 0);
+        int q3 = qlen >= 12 ? SwarUtil.loadInt(keyBytes, 8) : (qlen > 8 ? SwarUtil.packPartialQuad(keyBytes, 8, qlen - 8) : 0);
+        return new InternSlot(name, jsonKey, jsonKeyBytes, keyBytes, hash, q1, q2, q3, qlen);
     }
 
     /**
@@ -103,10 +97,9 @@ public final class JqValues {
         int hash = key.hashCode();
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            if (INTERN_TABLE[s] == key) { // reference equality — interned keys match
-                return INTERN_JSON_KEY[s];
-            }
-            if (INTERN_TABLE[s] == null) break; // empty slot — not interned
+            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            if (slot == null) break;
+            if (slot.key == key) return slot.jsonKey; // reference equality
         }
         return null;
     }
@@ -119,10 +112,9 @@ public final class JqValues {
         int hash = key.hashCode();
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            if (INTERN_TABLE[s] == key) {
-                return INTERN_JSON_KEY_BYTES[s];
-            }
-            if (INTERN_TABLE[s] == null) break;
+            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            if (slot == null) break;
+            if (slot.key == key) return slot.jsonKeyBytes; // reference equality
         }
         return null;
     }
@@ -779,12 +771,12 @@ public final class JqValues {
         for (int i = start; i < end; i++) {
             hash = hash * 31 + s.charAt(i);
         }
-        // Use internFieldName for consistent probing + quad storage
-        // First check if already interned (fast path)
+        // Check if already interned (fast path) — snapshot each slot for thread safety
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int slot = (hash + probe) & INTERN_MASK;
-            String cached = INTERN_TABLE[slot];
-            if (cached == null) break;
+            int idx = (hash + probe) & INTERN_MASK;
+            InternSlot slot = INTERN_SLOTS[idx]; // snapshot — atomic read
+            if (slot == null) break;
+            String cached = slot.key;
             if (cached.length() == keyLen) {
                 boolean match = true;
                 for (int i = 0; i < keyLen; i++) {
@@ -1342,42 +1334,36 @@ public final class JqValues {
         int q2 = keyLen >= 8 ? SwarUtil.loadInt(data, start + 4) : (keyLen > 4 ? SwarUtil.packPartialQuad(data, start + 4, keyLen - 4) : 0);
         int q3 = keyLen >= 12 ? SwarUtil.loadInt(data, start + 8) : (keyLen > 8 ? SwarUtil.packPartialQuad(data, start + 8, keyLen - 8) : 0);
 
-        // Multi-slot probing with quad verification
+        // Multi-slot probing with quad verification — each slot read is an atomic snapshot
         int firstEmpty = -1;
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            if (INTERN_TABLE[s] == null) {
+            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            if (slot == null) {
                 if (firstEmpty < 0) firstEmpty = s;
                 break; // empty slot — no further probing needed
             }
-            // Fast reject: hash + length
-            if (INTERN_HASH[s] != hash || INTERN_QLEN[s] != keyLen) continue;
+            // Fast reject: hash + length (from same snapshot — no torn reads)
+            if (slot.hash != hash || slot.qlen != keyLen) continue;
             // Quad verification
-            if (q1 != INTERN_Q1[s]) continue;
-            if (keyLen > 4 && q2 != INTERN_Q2[s]) continue;
-            if (keyLen > 8 && q3 != INTERN_Q3[s]) continue;
-            // For keys > 12 bytes, verify remainder
+            if (q1 != slot.q1) continue;
+            if (keyLen > 4 && q2 != slot.q2) continue;
+            if (keyLen > 8 && q3 != slot.q3) continue;
+            // For keys > 12 bytes, verify remainder (keyBytes from same snapshot)
             if (keyLen > 12) {
-                byte[] cachedBytes = INTERN_KEY_BYTES[s];
-                if (cachedBytes == null || !matchBytesFrom(cachedBytes, data, start, 12, keyLen)) continue;
+                if (!matchBytesFrom(slot.keyBytes, data, start, 12, keyLen)) continue;
             }
-            return INTERN_TABLE[s]; // CACHE HIT — zero allocation
+            return slot.key; // CACHE HIT — zero allocation
         }
 
-        // Cache miss: create string and store
+        // Cache miss: create string and store as atomic slot
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
         result.hashCode(); // force JDK to cache hashCode
-        int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK); // evict first slot if all probes full
-        INTERN_TABLE[storeSlot] = result;
-        String jsonKey = buildJsonKey(result);
-        INTERN_JSON_KEY[storeSlot] = jsonKey;
-        INTERN_JSON_KEY_BYTES[storeSlot] = jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        INTERN_KEY_BYTES[storeSlot] = java.util.Arrays.copyOfRange(data, start, end);
-        INTERN_HASH[storeSlot] = hash;
-        INTERN_Q1[storeSlot] = q1;
-        INTERN_Q2[storeSlot] = q2;
-        INTERN_Q3[storeSlot] = q3;
-        INTERN_QLEN[storeSlot] = keyLen;
+        int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK);
+        INTERN_SLOTS[storeSlot] = new InternSlot(result, buildJsonKey(result),
+                buildJsonKey(result).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.util.Arrays.copyOfRange(data, start, end),
+                hash, q1, q2, q3, keyLen);
         return result;
     }
 

@@ -2558,4 +2558,113 @@ class JqValueTest {
         assertEquals(bytes.length, value.estimatedSizeInBytes());
         assertTrue(value.estimatedSizeInBytes() > 5000, "Should be > 5KB");
     }
+
+    // ========================================================================
+    //  Concurrent parsing tests (issue #50)
+    // ========================================================================
+
+    @Test
+    void testConcurrentByteParsingNoException() throws Exception {
+        // Multiple threads parsing JSON with overlapping field names concurrently.
+        // Before issue #50 fix, this could cause ArrayIndexOutOfBoundsException
+        // in internKeyWithHash due to torn reads across parallel arrays.
+        int threadCount = 8;
+        int iterationsPerThread = 500;
+        var errors = new java.util.concurrent.ConcurrentLinkedQueue<Throwable>();
+        var latch = new java.util.concurrent.CountDownLatch(threadCount);
+
+        // Different JSON documents with overlapping and unique keys
+        String[] jsons = {
+                "{\"name\":\"Alice\",\"age\":30,\"hostname\":\"server01\",\"mem.util.used\":42}",
+                "{\"name\":\"Bob\",\"value\":3.14,\"hostname\":\"server02\",\"cpu.idle\":0.95}",
+                "{\"type\":\"metric\",\"timestamp\":1234567890,\"hostname\":\"server03\"}",
+                "{\"id\":1,\"data\":{\"nested\":true,\"values\":[1,2,3]},\"hostname\":\"server04\"}",
+                "{\"long_field_name_one\":1,\"long_field_name_two\":2,\"long_field_name_three\":3}",
+                "{\"a\":1,\"ab\":2,\"abc\":3,\"abcd\":4,\"abcde\":5,\"abcdefghijklm\":13}",
+                "{\"x\":\"hello\",\"y\":\"world\",\"z\":true,\"w\":null}",
+                "{\"metric.cpu.user\":0.5,\"metric.cpu.system\":0.1,\"metric.mem.used\":1024}",
+        };
+
+        Thread[] threads = new Thread[threadCount];
+        for (int t = 0; t < threadCount; t++) {
+            int threadId = t;
+            threads[t] = new Thread(() -> {
+                try {
+                    for (int i = 0; i < iterationsPerThread; i++) {
+                        String json = jsons[threadId % jsons.length];
+                        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                        // Parse from bytes (exercises internKeyWithHash)
+                        JqValue fromBytes = JqValues.parse(bytes);
+                        // Parse from String (exercises internKeyFromString)
+                        JqValue fromString = JqValues.parse(json);
+                        // Verify correctness
+                        assertEquals(fromString, fromBytes,
+                                "Thread " + threadId + " iter " + i + ": byte/string parse mismatch");
+                        // Exercise serialization (uses internedJsonKey/internedJsonKeyBytes)
+                        String serialized = fromBytes.toJsonString();
+                        byte[] serializedBytes = JqValues.serializeToBytes(fromBytes);
+                        assertEquals(serialized, new String(serializedBytes, StandardCharsets.UTF_8),
+                                "Thread " + threadId + " iter " + i + ": serialization mismatch");
+                    }
+                } catch (Throwable e) {
+                    errors.add(e);
+                } finally {
+                    latch.countDown();
+                }
+            });
+            threads[t].start();
+        }
+
+        latch.await(30, java.util.concurrent.TimeUnit.SECONDS);
+        if (!errors.isEmpty()) {
+            Throwable first = errors.poll();
+            fail("Concurrent parsing failed with " + errors.size() + " additional error(s): "
+                    + first.getClass().getSimpleName() + ": " + first.getMessage(), first);
+        }
+    }
+
+    @Test
+    void testConcurrentParsingCorrectness() throws Exception {
+        // Verify that concurrent parsing produces correct results for each thread.
+        int threadCount = 4;
+        int iterations = 200;
+        var errors = new java.util.concurrent.ConcurrentLinkedQueue<Throwable>();
+        var latch = new java.util.concurrent.CountDownLatch(threadCount);
+
+        Thread[] threads = new Thread[threadCount];
+        for (int t = 0; t < threadCount; t++) {
+            int threadId = t;
+            threads[t] = new Thread(() -> {
+                try {
+                    // Each thread parses its own unique document
+                    String json = "{\"thread\":" + threadId + ",\"data\":{\"id\":" + threadId
+                            + ",\"name\":\"thread-" + threadId + "\",\"values\":[" + threadId + "]}}";
+                    byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                    for (int i = 0; i < iterations; i++) {
+                        JqValue value = JqValues.parse(bytes);
+                        JqObject obj = (JqObject) value;
+                        assertEquals(threadId, obj.get("thread").intValue(),
+                                "Thread " + threadId + ": wrong thread field");
+                        JqObject data = (JqObject) obj.get("data");
+                        assertEquals(threadId, data.get("id").intValue(),
+                                "Thread " + threadId + ": wrong id field");
+                        assertEquals("thread-" + threadId, data.get("name").stringValue(),
+                                "Thread " + threadId + ": wrong name field");
+                    }
+                } catch (Throwable e) {
+                    errors.add(e);
+                } finally {
+                    latch.countDown();
+                }
+            });
+            threads[t].start();
+        }
+
+        latch.await(30, java.util.concurrent.TimeUnit.SECONDS);
+        if (!errors.isEmpty()) {
+            Throwable first = errors.poll();
+            fail("Concurrent parsing correctness failed: "
+                    + first.getClass().getSimpleName() + ": " + first.getMessage(), first);
+        }
+    }
 }
