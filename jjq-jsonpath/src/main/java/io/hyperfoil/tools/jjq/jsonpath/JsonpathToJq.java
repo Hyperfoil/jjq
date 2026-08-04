@@ -120,7 +120,12 @@ public final class JsonpathToJq {
         jq = jq.replace(".double()", " | tonumber");
         jq = jq.replace(".string()", " | tostring");
         jq = jq.replace(".type()", " | type");
-        jq = jq.replace(".boolean()", " | if . then true else false end");
+        jq = jq.replace(".boolean()",
+                " | if type == \"boolean\" then ." +
+                " elif type == \"number\" then . != 0" +
+                " elif type == \"string\" then (. == \"t\" or . == \"true\" or . == \"y\" or . == \"yes\" or . == \"on\" or . == \"1\")" +
+                " elif . == null then false" +
+                " else null end");
         jq = jq.replace(".ceiling()", " | ceil");
         jq = jq.replace(".floor()", " | floor");
         jq = jq.replace(".abs()", " | fabs");
@@ -275,16 +280,18 @@ public final class JsonpathToJq {
         body = body.replace("&&", "and");
         body = body.replace("||", "or");
         // Handle like_regex with optional flags → test()
+        // Includes type guard: PostgreSQL lax mode silently skips non-string values,
+        // but jq's test() throws on non-strings. Guard with (type == "string" and ...).
         // flag "" (empty flags) → test() without flags argument
         body = body.replaceAll(
                 "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"\"",
-                "($1 | test(\"$2\"))");
+                "($1 | type == \"string\" and test(\"$2\"))");
         body = body.replaceAll(
                 "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"([^\"]+)\"",
-                "($1 | test(\"$2\"; \"$3\"))");
+                "($1 | type == \"string\" and test(\"$2\"; \"$3\"))");
         body = body.replaceAll(
                 "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"",
-                "($1 | test(\"$2\"))");
+                "($1 | type == \"string\" and test(\"$2\"))");
         // Handle starts with → startswith()
         body = body.replaceAll(
                 "(\\S+)\\s+starts\\s+with\\s+\"([^\"]+)\"",
