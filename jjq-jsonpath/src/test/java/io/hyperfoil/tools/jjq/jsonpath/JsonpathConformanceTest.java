@@ -95,22 +95,13 @@ class JsonpathConformanceTest {
                 assumeTrue(false, "Unsupported: arithmetic in path");
             }
         }
-        if (jsonpath.contains(" to ")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: array range (to)");
-        }
-        if (jsonpath.contains("last")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: last keyword");
-        }
+        // array range (to) — now supported
+        // last keyword — now supported
         if (jsonpath.contains("exists(") || jsonpath.contains("exists (")) {
             skipped++;
             assumeTrue(false, "Unsupported: exists()");
         }
-        if (jsonpath.contains("starts with")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: starts with");
-        }
+        // starts with — now supported
         if (jsonpath.contains(".bigint(") || jsonpath.contains(".integer(") ||
                 jsonpath.contains(".number(") || jsonpath.contains(".decimal(")) {
             skipped++;
@@ -129,16 +120,14 @@ class JsonpathConformanceTest {
         // Let the converter handle mode prefix detection
 
         // Try to convert and compile
-        String jq;
+        String jq = null;
         JqProgram program;
         try {
-            jq = tc.queryFirst
-                    ? JsonpathToJq.convert(jsonpath, mode)
-                    : JsonpathToJq.convert(jsonpath, mode);
+            jq = JsonpathToJq.convert(jsonpath, mode);
             program = JqProgram.compile(jq);
         } catch (Exception e) {
             skipped++;
-            assumeTrue(false, "Conversion/compilation failed: " + e.getMessage());
+            assumeTrue(false, "Conversion/compilation failed for '" + jsonpath + "' → '" + (jq != null ? jq : "?") + "': " + e.getMessage());
             return;
         }
 

@@ -83,12 +83,40 @@ public final class JsonpathToJq {
         // Replace **{N} recursive descent BEFORE .* — otherwise .* corrupts the **{N} pattern
         jq = jq.replaceAll("\\.\\*\\*\\{\\d+\\}", " | recurse");
 
-        // Replace .* (wildcard object values) with []? but only OUTSIDE quoted strings
+        // Replace .* (wildcard object values) with []? but only OUTSIDE quoted strings.
         jq = replaceOutsideQuotes(jq, ".*", "[]?");
+        // Fix: if .* was at the start (from $.*), the leading . got consumed by the pattern.
+        // A jq expression starting with [] is invalid — prepend . to restore root reference.
+        if (jq.startsWith("[]?")) jq = "." + jq;
+
+        // Replace 'last' keyword in array indices with negative indices
+        // [last - N] → [-(N+1)], [last] → [-1]
+        java.util.regex.Matcher lastMatcher = java.util.regex.Pattern.compile(
+                "\\[last\\s*-\\s*(\\d+)\\s*]").matcher(jq);
+        StringBuilder lastSb = new StringBuilder();
+        while (lastMatcher.find()) {
+            int n = Integer.parseInt(lastMatcher.group(1));
+            lastMatcher.appendReplacement(lastSb, "[" + (-(n + 1)) + "]");
+        }
+        lastMatcher.appendTail(lastSb);
+        jq = lastSb.toString();
+        jq = jq.replaceAll("\\[last\\s*]", "[-1]");
+
+        // Replace array range [M to N] → [M:N+1] (PostgreSQL 'to' is inclusive, jq slice end is exclusive)
+        java.util.regex.Matcher rangeMatcher = java.util.regex.Pattern.compile(
+                "\\[(\\d+)\\s+to\\s+(\\d+)\\s*]").matcher(jq);
+        StringBuilder rangeSb = new StringBuilder();
+        while (rangeMatcher.find()) {
+            int from = Integer.parseInt(rangeMatcher.group(1));
+            int to = Integer.parseInt(rangeMatcher.group(2));
+            rangeMatcher.appendReplacement(rangeSb, "[" + from + ":" + (to + 1) + "]");
+        }
+        rangeMatcher.appendTail(rangeSb);
+        jq = rangeSb.toString();
 
         // Replace PostgreSQL jsonpath methods with jq equivalents
         jq = jq.replace(".size()", " | length");
-        jq = jq.replace(".keyvalue()", " | to_entries[] | ");
+        jq = jq.replace(".keyvalue()", " | to_entries[]");
         jq = jq.replace(".double()", " | tonumber");
         jq = jq.replace(".string()", " | tostring");
         jq = jq.replace(".type()", " | type");
@@ -106,6 +134,11 @@ public final class JsonpathToJq {
         if (mode == Mode.LAX) {
             jq = convertToLaxChains(jq);
         }
+
+        // Fix: if the expression starts with " | " or "| " (from $.method() patterns
+        // where $.→. then .method()→ | method consumes the leading dot), prepend identity.
+        if (jq.startsWith(" | ")) jq = "." + jq;
+        else if (jq.startsWith("| ")) jq = ". " + jq;
 
         return jq;
     }
@@ -242,12 +275,20 @@ public final class JsonpathToJq {
         body = body.replace("&&", "and");
         body = body.replace("||", "or");
         // Handle like_regex with optional flags → test()
+        // flag "" (empty flags) → test() without flags argument
+        body = body.replaceAll(
+                "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"\"",
+                "($1 | test(\"$2\"))");
         body = body.replaceAll(
                 "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"([^\"]+)\"",
                 "($1 | test(\"$2\"; \"$3\"))");
         body = body.replaceAll(
                 "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"",
                 "($1 | test(\"$2\"))");
+        // Handle starts with → startswith()
+        body = body.replaceAll(
+                "(\\S+)\\s+starts\\s+with\\s+\"([^\"]+)\"",
+                "($1 | startswith(\"$2\"))");
         // Handle != → != (already valid in jq)
         // Handle == → == (already valid in jq)
         return body;
