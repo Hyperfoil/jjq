@@ -77,6 +77,8 @@ public final class JsonpathToJq {
         jq = jq.replace("$.", ".");
         if (jq.startsWith("$[")) jq = "." + jq.substring(1); // $[*] → .[*]
         if (jq.equals("$")) jq = ".";
+        // Replace remaining bare $ references (e.g., "$ ?" becomes ". ?")
+        if (jq.startsWith("$ ")) jq = ". " + jq.substring(2);
         jq = jq.replace("[*].*", "[]?");
         jq = jq.replace("[*]", "[]?");
 
@@ -145,6 +147,12 @@ public final class JsonpathToJq {
         if (jq.startsWith(" | ")) jq = "." + jq;
         else if (jq.startsWith("| ")) jq = ". " + jq;
 
+        // Lax error suppression: PostgreSQL lax mode silently produces empty results
+        // for type mismatches. Must be AFTER the leading-dot fix.
+        if (mode == Mode.LAX) {
+            jq = applyLaxErrorSuppression(jq);
+        }
+
         return jq;
     }
 
@@ -211,6 +219,22 @@ public final class JsonpathToJq {
         }
     }
 
+    /**
+     * Apply lax error suppression. PostgreSQL lax mode silently produces empty results
+     * for type mismatches (e.g., .field on a number, [0] on a scalar).
+     * Wraps the expression in {@code try (...) catch empty} to suppress jq type errors.
+     * <p>
+     * This is safe because:
+     * <ul>
+     *   <li>Successful operations (field access on objects, indexing arrays) are unaffected</li>
+     *   <li>Type mismatches produce empty output instead of crashing (matches PostgreSQL lax)</li>
+     *   <li>Missing fields still return null (JqObject.get returns JqNull.NULL, no exception)</li>
+     * </ul>
+     */
+    private static String applyLaxErrorSuppression(String jq) {
+        return "try (" + jq + ") catch empty";
+    }
+
     // ========================================================================
     //  Filter conversion (? (@.field op value) → | select(.field op value))
     // ========================================================================
@@ -275,7 +299,8 @@ public final class JsonpathToJq {
         // Convert @.field → .field (field access on current item)
         body = body.replace("@.", ".");
         // Convert bare @ → . (current item reference without field access)
-        body = body.replaceAll("@(?=[\\s)&|,]|$)", ".");
+        // Also handle @[ (array access on current item)
+        body = body.replaceAll("@(?=[\\s)&|,\\[]|$)", ".");
         // Convert && → and, || → or
         body = body.replace("&&", "and");
         body = body.replace("||", "or");

@@ -208,22 +208,24 @@ class JsonpathToJqTest {
     @Nested
     class LaxMode {
         @Test void singleSegmentNoUnwrap() {
-            // Single segment needs no unwrapping
-            assertEquals(".a", JsonpathToJq.convert("$.a", JsonpathToJq.Mode.LAX));
+            // Single segment — wrapped in try-catch for lax error suppression
+            String result = JsonpathToJq.convert("$.a", JsonpathToJq.Mode.LAX);
+            assertTrue(result.contains(".a"), "Should contain .a: " + result);
+            assertTrue(result.contains("try"), "Lax should have try-catch: " + result);
         }
 
         @Test void twoSegmentsUnwrapsFirst() {
             String result = JsonpathToJq.convert("$.a.b", JsonpathToJq.Mode.LAX);
             assertTrue(result.contains("if (.a | type) == \"array\""), "Should unwrap .a: " + result);
             assertTrue(result.contains(".a[]"), "Should iterate .a when array: " + result);
-            assertTrue(result.endsWith(".b"), "Last segment should be plain: " + result);
+            assertTrue(result.contains(".b"), "Should access .b: " + result);
         }
 
         @Test void threeSegmentsUnwrapsFirstTwo() {
             String result = JsonpathToJq.convert("$.a.b.c", JsonpathToJq.Mode.LAX);
             assertTrue(result.contains("if (.a | type) == \"array\""), "Should unwrap .a: " + result);
             assertTrue(result.contains("if (.b | type) == \"array\""), "Should unwrap .b: " + result);
-            assertTrue(result.endsWith(".c"), "Last segment should be plain: " + result);
+            assertTrue(result.contains(".c"), "Should access .c: " + result);
         }
 
         @Test void withExistingIterator() {
