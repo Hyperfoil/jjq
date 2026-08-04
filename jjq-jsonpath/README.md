@@ -1,6 +1,26 @@
 # jjq-jsonpath
 
-Converts PostgreSQL SQL/JSON path expressions to jq, with lax and strict mode support.
+Converts **PostgreSQL SQL/JSON path** expressions to jq, with lax and strict mode support.
+
+## Important: SQL/JSON path vs JSONPath
+
+This module targets **PostgreSQL's SQL/JSON path** language (ISO 9075-2), **not** the
+JavaScript-ecosystem JSONPath (RFC 9535 / Goessner). These are different standards with
+different syntax:
+
+| Feature | SQL/JSON path (this module) | JSONPath (RFC 9535) |
+|---------|----------------------------|---------------------|
+| Filter syntax | `? (@.price < 10)` | `[?@.price < 10]` |
+| Recursive descent | `$.**`, `$.**{2}` | `$..name` |
+| Modes | `lax` (default), `strict` | No mode concept |
+| Variables | `$varname` | Not supported |
+| Methods | `.size()`, `.type()`, `.keyvalue()`, etc. | `length()`, `count()` |
+| Regex | `like_regex "pat" flag "i"` | `match(@.x, "pat")` |
+| Array slicing | `$[1 to 5]` | `$[1:5]` |
+
+If you need RFC 9535 JSONPath support, this is not the right module. This module is
+designed for migrating from PostgreSQL's `jsonb_path_query()` / `jsonb_path_query_first()`
+/ `jsonb_path_query_array()` functions to application-side jq evaluation via jjq.
 
 ## Usage
 
@@ -78,7 +98,7 @@ if (.b | type) == "array" then .b[] else .b end |
 | `$.*` / `$.foo.*` | `.[]?` / `.foo[]?` | Wildcard |
 | `$.**{N}` | `. \| recurse` | Recursive descent |
 | `$.config.size()` | `.config \| length` | Array/object length |
-| `$.data.keyvalue()` | `.data \| to_entries[] \|` | Key-value pairs |
+| `$.data.keyvalue()` | `.data \| to_entries[]` | Key-value pairs |
 | `$.value.double()` | `.value \| tonumber` | Type conversion |
 | `$.value.type()` | `.value \| type` | Type name |
 | `$.value.abs()` | `.value \| fabs` | Math |
@@ -86,6 +106,11 @@ if (.b | type) == "array" then .b[] else .b end |
 | `$.a ?(@.b > 5 && @.c < 10)` | `.a[]? \| select(.b > 5 and .c < 10)` | Logical operators |
 | `$.a ?(@.name like_regex "pat" flag "i")` | `.a[]? \| select((.name \| test("pat"; "i")))` | Regex |
 | `$."special.key"` | `."special.key"` | Quoted keys |
+| `$.a ?(@ starts with "pre")` | `.a[]? \| select((. \| startswith("pre")))` | String prefix |
+| `$[last]` | `.[-1]` | Last array element |
+| `$[last - 2]` | `.[-3]` | Offset from last |
+| `$[1 to 5]` | `.[1:6]` | Array range (inclusive → exclusive) |
+| `$.data[$.data.size()-1]` | `.data[.data \| length-1]` | Size in bracket index |
 
 ## Mode prefix
 
