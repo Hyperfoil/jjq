@@ -140,6 +140,7 @@ public final class JsonpathToJq {
         // Apply lax array unwrapping if requested
         if (mode == Mode.LAX) {
             jq = convertToLaxChains(jq);
+            jq = applyLaxAutoWrap(jq);
         }
 
         // Fix: if the expression starts with " | " or "| " (from $.method() patterns
@@ -220,19 +221,118 @@ public final class JsonpathToJq {
     }
 
     /**
-     * Apply lax error suppression. PostgreSQL lax mode silently produces empty results
-     * for type mismatches (e.g., .field on a number, [0] on a scalar).
-     * Wraps the expression in {@code try (...) catch empty} to suppress jq type errors.
-     * <p>
-     * This is safe because:
+     * Apply lax auto-wrapping for bracket access on scalars.
+     * PostgreSQL lax mode auto-wraps non-array values in a single-element array
+     * before applying bracket access. For example:
      * <ul>
-     *   <li>Successful operations (field access on objects, indexing arrays) are unaffected</li>
-     *   <li>Type mismatches produce empty output instead of crashing (matches PostgreSQL lax)</li>
-     *   <li>Missing fields still return null (JqObject.get returns JqNull.NULL, no exception)</li>
+     *   <li>{@code lax $[0]} on scalar {@code 1} → wraps as {@code [1]}, then {@code [0]} → {@code 1}</li>
+     *   <li>{@code lax $[*]} on scalar {@code 1} → wraps as {@code [1]}, then {@code [*]} → {@code 1}</li>
      * </ul>
      */
+    private static String applyLaxAutoWrap(String jq) {
+        // Handle root-level bracket access: .[N], .[N,M], .[N:M], .[]?
+        // These need auto-wrapping when the input is not an array.
+        if (jq.startsWith(".[]?")) {
+            // $[*] on scalar → return the scalar itself (auto-wrap + iterate = identity)
+            String rest = jq.substring(4); // everything after .[]?
+            if (rest.isEmpty()) {
+                jq = "(if type == \"array\" then .[]? else . end)";
+            } else {
+                // rest may start with . (field access) or | (pipe) — connect properly
+                String elseExpr = rest.startsWith(".") ? rest : "." + rest;
+                jq = "(if type == \"array\" then .[]?" + rest + " else " + elseExpr + " end)";
+            }
+        } else if (jq.startsWith(".[")) {
+            // .[0], .[0,1], .[0:11] — find the closing bracket
+            int closeBracket = findClosingBracket(jq, 1);
+            if (closeBracket > 0) {
+                String bracketExpr = jq.substring(1, closeBracket + 1); // [N] or [N:M] or [N,M]
+                String rest = jq.substring(closeBracket + 1);
+                // Optional ? after bracket
+                if (rest.startsWith("?")) rest = rest.substring(1);
+                jq = "(if type == \"array\" then ." + bracketExpr + rest + " else [.]" + bracketExpr + rest + " end)";
+            }
+        }
+        return jq;
+    }
+
+    /** Find the closing bracket matching the one at position {@code openPos}. */
+    private static int findClosingBracket(String s, int openPos) {
+        int depth = 0;
+        for (int i = openPos; i < s.length(); i++) {
+            if (s.charAt(i) == '[') depth++;
+            else if (s.charAt(i) == ']') {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Apply lax error suppression. PostgreSQL lax mode silently produces empty results
+     * for type mismatches (e.g., .field on a number, [0] on a scalar).
+     * <p>
+     * Uses jq's {@code ?} (optional/try) operator on individual field access and bracket
+     * operations to suppress errors per-element rather than wrapping the entire expression
+     * in try-catch (which would discard successful results from multi-output expressions
+     * when any single element fails).
+     */
     private static String applyLaxErrorSuppression(String jq) {
-        return "try (" + jq + ") catch empty";
+        // Add ? to .field access that doesn't already have it
+        // Matches .identifier NOT followed by ? or ( or [
+        // Uses word boundary: letter/digit/underscore after the dot
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        boolean inQuote = false;
+        boolean inParens = false;
+        int parenDepth = 0;
+        while (i < jq.length()) {
+            char c = jq.charAt(i);
+            if (c == '"') {
+                inQuote = !inQuote;
+                sb.append(c);
+                i++;
+            } else if (inQuote) {
+                if (c == '\\' && i + 1 < jq.length()) {
+                    sb.append(c);
+                    sb.append(jq.charAt(i + 1));
+                    i += 2;
+                } else {
+                    sb.append(c);
+                    i++;
+                }
+            } else if (c == '(' ) {
+                parenDepth++;
+                sb.append(c);
+                i++;
+            } else if (c == ')') {
+                parenDepth--;
+                sb.append(c);
+                i++;
+            } else if (c == '.' && i + 1 < jq.length() && Character.isLetter(jq.charAt(i + 1))) {
+                // .field — find the end of the identifier
+                int start = i;
+                i++; // skip the dot
+                while (i < jq.length() && (Character.isLetterOrDigit(jq.charAt(i)) || jq.charAt(i) == '_' || jq.charAt(i) == '-')) {
+                    i++;
+                }
+                String fieldAccess = jq.substring(start, i);
+                sb.append(fieldAccess);
+                // Add ? if not already present and not inside if/then/else/end keywords
+                if (i < jq.length() && jq.charAt(i) == '?') {
+                    sb.append('?');
+                    i++; // skip existing ?
+                } else if (!fieldAccess.equals(".end") && !fieldAccess.equals(".else")
+                        && !fieldAccess.equals(".then") && !fieldAccess.equals(".if")) {
+                    sb.append('?');
+                }
+            } else {
+                sb.append(c);
+                i++;
+            }
+        }
+        return sb.toString();
     }
 
     // ========================================================================
