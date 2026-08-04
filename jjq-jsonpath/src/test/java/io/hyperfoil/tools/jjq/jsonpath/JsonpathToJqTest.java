@@ -73,6 +73,30 @@ class JsonpathToJqTest {
         @Test void ceilingMethod() { assertStrict("$.value.ceiling()", ".value | ceil"); }
         @Test void floorMethod() { assertStrict("$.value.floor()", ".value | floor"); }
         @Test void absMethod() { assertStrict("$.value.abs()", ".value | fabs"); }
+
+        @Test void sizeInsideBracket() {
+            // h5m production pattern: $.state.throughput[3].cumulative[$.state.throughput[3].cumulative.size()-1].rate
+            String result = JsonpathToJq.convert(
+                    "$.state.throughput[3].cumulative[$.state.throughput[3].cumulative.size()-1].rate",
+                    JsonpathToJq.Mode.STRICT);
+            assertTrue(result.contains("| length"), "Should convert .size() to | length inside brackets: " + result);
+            assertFalse(result.contains(".size()"), "Should not contain .size(): " + result);
+            assertTrue(result.contains(".rate"), "Should have trailing .rate: " + result);
+        }
+
+        @Test void sizeInsideBracketSimple() {
+            String result = JsonpathToJq.convert("$.data[$.data.size()-1]", JsonpathToJq.Mode.STRICT);
+            assertTrue(result.contains("| length"), result);
+            assertFalse(result.contains(".size()"), result);
+        }
+
+        @Test void sizeInsideBracketCompiles() {
+            // Verify the h5m pattern actually compiles to valid jq
+            JqProgram program = JsonpathToJq.compile(
+                    "$.state.throughput[3].cumulative[$.state.throughput[3].cumulative.size()-1].rate",
+                    JsonpathToJq.Mode.STRICT);
+            assertNotNull(program);
+        }
     }
 
     // ========================================================================
@@ -371,6 +395,14 @@ class JsonpathToJqTest {
             JqProgram program = JsonpathToJq.compile("$", JsonpathToJq.Mode.STRICT);
             JqValue input = JqValues.parse("{\"a\":1}");
             assertEquals(input, program.apply(input));
+        }
+
+        @Test void sizeInsideBracketRoundTrip() {
+            // Simulates the h5m throughput pattern with a simpler structure
+            String json = "{\"data\":[10,20,30,40,50]}";
+            JqProgram program = JsonpathToJq.compile("$.data[$.data.size()-1]", JsonpathToJq.Mode.STRICT);
+            JqValue result = program.apply(JqValues.parse(json));
+            assertEquals("50", result.toJsonString(), "Should get last element");
         }
     }
 

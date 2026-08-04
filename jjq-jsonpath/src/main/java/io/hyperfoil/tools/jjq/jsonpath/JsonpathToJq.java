@@ -116,7 +116,11 @@ public final class JsonpathToJq {
         rangeMatcher.appendTail(rangeSb);
         jq = rangeSb.toString();
 
-        // Replace PostgreSQL jsonpath methods with jq equivalents
+        // Replace PostgreSQL jsonpath methods with jq equivalents.
+        // Handle .size() inside array brackets first — these need different treatment:
+        // $[$.path.size()-1] → [.path | length-1] (not [.path | length-1])
+        // The $.path inside brackets is already converted to .path by the $. replacement above.
+        jq = convertSizeInBrackets(jq);
         jq = jq.replace(".size()", " | length");
         jq = jq.replace(".keyvalue()", " | to_entries[]");
         jq = jq.replace(".double()", " | tonumber");
@@ -254,6 +258,35 @@ public final class JsonpathToJq {
             }
         }
         return jq;
+    }
+
+    /**
+     * Convert {@code .size()} calls inside bracket expressions {@code [...]} to
+     * {@code | length}. Inside brackets, the path before {@code .size()} is a jq expression
+     * that should pipe to length, e.g., {@code [.path.size()-1]} → {@code [.path | length-1]}.
+     */
+    private static String convertSizeInBrackets(String jq) {
+        // Find .size() inside [...] brackets
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < jq.length()) {
+            if (jq.charAt(i) == '[') {
+                int close = findClosingBracket(jq, i);
+                if (close > 0) {
+                    String inside = jq.substring(i + 1, close);
+                    if (inside.contains(".size()")) {
+                        // Replace .size() with  | length inside the brackets
+                        inside = inside.replace(".size()", " | length");
+                    }
+                    sb.append('[').append(inside).append(']');
+                    i = close + 1;
+                    continue;
+                }
+            }
+            sb.append(jq.charAt(i));
+            i++;
+        }
+        return sb.toString();
     }
 
     /** Find the closing bracket matching the one at position {@code openPos}. */
