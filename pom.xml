@@ -50,6 +50,7 @@
         <module>jjq-jackson</module>
         <module>jjq-jakarta</module>
         <module>jjq-jsonata</module>
+        <module>jjq-jsonpath</module>
     </modules>
 
     <properties>

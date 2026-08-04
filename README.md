@@ -25,6 +25,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-jakarta` | Hibernate `FormatMapper` and JAX-RS `MessageBodyReader`/`Writer` for `JqValue` persistence and REST |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
+| `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (96.7% passing) |
 | `jjq-benchmark` | JMH benchmarks: library comparison, production queries, allocation profiling |
