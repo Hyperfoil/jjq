@@ -4,7 +4,7 @@
 
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-parent</artifactId>
-    <version>0.1.8</version>
+    <version>0.1.9-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>jjq</name>
@@ -15,7 +15,7 @@
         <connection>scm:git:git://github.com/Hyperfoil/jjq.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/Hyperfoil/jjq.git</developerConnection>
         <url>https://github.com/Hyperfoil/jjq</url>
-        <tag>0.1.8</tag>
+        <tag>0.1.2</tag>
     </scm>
 
     <licenses>
