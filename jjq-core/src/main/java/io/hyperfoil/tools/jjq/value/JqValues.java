@@ -292,6 +292,9 @@ public final class JqValues {
         final String json;
         final int len;
         int pos;
+        // Key sharing: same as JsonByteReader — track previous object's keys
+        String[] previousKeys;
+        int previousKeyCount;
 
         JsonReader(String json) {
             this.json = json;
@@ -672,7 +675,14 @@ public final class JqValues {
             if (r.pos >= r.len || r.json.charAt(r.pos) == '}') { r.pos++; break; }
             r.pos++; // skip ,
         }
-        return JqObject.ofArrays(keys, values, count);
+        // Key sharing: reuse previous keys[] if same schema
+        String[] sharedKeys = tryShareKeys(keys, count, r.previousKeys, r.previousKeyCount);
+        if (sharedKeys != null) {
+            return JqObject.ofArrays(sharedKeys, values, count);
+        }
+        r.previousKeys = java.util.Arrays.copyOf(keys, count);
+        r.previousKeyCount = count;
+        return JqObject.ofArrays(r.previousKeys, values, count);
     }
 
     /**
@@ -983,6 +993,11 @@ public final class JqValues {
         final byte[] data;
         final int end;
         int pos;
+        // Key sharing: track previous object's keys for schema detection.
+        // When consecutive objects have the same interned keys (reference equality),
+        // share the keys[] array to reduce heap pressure and improve L1 cache locality.
+        String[] previousKeys;
+        int previousKeyCount;
 
         JsonByteReader(byte[] data, int offset, int end) {
             this.data = data;
@@ -1066,6 +1081,20 @@ public final class JqValues {
 
     private static boolean isWsByte(byte b) {
         return b == ' ' || b == '\n' || b == '\r' || b == '\t';
+    }
+
+    /**
+     * Try to share keys with a previously parsed object.
+     * Returns the shared keys array if all keys match by reference equality (interned),
+     * or null if the schemas differ (caller should create a new previousKeys).
+     */
+    private static String[] tryShareKeys(String[] keys, int count,
+                                          String[] previousKeys, int previousKeyCount) {
+        if (previousKeys == null || count != previousKeyCount) return null;
+        for (int i = 0; i < count; i++) {
+            if (keys[i] != previousKeys[i]) return null; // reference equality — interned keys
+        }
+        return previousKeys; // same schema — share the array
     }
 
     /** Set source byte length on root values for cache weighing. No-op for scalars and singletons. */
@@ -1190,7 +1219,17 @@ public final class JqValues {
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) == '}') { r.pos++; break; }
             r.pos++; // skip ,
         }
-        return JqObject.ofArrays(keys, values, count);
+        // Key sharing: if this object has the same interned keys as the previous one,
+        // reuse the shared keys[] array. Saves ~1KB per object for 127-key PCP entries.
+        // Reference equality is safe because all keys are interned.
+        String[] sharedKeys = tryShareKeys(keys, count, r.previousKeys, r.previousKeyCount);
+        if (sharedKeys != null) {
+            return JqObject.ofArrays(sharedKeys, values, count);
+        }
+        // New schema — remember this key set for next comparison
+        r.previousKeys = java.util.Arrays.copyOf(keys, count);
+        r.previousKeyCount = count;
+        return JqObject.ofArrays(r.previousKeys, values, count);
     }
 
     /** Parse a JSON string value from bytes, returning a deferred JqString. */

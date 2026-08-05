@@ -2667,4 +2667,120 @@ class JqValueTest {
                     + first.getClass().getSimpleName() + ": " + first.getMessage(), first);
         }
     }
+
+    // ========================================================================
+    //  Key sharing tests (issue #48)
+    // ========================================================================
+
+    @Test
+    void testKeysSharingUniformArrayFromBytes() {
+        // Array of objects with identical keys — keys[] should be shared
+        String json = "[{\"a\":1,\"b\":2},{\"a\":3,\"b\":4},{\"a\":5,\"b\":6}]";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqArray arr = (JqArray) JqValues.parse(bytes);
+        assertEquals(3, arr.size());
+
+        // All objects should have correct values
+        JqObject obj0 = (JqObject) arr.get(0);
+        JqObject obj1 = (JqObject) arr.get(1);
+        JqObject obj2 = (JqObject) arr.get(2);
+        assertEquals(1, obj0.get("a").intValue());
+        assertEquals(4, obj1.get("b").intValue());
+        assertEquals(5, obj2.get("a").intValue());
+    }
+
+    @Test
+    void testKeysSharingUniformArrayFromString() {
+        // Same test from String parser
+        String json = "[{\"x\":10,\"y\":20},{\"x\":30,\"y\":40}]";
+        JqArray arr = (JqArray) JqValues.parse(json);
+        assertEquals(2, arr.size());
+        assertEquals(10, ((JqObject) arr.get(0)).get("x").intValue());
+        assertEquals(40, ((JqObject) arr.get(1)).get("y").intValue());
+    }
+
+    @Test
+    void testKeysSharingNonUniformArray() {
+        // Objects with different keys — should still work correctly
+        String json = "[{\"a\":1,\"b\":2},{\"c\":3,\"d\":4},{\"a\":5,\"b\":6}]";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqArray arr = (JqArray) JqValues.parse(bytes);
+        assertEquals(3, arr.size());
+        assertEquals(1, ((JqObject) arr.get(0)).get("a").intValue());
+        assertEquals(3, ((JqObject) arr.get(1)).get("c").intValue());
+        assertEquals(5, ((JqObject) arr.get(2)).get("a").intValue());
+    }
+
+    @Test
+    void testKeysSharingDifferentValuesSameKeys() {
+        // Ensure values are independent even when keys are shared
+        String json = "[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqArray arr = (JqArray) JqValues.parse(bytes);
+        JqObject alice = (JqObject) arr.get(0);
+        JqObject bob = (JqObject) arr.get(1);
+        assertEquals("Alice", alice.get("name").stringValue());
+        assertEquals("Bob", bob.get("name").stringValue());
+        assertEquals(30, alice.get("age").intValue());
+        assertEquals(25, bob.get("age").intValue());
+    }
+
+    @Test
+    void testKeysSharingLargeUniformArray() {
+        // Simulates PCP-like data: many objects with the same keys
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < 100; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("{\"metric\":").append(i)
+                    .append(",\"host\":\"server").append(i % 5).append("\"")
+                    .append(",\"value\":").append(i * 1.5).append("}");
+        }
+        sb.append("]");
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        JqArray arr = (JqArray) JqValues.parse(bytes);
+        assertEquals(100, arr.size());
+
+        // Verify all values are correct
+        for (int i = 0; i < 100; i++) {
+            JqObject obj = (JqObject) arr.get(i);
+            assertEquals(i, obj.get("metric").intValue());
+            assertEquals("server" + (i % 5), obj.get("host").stringValue());
+        }
+    }
+
+    @Test
+    void testKeysSharingRoundTrip() {
+        // Parse → serialize → reparse — key sharing should not affect output
+        String json = "[{\"a\":1,\"b\":\"x\"},{\"a\":2,\"b\":\"y\"},{\"a\":3,\"b\":\"z\"}]";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqValue parsed = JqValues.parse(bytes);
+        byte[] serialized = JqValues.serializeToBytes(parsed);
+        JqValue reparsed = JqValues.parse(serialized);
+        assertEquals(parsed, reparsed, "Round-trip should produce equal values with key sharing");
+    }
+
+    @Test
+    void testKeysSharingNestedArrays() {
+        // Nested arrays of uniform objects
+        String json = "{\"data\":[[{\"a\":1},{\"a\":2}],[{\"b\":3},{\"b\":4}]]}";
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JqValue parsed = JqValues.parse(bytes);
+        JqObject root = (JqObject) parsed;
+        JqArray outer = (JqArray) root.get("data");
+        JqArray inner0 = (JqArray) outer.get(0);
+        JqArray inner1 = (JqArray) outer.get(1);
+        assertEquals(1, ((JqObject) inner0.get(0)).get("a").intValue());
+        assertEquals(2, ((JqObject) inner0.get(1)).get("a").intValue());
+        assertEquals(3, ((JqObject) inner1.get(0)).get("b").intValue());
+        assertEquals(4, ((JqObject) inner1.get(1)).get("b").intValue());
+    }
+
+    @Test
+    void testKeysSharingEmptyAndSingletonArrays() {
+        // Edge cases: empty array, single-element array
+        assertEquals(JqArray.EMPTY, JqValues.parse("[]".getBytes(StandardCharsets.UTF_8)));
+        JqArray single = (JqArray) JqValues.parse("[{\"a\":1}]".getBytes(StandardCharsets.UTF_8));
+        assertEquals(1, single.size());
+        assertEquals(1, ((JqObject) single.get(0)).get("a").intValue());
+    }
 }
