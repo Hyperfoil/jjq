@@ -50,7 +50,7 @@ public final class JqValues {
     // Per-thread L1 intern cache — eliminates cross-thread eviction (issue #55).
     // Each thread has its own 256-slot cache with 2-probe linear probing.
     // L1 hits return immediately without touching the shared L2 table.
-    private static final int L1_SIZE = 256;
+    private static final int L1_SIZE = 512;
     private static final int L1_MASK = L1_SIZE - 1;
     private static final int L1_MAX_PROBES = 2;
     private static final ThreadLocal<InternSlot[]> INTERN_L1 =
