@@ -1399,8 +1399,9 @@ public final class JqValues {
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
         result.hashCode(); // force JDK to cache hashCode
         int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK);
-        INTERN_SLOTS[storeSlot] = new InternSlot(result, buildJsonKey(result),
-                buildJsonKey(result).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        String jsonKey = buildJsonKey(result);
+        INTERN_SLOTS[storeSlot] = new InternSlot(result, jsonKey,
+                jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 java.util.Arrays.copyOfRange(data, start, end),
                 hash, q1, q2, q3, keyLen);
         return result;
