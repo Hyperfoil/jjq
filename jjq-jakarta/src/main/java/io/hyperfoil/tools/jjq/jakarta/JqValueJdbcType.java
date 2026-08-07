@@ -10,6 +10,7 @@ import org.hibernate.type.descriptor.jdbc.BasicBinder;
 import org.hibernate.type.descriptor.jdbc.BasicExtractor;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 
+import java.io.ByteArrayInputStream;
 import java.sql.CallableStatement;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -74,15 +75,22 @@ public class JqValueJdbcType implements JdbcType {
             @Override
             protected void doBind(PreparedStatement st, X value, int index, WrapperOptions options)
                     throws SQLException {
-                byte[] bytes = javaType.unwrap(value, byte[].class, options);
-                st.setBytes(index, bytes);
+                // Use setBinaryStream to avoid the defensive byte[] copy in JDBC drivers.
+                // PostgreSQL's setBytes() copies the array internally; setBinaryStream(is, len)
+                // stores the InputStream reference and streams lazily during execute().
+                JqValues.SerializedBytes result = JqValues.serializeToByteOutput((JqValue) value);
+                st.setBinaryStream(index,
+                        new ByteArrayInputStream(result.data(), 0, result.length()),
+                        result.length());
             }
 
             @Override
             protected void doBind(CallableStatement st, X value, String name, WrapperOptions options)
                     throws SQLException {
-                byte[] bytes = javaType.unwrap(value, byte[].class, options);
-                st.setBytes(name, bytes);
+                JqValues.SerializedBytes result = JqValues.serializeToByteOutput((JqValue) value);
+                st.setBinaryStream(name,
+                        new ByteArrayInputStream(result.data(), 0, result.length()),
+                        result.length());
             }
         };
     }

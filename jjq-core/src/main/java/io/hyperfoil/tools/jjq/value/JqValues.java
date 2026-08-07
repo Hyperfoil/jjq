@@ -191,8 +191,8 @@ public final class JqValues {
      * Deferred-bytes string values are copied as raw bytes (zero encoding overhead).
      */
     public static void serializeTo(JqValue value, OutputStream out) throws IOException {
-        byte[] bytes = serializeToBytes(value);
-        out.write(bytes);
+        SerializedBytes result = serializeToByteOutput(value);
+        out.write(result.data, 0, result.length);
     }
 
     /**
@@ -233,6 +233,44 @@ public final class JqValues {
             BYTE_SERIALIZER_BUFFER.set(new BytOutput(SERIALIZE_BUFFER_INIT));
         }
         return result;
+    }
+
+    /**
+     * Result of serializing a JqValue to bytes without a final array copy.
+     * The {@code data} array may be larger than {@code length} — callers must
+     * only read bytes {@code data[0..length-1]}.
+     *
+     * <p>Use this to avoid the defensive copy that {@link #serializeToBytes(JqValue)}
+     * performs for exact-size trimming. Designed for JDBC {@code setBinaryStream}
+     * and streaming I/O where the caller can provide an offset+length.</p>
+     *
+     * @param data   the byte array containing the serialized JSON (may be oversized)
+     * @param length the number of valid bytes in {@code data}
+     */
+    public record SerializedBytes(byte[] data, int length) {}
+
+    /**
+     * Serialize a JqValue to a byte buffer without final array copy.
+     * Returns a {@link SerializedBytes} containing the raw buffer and valid length.
+     *
+     * <p>For values with known size ({@link JqValue#estimatedSizeInBytes()} > 1),
+     * allocates a pre-sized buffer. For others, uses the thread-local buffer and
+     * copies (same as {@link #serializeToBytes(JqValue)}).</p>
+     *
+     * @param value the JqValue to serialize
+     * @return buffer and length — the buffer may be larger than length
+     */
+    public static SerializedBytes serializeToByteOutput(JqValue value) {
+        int estimate = value.estimatedSizeInBytes();
+        if (estimate > 1) {
+            // Known size — allocate exact buffer, serialize into it
+            BytOutput out = new BytOutput(new byte[estimate]);
+            value.appendToBytes(out);
+            return new SerializedBytes(out.buf, out.pos);
+        }
+        // Unknown size — serialize and copy (can't return thread-local buffer)
+        byte[] result = serializeToBytes(value);
+        return new SerializedBytes(result, result.length);
     }
 
     // ========================================================================

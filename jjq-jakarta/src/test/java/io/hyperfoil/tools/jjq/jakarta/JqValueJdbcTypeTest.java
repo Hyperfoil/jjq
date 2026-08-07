@@ -261,6 +261,56 @@ class JqValueJdbcTypeTest {
     }
 
     // ========================================================================
+    //  SerializedBytes / serializeToByteOutput tests
+    // ========================================================================
+
+    @Test
+    void serializeToByteOutputKnownSize() {
+        // Parsed value has estimatedSizeInBytes set — pre-sized path
+        String json = "{\"name\":\"Alice\",\"age\":30}";
+        JqValue value = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertTrue(value.estimatedSizeInBytes() > 1);
+        JqValues.SerializedBytes result = JqValues.serializeToByteOutput(value);
+        assertNotNull(result);
+        assertTrue(result.length() > 0);
+        assertEquals(value.toJsonString(),
+                new String(result.data(), 0, result.length(), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void serializeToByteOutputUnknownSize() {
+        // Programmatic value — falls back to copy path
+        JqObject obj = JqObject.builder().put("key", "value").build();
+        assertEquals(1, obj.estimatedSizeInBytes());
+        JqValues.SerializedBytes result = JqValues.serializeToByteOutput(obj);
+        assertEquals("{\"key\":\"value\"}",
+                new String(result.data(), 0, result.length(), StandardCharsets.UTF_8));
+        assertEquals(result.length(), result.data().length, "Fallback should return exact-size array");
+    }
+
+    @Test
+    void serializeToByteOutputRoundTrip() {
+        // Parse → serializeToByteOutput → parse again
+        String json = "{\"data\":[1,2,3],\"active\":true,\"name\":\"test\"}";
+        JqValue original = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        JqValues.SerializedBytes result = JqValues.serializeToByteOutput(original);
+        JqValue reparsed = JqValues.parse(result.data(), 0, result.length());
+        assertEquals(original, reparsed);
+    }
+
+    @Test
+    void serializeToByteOutputBufferMayBeOversized() {
+        // The buffer may be larger than length — verify correct handling
+        JqValue value = JqValues.parse("{\"x\":1}".getBytes(StandardCharsets.UTF_8));
+        JqValues.SerializedBytes result = JqValues.serializeToByteOutput(value);
+        assertTrue(result.length() <= result.data().length,
+                "length should not exceed data array size");
+        // Verify only the valid portion contains correct data
+        String json = new String(result.data(), 0, result.length(), StandardCharsets.UTF_8);
+        assertEquals(value.toJsonString(), json);
+    }
+
+    // ========================================================================
     //  Helpers
     // ========================================================================
 
