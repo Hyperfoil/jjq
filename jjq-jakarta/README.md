@@ -22,9 +22,9 @@ Two approaches for persisting `JqValue` fields:
 
 ### Option 1: BYTEA with JdbcType (recommended)
 
-Uses direct `byte[]` JDBC I/O — no intermediate String allocation. Deferred string values
-from byte parsing are copied as raw bytes during serialization, making the
-`parse(byte[])` -> `serializeToBytes()` round-trip optimal.
+Zero-copy persistence using direct byte serialization and JDBC binary streaming. Deferred
+string values from byte parsing are copied as raw bytes during serialization — no String
+construction, no UTF-8 re-encoding, no intermediate array copies.
 
 ```java
 import io.hyperfoil.tools.jjq.jakarta.JqValueJdbcType;
@@ -44,10 +44,22 @@ public class MyEntity {
 }
 ```
 
-- **Write:** `JqValues.serializeToBytes(value)` -> `PreparedStatement.setBytes()`
-- **Read:** `ResultSet.getBytes()` -> `JqValues.parse(byte[])`
+**Write path (zero copy):**
+1. `JqValues.serializeToByteOutput(value)` — serializes directly into a pre-sized `byte[]` buffer (no `Arrays.copyOf`)
+2. `PreparedStatement.setBinaryStream(index, stream, length)` — wraps the buffer in `ByteArrayInputStream` (no copy). PostgreSQL's JDBC driver stores the stream reference and reads lazily during execute.
+
+**Read path:**
+- `ResultSet.getBytes()` → `JqValues.parse(byte[])` — SWAR-optimized byte parser with field name interning
+
+**Benefits:**
 - **2LC compatible:** `JqValue` implements `Serializable` with proper singleton preservation
 - **No FormatMapper registration needed** — the `@JdbcType` and `@JavaType` annotations are self-contained
+- **No JSONB overhead** — avoids PostgreSQL's JSONB parse/validate on write and JSONB-to-text serialize on read
+
+**Migration from JSONB:** If switching an existing JSONB column to BYTEA:
+```sql
+ALTER TABLE my_entity ALTER COLUMN data TYPE BYTEA USING data::bytea;
+```
 
 ### Option 2: JSONB with FormatMapper
 
@@ -158,10 +170,14 @@ The module leverages jjq's optimized parser and serializer:
 - **Serialization:** `JqValueMessageBodyWriter` uses `JqValues.serializeTo(value, outputStream)` which
   uses the direct byte serialization path — no intermediate String or StringBuilder.
 
-- **BYTEA persistence (JdbcType):** `JqValueJdbcType` uses `serializeToBytes()` for writes and
-  `parse(byte[])` for reads. Deferred string values from byte parsing are copied as raw bytes
-  during serialization — zero String construction, zero UTF-8 re-encoding. This is the fastest
-  persistence path for pass-through workloads (parse JSON upload, store, retrieve, serialize).
+- **BYTEA persistence (JdbcType):** `JqValueJdbcType` uses `serializeToByteOutput()` with
+  `setBinaryStream()` for writes and `parse(byte[])` for reads. The write path achieves
+  **zero array copies** — the pre-sized buffer is wrapped in `ByteArrayInputStream` and
+  streamed directly to the JDBC driver. PostgreSQL's `setBytes()` makes a defensive
+  `System.arraycopy`; `setBinaryStream(is, len)` stores the stream reference and reads
+  lazily during execute. For pass-through workloads (parse JSON → store → retrieve → serialize),
+  deferred string values flow as raw bytes from input to database without ever constructing
+  a Java String.
 
 - **JSONB persistence (FormatMapper):** `JqValueFormatMapper` eliminates Jackson's `ObjectMapper`
   from the Hibernate serialization path.
