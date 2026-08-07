@@ -22,6 +22,11 @@ final class BytOutput {
         this.buf = new byte[initialCapacity];
     }
 
+    /** Create a BytOutput backed by the given buffer. Used for pre-sized serialization. */
+    BytOutput(byte[] buffer) {
+        this.buf = buffer;
+    }
+
     void reset() {
         pos = 0;
     }

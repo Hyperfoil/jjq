@@ -212,6 +212,19 @@ public final class JqValues {
      * @return UTF-8 encoded JSON byte array
      */
     public static byte[] serializeToBytes(JqValue value) {
+        int estimate = value.estimatedSizeInBytes();
+        if (estimate > 1) {
+            // Known size — allocate exact buffer, serialize into it.
+            // If the estimate is exact (common for parse→serialize pass-through),
+            // the buffer IS the result — zero copy.
+            BytOutput out = new BytOutput(new byte[estimate]);
+            value.appendToBytes(out);
+            if (out.pos == out.buf.length) {
+                return out.buf; // exact fit — no copy
+            }
+            return out.toByteArray(); // estimate was off — trim
+        }
+        // Unknown size — use thread-local with copy
         BytOutput out = BYTE_SERIALIZER_BUFFER.get();
         out.reset();
         value.appendToBytes(out);

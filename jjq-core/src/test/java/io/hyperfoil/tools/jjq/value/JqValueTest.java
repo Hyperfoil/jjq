@@ -2446,6 +2446,38 @@ class JqValueTest {
         assertBytesEquivalent(JqValues.parse("3.14159265358979323846"));
     }
 
+    @Test
+    void testSerializeToBytesPreSizedFromParsedBytes() {
+        // Parsed from byte[] — estimatedSizeInBytes is set, should use pre-sized path
+        String json = "{\"name\":\"Alice\",\"scores\":[95,87],\"active\":true}";
+        byte[] input = json.getBytes(StandardCharsets.UTF_8);
+        JqValue parsed = JqValues.parse(input);
+        assertTrue(parsed.estimatedSizeInBytes() > 1, "Parsed value should have estimated size");
+        byte[] output = JqValues.serializeToBytes(parsed);
+        // Verify correctness
+        assertEquals(parsed.toJsonString(), new String(output, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void testSerializeToBytesPreSizedRoundTrip() {
+        // Parse from bytes → serialize to bytes → parse again — must be equal
+        String json = "{\"data\":[{\"x\":1},{\"x\":2},{\"x\":3}],\"count\":3}";
+        byte[] input = json.getBytes(StandardCharsets.UTF_8);
+        JqValue first = JqValues.parse(input);
+        byte[] serialized = JqValues.serializeToBytes(first);
+        JqValue second = JqValues.parse(serialized);
+        assertEquals(first, second);
+    }
+
+    @Test
+    void testSerializeToBytesFallbackForProgrammatic() {
+        // Programmatic value — estimatedSizeInBytes is 1, uses thread-local fallback
+        JqObject obj = JqObject.builder().put("key", "value").build();
+        assertEquals(1, obj.estimatedSizeInBytes());
+        byte[] output = JqValues.serializeToBytes(obj);
+        assertEquals("{\"key\":\"value\"}", new String(output, StandardCharsets.UTF_8));
+    }
+
     /** Assert that serializeToBytes produces the same output as toJsonString().getBytes(UTF_8) */
     private void assertBytesEquivalent(JqValue value) {
         byte[] fromBytes = JqValues.serializeToBytes(value);
