@@ -47,6 +47,15 @@ public final class JqValues {
 
     private static final InternSlot[] INTERN_SLOTS = new InternSlot[INTERN_TABLE_SIZE];
 
+    // Per-thread L1 intern cache — eliminates cross-thread eviction (issue #55).
+    // Each thread has its own 256-slot cache with 2-probe linear probing.
+    // L1 hits return immediately without touching the shared L2 table.
+    private static final int L1_SIZE = 256;
+    private static final int L1_MASK = L1_SIZE - 1;
+    private static final int L1_MAX_PROBES = 2;
+    private static final ThreadLocal<InternSlot[]> INTERN_L1 =
+            ThreadLocal.withInitial(() -> new InternSlot[L1_SIZE]);
+
     /**
      * Intern a field name string. Returns the cached instance if one exists
      * for this hash slot, or caches and returns the given string.
@@ -58,18 +67,32 @@ public final class JqValues {
      */
     public static String internFieldName(String name) {
         int hash = name.hashCode();
+        // L1 lookup (thread-local, no contention)
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && name.equals(cached.key)) return cached.key;
+        }
+        // L2 lookup (global, atomic snapshots)
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) {
-                INTERN_SLOTS[s] = createInternSlot(name, hash);
+                InternSlot newSlot = createInternSlot(name, hash);
+                INTERN_SLOTS[s] = newSlot;
+                l1[hash & L1_MASK] = newSlot; // promote to L1
                 return name;
             }
-            if (name.equals(slot.key)) return slot.key;
+            if (name.equals(slot.key)) {
+                l1[hash & L1_MASK] = slot; // promote to L1
+                return slot.key;
+            }
         }
         // All probes occupied — evict first slot
         int s = hash & INTERN_MASK;
-        INTERN_SLOTS[s] = createInternSlot(name, hash);
+        InternSlot newSlot = createInternSlot(name, hash);
+        INTERN_SLOTS[s] = newSlot;
+        l1[hash & L1_MASK] = newSlot; // promote to L1
         return name;
     }
 
@@ -95,11 +118,21 @@ public final class JqValues {
      */
     public static String internedJsonKey(String key) {
         int hash = key.hashCode();
+        // L1 lookup (reference equality — interned keys match by identity)
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.key == key) return cached.jsonKey;
+        }
+        // L2 lookup
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) break;
-            if (slot.key == key) return slot.jsonKey; // reference equality
+            if (slot.key == key) {
+                l1[hash & L1_MASK] = slot; // promote to L1
+                return slot.jsonKey;
+            }
         }
         return null;
     }
@@ -110,11 +143,21 @@ public final class JqValues {
      */
     static byte[] internedJsonKeyBytes(String key) {
         int hash = key.hashCode();
+        // L1 lookup
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.key == key) return cached.jsonKeyBytes;
+        }
+        // L2 lookup
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) break;
-            if (slot.key == key) return slot.jsonKeyBytes; // reference equality
+            if (slot.key == key) {
+                l1[hash & L1_MASK] = slot; // promote to L1
+                return slot.jsonKeyBytes;
+            }
         }
         return null;
     }
@@ -832,24 +875,35 @@ public final class JqValues {
         for (int i = start; i < end; i++) {
             hash = hash * 31 + s.charAt(i);
         }
-        // Check if already interned (fast path) — snapshot each slot for thread safety
-        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int idx = (hash + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[idx]; // snapshot — atomic read
-            if (slot == null) break;
-            String cached = slot.key;
-            if (cached.length() == keyLen) {
+        // L1 lookup (thread-local)
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.key.length() == keyLen) {
                 boolean match = true;
                 for (int i = 0; i < keyLen; i++) {
-                    if (cached.charAt(i) != s.charAt(start + i)) {
-                        match = false;
-                        break;
-                    }
+                    if (cached.key.charAt(i) != s.charAt(start + i)) { match = false; break; }
                 }
-                if (match) return cached;
+                if (match) return cached.key;
             }
         }
-        // Cache miss
+        // L2 lookup (global)
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int idx = (hash + probe) & INTERN_MASK;
+            InternSlot slot = INTERN_SLOTS[idx];
+            if (slot == null) break;
+            if (slot.key.length() == keyLen) {
+                boolean match = true;
+                for (int i = 0; i < keyLen; i++) {
+                    if (slot.key.charAt(i) != s.charAt(start + i)) { match = false; break; }
+                }
+                if (match) {
+                    l1[hash & L1_MASK] = slot; // promote to L1
+                    return slot.key;
+                }
+            }
+        }
+        // Cache miss — internFieldName handles L1+L2 storage
         String result = s.substring(start, end);
         return internFieldName(result);
     }
@@ -1424,37 +1478,50 @@ public final class JqValues {
         int q2 = keyLen >= 8 ? SwarUtil.loadInt(data, start + 4) : (keyLen > 4 ? SwarUtil.packPartialQuad(data, start + 4, keyLen - 4) : 0);
         int q3 = keyLen >= 12 ? SwarUtil.loadInt(data, start + 8) : (keyLen > 8 ? SwarUtil.packPartialQuad(data, start + 8, keyLen - 8) : 0);
 
-        // Multi-slot probing with quad verification — each slot read is an atomic snapshot
+        // L1 lookup (thread-local, no contention, no cross-thread eviction)
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.hash == hash && cached.qlen == keyLen
+                    && cached.q1 == q1
+                    && (keyLen <= 4 || cached.q2 == q2)
+                    && (keyLen <= 8 || cached.q3 == q3)
+                    && (keyLen <= 12 || matchBytesFrom(cached.keyBytes, data, start, 12, keyLen))) {
+                return cached.key; // L1 HIT — zero allocation, no L2 access
+            }
+        }
+
+        // L2 lookup (global, atomic snapshots)
         int firstEmpty = -1;
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
             int s = (hash + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[s]; // snapshot — atomic read
+            InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) {
                 if (firstEmpty < 0) firstEmpty = s;
-                break; // empty slot — no further probing needed
+                break;
             }
-            // Fast reject: hash + length (from same snapshot — no torn reads)
             if (slot.hash != hash || slot.qlen != keyLen) continue;
-            // Quad verification
             if (q1 != slot.q1) continue;
             if (keyLen > 4 && q2 != slot.q2) continue;
             if (keyLen > 8 && q3 != slot.q3) continue;
-            // For keys > 12 bytes, verify remainder (keyBytes from same snapshot)
             if (keyLen > 12) {
                 if (!matchBytesFrom(slot.keyBytes, data, start, 12, keyLen)) continue;
             }
-            return slot.key; // CACHE HIT — zero allocation
+            l1[hash & L1_MASK] = slot; // promote to L1
+            return slot.key;
         }
 
-        // Cache miss: create string and store as atomic slot
+        // Cache miss: create string and store in both L1 and L2
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
         result.hashCode(); // force JDK to cache hashCode
         int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK);
         String jsonKey = buildJsonKey(result);
-        INTERN_SLOTS[storeSlot] = new InternSlot(result, jsonKey,
+        InternSlot newSlot = new InternSlot(result, jsonKey,
                 jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 java.util.Arrays.copyOfRange(data, start, end),
                 hash, q1, q2, q3, keyLen);
+        INTERN_SLOTS[storeSlot] = newSlot;
+        l1[hash & L1_MASK] = newSlot; // store in L1
         return result;
     }
 
