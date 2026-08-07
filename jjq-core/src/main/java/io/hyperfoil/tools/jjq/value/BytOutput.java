@@ -184,7 +184,7 @@ final class BytOutput {
     }
 
     byte[] toByteArray() {
-        return Arrays.copyOf(buf, pos);
+        return (pos == buf.length) ? buf : Arrays.copyOf(buf, pos);
     }
 
     private void ensureCapacity(int needed) {
