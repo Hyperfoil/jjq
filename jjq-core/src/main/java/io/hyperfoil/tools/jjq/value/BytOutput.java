@@ -134,51 +134,77 @@ final class BytOutput {
 
     /**
      * JSON-escape a string and write as UTF-8 bytes (without quotes).
+     * Uses segment-based scanning: scans for the next escape character without
+     * writing, then bulk-flushes the clean segment. This keeps the scan loop
+     * tight (no buf/pos updates, no ensureCapacity) for the common case of
+     * clean ASCII strings.
      */
     void escapeJsonToBytes(String s) {
-        int len = s.length();
+        final int len = s.length();
         ensureCapacity(len * 3 + 12); // worst case: all escaped + UTF-8 expansion
+        int segStart = 0;
+
         for (int i = 0; i < len; i++) {
             char c = s.charAt(i);
-            if (c >= 0x20 && c != '"' && c != '\\') {
-                // Common case: no escaping needed — encode as UTF-8
-                if (c < 0x80) {
-                    buf[pos++] = (byte) c;
-                } else if (c < 0x800) {
-                    buf[pos++] = (byte) (0xC0 | (c >> 6));
-                    buf[pos++] = (byte) (0x80 | (c & 0x3F));
-                } else if (Character.isHighSurrogate(c) && i + 1 < len) {
-                    char low = s.charAt(++i);
-                    int cp = Character.toCodePoint(c, low);
-                    buf[pos++] = (byte) (0xF0 | (cp >> 18));
-                    buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
-                    buf[pos++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-                    buf[pos++] = (byte) (0x80 | (cp & 0x3F));
-                } else {
-                    buf[pos++] = (byte) (0xE0 | (c >> 12));
-                    buf[pos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-                    buf[pos++] = (byte) (0x80 | (c & 0x3F));
+            if (c >= 0x20 && c != '"' && c != '\\') continue; // scan — no writes
+
+            // Found escape character — flush clean segment before it
+            if (i > segStart) {
+                writeStringSegmentAsUTF8(s, segStart, i);
+            }
+            // Emit escape sequence
+            ensureCapacity(6);
+            switch (c) {
+                case '"'  -> { buf[pos++] = '\\'; buf[pos++] = '"'; }
+                case '\\' -> { buf[pos++] = '\\'; buf[pos++] = '\\'; }
+                case '\b' -> { buf[pos++] = '\\'; buf[pos++] = 'b'; }
+                case '\f' -> { buf[pos++] = '\\'; buf[pos++] = 'f'; }
+                case '\n' -> { buf[pos++] = '\\'; buf[pos++] = 'n'; }
+                case '\r' -> { buf[pos++] = '\\'; buf[pos++] = 'r'; }
+                case '\t' -> { buf[pos++] = '\\'; buf[pos++] = 't'; }
+                default -> {
+                    // Control character: \\u00XX
+                    buf[pos++] = '\\';
+                    buf[pos++] = 'u';
+                    buf[pos++] = '0';
+                    buf[pos++] = '0';
+                    buf[pos++] = (byte) Character.forDigit((c >> 4) & 0xF, 16);
+                    buf[pos++] = (byte) Character.forDigit(c & 0xF, 16);
                 }
+            }
+            segStart = i + 1;
+        }
+        // Flush remaining clean segment
+        if (segStart < len) {
+            writeStringSegmentAsUTF8(s, segStart, len);
+        }
+    }
+
+    /**
+     * Bulk-write a clean string segment (no escape characters) as UTF-8.
+     * Most JSON string values are ASCII, so the inner loop is a simple byte cast.
+     */
+    private void writeStringSegmentAsUTF8(String s, int start, int end) {
+        int segLen = end - start;
+        ensureCapacity(segLen * 3); // worst case UTF-8
+        for (int i = start; i < end; i++) {
+            char c = s.charAt(i);
+            if (c < 0x80) {
+                buf[pos++] = (byte) c;
+            } else if (c < 0x800) {
+                buf[pos++] = (byte) (0xC0 | (c >> 6));
+                buf[pos++] = (byte) (0x80 | (c & 0x3F));
+            } else if (Character.isHighSurrogate(c) && i + 1 < end) {
+                char low = s.charAt(++i);
+                int cp = Character.toCodePoint(c, low);
+                buf[pos++] = (byte) (0xF0 | (cp >> 18));
+                buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+                buf[pos++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+                buf[pos++] = (byte) (0x80 | (cp & 0x3F));
             } else {
-                // Escape sequences (all ASCII)
-                switch (c) {
-                    case '"' -> { buf[pos++] = '\\'; buf[pos++] = '"'; }
-                    case '\\' -> { buf[pos++] = '\\'; buf[pos++] = '\\'; }
-                    case '\b' -> { buf[pos++] = '\\'; buf[pos++] = 'b'; }
-                    case '\f' -> { buf[pos++] = '\\'; buf[pos++] = 'f'; }
-                    case '\n' -> { buf[pos++] = '\\'; buf[pos++] = 'n'; }
-                    case '\r' -> { buf[pos++] = '\\'; buf[pos++] = 'r'; }
-                    case '\t' -> { buf[pos++] = '\\'; buf[pos++] = 't'; }
-                    default -> {
-                         // Control character: \\u00XX
-                        buf[pos++] = '\\';
-                        buf[pos++] = 'u';
-                        buf[pos++] = '0';
-                        buf[pos++] = '0';
-                        buf[pos++] = (byte) Character.forDigit((c >> 4) & 0xF, 16);
-                        buf[pos++] = (byte) Character.forDigit(c & 0xF, 16);
-                    }
-                }
+                buf[pos++] = (byte) (0xE0 | (c >> 12));
+                buf[pos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+                buf[pos++] = (byte) (0x80 | (c & 0x3F));
             }
         }
     }
