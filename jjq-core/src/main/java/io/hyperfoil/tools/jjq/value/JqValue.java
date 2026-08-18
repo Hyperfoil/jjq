@@ -227,6 +227,26 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     /**
      * Get a field value from an object. Returns {@link JqNull#NULL} for missing keys
      * and for non-object values (enables fluent navigation chains).
+     *
+     * <p>This method is defined on {@link JqValue} (not just {@link JqObject}) so it can
+     * be called on any value without an {@code instanceof} check. Non-object values
+     * silently return {@link JqNull#NULL} instead of throwing, enabling fluent chaining:</p>
+     * <pre>{@code
+     * // Safe chaining — never throws, even if "user" is not an object
+     * String name = data.getField("user").getField("name").asString("unknown");
+     * }</pre>
+     *
+     * <p><b>When to use this vs {@link JqObject#get(String)}:</b></p>
+     * <ul>
+     *   <li>Use {@code getField()} when the value's type is unknown or you want null-safe
+     *       chaining across multiple levels. This is the common case in application code.</li>
+     *   <li>Use {@link JqObject#get(String)} when you already have a {@code JqObject} reference
+     *       and want to avoid the {@code instanceof} check (marginal performance benefit in
+     *       tight loops).</li>
+     * </ul>
+     *
+     * <p>Both methods return {@link JqNull#NULL} for missing keys — they never return
+     * Java {@code null}.</p>
      */
     default JqValue getField(String key) {
         if (this instanceof JqObject obj) return obj.get(key);

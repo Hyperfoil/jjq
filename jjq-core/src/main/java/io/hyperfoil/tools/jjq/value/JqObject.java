@@ -497,6 +497,11 @@ public final class JqObject implements JqValue {
     /**
      * Get a field value by key. Returns {@link JqNull#NULL} for missing keys.
      *
+     * <p>This method requires the caller to already have a {@code JqObject} reference.
+     * For null-safe chaining across values of unknown type, use
+     * {@link JqValue#getField(String)} instead — it accepts any {@code JqValue} and
+     * returns {@link JqNull#NULL} for non-objects without throwing.</p>
+     *
      * <p>Lookup strategy (following SwissTable/IndexMap patterns):</p>
      * <ul>
      *   <li>Size 0: immediate return</li>
