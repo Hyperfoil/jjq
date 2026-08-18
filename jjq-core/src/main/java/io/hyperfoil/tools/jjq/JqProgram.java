@@ -322,6 +322,110 @@ public final class JqProgram {
         return vm;
     }
 
+    /**
+     * Returns true if this program references the {@code input} or {@code inputs}
+     * builtins, indicating it should be executed in null-input mode
+     * (equivalent to jq's {@code --null-input} flag).
+     *
+     * <p>This is determined by scanning the compiled bytecode for function calls
+     * to {@code input/0} or {@code inputs/0}, including any calls within
+     * sub-expressions evaluated by the tree-walker fallback.</p>
+     *
+     * <p>Use this instead of regex-based heuristics on the expression string,
+     * which can produce false positives (e.g., {@code "inputs"} inside a string
+     * literal) or false negatives.</p>
+     */
+    public boolean usesNullInput() {
+        return referencesBuiltin("input") || referencesBuiltin("inputs");
+    }
+
+    /**
+     * Returns true if this program references the named builtin function
+     * (at any arity) anywhere in its AST, including nested sub-expressions
+     * and function arguments.
+     *
+     * <p>This walks the AST rather than scanning bytecode, so it correctly
+     * detects builtins that are inlined to dedicated opcodes (e.g., {@code length},
+     * {@code keys}) and builtins passed as function arguments (e.g.,
+     * {@code first(inputs)}).</p>
+     *
+     * @param name the builtin function name (e.g., "input", "inputs", "length", "keys")
+     */
+    public boolean referencesBuiltin(String name) {
+        return astReferencesFuncCall(ast, name);
+    }
+
+    /** Recursively walk an AST node checking for FuncCallExpr with the given name. */
+    private static boolean astReferencesFuncCall(JqExpr expr, String name) {
+        return switch (expr) {
+            case JqExpr.FuncCallExpr fc -> {
+                if (name.equals(fc.name())) yield true;
+                for (JqExpr arg : fc.args()) {
+                    if (astReferencesFuncCall(arg, name)) yield true;
+                }
+                yield false;
+            }
+            case JqExpr.PipeExpr p -> astReferencesFuncCall(p.left(), name) || astReferencesFuncCall(p.right(), name);
+            case JqExpr.CommaExpr c -> astReferencesFuncCall(c.left(), name) || astReferencesFuncCall(c.right(), name);
+            case JqExpr.ArrayConstructExpr a -> astReferencesFuncCall(a.body(), name);
+            case JqExpr.ObjectConstructExpr o -> {
+                for (var entry : o.entries()) {
+                    if (astReferencesFuncCall(entry.key(), name) || astReferencesFuncCall(entry.value(), name))
+                        yield true;
+                }
+                yield false;
+            }
+            case JqExpr.IfExpr i -> {
+                if (astReferencesFuncCall(i.condition(), name) || astReferencesFuncCall(i.thenBranch(), name))
+                    yield true;
+                for (var elif : i.elifs()) {
+                    if (astReferencesFuncCall(elif.condition(), name) || astReferencesFuncCall(elif.body(), name))
+                        yield true;
+                }
+                yield i.elseBranch() != null && astReferencesFuncCall(i.elseBranch(), name);
+            }
+            case JqExpr.TryCatchExpr t -> astReferencesFuncCall(t.tryExpr(), name) || (t.catchExpr() != null && astReferencesFuncCall(t.catchExpr(), name));
+            case JqExpr.ReduceExpr r -> astReferencesFuncCall(r.source(), name) || astReferencesFuncCall(r.init(), name) || astReferencesFuncCall(r.update(), name);
+            case JqExpr.ForeachExpr f -> astReferencesFuncCall(f.source(), name) || astReferencesFuncCall(f.init(), name) || astReferencesFuncCall(f.update(), name) || (f.extract() != null && astReferencesFuncCall(f.extract(), name));
+            case JqExpr.FuncDefExpr fd -> astReferencesFuncCall(fd.body(), name) || astReferencesFuncCall(fd.next(), name);
+            case JqExpr.VariableBindExpr v -> astReferencesFuncCall(v.expr(), name) || astReferencesFuncCall(v.body(), name);
+            case JqExpr.IndexExpr i -> astReferencesFuncCall(i.expr(), name) || (i.index() != null && astReferencesFuncCall(i.index(), name));
+            case JqExpr.SliceExpr s -> astReferencesFuncCall(s.expr(), name) || (s.from() != null && astReferencesFuncCall(s.from(), name)) || (s.to() != null && astReferencesFuncCall(s.to(), name));
+            case JqExpr.IterateExpr i -> astReferencesFuncCall(i.expr(), name);
+            case JqExpr.NegateExpr n -> astReferencesFuncCall(n.expr(), name);
+            case JqExpr.ArithmeticExpr a -> astReferencesFuncCall(a.left(), name) || astReferencesFuncCall(a.right(), name);
+            case JqExpr.ComparisonExpr c -> astReferencesFuncCall(c.left(), name) || astReferencesFuncCall(c.right(), name);
+            case JqExpr.LogicalExpr l -> astReferencesFuncCall(l.left(), name) || astReferencesFuncCall(l.right(), name);
+            case JqExpr.NotExpr n -> astReferencesFuncCall(n.expr(), name);
+            case JqExpr.AlternativeExpr a -> astReferencesFuncCall(a.left(), name) || astReferencesFuncCall(a.right(), name);
+            case JqExpr.OptionalExpr o -> astReferencesFuncCall(o.expr(), name);
+            case JqExpr.StringInterpolationExpr si -> {
+                for (JqExpr part : si.parts()) {
+                    if (astReferencesFuncCall(part, name)) yield true;
+                }
+                yield false;
+            }
+            case JqExpr.UpdateExpr u -> astReferencesFuncCall(u.path(), name) || astReferencesFuncCall(u.update(), name);
+            case JqExpr.AssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.AlternativeAssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.AddAssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.SubAssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.MulAssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.DivAssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.ModAssignExpr a -> astReferencesFuncCall(a.path(), name) || astReferencesFuncCall(a.value(), name);
+            case JqExpr.LabelExpr l -> astReferencesFuncCall(l.body(), name);
+            case JqExpr.PathExpr p -> astReferencesFuncCall(p.expr(), name);
+            case JqExpr.FormatExpr f -> astReferencesFuncCall(f.input(), name);
+            // Leaf nodes — no sub-expressions to check
+            case JqExpr.IdentityExpr ignored -> false;
+            case JqExpr.LiteralExpr ignored -> false;
+            case JqExpr.DotFieldExpr ignored -> false;
+            case JqExpr.RecurseExpr ignored -> false;
+            case JqExpr.VariableRefExpr ignored -> false;
+            case JqExpr.BreakExpr ignored -> false;
+        };
+    }
+
     public String expression() { return expression; }
     public JqExpr ast() { return ast; }
 }

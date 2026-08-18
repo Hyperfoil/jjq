@@ -547,6 +547,56 @@ class JqProgramTest {
         assertEquals("{\"name\":\"Alice\",\"email\":\"a@b.com\"}", result.toJsonString());
     }
 
+    // ---- usesNullInput / referencesBuiltin ----
+
+    @Test
+    void usesNullInput_withInputs() {
+        assertTrue(JqProgram.compile("[inputs | .name]").usesNullInput());
+    }
+
+    @Test
+    void usesNullInput_withInput() {
+        assertTrue(JqProgram.compile("first(inputs)").usesNullInput());
+    }
+
+    @Test
+    void usesNullInput_inPipe() {
+        assertTrue(JqProgram.compile("[inputs] | length").usesNullInput());
+    }
+
+    @Test
+    void usesNullInput_simpleFieldAccess() {
+        assertFalse(JqProgram.compile(".name").usesNullInput());
+    }
+
+    @Test
+    void usesNullInput_identity() {
+        assertFalse(JqProgram.compile(".").usesNullInput());
+    }
+
+    @Test
+    void usesNullInput_complexFilter() {
+        assertFalse(JqProgram.compile(".[] | select(.age > 20) | {name, email}").usesNullInput());
+    }
+
+    @Test
+    void usesNullInput_inputsInStringLiteral() {
+        // "inputs" inside a string literal is NOT a builtin call
+        assertFalse(JqProgram.compile("\"inputs\"").usesNullInput());
+    }
+
+    @Test
+    void referencesBuiltin_length() {
+        assertTrue(JqProgram.compile("length").referencesBuiltin("length"));
+        assertFalse(JqProgram.compile(".name").referencesBuiltin("length"));
+    }
+
+    @Test
+    void referencesBuiltin_keys() {
+        assertTrue(JqProgram.compile("keys").referencesBuiltin("keys"));
+        assertFalse(JqProgram.compile(".keys").referencesBuiltin("keys"));
+    }
+
     // ---- Helpers ----
 
     private static JqValue parseJson(String json) {
