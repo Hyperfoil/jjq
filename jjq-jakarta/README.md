@@ -23,28 +23,39 @@ required at runtime.
 
 Two approaches for persisting `JqValue` fields:
 
-### Option 1: BYTEA with JdbcType (recommended)
+### Option 1: BYTEA with @JqValueColumn (recommended)
 
 Zero-copy persistence using direct byte serialization and JDBC binary streaming. Deferred
 string values from byte parsing are copied as raw bytes during serialization — no String
 construction, no UTF-8 re-encoding, no intermediate array copies.
 
+The `@JqValueColumn` composite annotation combines the three Hibernate annotations
+(`@JdbcType`, `@JavaType`, `@Mutability`) into one:
+
 ```java
-import io.hyperfoil.tools.jjq.jakarta.JqValueJdbcType;
-import io.hyperfoil.tools.jjq.jakarta.JqValueJavaType;
+import io.hyperfoil.tools.jjq.jakarta.JqValueColumn;
 import io.hyperfoil.tools.jjq.value.JqValue;
-import org.hibernate.annotations.Mutability;
-import org.hibernate.type.descriptor.java.Immutability;
 
 @Entity
 public class MyEntity {
 
+    @JqValueColumn
     @Column(columnDefinition = "BYTEA")
-    @org.hibernate.annotations.JdbcType(JqValueJdbcType.class)
-    @org.hibernate.annotations.JavaType(JqValueJavaType.class)
-    @Mutability(Immutability.class)
     public JqValue data;
 }
+```
+
+`@Column(columnDefinition = "BYTEA")` is still needed separately because column definitions
+are database-specific (BYTEA for PostgreSQL, BLOB for SQLite/MySQL, etc.).
+
+If you prefer explicit annotations, the equivalent expanded form is:
+
+```java
+@Column(columnDefinition = "BYTEA")
+@org.hibernate.annotations.JdbcType(JqValueJdbcType.class)
+@org.hibernate.annotations.JavaType(JqValueJavaType.class)
+@Mutability(Immutability.class)
+public JqValue data;
 ```
 
 **Write path (zero copy):**
@@ -56,8 +67,11 @@ public class MyEntity {
 
 **Benefits:**
 - **2LC compatible:** `JqValue` implements `Serializable` with proper singleton preservation
-- **No FormatMapper registration needed** — the `@JdbcType` and `@JavaType` annotations are self-contained
+- **No FormatMapper registration needed** — `@JqValueColumn` is self-contained
 - **No JSONB overhead** — avoids PostgreSQL's JSONB parse/validate on write and JSONB-to-text serialize on read
+- **Immutability-safe** — `JqValue` is immutable, so Hibernate skips `deepCopy()` for snapshots and
+  second-level cache. Dirty checking uses `.equals()`, so reassigning the field to a different
+  `JqValue` instance is correctly detected
 
 **Migration from JSONB:** If switching an existing JSONB column to BYTEA:
 ```sql

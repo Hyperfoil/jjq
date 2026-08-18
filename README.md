@@ -263,6 +263,14 @@ JqArray items = JqArray.arrayBuilder()
     .add(42)
     .build();
 
+// Quick object construction with auto-wrapped values (String, Number, Boolean, null)
+JqObject block = JqObject.ofEntries(
+    "type", "header",
+    "count", 42,
+    "active", true,
+    "nested", JqObject.ofEntries("key", "value")
+);
+
 // Copy-on-write modification (immutable — returns new instances)
 JqObject updated = result.with("status", JqString.of("verified"));
 JqObject merged = result.merge(otherObject);
@@ -328,10 +336,8 @@ Use `JqValue` directly as a Hibernate entity field type, in REST endpoints, and 
 @Entity
 public class MyEntity {
     // Option 1: BYTEA — zero-copy byte[] I/O (recommended)
+    @JqValueColumn
     @Column(columnDefinition = "BYTEA")
-    @org.hibernate.annotations.JdbcType(JqValueJdbcType.class)
-    @org.hibernate.annotations.JavaType(JqValueJavaType.class)
-    @Mutability(Immutability.class)
     public JqValue data;
 
     // Option 2: Portable JPA — works with any JPA provider
@@ -395,6 +401,22 @@ List<JqValue> inputs = JqValues.parseAll("""
 
 JqProgram program = JqProgram.compile(".name");
 List<JqValue> names = program.applyAll(inputs);
+```
+
+### Program introspection
+
+```java
+// Detect if a program needs --null-input mode (uses input/inputs builtins)
+JqProgram program = JqProgram.compile("[inputs | .name]");
+if (program.usesNullInput()) {
+    results = program.applyNullInput(sourceValues);
+} else {
+    results = program.applyAll(input);
+}
+
+// Check if a program references any specific builtin
+program.referencesBuiltin("inputs");  // true
+program.referencesBuiltin("length");  // false
 ```
 
 ## CLI Usage
