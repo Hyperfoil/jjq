@@ -1125,6 +1125,95 @@ class JqValueTest {
         assertEquals(JqNumber.of(new java.math.BigDecimal("3.14159")), JqNumber.of((Number) new java.math.BigDecimal("3.14159")));
     }
 
+    // ---- BigDecimal edge cases (issue #59) ----
+
+    @Test
+    void testBigDecimalInteger() {
+        // Whole number BigDecimal should produce long-backed JqNumber
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("42"));
+        assertTrue(n.isIntegral());
+        assertTrue(n.isLongBacked());
+        assertEquals(42L, n.longValue());
+    }
+
+    @Test
+    void testBigDecimalTrailingZeros() {
+        // 3.00 should be promoted to integer 3
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("3.00"));
+        assertTrue(n.isIntegral());
+        assertTrue(n.isLongBacked());
+        assertEquals(3L, n.longValue());
+    }
+
+    @Test
+    void testBigDecimalFractional() {
+        // Non-integer should remain non-long-backed
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("3.14"));
+        assertFalse(n.isLongBacked());
+        assertEquals(3.14, n.doubleValue(), 0.001);
+    }
+
+    @Test
+    void testBigDecimalNegativeScale() {
+        // 1E+2 = 100, scale = -2, should be long-backed
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("1E+2"));
+        assertTrue(n.isIntegral());
+        assertTrue(n.isLongBacked());
+        assertEquals(100L, n.longValue());
+    }
+
+    @Test
+    void testBigDecimalLongMaxValue() {
+        // Long.MAX_VALUE should be long-backed
+        JqNumber n = JqNumber.of(new java.math.BigDecimal(Long.MAX_VALUE));
+        assertTrue(n.isLongBacked());
+        assertEquals(Long.MAX_VALUE, n.longValue());
+    }
+
+    @Test
+    void testBigDecimalBeyondLong() {
+        // Value larger than Long.MAX_VALUE should not be long-backed
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("99999999999999999999"));
+        assertFalse(n.isLongBacked());
+    }
+
+    @Test
+    void testBigDecimalZero() {
+        JqNumber n = JqNumber.of(java.math.BigDecimal.ZERO);
+        assertTrue(n.isLongBacked());
+        assertEquals(0L, n.longValue());
+    }
+
+    @Test
+    void testBigDecimalCachedRange() {
+        // Values in cache range [-128, 1023] should return cached instances
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("42"));
+        assertSame(JqNumber.of(42L), n);
+    }
+
+    @Test
+    void testBigDecimalNegative() {
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("-7"));
+        assertTrue(n.isLongBacked());
+        assertEquals(-7L, n.longValue());
+    }
+
+    @Test
+    void testBigDecimalVerySmallFraction() {
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("0.000001"));
+        assertFalse(n.isLongBacked());
+        assertFalse(n.isIntegral());
+    }
+
+    @Test
+    void testBigDecimalLargeNegativeScale() {
+        // 1E+19 — 20 digits, too large for long
+        JqNumber n = JqNumber.of(new java.math.BigDecimal("1E+19"));
+        // 10000000000000000000 > Long.MAX_VALUE (9223372036854775807)
+        // This should NOT be long-backed since it exceeds long range
+        assertFalse(n.isLongBacked());
+    }
+
     @Test
     void testNumberOfIntegralDouble() {
         // Integer-valued doubles should be promoted to long-backed

@@ -69,13 +69,56 @@ public final class JqNumber implements JqValue {
         return of(d);
     }
 
+    private static final BigDecimal LONG_MIN_BD = BigDecimal.valueOf(Long.MIN_VALUE);
+    private static final BigDecimal LONG_MAX_BD = BigDecimal.valueOf(Long.MAX_VALUE);
+
+    /**
+     * Create a JqNumber from a BigDecimal. If the value represents a whole number
+     * that fits in a long, returns a long-backed instance (with cache hit for [-128, 1023]).
+     * Otherwise stores the BigDecimal directly.
+     *
+     * <p>Uses scale/precision checks to avoid {@code longValueExact()} throwing
+     * {@link ArithmeticException} on non-integer values. This eliminates
+     * {@code Throwable.fillInStackTrace()} overhead that was measurable in
+     * high-throughput JSON parsing (issue #59).</p>
+     */
     public static JqNumber of(BigDecimal value) {
-        try {
-            long l = value.longValueExact();
-            return of(l);
-        } catch (ArithmeticException e) {
+        int scale = value.scale();
+        if (scale <= 0) {
+            // No fractional part — check if it fits in a long
+            if (fitsInLong(value, scale)) {
+                return of(value.longValueExact()); // guaranteed no exception
+            }
+            // Too large for long — keep as BigDecimal
             return new JqNumber(0, value, value.doubleValue(), false);
         }
+        // Positive scale — has fractional digits. Strip trailing zeros first
+        // to handle cases like 3.00 which should be treated as integer 3.
+        BigDecimal stripped = value.stripTrailingZeros();
+        int strippedScale = stripped.scale();
+        if (strippedScale <= 0 && fitsInLong(stripped, strippedScale)) {
+            return of(stripped.longValueExact()); // guaranteed no exception
+        }
+        // Genuinely non-integer — store as BigDecimal
+        return new JqNumber(0, value, value.doubleValue(), false);
+    }
+
+    /**
+     * Check if a BigDecimal with scale <= 0 fits in a long without calling
+     * longValueExact() (which would throw ArithmeticException if it doesn't fit).
+     *
+     * <p>The number of integer digits is {@code precision - scale} (scale is <= 0,
+     * so {@code -scale} adds the trailing zeros). A long holds at most 19 decimal
+     * digits, but only some 19-digit values fit (Long.MAX_VALUE = 9223372036854775807).
+     * For 1-18 digits we know it fits; for 19 digits we range-check against
+     * Long.MIN_VALUE/MAX_VALUE; for 20+ digits it never fits.</p>
+     */
+    private static boolean fitsInLong(BigDecimal value, int scale) {
+        int integerDigits = value.precision() + (-scale);
+        if (integerDigits <= 18) return true;
+        if (integerDigits >= 20) return false;
+        // Exactly 19 digits — some fit, some don't. Range-check.
+        return value.compareTo(LONG_MIN_BD) >= 0 && value.compareTo(LONG_MAX_BD) <= 0;
     }
 
     /** Preserve cached instance identity across serialization. */
