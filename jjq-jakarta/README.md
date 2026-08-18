@@ -1,7 +1,8 @@
 # jjq-jakarta
 
-Jakarta EE integration for jjq — provides Hibernate persistence types and JAX-RS providers
-that enable `JqValue` as a first-class JSON type in persistence and REST layers.
+Jakarta EE integration for jjq — provides Hibernate persistence types, JPA `AttributeConverter`,
+JAX-RS providers, and Jakarta JSON-B serializers that enable `JqValue` as a first-class JSON type
+across the Jakarta EE stack.
 
 ## Dependencies
 
@@ -13,8 +14,10 @@ that enable `JqValue` as a first-class JSON type in persistence and REST layers.
 </dependency>
 ```
 
-The module depends on `hibernate-core` and `jakarta.ws.rs-api` with `provided` scope —
-your application's runtime (Quarkus, Spring, WildFly) supplies the actual versions.
+The module depends on `hibernate-core`, `jakarta.ws.rs-api`, `jakarta.json.bind-api`, and
+`jakarta.json-api` with `provided` scope — your application's runtime (Quarkus, Spring, WildFly)
+supplies the actual versions. Only include the features you use; unused Jakarta APIs are not
+required at runtime.
 
 ## Hibernate Persistence
 
@@ -103,6 +106,33 @@ public class HibernateConfig {
 hibernate.type.json_format_mapper=io.hyperfoil.tools.jjq.jakarta.JqValueFormatMapper
 ```
 
+## JPA AttributeConverter (portable)
+
+For portable JPA persistence that works with any JPA provider (Hibernate, EclipseLink,
+OpenJPA), use the `JqValueConverter`:
+
+```java
+import io.hyperfoil.tools.jjq.jakarta.JqValueConverter;
+
+@Entity
+public class MyEntity {
+
+    @Convert(converter = JqValueConverter.class)
+    @Column(columnDefinition = "TEXT")
+    private JqValue metadata;
+}
+```
+
+The converter is annotated with `@Converter(autoApply = true)`, so all `JqValue` fields
+are automatically converted without requiring `@Convert` on each field.
+
+- **Write:** `JqValue.toJsonString()` -> VARCHAR/TEXT column
+- **Read:** `JqValues.parse(String)` -> `JqValue`
+- `null` database values map to Java `null`
+
+For better performance on PostgreSQL, prefer the Hibernate-specific `JqValueJdbcType` (BYTEA)
+or `JqValueFormatMapper` (JSONB) described above.
+
 ## JAX-RS Providers
 
 The module includes `@Provider`-annotated `MessageBodyReader` and `MessageBodyWriter`
@@ -142,6 +172,26 @@ public class DataResource {
 }
 ```
 
+### Query/path parameter conversion
+
+The module includes a `ParamConverterProvider` that enables `JqValue` as a type for
+`@QueryParam`, `@PathParam`, `@HeaderParam`, and `@FormParam` parameters:
+
+```java
+@GET
+@Path("/search")
+public Response search(@QueryParam("filter") JqValue filter) {
+    // filter is parsed from the JSON query parameter string
+    // e.g., /search?filter={"status":"active","limit":10}
+    String status = filter.getField("status").asString("all");
+    return Response.ok(service.search(status)).build();
+}
+```
+
+The `JqValueParamConverterProvider` is annotated with `@Provider` and auto-discovered.
+It parses JSON strings from request parameters via `JqValues.parse()` and serializes
+back via `JqValue.toJsonString()`.
+
 ### Building JSON responses
 
 Use the `JqObject.builder()` and `JqArray.arrayBuilder()` APIs to construct JSON values:
@@ -157,6 +207,67 @@ JqObject response = JqObject.builder()
         .add(JqObject.builder().put("id", 2).put("name", "second").build())
         .build())
     .build();
+```
+
+## Jakarta JSON-B Support
+
+For pure Jakarta EE environments that use JSON-B instead of Jackson (Open Liberty, Payara,
+etc.), the module provides `JsonbSerializer` and `JsonbDeserializer` implementations:
+
+```java
+import io.hyperfoil.tools.jjq.jakarta.JqValueJsonbSerializer;
+import io.hyperfoil.tools.jjq.jakarta.JqValueJsonbDeserializer;
+import jakarta.json.bind.Jsonb;
+import jakarta.json.bind.JsonbBuilder;
+import jakarta.json.bind.JsonbConfig;
+
+JsonbConfig config = new JsonbConfig()
+    .withSerializers(new JqValueJsonbSerializer())
+    .withDeserializers(new JqValueJsonbDeserializer());
+Jsonb jsonb = JsonbBuilder.create(config);
+
+// Serialize
+String json = jsonb.toJson(myJqValue, JqValue.class);
+
+// Deserialize
+JqValue value = jsonb.fromJson(jsonString, JqValue.class);
+```
+
+### Per-field annotation
+
+You can also register the serializers on individual entity fields:
+
+```java
+import jakarta.json.bind.annotation.JsonbTypeSerializer;
+import jakarta.json.bind.annotation.JsonbTypeDeserializer;
+
+public class MyEntity {
+    public String name;
+
+    @JsonbTypeSerializer(JqValueJsonbSerializer.class)
+    @JsonbTypeDeserializer(JqValueJsonbDeserializer.class)
+    public JqValue metadata;
+}
+```
+
+### POJOs with JqValue fields
+
+Once registered, JqValue fields in POJOs are automatically handled:
+
+```java
+public class Config {
+    public String name;
+    public JqValue settings;  // serialized as nested JSON
+}
+
+Config config = new Config();
+config.name = "production";
+config.settings = JqValues.parse("{\"timeout\":30,\"retries\":3}");
+
+String json = jsonb.toJson(config);
+// {"name":"production","settings":{"timeout":30,"retries":3}}
+
+Config restored = jsonb.fromJson(json, Config.class);
 ```
 
 ## Performance

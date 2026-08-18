@@ -10,7 +10,7 @@
 
     <artifactId>jjq-jakarta</artifactId>
     <name>jjq :: Jakarta EE Integration</name>
-    <description>Hibernate FormatMapper and JAX-RS providers for jjq — enables JqValue as a persistence and REST type</description>
+    <description>Jakarta EE integration for jjq — Hibernate persistence, JPA AttributeConverter, JAX-RS providers, and JSON-B serializers for JqValue</description>
 
     <properties>
         <hibernate.version>7.3.2.Final</hibernate.version>

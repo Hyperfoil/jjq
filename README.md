@@ -12,7 +12,8 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 - **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing with SWAR scanning, field name interning. 1.3-2.4x faster than Jackson on 10KB inputs; comparable on large files (interning trades parse throughput for zero-allocation queries)
 - **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
-- **Hibernate + JAX-RS integration** — `jjq-jakarta` module provides FormatMapper and MessageBodyReader/Writer for direct `JqValue` persistence and REST endpoints
+- **Jakarta EE integration** — `jjq-jakarta` module provides Hibernate persistence (BYTEA + JSONB), JPA `AttributeConverter`, JAX-RS body/param providers, and JSON-B serializers
+- **Jackson Module** — `jjq-jackson` includes `JqValueModule` for native `JqValue` serialization in POJOs via `ObjectMapper`
 - **Multiple JSON adapters** — Jackson, fastjson2, and byte[] adapters with lazy zero-copy conversion
 - **Java 21+** — leverages sealed classes, records, and pattern matching
 
@@ -21,9 +22,9 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | Module | Description |
 |--------|-------------|
 | `jjq-core` | Lexer, parser, AST, bytecode VM, builtins (zero external dependencies) |
-| `jjq-jackson` | Jackson databind adapter — `JsonNode` ↔ `JqValue` conversion with lazy wrapping |
+| `jjq-jackson` | Jackson integration — `JsonNode` ↔ `JqValue` conversion, `JqValueModule` for native POJO serialization |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
-| `jjq-jakarta` | Hibernate `FormatMapper` and JAX-RS `MessageBodyReader`/`Writer` for `JqValue` persistence and REST |
+| `jjq-jakarta` | Hibernate persistence, JPA `AttributeConverter`, JAX-RS providers, `ParamConverter`, and JSON-B serializers |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
@@ -271,18 +272,35 @@ JqObject without = result.without("age");
 
 ### Jackson integration
 
+Register `JqValueModule` on an `ObjectMapper` to natively serialize/deserialize `JqValue` fields
+in POJOs — no manual conversion needed:
+
 ```java
-import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.hyperfoil.tools.jjq.jackson.JqValueModule;
 
 ObjectMapper mapper = new ObjectMapper();
-JacksonJqEngine engine = new JacksonJqEngine(mapper);
+mapper.registerModule(new JqValueModule());
 
+// POJOs with JqValue fields work automatically
+record Config(String name, JqValue settings) {}
+String json = mapper.writeValueAsString(new Config("prod", myJqValue));
+Config restored = mapper.readValue(json, Config.class);
+```
+
+Use `JacksonJqEngine` to apply jq filters to Jackson `JsonNode` trees:
+
+```java
+import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
+
+JacksonJqEngine engine = new JacksonJqEngine(mapper);
 JqProgram program = engine.compile(".users[] | {name, email}");
 JsonNode input = mapper.readTree(requestBody);
 List<JsonNode> results = engine.apply(program, input);
 ```
+
+See the [jjq-jackson README](jjq-jackson/README.md) for full details on lazy conversion, Spring Boot,
+and Quarkus integration.
 
 ### JSONata support (jjq-jsonata)
 
@@ -300,61 +318,60 @@ JqValue result = program.apply(data);
 
 Supports navigation, operators, predicates, 35+ built-in functions, implicit array mapping, variable binding, lambdas (`$map`/`$filter`/`$reduce`), `~>` pipe operator, `**` recursive descent, and more. See the [jjq-jsonata README](jjq-jsonata/README.md) for full details and conformance status.
 
-### Hibernate / JAX-RS integration (jjq-jakarta)
+### Jakarta EE integration (jjq-jakarta)
 
-Use `JqValue` directly as a Hibernate entity field type and in REST endpoints.
+Use `JqValue` directly as a Hibernate entity field type, in REST endpoints, and with JSON-B.
 
-**BYTEA column with byte[] I/O (recommended)** — zero-String persistence using direct byte serialization:
+**Hibernate persistence** — BYTEA (recommended) or JSONB columns:
 
 ```java
 @Entity
 public class MyEntity {
+    // Option 1: BYTEA — zero-copy byte[] I/O (recommended)
     @Column(columnDefinition = "BYTEA")
     @org.hibernate.annotations.JdbcType(JqValueJdbcType.class)
     @org.hibernate.annotations.JavaType(JqValueJavaType.class)
     @Mutability(Immutability.class)
     public JqValue data;
+
+    // Option 2: Portable JPA — works with any JPA provider
+    @Convert(converter = JqValueConverter.class)
+    @Column(columnDefinition = "TEXT")
+    public JqValue metadata;
 }
 ```
 
-This uses `JqValues.serializeToBytes()` for writes and `JqValues.parse(byte[])` for reads — no intermediate String allocation. Deferred string values from byte parsing are copied as raw bytes during serialization.
-
-**JSONB column with FormatMapper (alternative)** — uses String I/O via Hibernate's FormatMapper SPI:
-
-```java
-@Entity
-public class MyEntity {
-    @Column(columnDefinition = "JSONB")
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Mutability(Immutability.class)
-    public JqValue data;
-}
-```
-
-Register the FormatMapper for Quarkus:
-```java
-@ApplicationScoped
-@PersistenceUnitExtension
-@JsonFormat
-public class MyFormatMapper extends JqValueFormatMapper {}
-```
-
-**REST endpoints** (both approaches):
+**JAX-RS providers** — auto-discovered via `@Provider`:
 
 ```java
 @POST @Path("/upload")
-public Response upload(JqValue data) {
+public Response upload(JqValue data) {           // MessageBodyReader
     service.store(data);
     return Response.ok().build();
 }
 
 @GET @Path("/{id}")
-public JqValue get(@PathParam("id") long id) {
+public JqValue get(@PathParam("id") long id) {   // MessageBodyWriter
     return service.load(id);
+}
+
+@GET @Path("/search")
+public Response search(@QueryParam("filter") JqValue filter) {  // ParamConverter
+    return Response.ok(service.search(filter)).build();
 }
 ```
 
-See the [jjq-jakarta README](jjq-jakarta/README.md) for full setup details.
+**JSON-B support** — for environments using JSON-B instead of Jackson:
+
+```java
+JsonbConfig config = new JsonbConfig()
+    .withSerializers(new JqValueJsonbSerializer())
+    .withDeserializers(new JqValueJsonbDeserializer());
+Jsonb jsonb = JsonbBuilder.create(config);
+```
+
+See the [jjq-jakarta README](jjq-jakarta/README.md) for full setup details, including
+Quarkus and Spring Boot configuration.
 
 ### With variables
 
@@ -626,7 +643,8 @@ jq uses arbitrary-precision integers internally. jjq uses `long` with `BigDecima
 - [User Guide](docs/guide.md) — CLI usage, Java API, integration patterns
 - [Performance Guide](docs/performance.md) — benchmarking methodology, profiling, optimization history
 - [Profiling Guide](docs/profiling-guide.md) — JMH profiler recipes, async-profiler flame graphs
-- [jjq-jakarta README](jjq-jakarta/README.md) — Hibernate and JAX-RS integration
+- [jjq-jackson README](jjq-jackson/README.md) — Jackson Module, JacksonJqEngine, JsonNode conversion
+- [jjq-jakarta README](jjq-jakarta/README.md) — Hibernate, JPA, JAX-RS, and JSON-B integration
 
 ## License
 
