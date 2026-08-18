@@ -165,6 +165,60 @@ public final class JqObject implements JqValue {
         return of(key, JqNumber.of(value));
     }
 
+    /**
+     * Create a JqObject from key-value pairs with automatic value wrapping.
+     * Keys must be {@code String}. Values are auto-wrapped:
+     * <ul>
+     *   <li>{@code null} → {@link JqNull#NULL}</li>
+     *   <li>{@link JqValue} → used as-is</li>
+     *   <li>{@link String} → {@link JqString#of(String)}</li>
+     *   <li>{@link Number} → {@link JqNumber#of(Number)}</li>
+     *   <li>{@link Boolean} → {@link JqBoolean#of(boolean)}</li>
+     * </ul>
+     *
+     * <p>This enables concise object construction without explicit wrapping:</p>
+     * <pre>{@code
+     * JqObject obj = JqObject.ofEntries(
+     *     "type", "header",
+     *     "text", "Hello world",
+     *     "count", 42,
+     *     "active", true,
+     *     "nested", someJqValue
+     * );
+     * }</pre>
+     *
+     * @throws IllegalArgumentException if the number of arguments is odd or a key is not a String
+     */
+    public static JqObject ofEntries(Object... keysAndValues) {
+        if (keysAndValues.length == 0) return EMPTY;
+        if (keysAndValues.length % 2 != 0) {
+            throw new IllegalArgumentException("Arguments must be key-value pairs (got " + keysAndValues.length + " arguments)");
+        }
+        int n = keysAndValues.length / 2;
+        String[] keys = new String[n];
+        JqValue[] vals = new JqValue[n];
+        for (int i = 0; i < n; i++) {
+            Object key = keysAndValues[i * 2];
+            if (!(key instanceof String k)) {
+                throw new IllegalArgumentException("Key at position " + (i * 2) + " must be a String, got: " + (key == null ? "null" : key.getClass().getName()));
+            }
+            keys[i] = k;
+            vals[i] = coerceToJqValue(keysAndValues[i * 2 + 1]);
+        }
+        return new JqObject(keys, vals, n, null);
+    }
+
+    /** Coerce a Java object to a JqValue for the auto-wrapping factory methods. */
+    private static JqValue coerceToJqValue(Object value) {
+        if (value == null) return JqNull.NULL;
+        if (value instanceof JqValue jv) return jv;
+        if (value instanceof String s) return JqString.of(s);
+        if (value instanceof Number n) return JqNumber.of(n);
+        if (value instanceof Boolean b) return JqBoolean.of(b);
+        throw new IllegalArgumentException("Cannot coerce " + value.getClass().getName() + " to JqValue. " +
+                "Supported types: null, JqValue, String, Number, Boolean");
+    }
+
     // ========================================================================
     //  Copy-on-write mutation methods
     // ========================================================================

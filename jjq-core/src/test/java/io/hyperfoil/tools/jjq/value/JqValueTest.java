@@ -2815,4 +2815,85 @@ class JqValueTest {
         assertEquals(1, single.size());
         assertEquals(1, ((JqObject) single.get(0)).get("a").intValue());
     }
+
+    // ---- JqObject.ofEntries auto-wrapping ----
+
+    @Test
+    void ofEntries_empty() {
+        JqObject obj = JqObject.ofEntries();
+        assertEquals(JqObject.EMPTY, obj);
+    }
+
+    @Test
+    void ofEntries_stringValues() {
+        JqObject obj = JqObject.ofEntries("type", "header", "text", "hello");
+        assertEquals(JqString.of("header"), obj.get("type"));
+        assertEquals(JqString.of("hello"), obj.get("text"));
+    }
+
+    @Test
+    void ofEntries_mixedTypes() {
+        JqObject obj = JqObject.ofEntries(
+                "name", "Alice",
+                "age", 30,
+                "score", 95.5,
+                "active", true,
+                "data", JqNull.NULL
+        );
+        assertEquals(JqString.of("Alice"), obj.get("name"));
+        assertEquals(JqNumber.of(30), obj.get("age"));
+        assertEquals(95.5, obj.get("score").doubleValue(), 0.001);
+        assertEquals(JqBoolean.TRUE, obj.get("active"));
+        assertEquals(JqNull.NULL, obj.get("data"));
+    }
+
+    @Test
+    void ofEntries_nullValue() {
+        JqObject obj = JqObject.ofEntries("key", null);
+        assertEquals(JqNull.NULL, obj.get("key"));
+    }
+
+    @Test
+    void ofEntries_jqValuePassthrough() {
+        JqArray arr = JqArray.of(java.util.List.of(JqNumber.of(1)));
+        JqObject nested = JqObject.ofEntries("inner", arr);
+        assertSame(arr, nested.get("inner"));
+    }
+
+    @Test
+    void ofEntries_oddArgCount() {
+        assertThrows(IllegalArgumentException.class, () -> JqObject.ofEntries("key"));
+    }
+
+    @Test
+    void ofEntries_nonStringKey() {
+        assertThrows(IllegalArgumentException.class, () -> JqObject.ofEntries(42, "value"));
+    }
+
+    @Test
+    void ofEntries_unsupportedValueType() {
+        assertThrows(IllegalArgumentException.class, () -> JqObject.ofEntries("key", new Object()));
+    }
+
+    @Test
+    void ofEntries_preservesInsertionOrder() {
+        JqObject obj = JqObject.ofEntries("z", "last", "a", "first", "m", "middle");
+        var keys = new java.util.ArrayList<>(obj.keys());
+        assertEquals(java.util.List.of("z", "a", "m"), keys);
+    }
+
+    @Test
+    void ofEntries_nestedObject() {
+        // Simulates Slack Block Kit pattern that prompted this feature
+        JqObject block = JqObject.ofEntries(
+                "type", "header",
+                "text", JqObject.ofEntries(
+                        "type", "plain_text",
+                        "text", "Change detected"
+                )
+        );
+        assertEquals("header", block.get("type").stringValue());
+        assertEquals("plain_text", block.get("text").getField("type").stringValue());
+        assertEquals("Change detected", block.get("text").getField("text").stringValue());
+    }
 }
