@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 public sealed interface JqValue extends Comparable<JqValue>, Serializable
         permits JqNull, JqBoolean, JqNumber, JqString, JqArray, JqObject {
@@ -283,6 +284,39 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     default JqValue withElement(int index, JqValue value) {
         if (this instanceof JqArray arr) return arr.with(index, value);
         throw new JqTypeError("Cannot set element on " + type().jqName());
+    }
+
+    /**
+     * Get a field value from an object if the field exists, returning an {@link java.util.Optional}.
+     * Returns an empty Optional if the key is missing or this is not an object.
+     * Returns {@code Optional.of(value)} if the key exists — including
+     * {@code Optional.of(JqNull.NULL)} when the key is present with a JSON null value.
+     *
+     * <p>This distinguishes between a missing key and a key with a null value,
+     * which is not possible with {@link #getField(String)} (both return {@link JqNull#NULL}).
+     * Aligns with the JDK 28 {@code jdk.incubator.json.JsonValue.tryGet(String)} convention.</p>
+     *
+     * <p>Use this when you need to distinguish "key absent" from "key present with null value",
+     * or when you want to use {@code Optional} combinators:</p>
+     * <pre>{@code
+     * // Extract a string if the field exists, null otherwise
+     * String filter = config.tryGet("filter").map(v -> v.asString(null)).orElse(null);
+     *
+     * // Execute logic only if the field is present
+     * data.tryGet("callback").ifPresent(cb -> handleCallback(cb));
+     *
+     * // Provide a default JqValue for missing fields
+     * JqValue timeout = config.tryGet("timeout").orElse(JqNumber.of(30));
+     * }</pre>
+     *
+     * @param key the field name to look up
+     * @return an Optional containing the field value, or empty if the key is missing or
+     *         this is not an object
+     * @see #getField(String)
+     */
+    default Optional<JqValue> tryGet(String key) {
+        if (this instanceof JqObject obj) return obj.tryGet(key);
+        return Optional.empty();
     }
 
     /**

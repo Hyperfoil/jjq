@@ -2985,4 +2985,130 @@ class JqValueTest {
         assertEquals("plain_text", block.get("text").getField("type").stringValue());
         assertEquals("Change detected", block.get("text").getField("text").stringValue());
     }
+
+    // ---- tryGet (Optional-based field access) ----
+
+    @Test
+    void tryGet_presentField() {
+        JqObject obj = (JqObject) JqValues.parse("{\"name\":\"Alice\",\"age\":30}");
+        var name = obj.tryGet("name");
+        assertTrue(name.isPresent());
+        assertEquals("Alice", name.get().stringValue());
+    }
+
+    @Test
+    void tryGet_missingField() {
+        JqObject obj = (JqObject) JqValues.parse("{\"name\":\"Alice\"}");
+        var missing = obj.tryGet("email");
+        assertTrue(missing.isEmpty());
+    }
+
+    @Test
+    void tryGet_nullValueField() {
+        // Key present with JSON null value — should return Optional.of(JqNull.NULL),
+        // NOT Optional.empty(). This distinguishes "key absent" from "key is null".
+        JqObject obj = (JqObject) JqValues.parse("{\"data\":null}");
+        var data = obj.tryGet("data");
+        assertTrue(data.isPresent());
+        assertEquals(JqNull.NULL, data.get());
+    }
+
+    @Test
+    void tryGet_emptyObject() {
+        JqObject obj = JqObject.EMPTY;
+        assertTrue(obj.tryGet("anything").isEmpty());
+    }
+
+    @Test
+    void tryGet_mapWithDefault() {
+        JqObject obj = (JqObject) JqValues.parse("{\"timeout\":30}");
+        // Present field — map extracts value
+        long timeout = obj.tryGet("timeout").map(v -> v.asLong(0)).orElse(60L);
+        assertEquals(30L, timeout);
+        // Missing field — uses default
+        long retries = obj.tryGet("retries").map(v -> v.asLong(0)).orElse(3L);
+        assertEquals(3L, retries);
+    }
+
+    @Test
+    void tryGet_ifPresent() {
+        JqObject obj = (JqObject) JqValues.parse("{\"callback\":\"http://example.com\"}");
+        var found = new boolean[]{false};
+        obj.tryGet("callback").ifPresent(v -> found[0] = true);
+        assertTrue(found[0]);
+        obj.tryGet("missing").ifPresent(v -> fail("Should not be called"));
+    }
+
+    @Test
+    void tryGet_orElseJqValue() {
+        JqObject obj = (JqObject) JqValues.parse("{\"port\":8080}");
+        JqValue port = obj.tryGet("port").orElse(JqNumber.of(3000));
+        assertEquals(JqNumber.of(8080), port);
+        JqValue host = obj.tryGet("host").orElse(JqString.of("localhost"));
+        assertEquals(JqString.of("localhost"), host);
+    }
+
+    @Test
+    void tryGet_onJqValue_nonObject() {
+        // tryGet on non-object JqValue types returns empty
+        assertTrue(JqString.of("hello").tryGet("key").isEmpty());
+        assertTrue(JqNumber.of(42).tryGet("key").isEmpty());
+        assertTrue(JqBoolean.TRUE.tryGet("key").isEmpty());
+        assertTrue(JqNull.NULL.tryGet("key").isEmpty());
+        assertTrue(JqArray.of(List.of(JqNumber.of(1))).tryGet("key").isEmpty());
+    }
+
+    @Test
+    void tryGet_onJqValue_object() {
+        // tryGet on JqValue that IS an object — delegates to JqObject.tryGet
+        JqValue value = JqValues.parse("{\"x\":1}");
+        var x = value.tryGet("x");
+        assertTrue(x.isPresent());
+        assertEquals(JqNumber.of(1), x.get());
+        assertTrue(value.tryGet("y").isEmpty());
+    }
+
+    @Test
+    void tryGet_eliminatesHasGetPattern() {
+        // This test documents the pattern that tryGet replaces:
+        // Before: config.has(KEY) ? config.get(KEY).asString(null) : null
+        // After:  config.tryGet(KEY).map(v -> v.asString(null)).orElse(null)
+        JqObject config = (JqObject) JqValues.parse("{\"filter\":\".name\",\"other\":null}");
+
+        // Present string field
+        String filter = config.tryGet("filter").map(v -> v.asString(null)).orElse(null);
+        assertEquals(".name", filter);
+
+        // Missing field
+        String missing = config.tryGet("missing").map(v -> v.asString(null)).orElse(null);
+        assertNull(missing);
+
+        // Present field with null value — returns null via asString(null) on JqNull
+        String other = config.tryGet("other").map(v -> v.asString(null)).orElse(null);
+        assertNull(other);
+    }
+
+    @Test
+    void tryGet_singleFieldObject() {
+        // Tests the size==1 fast path
+        JqObject obj = JqObject.of("only", JqString.of("value"));
+        assertTrue(obj.tryGet("only").isPresent());
+        assertEquals("value", obj.tryGet("only").get().stringValue());
+        assertTrue(obj.tryGet("other").isEmpty());
+    }
+
+    @Test
+    void tryGet_largeObject() {
+        // Tests the hash-index path (> HASH_THRESHOLD keys)
+        var builder = JqObject.builder(40);
+        for (int i = 0; i < 40; i++) {
+            builder.put("field" + i, (long) i);
+        }
+        JqObject obj = builder.build();
+        assertTrue(obj.tryGet("field0").isPresent());
+        assertEquals(JqNumber.of(0), obj.tryGet("field0").get());
+        assertTrue(obj.tryGet("field39").isPresent());
+        assertEquals(JqNumber.of(39), obj.tryGet("field39").get());
+        assertTrue(obj.tryGet("field40").isEmpty());
+    }
 }

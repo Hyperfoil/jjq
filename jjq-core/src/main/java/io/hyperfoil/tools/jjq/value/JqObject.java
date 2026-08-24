@@ -527,6 +527,39 @@ public final class JqObject implements JqValue {
         return idx >= 0 ? values[idx] : JqNull.NULL;
     }
 
+    /**
+     * Get a field value if the key exists, returning an {@link java.util.Optional}.
+     * Returns an empty Optional for missing keys, {@code Optional.of(value)} for
+     * present keys — including {@code Optional.of(JqNull.NULL)} when the key is
+     * present with a JSON null value.
+     *
+     * <p>This distinguishes between "key missing" and "key present with null value",
+     * unlike {@link #get(String)} which returns {@link JqNull#NULL} for both cases.</p>
+     *
+     * @param key the field name to look up
+     * @return Optional containing the value, or empty if the key is missing
+     * @see #get(String)
+     * @see #has(String)
+     */
+    public Optional<JqValue> tryGet(String key) {
+        if (externalMap != null) {
+            // External maps (lazy adapters) never store Java null — JqNull.NULL is used instead.
+            // If get() returns null, the key does not exist.
+            JqValue v = externalMap.get(key);
+            return v != null ? Optional.of(v) : Optional.empty();
+        }
+        if (size == 0) return Optional.empty();
+        if (size == 1) return key.equals(keys[0]) ? Optional.of(values[0]) : Optional.empty();
+        if (size <= HASH_THRESHOLD) {
+            for (int i = 0; i < size; i++) {
+                if (key.equals(keys[i])) return Optional.of(values[i]);
+            }
+            return Optional.empty();
+        }
+        int idx = hashLookup(key);
+        return idx >= 0 ? Optional.of(values[idx]) : Optional.empty();
+    }
+
     public boolean has(String key) {
         if (externalMap != null) return externalMap.containsKey(key);
         if (size == 0) return false;
