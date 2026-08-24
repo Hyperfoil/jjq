@@ -3111,4 +3111,93 @@ class JqValueTest {
         assertEquals(JqNumber.of(39), obj.tryGet("field39").get());
         assertTrue(obj.tryGet("field40").isEmpty());
     }
+
+    // ---- SWAR whitespace skipping (byte parser) ----
+
+    @Test
+    void parseBytes_prettyPrintedJson() {
+        // Deep indentation exercises the SWAR whitespace skip path (>8 bytes of whitespace)
+        String pretty = """
+                {
+                    "level1": {
+                        "level2": {
+                            "level3": {
+                                "level4": {
+                                    "value": 42,
+                                    "name": "deep",
+                                    "active": true,
+                                    "data": null,
+                                    "list": [1, 2, 3]
+                                }
+                            }
+                        }
+                    }
+                }
+                """;
+        JqValue parsed = JqValues.parse(pretty.getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(JqObject.class, parsed);
+        assertEquals(42L, parsed.at("/level1/level2/level3/level4/value").longValue());
+        assertEquals("deep", parsed.at("/level1/level2/level3/level4/name").stringValue());
+        assertTrue(parsed.at("/level1/level2/level3/level4/active").booleanValue());
+        assertTrue(parsed.at("/level1/level2/level3/level4/data").isNull());
+        assertEquals(3, parsed.at("/level1/level2/level3/level4/list").length());
+    }
+
+    @Test
+    void parseBytes_heavyWhitespace() {
+        // 64 spaces of indentation — forces multiple SWAR iterations
+        String indent = " ".repeat(64);
+        String json = "{\n" + indent + "\"key\": \"value\"\n}";
+        JqValue parsed = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(JqObject.class, parsed);
+        assertEquals("value", ((JqObject) parsed).get("key").stringValue());
+    }
+
+    @Test
+    void parseBytes_tabIndented() {
+        // Tabs as whitespace
+        String json = "{\n\t\t\t\"key\":\t\"value\",\n\t\t\t\"num\":\t42\n}";
+        JqValue parsed = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(JqObject.class, parsed);
+        assertEquals("value", ((JqObject) parsed).get("key").stringValue());
+        assertEquals(42L, ((JqObject) parsed).get("num").longValue());
+    }
+
+    @Test
+    void parseBytes_mixedWhitespace() {
+        // Mix of spaces, tabs, newlines, carriage returns
+        String json = "{ \t\n\r \"key\" \t:\n \"value\" \r\n }";
+        JqValue parsed = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(JqObject.class, parsed);
+        assertEquals("value", ((JqObject) parsed).get("key").stringValue());
+    }
+
+    @Test
+    void parseBytes_compactJson() {
+        // Compact JSON — no whitespace at all. SWAR path exits immediately.
+        String json = "{\"a\":1,\"b\":[2,3],\"c\":{\"d\":true}}";
+        JqValue parsed = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(JqObject.class, parsed);
+        assertEquals(1L, parsed.getField("a").longValue());
+        assertEquals(2, parsed.getField("b").length());
+        assertTrue(parsed.at("/c/d").booleanValue());
+    }
+
+    @Test
+    void parseBytes_roundTripPrettyPrinted() {
+        // Parse compact, pretty-print, re-parse from bytes — verifies SWAR handles the output
+        JqValue original = JqValues.parse("{\"users\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]}");
+        String pretty = JqValues.toPrettyJsonString(original);
+        JqValue reparsed = JqValues.parse(pretty.getBytes(StandardCharsets.UTF_8));
+        assertEquals(original, reparsed);
+    }
+
+    @Test
+    void parseBytes_arrayWithWhitespace() {
+        // Array elements separated by whitespace and newlines
+        String json = "[\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  10\n]";
+        JqValue parsed = JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(JqArray.class, parsed);
+        assertEquals(10, parsed.length());
+    }
 }

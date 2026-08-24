@@ -95,6 +95,52 @@ final class SwarUtil {
     }
 
     // ========================================================================
+    //  Whitespace detection (JSON RFC 8259: SP, TAB, LF, CR)
+    // ========================================================================
+
+    /** Pre-compiled patterns for JSON whitespace bytes. */
+    static final long SPACE_PATTERN = compilePattern((byte) ' ');    // 0x20
+    static final long TAB_PATTERN = compilePattern((byte) '\t');     // 0x09
+    static final long NEWLINE_PATTERN = compilePattern((byte) '\n'); // 0x0A
+    static final long CR_PATTERN = compilePattern((byte) '\r');      // 0x0D
+
+    /**
+     * Find the first non-whitespace byte in an 8-byte word.
+     * Returns a bitmask with the high bit set on each byte that is NOT
+     * one of the four JSON whitespace characters (SP, TAB, LF, CR).
+     *
+     * <p>Use {@link #getIndex(long)} on the result to find the byte position
+     * of the first non-whitespace character (0-7), or check if the result
+     * is zero to confirm all 8 bytes are whitespace.</p>
+     *
+     * <p>Cost: 4 XOR + 4 ADD + 4 AND + 3 OR + 1 NOT + 1 AND = ~17 ops for 8 bytes
+     * (~2 ops/byte vs ~4 ops/byte for scalar comparison).</p>
+     */
+    static long findNonWhitespace(long word) {
+        long ws = applyPattern(word, SPACE_PATTERN)
+                | applyPattern(word, TAB_PATTERN)
+                | applyPattern(word, NEWLINE_PATTERN)
+                | applyPattern(word, CR_PATTERN);
+        return ~ws & 0x8080808080808080L;
+    }
+
+    /**
+     * Find the first whitespace byte in an 8-byte word.
+     * Returns a bitmask with the high bit set on each byte that IS
+     * one of the four JSON whitespace characters (SP, TAB, LF, CR).
+     *
+     * <p>Use {@link #getIndex(long)} on the result to find the byte position
+     * of the first whitespace character (0-7), or check if the result is zero
+     * to confirm no whitespace in the word.</p>
+     */
+    static long findWhitespace(long word) {
+        return applyPattern(word, SPACE_PATTERN)
+             | applyPattern(word, TAB_PATTERN)
+             | applyPattern(word, NEWLINE_PATTERN)
+             | applyPattern(word, CR_PATTERN);
+    }
+
+    // ========================================================================
     //  ASCII detection
     // ========================================================================
 
