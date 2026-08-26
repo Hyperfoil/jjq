@@ -14,7 +14,7 @@ import jakarta.persistence.Converter;
  * JPA provider (Hibernate, EclipseLink, OpenJPA, etc.) and stores JSON as
  * a VARCHAR/TEXT column.</p>
  *
- * <p>Usage on entity fields:</p>
+ * <p>Usage on entity fields — requires explicit {@code @Convert} annotation:</p>
  * <pre>{@code
  * @Entity
  * public class MyEntity {
@@ -24,19 +24,24 @@ import jakarta.persistence.Converter;
  * }
  * }</pre>
  *
- * <p>If your database supports JSONB columns and you want binary storage
- * with zero-copy I/O, use the Hibernate-specific {@link JqValueJdbcType}
- * and {@link JqValueJavaType} annotations instead.</p>
+ * <p>Auto-apply is disabled ({@code autoApply = false}) to avoid conflicting
+ * with the Hibernate-specific {@link JqValueJdbcType}/{@link JqValueJavaType}
+ * binary mapping. If auto-apply were enabled, this String-based converter would
+ * intercept all {@code JqValue} fields — including those explicitly annotated
+ * for BYTEA storage — causing a {@code ClassCastException}.</p>
  *
- * <p>The {@code @Converter(autoApply = true)} annotation makes this converter
- * apply automatically to all {@code JqValue} fields without requiring
- * {@code @Convert} on each field. To disable auto-apply, subclass and
- * override the annotation.</p>
+ * <p>If you want auto-apply behavior, subclass this converter and override
+ * the annotation:</p>
+ * <pre>{@code
+ * @Converter(autoApply = true)
+ * public class AutoJqValueConverter extends JqValueConverter {}
+ * }</pre>
  *
  * @see JqValueJdbcType
  * @see JqValueJavaType
+ * @see JqValueColumn
  */
-@Converter(autoApply = true)
+@Converter(autoApply = false)
 public class JqValueConverter implements AttributeConverter<JqValue, String> {
 
     /** Creates a new JqValueConverter. */

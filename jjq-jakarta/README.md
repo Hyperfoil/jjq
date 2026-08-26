@@ -137,8 +137,9 @@ public class MyEntity {
 }
 ```
 
-The converter is annotated with `@Converter(autoApply = true)`, so all `JqValue` fields
-are automatically converted without requiring `@Convert` on each field.
+Each field requires an explicit `@Convert` annotation. Auto-apply is intentionally
+disabled to avoid conflicting with the Hibernate-specific `@JdbcType`/`@JavaType`
+BYTEA mapping on other `JqValue` fields in the same entity.
 
 - **Write:** `JqValue.toJsonString()` -> VARCHAR/TEXT column
 - **Read:** `JqValues.parse(String)` -> `JqValue`

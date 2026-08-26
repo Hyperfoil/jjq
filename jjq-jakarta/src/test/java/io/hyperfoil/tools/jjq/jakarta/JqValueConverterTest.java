@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.jakarta;
 
 import io.hyperfoil.tools.jjq.value.*;
+import jakarta.persistence.Converter;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -11,6 +12,19 @@ import static org.junit.jupiter.api.Assertions.*;
 class JqValueConverterTest {
 
     private final JqValueConverter converter = new JqValueConverter();
+
+    // ---- autoApply must be false (issue #60) ----
+
+    @Test
+    void autoApplyIsFalse() {
+        // autoApply = true would intercept ALL JqValue fields, including those
+        // with explicit @JdbcType(JqValueJdbcType.class) for BYTEA storage,
+        // causing ClassCastException (String cannot be cast to JqValue).
+        Converter annotation = JqValueConverter.class.getAnnotation(Converter.class);
+        assertNotNull(annotation, "@Converter annotation must be present");
+        assertFalse(annotation.autoApply(),
+                "@Converter(autoApply) must be false to avoid conflicting with @JdbcType/@JavaType BYTEA mapping");
+    }
 
     // ---- convertToDatabaseColumn ----
 
