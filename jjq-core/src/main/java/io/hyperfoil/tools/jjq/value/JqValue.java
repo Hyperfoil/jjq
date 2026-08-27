@@ -432,8 +432,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 }
                 yield JqNumber.of(n.decimalValue().add(m.decimalValue()));
             }
-            case JqNumber ignored -> throw new JqTypeError(type().jqName() + " (" + truncateForError(toJsonString()) + ") and "
-                    + other.type().jqName() + " (" + truncateForError(other.toJsonString()) + ") cannot be added");
+            case JqNumber ignored -> throw arithTypeError(this, other, "added");
             case JqString s -> JqString.of(s.stringValue() + other.stringValue());
             case JqArray a -> {
                 var list = new java.util.ArrayList<>(a.arrayValue());
@@ -441,8 +440,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 yield JqArray.of(list);
             }
             case JqObject o -> o.merge((JqObject) other);
-            default -> throw new JqTypeError(type().jqName() + " (" + truncateForError(toJsonString()) + ") and "
-                    + other.type().jqName() + " (" + truncateForError(other.toJsonString()) + ") cannot be added");
+            default -> throw arithTypeError(this, other, "added");
         };
     }
 
@@ -466,8 +464,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 list.removeAll(toRemove);
                 yield JqArray.of(list);
             }
-            default -> throw new JqTypeError(type().jqName() + " (" + truncateForError(toJsonString()) + ") and "
-                    + other.type().jqName() + " (" + truncateForError(other.toJsonString()) + ") cannot be subtracted");
+            default -> throw arithTypeError(this, other, "subtracted");
         };
     }
 
@@ -520,7 +517,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     default JqValue divide(JqValue other) {
         if (this instanceof JqNumber n && other instanceof JqNumber m) {
             if (m.isIntegral() && m.longValue() == 0) {
-                throw new JqTypeError("number (" + n.toJsonString() + ") and number (0) cannot be divided because the divisor is zero");
+                throw divisionByZero(n);
             }
             return JqNumber.of(n.decimalValue().divide(m.decimalValue(), java.math.MathContext.DECIMAL128));
         }
@@ -542,8 +539,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 return JqNumber.of(Double.NaN);
             }
             if (b == 0.0) {
-                throw new JqTypeError("number (" + n.toJsonString() + ") and number (" + m.toJsonString()
-                        + ") cannot be divided (remainder) because the divisor is zero");
+                throw moduloByZero(n, m);
             }
             if (Double.isInfinite(a) && Double.isInfinite(b)) {
                 // jq converts to long long: inf→LLONG_MAX, -inf→LLONG_MIN, then does integer %
@@ -572,7 +568,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
             if (n.isNaN() || n.isInfinite()) return JqNumber.of(-n.doubleValue());
             return JqNumber.of(n.decimalValue().negate());
         }
-        throw new JqTypeError(type().jqName() + " (" + truncateForError(toJsonString()) + ") cannot be negated");
+        throw negateTypeError(this);
     }
 
     @Override
@@ -696,6 +692,29 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * <p>O(1) — no tree walking, no serialization. Designed for cache weighers.</p>
      */
     default int estimatedSizeInBytes() { return 1; }
+
+    // ========================================================================
+    //  Error factory methods — extracted from arithmetic to reduce bytecode
+    //  size of hot default methods (issue #61).
+    // ========================================================================
+
+    private static JqTypeError arithTypeError(JqValue left, JqValue right, String verb) {
+        return new JqTypeError(left.type().jqName() + " (" + truncateForError(left.toJsonString()) + ") and "
+                + right.type().jqName() + " (" + truncateForError(right.toJsonString()) + ") cannot be " + verb);
+    }
+
+    private static JqTypeError divisionByZero(JqNumber n) {
+        return new JqTypeError("number (" + n.toJsonString() + ") and number (0) cannot be divided because the divisor is zero");
+    }
+
+    private static JqTypeError moduloByZero(JqNumber n, JqNumber m) {
+        return new JqTypeError("number (" + n.toJsonString() + ") and number (" + m.toJsonString()
+                + ") cannot be divided (remainder) because the divisor is zero");
+    }
+
+    private static JqTypeError negateTypeError(JqValue val) {
+        return new JqTypeError(val.type().jqName() + " (" + truncateForError(val.toJsonString()) + ") cannot be negated");
+    }
 
     /** Truncate value string for error messages (jq uses 25 chars + "...") */
     private static String truncateForError(String jsonStr) {

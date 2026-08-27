@@ -419,236 +419,22 @@ public final class VirtualMachine {
                             } else {
                                 doBacktrack();
                             }
-                        } else if (val instanceof JqNull) {
-                            throw new JqException("Cannot iterate over null (null)");
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
+                            throw cannotIterate(val);
                         }
                     }
 
                     // Compound field access
                     case DOT_FIELD2 -> push(fieldAccess2(pop(), names[arg1s[curPc]], names[arg2s[curPc]]));
 
-                    // Inlined builtins
-                    case BUILTIN_LENGTH -> {
-                        JqValue val = pop();
-                        if (val instanceof JqNumber n) {
-                            if (n.isNaN() || n.isInfinite()) {
-                                push(JqNumber.of(Math.abs(n.doubleValue())));
-                            } else if (n.isIntegral()) {
-                                push(JqNumber.of(Math.abs(n.longValue())));
-                            } else {
-                                push(JqNumber.of(n.decimalValue().abs()));
-                            }
-                        } else {
-                            push(JqNumber.of(val.length()));
-                        }
-                    }
-
-                    case BUILTIN_TYPE -> {
-                        JqValue val = pop();
-                        push(typeString(val));
-                    }
-
-                    case BUILTIN_KEYS -> {
-                        JqValue val = pop();
-                        if (val instanceof JqObject obj) {
-                            push(obj.sortedKeysAsArray());
-                        } else if (val instanceof JqArray arr) {
-                            var keys = new ArrayList<JqValue>(arr.arrayValue().size());
-                            for (int i = 0; i < arr.arrayValue().size(); i++) keys.add(JqNumber.of(i));
-                            push(JqArray.of(keys));
-                        } else {
-                            throw new JqException(val.type().jqName() + " has no keys");
-                        }
-                    }
-
-                    case BUILTIN_VALUES -> {
-                        JqValue val = pop();
-                        // values is a type-selector (jq 1.7+): select(. != null)
-                        if (val instanceof JqNull) {
-                            doBacktrack();
-                        } else {
-                            push(val);
-                        }
-                    }
-
-                    case BUILTIN_NOT -> {
-                        JqValue val = pop();
-                        push(JqBoolean.of(!val.isTruthy()));
-                    }
-
-                    case BUILTIN_EMPTY -> doBacktrack();
-
-                    case BUILTIN_TOSTRING -> {
-                        JqValue val = pop();
-                        if (val instanceof JqString) push(val);
-                        else push(JqString.of(val.toJsonString()));
-                    }
-
-                    case BUILTIN_TONUMBER -> {
-                        JqValue val = pop();
-                        if (val instanceof JqNumber) push(val);
-                        else if (val instanceof JqString s) {
-                            String str = s.stringValue().trim();
-                            try {
-                                if (str.contains(".") || str.contains("e") || str.contains("E")) {
-                                    push(JqNumber.of(new java.math.BigDecimal(str)));
-                                } else {
-                                    push(JqNumber.of(Long.parseLong(str)));
-                                }
-                            } catch (NumberFormatException e) {
-                                throw new JqException("string (" + JqString.formatForError(s.stringValue()) + ") cannot be parsed as a number");
-                            }
-                        } else {
-                            throw new JqException(val.type().jqName() + " cannot be converted to number");
-                        }
-                    }
-
-                    case BUILTIN_ADD -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var items = arr.arrayValue();
-                            if (items.isEmpty()) { push(JqNull.NULL); break; }
-                            JqValue result = items.getFirst();
-                            for (int i = 1; i < items.size(); i++) {
-                                result = result.add(items.get(i));
-                            }
-                            push(result);
-                        } else {
-                            throw new JqException(val.type().jqName() + " is not iterable");
-                        }
-                    }
-
-                    case BUILTIN_REVERSE -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var list = new ArrayList<>(arr.arrayValue());
-                            java.util.Collections.reverse(list);
-                            push(JqArray.of(list));
-                        } else {
-                            throw new JqException(val.type().jqName() + " cannot be reversed");
-                        }
-                    }
-
-                    case BUILTIN_SORT -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var list = new ArrayList<>(arr.arrayValue());
-                            list.sort(JqValue::compareTo);
-                            push(JqArray.of(list));
-                        } else {
-                            throw new JqException(val.type().jqName() + " cannot be sorted");
-                        }
-                    }
-
-                    case BUILTIN_MIN -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var items = arr.arrayValue();
-                            if (items.isEmpty()) { push(JqNull.NULL); break; }
-                            JqValue min = items.getFirst();
-                            for (int i = 1; i < items.size(); i++) {
-                                if (items.get(i).compareTo(min) < 0) min = items.get(i);
-                            }
-                            push(min);
-                        } else {
-                            throw new JqException(val.type().jqName() + " is not iterable");
-                        }
-                    }
-
-                    case BUILTIN_MAX -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var items = arr.arrayValue();
-                            if (items.isEmpty()) { push(JqNull.NULL); break; }
-                            JqValue max = items.getFirst();
-                            for (int i = 1; i < items.size(); i++) {
-                                if (items.get(i).compareTo(max) > 0) max = items.get(i);
-                            }
-                            push(max);
-                        } else {
-                            throw new JqException(val.type().jqName() + " is not iterable");
-                        }
-                    }
-
-                    case BUILTIN_FLATTEN -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var flat = new ArrayList<JqValue>();
-                            flattenDeep(arr, flat);
-                            push(JqArray.of(flat));
-                        } else {
-                            throw new JqException(val.type().jqName() + " cannot be flattened");
-                        }
-                    }
-
-                    case BUILTIN_UNIQUE -> {
-                        JqValue val = pop();
-                        if (val instanceof JqArray arr) {
-                            var sorted = new ArrayList<>(arr.arrayValue());
-                            sorted.sort(JqValue::compareTo);
-                            var unique = new ArrayList<JqValue>();
-                            JqValue prev = null;
-                            for (JqValue item : sorted) {
-                                if (prev == null || !prev.equals(item)) unique.add(item);
-                                prev = item;
-                            }
-                            push(JqArray.of(unique));
-                        } else {
-                            throw new JqException(val.type().jqName() + " cannot be uniquified");
-                        }
-                    }
-
-                    case BUILTIN_FLOOR -> {
-                        JqValue val = pop();
-                        if (val instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
-                        else throw new JqException(val.type().jqName() + " cannot be floored");
-                    }
-
-                    case BUILTIN_CEIL -> {
-                        JqValue val = pop();
-                        if (val instanceof JqNumber n) push(JqNumber.of((long) Math.ceil(n.doubleValue())));
-                        else throw new JqException(val.type().jqName() + " cannot be ceiled");
-                    }
-
-                    case BUILTIN_ROUND -> {
-                        JqValue val = pop();
-                        if (val instanceof JqNumber n) push(JqNumber.of(Math.round(n.doubleValue())));
-                        else throw new JqException(val.type().jqName() + " cannot be rounded");
-                    }
-
-                    case BUILTIN_ABS -> {
-                        JqValue val = pop();
-                        if (val instanceof JqNumber n) {
-                            if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
-                            else if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
-                            else push(JqNumber.of(n.decimalValue().abs()));
-                        } else if (val instanceof JqNull) {
-                            push(JqNull.NULL);
-                        } else {
-                            // jq: abs on non-number returns the value itself
-                            push(val);
-                        }
-                    }
-
-                    case BUILTIN_TOJSON -> {
-                        JqValue val = pop();
-                        push(JqString.of(JqValues.toJsonStringDepthLimited(val)));
-                    }
-
-                    case BUILTIN_FROMJSON -> {
-                        JqValue val = pop();
-                        if (val instanceof JqString s) {
-                            try {
-                                push(JqValues.parseStrict(s.stringValue()));
-                            } catch (IllegalArgumentException e) {
-                                throw new JqException(e.getMessage());
-                            }
-                        } else {
-                            throw new JqException(val.type().jqName() + " cannot be parsed as JSON");
-                        }
-                    }
+                    // Inlined builtins — dispatched to separate method to keep runLoop() small
+                    // for JIT optimization (see issue #61, Norman Maurer's inlining article).
+                    case BUILTIN_LENGTH, BUILTIN_TYPE, BUILTIN_KEYS, BUILTIN_VALUES,
+                         BUILTIN_NOT, BUILTIN_EMPTY, BUILTIN_TOSTRING, BUILTIN_TONUMBER,
+                         BUILTIN_ADD, BUILTIN_REVERSE, BUILTIN_SORT, BUILTIN_MIN, BUILTIN_MAX,
+                         BUILTIN_FLATTEN, BUILTIN_UNIQUE, BUILTIN_FLOOR, BUILTIN_CEIL,
+                         BUILTIN_ROUND, BUILTIN_ABS, BUILTIN_TOJSON, BUILTIN_FROMJSON ->
+                        dispatchBuiltin(ops[curPc]);
 
                     // Arithmetic
                     case ADD -> { JqValue r = pop(); JqValue l = pop(); push(l.add(r)); }
@@ -705,14 +491,9 @@ public final class VirtualMachine {
                     case LOAD_VAR -> {
                         String name = names[arg1s[curPc]];
                         if ("ENV".equals(name)) {
-                            var map = new java.util.LinkedHashMap<String, JqValue>();
-                            System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
-                            push(JqObject.ofTrusted(map));
+                            push(buildEnvObject());
                         } else if ("__loc__".equals(name)) {
-                            var map = new java.util.LinkedHashMap<String, JqValue>();
-                            map.put("file", JqString.of("<top-level>"));
-                            map.put("line", JqNumber.of(1));
-                            push(JqObject.ofTrusted(map));
+                            push(buildLocObject());
                         } else {
                             push(env.getVariable(name));
                         }
@@ -758,7 +539,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
+                            throw cannotIterate(val);
                         }
                     }
 
@@ -773,7 +554,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
+                            throw cannotIterate(val);
                         }
                     }
 
@@ -787,7 +568,7 @@ public final class VirtualMachine {
                         } else if (val instanceof JqNull) {
                             push(initVal);
                         } else {
-                            throw new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
+                            throw cannotIterate(val);
                         }
                     }
 
@@ -894,6 +675,179 @@ public final class VirtualMachine {
 
     private JqValue peek() {
         return stack[sp - 1];
+    }
+
+    /**
+     * Dispatch inlined builtin opcodes. Extracted from runLoop() to keep the main
+     * dispatch loop small enough for C2 to optimize effectively (issue #61).
+     * The JIT can inline this into runLoop() if it's hot, or optimize it separately
+     * with its own register allocation budget.
+     */
+    private void dispatchBuiltin(int op) {
+        JqValue val = pop();
+        switch (op) {
+            case BUILTIN_LENGTH -> {
+                if (val instanceof JqNumber n) {
+                    if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
+                    else if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
+                    else push(JqNumber.of(n.decimalValue().abs()));
+                } else {
+                    push(JqNumber.of(val.length()));
+                }
+            }
+            case BUILTIN_TYPE -> push(typeString(val));
+            case BUILTIN_KEYS -> {
+                if (val instanceof JqObject obj) push(obj.sortedKeysAsArray());
+                else if (val instanceof JqArray arr) {
+                    var keys = new ArrayList<JqValue>(arr.arrayValue().size());
+                    for (int i = 0; i < arr.arrayValue().size(); i++) keys.add(JqNumber.of(i));
+                    push(JqArray.of(keys));
+                } else throw builtinTypeError(val, "has no keys");
+            }
+            case BUILTIN_VALUES -> { if (val instanceof JqNull) doBacktrack(); else push(val); }
+            case BUILTIN_NOT -> push(JqBoolean.of(!val.isTruthy()));
+            case BUILTIN_EMPTY -> doBacktrack();
+            case BUILTIN_TOSTRING -> push(val instanceof JqString ? val : JqString.of(val.toJsonString()));
+            case BUILTIN_TONUMBER -> dispatchToNumber(val);
+            case BUILTIN_ADD -> {
+                if (val instanceof JqArray arr) {
+                    var items = arr.arrayValue();
+                    if (items.isEmpty()) { push(JqNull.NULL); return; }
+                    JqValue result = items.getFirst();
+                    for (int i = 1; i < items.size(); i++) result = result.add(items.get(i));
+                    push(result);
+                } else throw builtinTypeError(val, "is not iterable");
+            }
+            case BUILTIN_REVERSE -> {
+                if (val instanceof JqArray arr) {
+                    var list = new ArrayList<>(arr.arrayValue());
+                    java.util.Collections.reverse(list);
+                    push(JqArray.of(list));
+                } else throw builtinTypeError(val, "cannot be reversed");
+            }
+            case BUILTIN_SORT -> {
+                if (val instanceof JqArray arr) {
+                    var list = new ArrayList<>(arr.arrayValue());
+                    list.sort(JqValue::compareTo);
+                    push(JqArray.of(list));
+                } else throw builtinTypeError(val, "cannot be sorted");
+            }
+            case BUILTIN_MIN -> {
+                if (val instanceof JqArray arr) {
+                    var items = arr.arrayValue();
+                    if (items.isEmpty()) { push(JqNull.NULL); return; }
+                    JqValue min = items.getFirst();
+                    for (int i = 1; i < items.size(); i++) if (items.get(i).compareTo(min) < 0) min = items.get(i);
+                    push(min);
+                } else throw builtinTypeError(val, "is not iterable");
+            }
+            case BUILTIN_MAX -> {
+                if (val instanceof JqArray arr) {
+                    var items = arr.arrayValue();
+                    if (items.isEmpty()) { push(JqNull.NULL); return; }
+                    JqValue max = items.getFirst();
+                    for (int i = 1; i < items.size(); i++) if (items.get(i).compareTo(max) > 0) max = items.get(i);
+                    push(max);
+                } else throw builtinTypeError(val, "is not iterable");
+            }
+            case BUILTIN_FLATTEN -> {
+                if (val instanceof JqArray arr) {
+                    var flat = new ArrayList<JqValue>();
+                    flattenDeep(arr, flat);
+                    push(JqArray.of(flat));
+                } else throw builtinTypeError(val, "cannot be flattened");
+            }
+            case BUILTIN_UNIQUE -> {
+                if (val instanceof JqArray arr) {
+                    var sorted = new ArrayList<>(arr.arrayValue());
+                    sorted.sort(JqValue::compareTo);
+                    var unique = new ArrayList<JqValue>();
+                    JqValue prev = null;
+                    for (JqValue item : sorted) {
+                        if (prev == null || !prev.equals(item)) unique.add(item);
+                        prev = item;
+                    }
+                    push(JqArray.of(unique));
+                } else throw builtinTypeError(val, "cannot be uniquified");
+            }
+            case BUILTIN_FLOOR -> {
+                if (val instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
+                else throw builtinTypeError(val, "cannot be floored");
+            }
+            case BUILTIN_CEIL -> {
+                if (val instanceof JqNumber n) push(JqNumber.of((long) Math.ceil(n.doubleValue())));
+                else throw builtinTypeError(val, "cannot be ceiled");
+            }
+            case BUILTIN_ROUND -> {
+                if (val instanceof JqNumber n) push(JqNumber.of(Math.round(n.doubleValue())));
+                else throw builtinTypeError(val, "cannot be rounded");
+            }
+            case BUILTIN_ABS -> {
+                if (val instanceof JqNumber n) {
+                    if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
+                    else if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
+                    else push(JqNumber.of(n.decimalValue().abs()));
+                } else if (val instanceof JqNull) push(JqNull.NULL);
+                else push(val);
+            }
+            case BUILTIN_TOJSON -> push(JqString.of(JqValues.toJsonStringDepthLimited(val)));
+            case BUILTIN_FROMJSON -> {
+                if (val instanceof JqString s) {
+                    try { push(JqValues.parseStrict(s.stringValue())); }
+                    catch (IllegalArgumentException e) { throw new JqException(e.getMessage()); }
+                } else throw builtinTypeError(val, "cannot be parsed as JSON");
+            }
+            default -> throw new JqException("Unknown builtin opcode: " + op);
+        }
+    }
+
+    /** Extract tonumber logic — has try-catch which inflates bytecode. */
+    private void dispatchToNumber(JqValue val) {
+        if (val instanceof JqNumber) { push(val); return; }
+        if (val instanceof JqString s) {
+            String str = s.stringValue().trim();
+            try {
+                if (str.contains(".") || str.contains("e") || str.contains("E")) {
+                    push(JqNumber.of(new java.math.BigDecimal(str)));
+                } else {
+                    push(JqNumber.of(Long.parseLong(str)));
+                }
+            } catch (NumberFormatException e) {
+                throw new JqException("string (" + JqString.formatForError(s.stringValue()) + ") cannot be parsed as a number");
+            }
+            return;
+        }
+        throw new JqException(val.type().jqName() + " cannot be converted to number");
+    }
+
+    // ========================================================================
+    //  Error factory methods — extracted from hot paths to reduce bytecode
+    //  size (issue #61). String concatenation and toJsonString() calls are
+    //  cold code that inflates the JIT's optimization budget.
+    // ========================================================================
+
+    private static JqException cannotIterate(JqValue val) {
+        if (val instanceof JqNull) {
+            return new JqException("Cannot iterate over null (null)");
+        }
+        return new JqException("Cannot iterate over " + val.type().jqName() + " (" + val.toJsonString() + ")");
+    }
+
+    private static JqException builtinTypeError(JqValue val, String message) {
+        return new JqException(val.type().jqName() + " " + message);
+    }
+
+    private static JqObject buildEnvObject() {
+        var map = new java.util.LinkedHashMap<String, JqValue>();
+        System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
+        return JqObject.ofTrusted(map);
+    }
+
+    private static JqObject buildLocObject() {
+        var map = new java.util.LinkedHashMap<String, JqValue>();
+        map.put("file", JqString.of("<top-level>"));
+        map.put("line", JqNumber.of(1));
+        return JqObject.ofTrusted(map);
     }
 
     private void btPush(int targetPc, int savedSp, JqValue savedInput, Environment savedEnv, JqValue pushValue) {
