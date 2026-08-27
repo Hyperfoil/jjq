@@ -917,10 +917,13 @@ public final class JqObject implements JqValue {
                 }
             }
 
-            // Both array-backed: iterate directly
+            // Both array-backed: iterate directly using tryGet() to avoid
+            // the double-lookup pattern (get() then has() for null distinction).
+            // tryGet() also uses the hash index for objects > 32 keys.
             for (int i = 0; i < a.size - 1; i++) {
-                JqValue bv = b.get(a.keys[i]);
-                if (bv instanceof JqNull && !b.has(a.keys[i])) return false;
+                Optional<JqValue> opt = b.tryGet(a.keys[i]);
+                if (opt.isEmpty()) return false;
+                JqValue bv = opt.get();
                 JqValue av = a.values[i];
                 if (av instanceof JqArray aa && bv instanceof JqArray ba) {
                     if (!JqArray.equalsDepth(aa, ba, depth + 1)) return false;
@@ -932,8 +935,9 @@ public final class JqObject implements JqValue {
             }
             // Tail-iterate on last entry
             String lastKey = a.keys[a.size - 1];
-            JqValue bv = b.get(lastKey);
-            if (bv instanceof JqNull && !b.has(lastKey)) return false;
+            Optional<JqValue> lastOpt = b.tryGet(lastKey);
+            if (lastOpt.isEmpty()) return false;
+            JqValue bv = lastOpt.get();
             JqValue av = a.values[a.size - 1];
             if (av instanceof JqObject ao && bv instanceof JqObject bo) {
                 a = ao; b = bo; depth++; continue;

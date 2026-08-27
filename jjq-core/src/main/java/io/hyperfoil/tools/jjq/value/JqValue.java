@@ -627,9 +627,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 }
                 case JqObject obj -> {
                     JqObject otherObj = (JqObject) b;
-                    var thisMap = obj.objectValue();
-                    var otherMap = otherObj.objectValue();
-                    int sizeCmp = Integer.compare(thisMap.size(), otherMap.size());
+                    int sizeCmp = Integer.compare(obj.size(), otherObj.size());
                     if (sizeCmp != 0) return sizeCmp;
                     String[] thisKeys = obj.sortedKeys();
                     String[] otherKeys = otherObj.sortedKeys();
@@ -638,14 +636,16 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                         if (keyCmp != 0) return keyCmp;
                     }
                     if (thisKeys.length == 0) return 0;
-                    // Compare all but the last value recursively
+                    // Compare values using JqObject.get() directly — uses hash index
+                    // for objects > 32 keys, unlike objectValue().get() which always
+                    // does linear scan via ArrayBackedMap.
                     for (int i = 0; i < thisKeys.length - 1; i++) {
-                        int valCmp = compareToDepth(thisMap.get(thisKeys[i]), otherMap.get(otherKeys[i]), depth + 1);
+                        int valCmp = compareToDepth(obj.get(thisKeys[i]), otherObj.get(otherKeys[i]), depth + 1);
                         if (valCmp != 0) return valCmp;
                     }
                     // Tail-iterate on the last value
-                    a = thisMap.get(thisKeys[thisKeys.length - 1]);
-                    b = otherMap.get(otherKeys[otherKeys.length - 1]);
+                    a = obj.get(thisKeys[thisKeys.length - 1]);
+                    b = otherObj.get(otherKeys[otherKeys.length - 1]);
                     depth++;
                     continue; // iterate instead of recurse
                 }

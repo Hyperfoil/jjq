@@ -59,6 +59,8 @@ public final class VirtualMachine {
     private ArrayList<JqValue> multiOutputs;
     // Reusable scratch array for BUILD_OBJECT / STRING_CONCAT (avoids per-op allocation)
     private JqValue[] scratchValues;
+    // Reusable StringBuilder for STRING_CONCAT (avoids per-interpolation allocation)
+    private final StringBuilder concatBuffer = new StringBuilder(64);
 
     private static final class BacktrackPoint {
         int pc, sp, tryDepth, collectDepth, iterIndex;
@@ -101,6 +103,7 @@ public final class VirtualMachine {
         this.tryStack = new TryPoint[INIT_TRY];
         for (int i = 0; i < INIT_TRY; i++) tryStack[i] = new TryPoint();
         this.collectStack = new List[INIT_COLLECT];
+        for (int i = 0; i < INIT_COLLECT; i++) collectStack[i] = new ArrayList<>();
         this.varSlots = bytecode.varSlotCount() > 0 ? new JqValue[bytecode.varSlotCount()] : null;
         this.scratchValues = new JqValue[computeMaxScratchSize(bytecode)];
         this.shape = detectShape();
@@ -516,7 +519,12 @@ public final class VirtualMachine {
                     }
 
                     // Collection (array construction)
-                    case COLLECT_BEGIN -> collectStack[cp++] = new ArrayList<>();
+                    // Lists are pre-allocated in collectStack — clear and reuse
+                    // instead of allocating a new ArrayList per array construction.
+                    case COLLECT_BEGIN -> {
+                        if (cp >= collectStack.length) growCollectStack();
+                        collectStack[cp++].clear();
+                    }
 
                     case COLLECT_ADD -> {
                         collectStack[cp - 1].add(pop());
@@ -525,7 +533,9 @@ public final class VirtualMachine {
 
                     case COLLECT_END -> {
                         List<JqValue> items = collectStack[--cp];
-                        push(JqArray.ofTrusted(items));
+                        // Copy items into an array — the ArrayList is reused on the next
+                        // COLLECT_BEGIN, so we cannot pass it to ofTrusted(List) directly.
+                        push(JqArray.ofTrusted(items.toArray(new JqValue[0])));
                     }
 
                     // Fused collect-iterate: [.[] | simple-expr]
@@ -594,20 +604,19 @@ public final class VirtualMachine {
                         push(builder.build());
                     }
 
-                    // String interpolation
+                    // String interpolation — reuses concatBuffer to avoid per-op StringBuilder allocation
                     case STRING_CONCAT -> {
                         int partCount = arg1s[curPc];
-                        // Parts are on stack with first part deepest — use reusable scratch array
                         for (int i = partCount - 1; i >= 0; i--) {
                             scratchValues[i] = pop();
                         }
-                        var sb = new StringBuilder();
+                        concatBuffer.setLength(0);
                         for (int i = 0; i < partCount; i++) {
                             JqValue v = scratchValues[i];
-                            if (v instanceof JqString s) sb.append(s.stringValue());
-                            else sb.append(v.toJsonString());
+                            if (v instanceof JqString s) concatBuffer.append(s.stringValue());
+                            else concatBuffer.append(v.toJsonString());
                         }
-                        push(JqString.of(sb.toString()));
+                        push(JqString.of(concatBuffer.toString()));
                     }
 
                     // Try-catch
@@ -871,6 +880,13 @@ public final class VirtualMachine {
         int oldLen = tryStack.length;
         tryStack = java.util.Arrays.copyOf(tryStack, oldLen * 2);
         for (int i = oldLen; i < tryStack.length; i++) tryStack[i] = new TryPoint();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void growCollectStack() {
+        int oldLen = collectStack.length;
+        collectStack = java.util.Arrays.copyOf(collectStack, oldLen * 2);
+        for (int i = oldLen; i < collectStack.length; i++) collectStack[i] = new ArrayList<>();
     }
 
     private void doBacktrack() {
@@ -1205,13 +1221,13 @@ public final class VirtualMachine {
                 case STRING_CONCAT -> {
                     int partCount = arg1s[bpc];
                     for (int j = partCount - 1; j >= 0; j--) scratchValues[j] = pop();
-                    var sb = new StringBuilder();
+                    concatBuffer.setLength(0);
                     for (int j = 0; j < partCount; j++) {
                         JqValue v = scratchValues[j];
-                        if (v instanceof JqString s) sb.append(s.stringValue());
-                        else sb.append(v.toJsonString());
+                        if (v instanceof JqString s) concatBuffer.append(s.stringValue());
+                        else concatBuffer.append(v.toJsonString());
                     }
-                    push(JqString.of(sb.toString()));
+                    push(JqString.of(concatBuffer.toString()));
                 }
                 default -> throw new JqException("Unsupported opcode in COLLECT_ITERATE body: " + ops[bpc]);
             }
