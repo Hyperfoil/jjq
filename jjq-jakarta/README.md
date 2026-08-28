@@ -1,8 +1,8 @@
 # jjq-jakarta
 
 Jakarta EE integration for jjq — provides Hibernate persistence types, JPA `AttributeConverter`,
-JAX-RS providers, and Jakarta JSON-B serializers that enable `JqValue` as a first-class JSON type
-across the Jakarta EE stack.
+JAX-RS providers, Jakarta JSON-B serializers, and direct `@JqMapped` record mapping that
+bypasses Jackson entirely for annotated record types.
 
 ## Dependencies
 
@@ -223,6 +223,53 @@ JqObject response = JqObject.builder()
         .build())
     .build();
 ```
+
+## Direct Record Mapping (bypass Jackson)
+
+For records annotated with `@JqMapped` (from `jjq-mapper`), the module provides
+JAX-RS providers that deserialize and serialize directly through jjq — bypassing
+Jackson entirely:
+
+```java
+import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqField;
+
+@JqMapped
+record CreateUserRequest(String name, int age, String email) {}
+
+@JqMapped
+record PerfResult(
+    String user,
+    @JqField(".config.timeout") int timeout,
+    @JqField(".data[0].name") String firstName
+) {}
+```
+
+Use these records directly as REST parameters and return types:
+
+```java
+@POST
+public Response createUser(CreateUserRequest request) {
+    // JSON bytes → JqValue → record via JqMapper (not Jackson)
+    service.create(request.name(), request.age(), request.email());
+    return Response.ok().build();
+}
+
+@GET
+@Path("/{id}")
+public CreateUserRequest getUser(@PathParam("id") long id) {
+    // Record → JqValue → JSON bytes via JqMapper (not Jackson)
+    return new CreateUserRequest("Alice", 30, "alice@example.com");
+}
+```
+
+The `JqMappedMessageBodyReader` and `JqMappedMessageBodyWriter` are annotated with
+`@Provider` and auto-discovered. They only activate for types with `@JqMapped` — all
+other types fall through to Jackson or other registered providers.
+
+With the `jjq-mapper-processor` annotation processor on the classpath, mapping
+executes in ~22 ns per 5-field record (5.8x faster than Jackson). Without the
+processor, reflection-based mapping is used (~130 ns, comparable to Jackson).
 
 ## Jakarta JSON-B Support
 
