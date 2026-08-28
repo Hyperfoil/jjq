@@ -60,7 +60,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class JqMapper {
 
-    private final ConcurrentHashMap<Class<?>, ClassMapping<?>> cache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Class<?>, Mapping<?>> cache = new ConcurrentHashMap<>();
 
     private JqMapper() {}
 
@@ -127,9 +127,11 @@ public final class JqMapper {
      * @return a JqObject with fields populated from the record
      * @throws JqMapperException if serialization fails
      */
+    @SuppressWarnings("unchecked")
     public JqValue toJqValue(Object value) {
         if (value == null) return io.hyperfoil.tools.jjq.value.JqNull.NULL;
-        return getMapping(value.getClass()).toJqValue(value, this);
+        Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+        return mapping.toJqValue(value, this);
     }
 
     /**
@@ -155,7 +157,32 @@ public final class JqMapper {
     }
 
     @SuppressWarnings("unchecked")
-    private <T> ClassMapping<T> getMapping(Class<T> type) {
-        return (ClassMapping<T>) cache.computeIfAbsent(type, ClassMapping::forRecord);
+    private <T> Mapping<T> getMapping(Class<T> type) {
+        return (Mapping<T>) cache.computeIfAbsent(type, this::createMapping);
+    }
+
+    private <T> Mapping<T> createMapping(Class<T> type) {
+        // Try generated mapping first (from jjq-mapper-processor)
+        GeneratedMapping<T> generated = loadGenerated(type);
+        if (generated != null) return generated;
+        // Fall back to reflection-based mapping
+        return ClassMapping.forRecord(type);
+    }
+
+    /**
+     * Try to load a compile-time generated mapping class via naming convention.
+     * Returns null if no generated class exists (processor not used or not on classpath).
+     */
+    @SuppressWarnings("unchecked")
+    private <T> GeneratedMapping<T> loadGenerated(Class<T> type) {
+        try {
+            String generatedName = type.getName() + "_JqMapping";
+            Class<?> cls = Class.forName(generatedName, true, type.getClassLoader());
+            return (GeneratedMapping<T>) cls.getDeclaredConstructor().newInstance();
+        } catch (ClassNotFoundException e) {
+            return null; // no generated mapping — use reflection
+        } catch (ReflectiveOperationException e) {
+            throw new JqMapperException("Failed to instantiate generated mapping for " + type.getName(), e);
+        }
     }
 }

@@ -26,7 +26,7 @@ import java.util.Map;
  * arrays instead of N separate {@code get()} lookups. This eliminates per-field
  * linear scan or hash lookup overhead.</p>
  */
-final class ClassMapping<T> {
+final class ClassMapping<T> implements Mapping<T> {
 
     private final Class<T> type;
     private final FieldMapping[] fields;
@@ -137,7 +137,8 @@ final class ClassMapping<T> {
      * by name to the constructor parameter index.</p>
      */
     @SuppressWarnings("unchecked")
-    T fromJqValue(JqValue value, JqMapper mapper) {
+    @Override
+    public T fromJqValue(JqValue value, JqMapper mapper) {
         // Fast path: single-pass iteration over the object's entries.
         // Instead of N separate get() lookups, iterate all entries once and
         // match each key to a constructor parameter index via the nameToIndex map.
@@ -170,7 +171,8 @@ final class ClassMapping<T> {
     /**
      * Serialize a Java object instance to a JqValue.
      */
-    JqValue toJqValue(Object instance, JqMapper mapper) {
+    @Override
+    public JqValue toJqValue(T instance, JqMapper mapper) {
         var builder = JqObject.builder(fields.length);
         for (FieldMapping field : fields) {
             if (field.isIgnored()) continue;

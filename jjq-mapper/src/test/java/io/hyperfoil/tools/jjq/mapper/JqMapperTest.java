@@ -463,4 +463,40 @@ class JqMapperTest {
         assertEquals(30, r.timeout());
         assertEquals("first", r.firstName());
     }
+
+    // ---- Generated mapping discovery ----
+
+    @Test
+    void reflectionFallback_whenNoGeneratedMapping() {
+        // No generated User_JqMapping class exists — should fall back to reflection
+        // and still work correctly (this verifies the loadGenerated null path)
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}");
+        SimpleRecord r = mapper.fromJqValue(json, SimpleRecord.class);
+        assertEquals("Alice", r.name());
+        assertEquals(30, r.age());
+    }
+
+    @Test
+    void jqMappedAnnotation_presentOnType() {
+        // Verify @JqMapped is a valid annotation that can be applied to records
+        // (this test ensures the annotation compiles and is retained at runtime)
+        assertTrue(MappedRecord.class.isAnnotationPresent(JqMapped.class));
+    }
+
+    @JqMapped
+    record MappedRecord(String name, int value) {}
+
+    @Test
+    void jqMappedRecord_worksWithReflection() {
+        // @JqMapped record should work with reflection-based mapping
+        // (no generated class exists yet — processor not running)
+        JqValue json = JqValues.parse("{\"name\":\"test\",\"value\":42}");
+        MappedRecord r = mapper.fromJqValue(json, MappedRecord.class);
+        assertEquals("test", r.name());
+        assertEquals(42, r.value());
+
+        JqValue back = mapper.toJqValue(r);
+        assertEquals("test", back.getField("name").stringValue());
+        assertEquals(42L, back.getField("value").longValue());
+    }
 }
