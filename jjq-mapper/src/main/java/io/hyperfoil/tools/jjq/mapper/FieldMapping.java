@@ -83,4 +83,6 @@ final class FieldMapping {
     Type genericType() { return genericType; }
     int constructorIndex() { return constructorIndex; }
     boolean isIgnored() { return ignored; }
+    /** True if this field uses a JqProgram (from @JqField), false if direct field name. */
+    boolean usesProgram() { return program != null; }
 }

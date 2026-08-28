@@ -410,4 +410,57 @@ class JqMapperTest {
         assertEquals(original, restored);
         assertEquals("leaf", json.at("/nested/inner/value").stringValue());
     }
+
+    // ---- Fast-path forEach extraction ----
+
+    @Test
+    void fastPath_exactFieldMatch() {
+        // JSON fields match record fields exactly — should use forEach fast path
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}");
+        SimpleRecord r = mapper.fromJqValue(json, SimpleRecord.class);
+        assertEquals("Alice", r.name());
+        assertEquals(30, r.age());
+        assertTrue(r.active());
+    }
+
+    @Test
+    void fastPath_extraFieldsInJson() {
+        // JSON has extra fields not in the record — fast path detects size mismatch,
+        // falls back to per-field extraction which ignores extra fields
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true,\"extra\":\"ignored\"}");
+        SimpleRecord r = mapper.fromJqValue(json, SimpleRecord.class);
+        assertEquals("Alice", r.name());
+        assertEquals(30, r.age());
+        assertTrue(r.active());
+    }
+
+    @Test
+    void fastPath_fewerFieldsInJson() {
+        // JSON has fewer fields — fast path detects size mismatch
+        JqValue json = JqValues.parse("{\"name\":\"Alice\"}");
+        SimpleRecord r = mapper.fromJqValue(json, SimpleRecord.class);
+        assertEquals("Alice", r.name());
+        assertEquals(0, r.age());
+        assertFalse(r.active());
+    }
+
+    @Test
+    void fastPath_differentFieldOrder() {
+        // JSON fields in different order — forEach still matches by name
+        JqValue json = JqValues.parse("{\"active\":true,\"name\":\"Bob\",\"age\":25}");
+        SimpleRecord r = mapper.fromJqValue(json, SimpleRecord.class);
+        assertEquals("Bob", r.name());
+        assertEquals(25, r.age());
+        assertTrue(r.active());
+    }
+
+    @Test
+    void fastPath_annotatedFieldsFallBack() {
+        // Record with @JqField — fast path is disabled, falls back to per-field extraction
+        JqValue json = JqValues.parse("{\"user\":\"Alice\",\"config\":{\"timeout\":30},\"data\":[{\"name\":\"first\"}]}");
+        Annotated r = mapper.fromJqValue(json, Annotated.class);
+        assertEquals("Alice", r.user());
+        assertEquals(30, r.timeout());
+        assertEquals("first", r.firstName());
+    }
 }
