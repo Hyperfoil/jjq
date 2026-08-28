@@ -64,7 +64,12 @@ final class ClassMapping<T> implements Mapping<T> {
 
         FieldMapping[] fields = new FieldMapping[components.length];
         Class<?>[] ctorParamTypes = new Class<?>[components.length];
-        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        MethodHandles.Lookup lookup;
+        try {
+            lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot create private lookup for " + type.getName(), e);
+        }
 
         for (int i = 0; i < components.length; i++) {
             RecordComponent rc = components[i];
