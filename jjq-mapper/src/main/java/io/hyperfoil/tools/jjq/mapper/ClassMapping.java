@@ -61,17 +61,19 @@ final class ClassMapping<T> {
             // Check for @JqIgnore
             boolean ignored = rc.isAnnotationPresent(JqIgnore.class);
 
-            // Determine jq expression: @JqField annotation or default ".fieldName"
-            String jqExpr;
+            // Determine extraction strategy:
+            // - @JqField: compile the jq expression and use JqProgram.apply()
+            // - Default: use JqObject.get(name) directly (faster — no JqProgram overhead)
+            String directFieldName;
+            JqProgram program;
             JqField jqFieldAnnotation = rc.getAnnotation(JqField.class);
-            if (jqFieldAnnotation != null) {
-                jqExpr = jqFieldAnnotation.value();
+            if (!ignored && jqFieldAnnotation != null) {
+                directFieldName = null;
+                program = JqProgram.compile(jqFieldAnnotation.value());
             } else {
-                jqExpr = "." + name;
+                directFieldName = name;
+                program = null;
             }
-
-            // Compile the jq program (cached globally by JqProgram)
-            JqProgram program = ignored ? JqProgram.compile(".") : JqProgram.compile(jqExpr);
 
             // Create MethodHandle for the accessor method (e.g., record.name())
             MethodHandle getter;
@@ -81,7 +83,7 @@ final class ClassMapping<T> {
                 throw new JqMapperException("Cannot access record component accessor: " + name, e);
             }
 
-            fields[i] = new FieldMapping(name, program, fieldType, genericType, getter, i, ignored);
+            fields[i] = new FieldMapping(name, directFieldName, program, fieldType, genericType, getter, i, ignored);
         }
 
         // Find and cache the canonical constructor
