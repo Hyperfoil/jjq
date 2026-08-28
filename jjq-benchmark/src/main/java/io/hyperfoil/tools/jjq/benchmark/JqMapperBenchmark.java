@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
+import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.openjdk.jmh.annotations.*;
@@ -132,6 +133,15 @@ public class JqMapperBenchmark {
         jqMapper.fromJqValue(simpleJqValue, SimpleRecord.class);
         jqMapper.fromJqValue(nestedJqValue, PersonRecord.class);
         jqMapper.fromJqValue(listJqValue, OrderRecord.class);
+
+        // Generated mapping record instances (for serialization benchmarks)
+        genSimpleRecord = new BenchmarkRecords.SimpleRecord("Alice", 30, 98.5, true, "alice@example.com");
+        genPersonRecord = new BenchmarkRecords.PersonRecord("Alice", 30,
+                new BenchmarkRecords.Address("New York", "10001", "US"));
+
+        // Warmup generated mapping caches
+        jqMapper.fromJqValue(simpleJqValue, BenchmarkRecords.SimpleRecord.class);
+        jqMapper.fromJqValue(nestedJqValue, BenchmarkRecords.PersonRecord.class);
     }
 
     // ========================================================================
@@ -292,5 +302,37 @@ public class JqMapperBenchmark {
     @Benchmark
     public byte[] ser_nested_jackson_bytes() throws JsonProcessingException {
         return jacksonMapper.writeValueAsBytes(personRecord);
+    }
+
+    // ========================================================================
+    //  Generated mapping benchmarks (uses @JqMapped records from BenchmarkRecords)
+    //  These records have compile-time generated _JqMapping classes.
+    // ========================================================================
+
+    // Generated-mapping state
+    private BenchmarkRecords.SimpleRecord genSimpleRecord;
+    private BenchmarkRecords.PersonRecord genPersonRecord;
+
+    // Note: setup for generated records is in the main setup() method below
+    // We reuse simpleJqValue/nestedJqValue since the JSON shape is the same
+
+    @Benchmark
+    public BenchmarkRecords.SimpleRecord deser_simple_jjq_generated_preParsed() {
+        return jqMapper.fromJqValue(simpleJqValue, BenchmarkRecords.SimpleRecord.class);
+    }
+
+    @Benchmark
+    public BenchmarkRecords.PersonRecord deser_nested_jjq_generated_preParsed() {
+        return jqMapper.fromJqValue(nestedJqValue, BenchmarkRecords.PersonRecord.class);
+    }
+
+    @Benchmark
+    public String ser_simple_jjq_generated() {
+        return jqMapper.toJson(genSimpleRecord);
+    }
+
+    @Benchmark
+    public String ser_nested_jjq_generated() {
+        return jqMapper.toJson(genPersonRecord);
     }
 }

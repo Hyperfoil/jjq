@@ -34,6 +34,11 @@
             <artifactId>jjq-mapper</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-mapper-processor</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>net.thisptr</groupId>
             <artifactId>jackson-jq</artifactId>
             <version>1.6.0</version>
@@ -97,6 +102,11 @@
                             <groupId>org.openjdk.jmh</groupId>
                             <artifactId>jmh-generator-annprocess</artifactId>
                             <version>${jmh.version}</version>
+                        </path>
+                        <path>
+                            <groupId>io.hyperfoil.tools</groupId>
+                            <artifactId>jjq-mapper-processor</artifactId>
+                            <version>${project.version}</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>

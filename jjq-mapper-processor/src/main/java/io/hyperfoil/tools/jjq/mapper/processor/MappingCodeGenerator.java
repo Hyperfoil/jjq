@@ -77,6 +77,24 @@ final class MappingCodeGenerator {
         sb.append("        return ").append(recordSimpleName).append(".class;\n");
         sb.append("    }\n");
 
+        // Helper methods for list conversion
+        boolean needsListHelper = components.stream().anyMatch(c ->
+                !c.ignored() && c.typeName().startsWith("java.util.List<"));
+        if (needsListHelper) {
+            sb.append("\n");
+            sb.append("    @SuppressWarnings(\"unchecked\")\n");
+            sb.append("    private static <E> java.util.List<E> _toList(JqValue value, JqMapper mapper, Class<E> elementType) {\n");
+            sb.append("        if (value == null || value instanceof JqNull || !(value instanceof JqArray arr)) return java.util.List.of();\n");
+            sb.append("        var list = new java.util.ArrayList<E>(arr.size());\n");
+            sb.append("        for (JqValue elem : arr) {\n");
+            sb.append("            list.add((E) io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(\n");
+            sb.append("                elem, io.hyperfoil.tools.jjq.mapper.TypeConverter.resolveKind(elementType, elementType),\n");
+            sb.append("                elementType, elementType, mapper));\n");
+            sb.append("        }\n");
+            sb.append("        return list;\n");
+            sb.append("    }\n");
+        }
+
         sb.append("}\n");
         return sb.toString();
     }
@@ -134,14 +152,15 @@ final class MappingCodeGenerator {
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append(apply);
                 }
-                // List<T>
+                // List<T> — delegate to mapper for element conversion
                 else if (typeName.startsWith("java.util.List<")) {
                     String elementType = extractGenericArg(typeName);
-                    sb.append("_extractList_").append(comp.name()).append("(").append(apply).append(", mapper)");
+                    sb.append("_toList(").append(apply).append(", mapper, ").append(elementType).append(".class)");
                 }
-                // Map<String, V>
+                // Map<String, V> — delegate to mapper for value conversion
                 else if (typeName.startsWith("java.util.Map<")) {
-                    sb.append("_extractMap_").append(comp.name()).append("(").append(apply).append(", mapper)");
+                    sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJava(")
+                      .append(apply).append(", java.util.Map.class, null, mapper)");
                 }
                 // Optional<T>
                 else if (typeName.startsWith("java.util.Optional<")) {

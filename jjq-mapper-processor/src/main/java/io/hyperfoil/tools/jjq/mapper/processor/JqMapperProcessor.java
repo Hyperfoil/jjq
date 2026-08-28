@@ -81,13 +81,22 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         // Generate the mapping class
         String packageName = processingEnv.getElementUtils().getPackageOf(recordType).getQualifiedName().toString();
-        String recordSimpleName = recordType.getSimpleName().toString();
         String recordQualifiedName = recordType.getQualifiedName().toString();
-        String mappingClassName = recordSimpleName + "_JqMapping";
+
+        // For nested records (e.g., Outer.Inner), compute the source-level name
+        // that works in generated code: "Outer.Inner" (using dots, not $)
+        String recordSourceName;
+        if (!packageName.isEmpty() && recordQualifiedName.startsWith(packageName + ".")) {
+            recordSourceName = recordQualifiedName.substring(packageName.length() + 1);
+        } else {
+            recordSourceName = recordQualifiedName;
+        }
+        // Mapping class name uses underscore-separated nesting: Outer_Inner_JqMapping
+        String mappingClassName = recordSourceName.replace('.', '_') + "_JqMapping";
         String qualifiedMappingName = packageName.isEmpty() ? mappingClassName : packageName + "." + mappingClassName;
 
         String source = MappingCodeGenerator.generate(
-                packageName, recordSimpleName, recordQualifiedName, mappingClassName, components);
+                packageName, recordSourceName, recordQualifiedName, mappingClassName, components);
 
         // Write the generated source file
         try {

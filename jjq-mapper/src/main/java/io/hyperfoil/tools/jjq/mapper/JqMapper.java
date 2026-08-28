@@ -175,8 +175,11 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     private <T> GeneratedMapping<T> loadGenerated(Class<T> type) {
+        // For nested classes, Class.getName() uses '$' (e.g., "pkg.Outer$Inner")
+        // but the generated class uses '_' (e.g., "pkg.Outer_Inner_JqMapping")
+        String baseName = type.getName().replace('$', '_');
+        String generatedName = baseName + "_JqMapping";
         try {
-            String generatedName = type.getName() + "_JqMapping";
             Class<?> cls = Class.forName(generatedName, true, type.getClassLoader());
             return (GeneratedMapping<T>) cls.getDeclaredConstructor().newInstance();
         } catch (ClassNotFoundException e) {

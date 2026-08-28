@@ -96,6 +96,11 @@
                 <version>${project.version}</version>
             </dependency>
             <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-mapper-processor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>

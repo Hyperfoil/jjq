@@ -15,10 +15,10 @@ import java.util.*;
  * via {@link #resolveKind(Class, Type)}. The actual conversion is done via a
  * single {@code switch} in {@link #convert(JqValue, Kind, Class, Type, JqMapper)}.</p>
  */
-final class TypeConverter {
+public final class TypeConverter {
 
     /** Pre-resolved conversion strategy — one enum constant per target type category. */
-    enum Kind {
+    public enum Kind {
         STRING, INT, LONG, DOUBLE, FLOAT, BOOLEAN, SHORT, BYTE, CHAR,
         BIG_DECIMAL, OPTIONAL, LIST, MAP, ENUM, RECORD, JQ_VALUE, DEFAULT
     }
@@ -30,7 +30,7 @@ final class TypeConverter {
      * This replaces the if/else chain in the old toJava() with a single
      * enum constant that can be dispatched via switch.
      */
-    static Kind resolveKind(Class<?> targetType, Type genericType) {
+    public static Kind resolveKind(Class<?> targetType, Type genericType) {
         if (targetType == Optional.class) return Kind.OPTIONAL;
         if (JqValue.class.isAssignableFrom(targetType)) return Kind.JQ_VALUE;
         if (targetType == String.class) return Kind.STRING;
@@ -55,7 +55,7 @@ final class TypeConverter {
      * Single switch dispatch — no if/else chains, no lambda classes.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    static Object convert(JqValue value, Kind kind, Class<?> targetType, Type genericType, JqMapper mapper) {
+    public static Object convert(JqValue value, Kind kind, Class<?> targetType, Type genericType, JqMapper mapper) {
         return switch (kind) {
             case OPTIONAL -> {
                 if (value == null || value instanceof JqNull) yield Optional.empty();
@@ -121,7 +121,7 @@ final class TypeConverter {
      * Convert a JqValue to the target Java type (full dispatch — fallback path).
      */
     @SuppressWarnings("unchecked")
-    static Object toJava(JqValue value, Class<?> targetType, Type genericType, JqMapper mapper) {
+    public static Object toJava(JqValue value, Class<?> targetType, Type genericType, JqMapper mapper) {
         Kind kind = resolveKind(targetType, genericType);
         if (kind != Kind.DEFAULT) {
             return convert(value, kind, targetType, genericType, mapper);
