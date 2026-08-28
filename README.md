@@ -25,6 +25,8 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jackson` | Jackson integration — `JsonNode` ↔ `JqValue` conversion, `JqValueModule` for native POJO serialization |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-jakarta` | Hibernate persistence, JPA `AttributeConverter`, JAX-RS providers, `ParamConverter`, and JSON-B serializers |
+| `jjq-mapper` | Zero-dependency record data binding — map `JqValue` to/from Java records using compiled jq queries |
+| `jjq-mapper-processor` | Compile-time annotation processor for `jjq-mapper` — generates optimized mappings (5-6x faster than Jackson) |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
@@ -667,6 +669,8 @@ jq uses arbitrary-precision integers internally. jjq uses `long` with `BigDecima
 - [Profiling Guide](docs/profiling-guide.md) — JMH profiler recipes, async-profiler flame graphs
 - [jjq-jackson README](jjq-jackson/README.md) — Jackson Module, JacksonJqEngine, JsonNode conversion
 - [jjq-jakarta README](jjq-jakarta/README.md) — Hibernate, JPA, JAX-RS, and JSON-B integration
+- [jjq-mapper README](jjq-mapper/README.md) — Record data binding, @JqField, type support
+- [jjq-mapper-processor README](jjq-mapper-processor/README.md) — Compile-time code generation, setup, benchmarks
 
 ## License
 
