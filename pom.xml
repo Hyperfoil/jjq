@@ -51,6 +51,7 @@
         <module>jjq-jakarta</module>
         <module>jjq-jsonata</module>
         <module>jjq-jsonpath</module>
+        <module>jjq-mapper</module>
     </modules>
 
     <properties>
@@ -86,6 +87,11 @@
             <dependency>
                 <groupId>io.hyperfoil.tools</groupId>
                 <artifactId>jjq-jakarta</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-mapper</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
