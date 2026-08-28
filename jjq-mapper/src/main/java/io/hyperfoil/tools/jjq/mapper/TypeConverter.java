@@ -133,8 +133,10 @@ final class TypeConverter {
 
     /**
      * Convert a Java value to a JqValue (serialization direction).
+     * Public so that generated mapping classes can call this for complex types
+     * (List, Map, Optional, Enum, nested records).
      */
-    static JqValue toJqValue(Object value, JqMapper mapper) {
+    public static JqValue toJqValue(Object value, JqMapper mapper) {
         if (value == null) return JqNull.NULL;
         if (value instanceof JqValue jv) return jv;
         if (value instanceof String s) return JqString.of(s);

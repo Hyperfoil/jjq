@@ -52,6 +52,7 @@
         <module>jjq-jsonata</module>
         <module>jjq-jsonpath</module>
         <module>jjq-mapper</module>
+        <module>jjq-mapper-processor</module>
     </modules>
 
     <properties>
