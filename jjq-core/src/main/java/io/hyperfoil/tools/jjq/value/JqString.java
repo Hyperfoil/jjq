@@ -121,7 +121,11 @@ public final class JqString implements JqValue {
      * clean segments in bulk via {@code sb.append(s, start, end)}, only
      * falling back to per-character handling at escape points.
      */
-    static void escapeJson(String s, StringBuilder sb) {
+    /**
+     * Escape a string for JSON output, appending the result to the StringBuilder.
+     * Characters below 0x20, {@code "}, and {@code \} are escaped.
+     */
+    public static void escapeJson(String s, StringBuilder sb) {
         final int len = s.length();
         int start = 0; // start of current clean segment
         for (int i = 0; i < len; i++) {
@@ -192,12 +196,24 @@ public final class JqString implements JqValue {
     }
 
     /** Check if a string contains any characters that require JSON escaping. */
-    static boolean needsEscaping(String s) {
+    public static boolean needsEscaping(String s) {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c < 0x20 || c == '"' || c == '\\') return true;
         }
         return false;
+    }
+
+    /**
+     * Escape a string for embedding in a JSON string literal.
+     * Convenience method for benchmark setup — returns the escaped content
+     * without surrounding quotes.
+     */
+    public static String escapeForBenchmark(String s) {
+        if (!needsEscaping(s)) return s;
+        StringBuilder sb = new StringBuilder(s.length() + 16);
+        escapeJson(s, sb);
+        return sb.toString();
     }
 
     @Override
