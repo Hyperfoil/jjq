@@ -186,7 +186,7 @@ first use. The mapper instance should be created once and reused.
 
 ### Pre-parsed path (JqValue already exists)
 
-This is the primary use case for Quarkus/h5m — JSON is parsed once at upload,
+This is the primary use case for applications, JSON is parsed once at upload,
 stored as `JqValue`, and mapped to records for processing.
 
 | Scenario | jjq-mapper | Jackson `treeToValue` |
