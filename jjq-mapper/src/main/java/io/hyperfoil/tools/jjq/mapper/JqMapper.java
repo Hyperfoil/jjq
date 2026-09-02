@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link io.hyperfoil.tools.jjq.JqProgram} that executes in ~3ns for simple
  * field access. Thread-safe: class metadata is cached and immutable.</p>
  *
- * <h3>Deserialization (JqValue to record)</h3>
+ * <h1>Deserialization (JqValue to record)</h1>
  * <pre>{@code
  * record User(String name, int age) {}
  *
@@ -22,13 +22,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * // user.name() == "Alice", user.age() == 30
  * }</pre>
  *
- * <h3>Serialization (record to JqValue)</h3>
+ * <h1>Serialization (record to JqValue)</h1>
  * <pre>{@code
  * JqValue json = mapper.toJqValue(new User("Bob", 25));
  * // {"name":"Bob","age":25}
  * }</pre>
  *
- * <h3>Custom jq expressions</h3>
+ * <h1>Custom jq expressions</h1>
  * <pre>{@code
  * record PerfResult(
  *     @JqField(".autobench_workload.data[0].results") JqValue results,
@@ -39,7 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * PerfResult r = mapper.fromJqValue(uploadData, PerfResult.class);
  * }</pre>
  *
- * <h3>Nested records and collections</h3>
+ * <h1>Nested records and collections</h1>
  * <pre>{@code
  * record Order(String id, List<Item> items) {}
  * record Item(String name, double price) {}
@@ -47,7 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Order order = mapper.fromJqValue(json, Order.class);
  * }</pre>
  *
- * <h3>Round-trip</h3>
+ * <h1>Round-trip</h1>
  * <pre>{@code
  * User original = new User("Alice", 30);
  * JqValue json = mapper.toJqValue(original);
