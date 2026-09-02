@@ -565,7 +565,35 @@ public final class JqValues {
     //  JSON parsing
     // ========================================================================
 
+    /**
+     * Threshold below which {@code parse(String)} delegates to the byte[]-based
+     * parser via {@code getBytes(UTF_8)}. Below this size, the copy cost is
+     * negligible and the byte parser's SWAR scanning + deferred-bytes strings
+     * provide better overall performance. Above this size, the char-based parser
+     * avoids the large byte array allocation.
+     *
+     * <p>The byte delegation also avoids {@code String.charAt()} calls that are
+     * vulnerable to C2 profile pollution (see issue #68, #69).</p>
+     */
+    private static final int BYTE_DELEGATION_THRESHOLD = 64 * 1024; // 64 KB
+
+    /**
+     * Parse a JSON value from a String.
+     *
+     * <p>For strings up to 64 KB, delegates to the byte[]-based parser via
+     * {@code getBytes(UTF_8)}. The byte parser uses SWAR scanning, byte-based
+     * field name interning, and produces deferred-bytes strings with zero-copy
+     * serialization support. This also avoids {@code String.charAt()} calls
+     * that are vulnerable to C2 profile pollution (see issue #68, #69).</p>
+     *
+     * <p>For larger strings, uses the char-based parser directly to avoid
+     * allocating a large byte array copy.</p>
+     */
     public static JqValue parse(String json) {
+        if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
+            return parse(json.getBytes(StandardCharsets.UTF_8));
+        }
+        // Large string: use char-based parser to avoid large byte[] allocation
         json = json.trim();
         // Strip UTF-8 BOM if present
         if (!json.isEmpty() && json.charAt(0) == '\uFEFF') {
@@ -573,7 +601,7 @@ public final class JqValues {
         }
         var reader = new JsonReader(json);
         JqValue result = parseValue(reader, 0);
-        setSourceLength(result, json.length()); // char count ≈ byte count for ASCII JSON
+        setSourceLength(result, json.length());
         return result;
     }
 
@@ -582,15 +610,18 @@ public final class JqValues {
      * Used by fromjson to reject trailing content like "NaN1".
      */
     public static JqValue parseStrict(String json) {
+        if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
+            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+            return parseStrictBytes(bytes, 0, bytes.length, json);
+        }
+        // Large string: use char-based parser
         String trimmed = json.trim();
         if (trimmed.isEmpty()) return JqNull.NULL;
-        // Strip UTF-8 BOM if present
         if (trimmed.charAt(0) == '\uFEFF') {
             trimmed = trimmed.substring(1);
         }
         var reader = new JsonReader(trimmed);
         JqValue result = parseValue(reader, 0);
-        // Skip trailing whitespace
         reader.skipWs();
         if (reader.pos < reader.len) {
             throw new IllegalArgumentException(
@@ -600,11 +631,38 @@ public final class JqValues {
         return result;
     }
 
+    /** Byte-based strict parse with trailing content validation. */
+    private static JqValue parseStrictBytes(byte[] bytes, int offset, int length, String originalForError) {
+        int end = offset + length;
+        while (offset < end && isWsByte(bytes[offset])) offset++;
+        if (offset >= end) return JqNull.NULL;
+        if (end - offset >= 3 && (bytes[offset] & 0xFF) == 0xEF
+                && (bytes[offset + 1] & 0xFF) == 0xBB && (bytes[offset + 2] & 0xFF) == 0xBF) {
+            offset += 3;
+            while (offset < end && isWsByte(bytes[offset])) offset++;
+        }
+        if (offset >= end) return JqNull.NULL;
+        var reader = new JsonByteReader(bytes, offset, end);
+        JqValue result = parseValueBytes(reader, 0);
+        reader.skipWs();
+        if (reader.pos < reader.end) {
+            String input = originalForError != null ? originalForError.trim() : new String(bytes, StandardCharsets.UTF_8).trim();
+            throw new IllegalArgumentException(
+                    "Invalid numeric literal at EOF at line 1, column " + input.length()
+                            + " (while parsing '" + input + "')");
+        }
+        return result;
+    }
+
     /**
      * Parse a stream of whitespace-separated JSON values (JSONL / NDJSON / JSON stream).
      * Behaves like jq: each top-level JSON value is parsed independently.
      */
     public static List<JqValue> parseAll(String json) {
+        if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
+            return parseAll(json.getBytes(StandardCharsets.UTF_8));
+        }
+        // Large string: use char-based parser
         var results = new ArrayList<JqValue>();
         var reader = new JsonReader(json);
         while (true) {
