@@ -76,11 +76,9 @@ public final class JqArray implements JqValue, Iterable<JqValue> {
      */
     public JqArray append(JqValue element) {
         Objects.requireNonNull(element, "element");
-        JqValue[] arr = new JqValue[elements.size() + 1];
-        for (int i = 0; i < elements.size(); i++) {
-            arr[i] = elements.get(i);
-        }
-        arr[elements.size()] = element;
+        int oldSize = elements.size();
+        JqValue[] arr = elements.toArray(new JqValue[oldSize + 1]);
+        arr[oldSize] = element;
         return new JqArray(Arrays.asList(arr));
     }
 
