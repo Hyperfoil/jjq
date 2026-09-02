@@ -80,6 +80,12 @@ public final class JsonpathToJq {
         // Replace remaining bare $ references (e.g., "$ ?" becomes ". ?")
         if (jq.startsWith("$ ")) jq = ". " + jq.substring(2);
         jq = jq.replace("[*].*", "[]?");
+        // In PostgreSQL lax mode, [*] on an object auto-wraps as [obj] then iterates,
+        // returning the object unchanged. When followed by .keyvalue(), the intent is to
+        // enumerate the object's own entries — not iterate the object's values first.
+        // jq's .[]? iterates values (not entries), so [*].keyvalue() must collapse to
+        // just .keyvalue() (which becomes | to_entries[]).
+        jq = jq.replace("[*].keyvalue()", ".keyvalue()");
         jq = jq.replace("[*]", "[]?");
 
         // Replace **{N} recursive descent BEFORE .* — otherwise .* corrupts the **{N} pattern

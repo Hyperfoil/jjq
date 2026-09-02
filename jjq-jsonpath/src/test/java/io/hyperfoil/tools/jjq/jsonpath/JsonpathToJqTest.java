@@ -66,6 +66,9 @@ class JsonpathToJqTest {
             String result = JsonpathToJq.convert("$.results[*].keyvalue().key", JsonpathToJq.Mode.STRICT);
             assertTrue(result.contains("to_entries[]"), "Should contain 'to_entries[]': " + result);
             assertTrue(result.contains(".key"), "Should contain '.key': " + result);
+            // [*] before .keyvalue() should be collapsed — the intent is to enumerate
+            // the object's own entries, not iterate values then enumerate sub-entries
+            assertFalse(result.contains("[]?"), "Should not have []? before to_entries[]: " + result);
         }
         @Test void doubleMethod() { assertStrict("$.value.double()", ".value | tonumber"); }
         @Test void stringMethod() { assertStrict("$.value.string()", ".value | tostring"); }
@@ -395,6 +398,19 @@ class JsonpathToJqTest {
             JqProgram program = JsonpathToJq.compile("$", JsonpathToJq.Mode.STRICT);
             JqValue input = JqValues.parse("{\"a\":1}");
             assertEquals(input, program.apply(input));
+        }
+
+        @Test void keyvalueKeyOnObject() {
+            // $.results[*].keyvalue().key should extract the top-level keys of 'results'
+            // when 'results' is an object (not an array). In PostgreSQL lax mode,
+            // [*] on an object auto-wraps as [obj] then iterates, returning the object
+            // unchanged. .keyvalue() then enumerates the object's entries.
+            String json = "{\"results\":{\"spring-jvm\":{\"rss\":1},\"quarkus-jvm\":{\"rss\":2}}}";
+            String jq = JsonpathToJq.convertArray("$.results[*].keyvalue().key", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse(json));
+            assertEquals("[\"spring-jvm\",\"quarkus-jvm\"]", result.toJsonString(),
+                    "Should extract top-level keys of the results object, jq: " + jq);
         }
 
         @Test void sizeInsideBracketRoundTrip() {
