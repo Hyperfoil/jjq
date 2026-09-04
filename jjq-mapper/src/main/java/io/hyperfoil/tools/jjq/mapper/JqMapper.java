@@ -66,10 +66,79 @@ public final class JqMapper {
 
     /**
      * Create a new JqMapper with default settings.
+     * Uses {@code Class.forName()} to discover generated mappings at runtime.
      * The mapper is thread-safe and should be reused across calls.
+     *
+     * <p>For GraalVM native-image or Quarkus native builds, use {@link #builder()}
+     * to pre-register generated mappings without reflective discovery.</p>
      */
     public static JqMapper create() {
         return new JqMapper();
+    }
+
+    /**
+     * Create a builder for constructing a JqMapper with pre-registered mappings.
+     * Pre-registered mappings are used directly without {@code Class.forName()}
+     * discovery, making the mapper compatible with GraalVM native-image and
+     * Quarkus native builds.
+     *
+     * <p>Example:</p>
+     * <pre>{@code
+     * JqMapper mapper = JqMapper.builder()
+     *     .register(new User_JqMapping())
+     *     .register(new PerfSummary_JqMapping())
+     *     .build();
+     * }</pre>
+     *
+     * <p>With a generated registry:</p>
+     * <pre>{@code
+     * JqMapper.Builder builder = JqMapper.builder();
+     * JqMappingRegistry.registerAll(builder);
+     * JqMapper mapper = builder.build();
+     * }</pre>
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for constructing a {@link JqMapper} with pre-registered mappings.
+     * The builder is not thread-safe — build the mapper once, then share it.
+     */
+    public static final class Builder {
+        private final java.util.List<GeneratedMapping<?>> mappings = new java.util.ArrayList<>();
+
+        private Builder() {}
+
+        /**
+         * Register a compile-time generated mapping.
+         * Pre-registered mappings take priority over {@code Class.forName()} discovery
+         * and reflection-based {@link ClassMapping}.
+         *
+         * @param mapping the generated mapping to register
+         * @return this builder for chaining
+         */
+        public Builder register(GeneratedMapping<?> mapping) {
+            mappings.add(mapping);
+            return this;
+        }
+
+        /**
+         * Build the mapper with all registered mappings.
+         * Types not pre-registered will still fall back to {@code Class.forName()}
+         * discovery and reflection-based mapping.
+         *
+         * @return a new thread-safe JqMapper
+         */
+        public JqMapper build() {
+            JqMapper mapper = new JqMapper();
+            for (var m : mappings) {
+                mapper.cache.put(m.type(), m);
+            }
+            return mapper;
+        }
     }
 
     /**

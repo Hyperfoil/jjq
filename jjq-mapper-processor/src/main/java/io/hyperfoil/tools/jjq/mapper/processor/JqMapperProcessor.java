@@ -40,6 +40,9 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+        // Track generated mapping class names per package for registry generation
+        var mappingsByPackage = new java.util.LinkedHashMap<String, List<String>>();
+
         for (Element element : roundEnv.getElementsAnnotatedWith(JqMapped.class)) {
             if (element.getKind() != ElementKind.RECORD) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
@@ -47,12 +50,26 @@ public class JqMapperProcessor extends AbstractProcessor {
                 continue;
             }
             TypeElement recordType = (TypeElement) element;
-            processRecord(recordType);
+            String mappingClassName = processRecord(recordType);
+            if (mappingClassName != null) {
+                String pkg = processingEnv.getElementUtils().getPackageOf(recordType).getQualifiedName().toString();
+                mappingsByPackage.computeIfAbsent(pkg, k -> new ArrayList<>()).add(mappingClassName);
+            }
         }
+
+        // Generate one JqMappingRegistry per package
+        for (var entry : mappingsByPackage.entrySet()) {
+            generateRegistry(entry.getKey(), entry.getValue());
+        }
+
         return true;
     }
 
-    private void processRecord(TypeElement recordType) {
+    /**
+     * Process a single {@code @JqMapped} record and generate its mapping class.
+     * @return the simple mapping class name (e.g., "User_JqMapping"), or null on error
+     */
+    private String processRecord(TypeElement recordType) {
         // Collect record component metadata
         List<ComponentInfo> components = new ArrayList<>();
         for (Element enclosed : recordType.getEnclosedElements()) {
@@ -71,7 +88,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                     } catch (Exception e) {
                         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                                 "Invalid jq expression in @JqField(\"" + jqExpr + "\"): " + e.getMessage(), rc);
-                        return;
+                        return null;
                     }
                 }
 
@@ -107,6 +124,29 @@ public class JqMapperProcessor extends AbstractProcessor {
         } catch (IOException e) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                     "Failed to write generated mapping: " + e.getMessage(), recordType);
+            return null;
+        }
+        return mappingClassName;
+    }
+
+    /**
+     * Generate a {@code JqMappingRegistry} class for a package that registers
+     * all generated mappings in a single method call.
+     */
+    private void generateRegistry(String packageName, List<String> mappingClassNames) {
+        String registryClassName = "JqMappingRegistry";
+        String qualifiedName = packageName.isEmpty() ? registryClassName : packageName + "." + registryClassName;
+
+        String source = MappingCodeGenerator.generateRegistry(packageName, mappingClassNames);
+
+        try {
+            JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedName);
+            try (PrintWriter writer = new PrintWriter(file.openWriter())) {
+                writer.print(source);
+            }
+        } catch (IOException e) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to write generated registry: " + e.getMessage());
         }
     }
 

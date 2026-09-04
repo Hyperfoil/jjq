@@ -499,4 +499,86 @@ class JqMapperTest {
         assertEquals("test", back.getField("name").stringValue());
         assertEquals(42L, back.getField("value").longValue());
     }
+
+    // ---- Builder API ----
+
+    @Test
+    void builder_registerAndUse() {
+        // Create a custom generated mapping to verify the builder uses it
+        var customMapping = new GeneratedMapping<SimpleRecord>() {
+            @Override
+            public SimpleRecord fromJqValue(JqValue input, JqMapper mapper) {
+                // Return a sentinel value to prove this mapping was used
+                return new SimpleRecord("from-builder", 99, true);
+            }
+            @Override
+            public JqValue toJqValue(SimpleRecord instance, JqMapper mapper) {
+                return JqValues.parse("{\"name\":\"from-builder\",\"age\":99,\"active\":true}");
+            }
+            @Override
+            public Class<SimpleRecord> type() { return SimpleRecord.class; }
+        };
+
+        JqMapper builderMapper = JqMapper.builder()
+                .register(customMapping)
+                .build();
+
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}");
+        SimpleRecord r = builderMapper.fromJqValue(json, SimpleRecord.class);
+
+        // The custom mapping ignores input and returns the sentinel
+        assertEquals("from-builder", r.name());
+        assertEquals(99, r.age());
+    }
+
+    @Test
+    void builder_emptyBuildFallsBackToDiscovery() {
+        // An empty builder should still discover mappings via Class.forName / reflection
+        JqMapper builderMapper = JqMapper.builder().build();
+
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}");
+        SimpleRecord r = builderMapper.fromJqValue(json, SimpleRecord.class);
+
+        assertEquals("Alice", r.name());
+        assertEquals(30, r.age());
+        assertTrue(r.active());
+    }
+
+    @Test
+    void builder_registerMultipleMappings() {
+        var simpleMapping = new GeneratedMapping<SimpleRecord>() {
+            @Override
+            public SimpleRecord fromJqValue(JqValue input, JqMapper mapper) {
+                return new SimpleRecord("simple-registered", 1, false);
+            }
+            @Override
+            public JqValue toJqValue(SimpleRecord instance, JqMapper mapper) {
+                return JqValues.parse("{}");
+            }
+            @Override
+            public Class<SimpleRecord> type() { return SimpleRecord.class; }
+        };
+
+        var numericMapping = new GeneratedMapping<NumericRecord>() {
+            @Override
+            public NumericRecord fromJqValue(JqValue input, JqMapper mapper) {
+                return new NumericRecord(42, 42L, 42.0, 42.0f, (short) 42, (byte) 42, null);
+            }
+            @Override
+            public JqValue toJqValue(NumericRecord instance, JqMapper mapper) {
+                return JqValues.parse("{}");
+            }
+            @Override
+            public Class<NumericRecord> type() { return NumericRecord.class; }
+        };
+
+        JqMapper builderMapper = JqMapper.builder()
+                .register(simpleMapping)
+                .register(numericMapping)
+                .build();
+
+        JqValue json = JqValues.parse("{}");
+        assertEquals("simple-registered", builderMapper.fromJqValue(json, SimpleRecord.class).name());
+        assertEquals(42, builderMapper.fromJqValue(json, NumericRecord.class).i());
+    }
 }
