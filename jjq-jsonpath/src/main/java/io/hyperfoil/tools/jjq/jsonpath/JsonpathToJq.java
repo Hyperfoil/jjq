@@ -97,30 +97,25 @@ public final class JsonpathToJq {
         // A jq expression starting with [] is invalid — prepend . to restore root reference.
         if (jq.startsWith("[]?")) jq = "." + jq;
 
-        // Replace 'last' keyword in array indices with negative indices
-        // [last - N] → [-(N+1)], [last] → [-1]
-        java.util.regex.Matcher lastMatcher = java.util.regex.Pattern.compile(
-                "\\[last\\s*-\\s*(\\d+)\\s*]").matcher(jq);
-        StringBuilder lastSb = new StringBuilder();
-        while (lastMatcher.find()) {
-            int n = Integer.parseInt(lastMatcher.group(1));
-            lastMatcher.appendReplacement(lastSb, "[" + (-(n + 1)) + "]");
-        }
-        lastMatcher.appendTail(lastSb);
-        jq = lastSb.toString();
-        jq = jq.replaceAll("\\[last\\s*]", "[-1]");
+        // Convert hyphenated field names to bracket notation.
+        // jq interprets .my-field as .my - field (subtraction), so fields
+        // containing hyphens must use ["field-name"] bracket access.
+        // Must run AFTER $. → . replacement and BEFORE method replacements.
+        jq = convertHyphenatedFields(jq);
+
+        // Handle 'last' keyword in array brackets and range expressions.
+        // Process range expressions with 'last' FIRST (most specific patterns),
+        // then standalone [last] and [last - N].
+        //
+        // [last - N to last] → [-(N+1):]     — last N+1 elements
+        // [M to last - N]    → [M:-(N+1)]    — from M to N+1 from end
+        // [M to last]        → [M:]           — from M to end
+        // [last - N]         → [-(N+1)]       — single element from end
+        // [last]             → [-1]            — last element
+        jq = replaceLastInRanges(jq);
 
         // Replace array range [M to N] → [M:N+1] (PostgreSQL 'to' is inclusive, jq slice end is exclusive)
-        java.util.regex.Matcher rangeMatcher = java.util.regex.Pattern.compile(
-                "\\[(\\d+)\\s+to\\s+(\\d+)\\s*]").matcher(jq);
-        StringBuilder rangeSb = new StringBuilder();
-        while (rangeMatcher.find()) {
-            int from = Integer.parseInt(rangeMatcher.group(1));
-            int to = Integer.parseInt(rangeMatcher.group(2));
-            rangeMatcher.appendReplacement(rangeSb, "[" + from + ":" + (to + 1) + "]");
-        }
-        rangeMatcher.appendTail(rangeSb);
-        jq = rangeSb.toString();
+        jq = replaceRanges(jq);
 
         // Replace PostgreSQL jsonpath methods with jq equivalents.
         // Handle .size() inside array brackets first — these need different treatment:
@@ -629,4 +624,98 @@ public final class JsonpathToJq {
 
     /** A range [start, end) in a string. */
     record Range(int start, int end) {}
+
+    /**
+     * Handle 'last' keyword in bracket expressions, including inside 'to' ranges.
+     * Processes most-specific patterns first to avoid partial matches.
+     */
+    private static String replaceLastInRanges(String jq) {
+        // [last - N to last] → [-(N+1):]
+        java.util.regex.Matcher m1 = java.util.regex.Pattern.compile(
+                "\\[last\\s*-\\s*(\\d+)\\s+to\\s+last\\s*]").matcher(jq);
+        StringBuilder sb1 = new StringBuilder();
+        while (m1.find()) {
+            int n = Integer.parseInt(m1.group(1));
+            m1.appendReplacement(sb1, "[" + (-(n + 1)) + ":]");
+        }
+        m1.appendTail(sb1);
+        jq = sb1.toString();
+
+        // [M to last - N] → [M:-(N+1)]
+        java.util.regex.Matcher m2 = java.util.regex.Pattern.compile(
+                "\\[(\\d+)\\s+to\\s+last\\s*-\\s*(\\d+)\\s*]").matcher(jq);
+        StringBuilder sb2 = new StringBuilder();
+        while (m2.find()) {
+            int from = Integer.parseInt(m2.group(1));
+            int n = Integer.parseInt(m2.group(2));
+            m2.appendReplacement(sb2, "[" + from + ":" + (-(n + 1)) + "]");
+        }
+        m2.appendTail(sb2);
+        jq = sb2.toString();
+
+        // [M to last] → [M:]
+        jq = jq.replaceAll("\\[(\\d+)\\s+to\\s+last\\s*]", "[$1:]");
+
+        // [last - N] → [-(N+1)] (standalone, not in range)
+        java.util.regex.Matcher m3 = java.util.regex.Pattern.compile(
+                "\\[last\\s*-\\s*(\\d+)\\s*]").matcher(jq);
+        StringBuilder sb3 = new StringBuilder();
+        while (m3.find()) {
+            int n = Integer.parseInt(m3.group(1));
+            m3.appendReplacement(sb3, "[" + (-(n + 1)) + "]");
+        }
+        m3.appendTail(sb3);
+        jq = sb3.toString();
+
+        // [last] → [-1]
+        jq = jq.replaceAll("\\[last\\s*]", "[-1]");
+
+        return jq;
+    }
+
+    /**
+     * Replace array range [M to N] → [M:N+1].
+     * PostgreSQL 'to' is inclusive on both ends, jq slice end is exclusive.
+     */
+    private static String replaceRanges(String jq) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "\\[(-?\\d+)\\s+to\\s+(-?\\d+)\\s*]").matcher(jq);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            int from = Integer.parseInt(m.group(1));
+            int to = Integer.parseInt(m.group(2));
+            m.appendReplacement(sb, "[" + from + ":" + (to + 1) + "]");
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * Convert hyphenated field names to bracket notation.
+     * jq interprets .my-field as .my - field (subtraction), so fields
+     * containing hyphens must use ["field-name"] bracket access.
+     * Only converts dot-accessed fields, not bracket-accessed ones.
+     */
+    private static String convertHyphenatedFields(String jq) {
+        // Match .identifier-with-hyphens — a dot followed by a word containing at least one hyphen
+        // but not starting with a digit (to avoid matching negative numbers like .-1)
+        // and not matching inside quotes.
+        // The dot is preserved: .my-field → .["my-field"]
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "\\.([a-zA-Z_][a-zA-Z0-9_]*(?:-[a-zA-Z0-9_]+)+)").matcher(jq);
+        StringBuilder sb = new StringBuilder();
+        int lastEnd = 0;
+        while (m.find()) {
+            // Check we're not inside quotes
+            String before = jq.substring(0, m.start());
+            long quoteCount = before.chars().filter(c -> c == '"').count();
+            if (quoteCount % 2 != 0) continue; // inside a quoted string — skip
+
+            sb.append(jq, lastEnd, m.start());
+            sb.append(".[\"").append(m.group(1)).append("\"]");
+            lastEnd = m.end();
+        }
+        sb.append(jq, lastEnd, jq.length());
+        return sb.toString();
+    }
 }

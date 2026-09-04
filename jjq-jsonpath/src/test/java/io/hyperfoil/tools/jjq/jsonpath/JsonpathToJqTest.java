@@ -450,9 +450,9 @@ class JsonpathToJqTest {
         }
 
         @Test void hyphenatedFieldName() {
-            // Hyphenated field names need quoting in jq, but jsonpath handles them bare
-            // The converter does direct string replacement, so this passes through as-is
-            assertStrict("$.a.b-c", ".a.b-c");
+            // Hyphenated field names are converted to bracket notation since
+            // jq interprets .b-c as .b - c (subtraction)
+            assertStrict("$.a.b-c", ".a.[\"b-c\"]");
         }
 
         @Test void multipleFilters() {
@@ -722,30 +722,19 @@ class JsonpathToJqTest {
         // ---- hyphenated field names ----
 
         @Test void hyphenatedFieldName() {
-            // Hyphenated field names are a known issue — jq treats . as subtraction
             String json = "{\"my-field\":42}";
             String jq = JsonpathToJq.convert("$.my-field", JsonpathToJq.Mode.STRICT);
-            try {
-                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
-                assertEquals("42", result.toJsonString(),
-                        "Should access hyphenated field, jq: " + jq);
-            } catch (Exception e) {
-                Assumptions.assumeTrue(false,
-                        "Hyphenated field names not yet converted to bracket notation. jq: " + jq + ", error: " + e.getMessage());
-            }
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("42", result.toJsonString(),
+                    "Should access hyphenated field, jq: " + jq);
         }
 
         @Test void hyphenatedNestedField() {
             String json = "{\"config\":{\"retry-count\":3}}";
             String jq = JsonpathToJq.convert("$.config.retry-count", JsonpathToJq.Mode.STRICT);
-            try {
-                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
-                assertEquals("3", result.toJsonString(),
-                        "Should access nested hyphenated field, jq: " + jq);
-            } catch (Exception e) {
-                Assumptions.assumeTrue(false,
-                        "Hyphenated field names not yet converted to bracket notation. jq: " + jq + ", error: " + e.getMessage());
-            }
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("3", result.toJsonString(),
+                    "Should access nested hyphenated field, jq: " + jq);
         }
 
         // ---- recursive descent with depth ----
@@ -783,17 +772,12 @@ class JsonpathToJqTest {
         @Test void filterArrayAccess() {
             String json = "{\"data\":[[1,2,3],[10,20,30],[5,6,7]]}";
             String jq = JsonpathToJq.convertArray("$.data[*] ? (@[0] > 5)", JsonpathToJq.Mode.STRICT);
-            try {
-                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
-                String resultStr = result.toJsonString();
-                assertTrue(resultStr.contains("[10,20,30]"),
-                        "Should include array starting with 10, jq: " + jq);
-                assertFalse(resultStr.contains("[1,2,3]"),
-                        "Should not include array starting with 1, jq: " + jq);
-            } catch (Exception e) {
-                Assumptions.assumeTrue(false,
-                        "Array access on current item in filter not yet supported. jq: " + jq + ", error: " + e.getMessage());
-            }
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("[10,20,30]"),
+                    "Should include array starting with 10, jq: " + jq);
+            assertFalse(resultStr.contains("[1,2,3]"),
+                    "Should not include array starting with 1, jq: " + jq);
         }
 
         // ---- multiple root references ----
