@@ -214,6 +214,13 @@ public final class JqValues {
     public static String serialize(JqValue value) {
         StringBuilder sb = SERIALIZER_BUFFER.get();
         sb.setLength(0);
+        // Pre-size the buffer to avoid repeated doubling during serialization.
+        // estimatedSizeInBytes() returns the source byte length for parsed values,
+        // which is a good approximation of the serialized output size.
+        int estimate = value.estimatedSizeInBytes();
+        if (estimate > 1 && estimate > sb.capacity()) {
+            sb.ensureCapacity(estimate);
+        }
         value.appendTo(sb);
         String result = sb.toString();
         if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
@@ -231,6 +238,10 @@ public final class JqValues {
     public static void serializeTo(JqValue value, Writer writer) throws IOException {
         StringBuilder sb = SERIALIZER_BUFFER.get();
         sb.setLength(0);
+        int estimate = value.estimatedSizeInBytes();
+        if (estimate > 1 && estimate > sb.capacity()) {
+            sb.ensureCapacity(estimate);
+        }
         value.appendTo(sb);
         writer.append(sb);
         if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
