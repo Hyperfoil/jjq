@@ -1171,25 +1171,16 @@ public final class JqValues {
         int peek() { return data[pos] & 0xFF; }
 
         void skipWs() {
-            // SWAR fast path: scan 8 bytes at a time for non-whitespace.
-            // For compact JSON this typically exits on the first word.
-            // For pretty-printed JSON with deep indentation (e.g., 20+ spaces),
-            // this processes whitespace runs ~8x faster than the scalar loop.
-            while (pos + 8 <= end) {
-                long word = SwarUtil.loadLong(data, pos);
-                long nonWs = SwarUtil.findNonWhitespace(word);
-                if (nonWs != 0) {
-                    pos += SwarUtil.getIndex(nonWs);
-                    return;
-                }
-                pos += 8;
-            }
-            // Scalar tail for remaining < 8 bytes
-            while (pos < end) {
-                int b = data[pos] & 0xFF;
+            int p = pos;
+            final byte[] d = data;
+            final int e = end;
+            if (p < e && (d[p] & 0xFF) > ' ') return;   // compact JSON: no whitespace at all
+            while (p < e) {
+                int b = d[p] & 0xFF;
                 if (b != ' ' && b != '\n' && b != '\r' && b != '\t') break;
-                pos++;
+                p++;
             }
+            pos = p;
         }
     }
 
