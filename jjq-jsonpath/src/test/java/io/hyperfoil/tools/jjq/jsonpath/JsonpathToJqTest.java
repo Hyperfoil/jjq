@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.jsonpath;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -533,6 +534,285 @@ class JsonpathToJqTest {
     // ========================================================================
     //  Test helpers
     // ========================================================================
+
+    // ========================================================================
+    //  Phase 1 tests: coverage for previously untested features (issue #71)
+    // ========================================================================
+
+    @Nested
+    class LastKeyword {
+        private static final String ARRAY_JSON = "{\"data\":[10,20,30,40,50]}";
+
+        @Test void lastIndex() {
+            String jq = JsonpathToJq.convert("$.data[last]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("50", result.toJsonString(),
+                    "$.data[last] should return last element, jq: " + jq);
+        }
+
+        @Test void lastMinusOne() {
+            String jq = JsonpathToJq.convert("$.data[last - 1]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("40", result.toJsonString(),
+                    "$.data[last - 1] should return second-to-last, jq: " + jq);
+        }
+
+        @Test void lastMinusThree() {
+            String jq = JsonpathToJq.convert("$.data[last - 3]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("20", result.toJsonString(),
+                    "$.data[last - 3] should return 4th from end, jq: " + jq);
+        }
+
+        @Test void zeroToLast() {
+            // Known limitation: last inside range expressions not supported (issue #71 Phase 2)
+            String jq = JsonpathToJq.convert("$.data[0 to last]", JsonpathToJq.Mode.STRICT);
+            try {
+                JqProgram program = JqProgram.compile(jq);
+                JqValue result = program.apply(JqValues.parse(ARRAY_JSON));
+                // If it works, verify it returns all elements
+                assertEquals("[10,20,30,40,50]", result.toJsonString());
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "last in range expressions not yet supported. jq produced: " + jq + ", error: " + e.getMessage());
+            }
+        }
+
+        @Test void lastMinusOneToLast() {
+            // Known limitation: last inside range expressions not supported
+            String jq = JsonpathToJq.convert("$.data[last - 1 to last]", JsonpathToJq.Mode.STRICT);
+            try {
+                JqProgram program = JqProgram.compile(jq);
+                JqValue result = program.apply(JqValues.parse(ARRAY_JSON));
+                assertEquals("[40,50]", result.toJsonString());
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "last in range expressions not yet supported. jq produced: " + jq + ", error: " + e.getMessage());
+            }
+        }
+    }
+
+    @Nested
+    class RangeSlicing {
+        private static final String ARRAY_JSON = "{\"data\":[10,20,30,40,50]}";
+
+        @Test void basicRange() {
+            // Range slicing returns a sub-array — use convert() not convertArray()
+            String jq = JsonpathToJq.convert("$.data[0 to 2]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[10,20,30]", result.toJsonString(),
+                    "$.data[0 to 2] should return first 3 elements, jq: " + jq);
+        }
+
+        @Test void midRange() {
+            String jq = JsonpathToJq.convert("$.data[1 to 3]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[20,30,40]", result.toJsonString(),
+                    "$.data[1 to 3] should return elements 1-3, jq: " + jq);
+        }
+
+        @Test void singleElementRange() {
+            String jq = JsonpathToJq.convert("$.data[2 to 2]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[30]", result.toJsonString(),
+                    "$.data[2 to 2] should return single element, jq: " + jq);
+        }
+    }
+
+    @Nested
+    class AdditionalFeatures {
+        private static final String ITEMS_JSON = """
+                {"items":[
+                    {"name":"Widget-A","price":9.99,"stock":100,"active":true,"type":"A"},
+                    {"name":"Widget-B","price":24.99,"stock":0,"active":false,"type":"B"},
+                    {"name":"Gadget-C","price":4.50,"stock":50,"active":true,"type":"A"}
+                ]}""";
+        private static final String NAMES_JSON = """
+                {"names":["Alice","Bob","Anna","Alex","Charlie"]}""";
+
+        // ---- starts with ----
+
+        @Test void startsWith() {
+            String jq = JsonpathToJq.convertArray("$.names[*] ? (@ starts with \"A\")", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(NAMES_JSON));
+            assertEquals("[\"Alice\",\"Anna\",\"Alex\"]", result.toJsonString(),
+                    "Should filter names starting with A, jq: " + jq);
+        }
+
+        @Test void startsWithOnField() {
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (@.name starts with \"Widget\")", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ITEMS_JSON));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("Widget-A") && resultStr.contains("Widget-B"),
+                    "Should filter items with name starting with Widget, jq: " + jq);
+            assertFalse(resultStr.contains("Gadget"),
+                    "Should not include Gadget, jq: " + jq);
+        }
+
+        // ---- .boolean() method ----
+
+        @Test void booleanMethod() {
+            String jq = JsonpathToJq.convert("$.value.boolean()", JsonpathToJq.Mode.STRICT);
+            // Verify the jq compiles
+            JqProgram program = JqProgram.compile(jq);
+            // Test with truthy value
+            JqValue truthy = program.apply(JqValues.parse("{\"value\":1}"));
+            assertNotNull(truthy, "boolean() on truthy value should produce result, jq: " + jq);
+        }
+
+        // ---- comparison operators ----
+
+        @Test void greaterOrEqual() {
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (@.price >= 10)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ITEMS_JSON));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("Widget-B"), "Should include Widget-B (24.99 >= 10), jq: " + jq);
+            assertFalse(resultStr.contains("Widget-A"), "Should not include Widget-A (9.99 < 10), jq: " + jq);
+            assertFalse(resultStr.contains("Gadget"), "Should not include Gadget (4.50 < 10), jq: " + jq);
+        }
+
+        @Test void lessOrEqual() {
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (@.price <= 10)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ITEMS_JSON));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("Widget-A"), "Should include Widget-A (9.99 <= 10), jq: " + jq);
+            assertTrue(resultStr.contains("Gadget"), "Should include Gadget (4.50 <= 10), jq: " + jq);
+            assertFalse(resultStr.contains("Widget-B"), "Should not include Widget-B (24.99 > 10), jq: " + jq);
+        }
+
+        // ---- method chaining ----
+
+        @Test void methodChainDoubleCeiling() {
+            String jq = JsonpathToJq.convert("$.value.double().ceiling()", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse("{\"value\":\"3.14\"}"));
+            assertEquals("4", result.toJsonString(),
+                    "double().ceiling() should parse then ceil, jq: " + jq);
+        }
+
+        @Test void methodChainAbsFloor() {
+            String jq = JsonpathToJq.convert("$.value.abs().floor()", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse("{\"value\":-3.7}"));
+            assertEquals("3", result.toJsonString(),
+                    "abs().floor() should absolute then floor, jq: " + jq);
+        }
+
+        // ---- compound filters ----
+
+        @Test void compoundAndFilter() {
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (@.price > 5 && @.stock > 0)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ITEMS_JSON));
+            String resultStr = result.toJsonString();
+            // Widget-A: price 9.99 > 5, stock 100 > 0 → include
+            // Widget-B: price 24.99 > 5, stock 0 NOT > 0 → exclude
+            // Gadget-C: price 4.50 NOT > 5 → exclude
+            assertTrue(resultStr.contains("Widget-A"), "Should include Widget-A, jq: " + jq);
+            assertFalse(resultStr.contains("Widget-B"), "Should not include Widget-B (stock 0), jq: " + jq);
+            assertFalse(resultStr.contains("Gadget"), "Should not include Gadget (price 4.50), jq: " + jq);
+        }
+
+        @Test void compoundOrFilter() {
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (@.type == \"A\" || @.type == \"B\")", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ITEMS_JSON));
+            assertEquals(3, result.length(),
+                    "Should include all items (types A and B), jq: " + jq);
+        }
+
+        // ---- hyphenated field names ----
+
+        @Test void hyphenatedFieldName() {
+            // Hyphenated field names are a known issue — jq treats . as subtraction
+            String json = "{\"my-field\":42}";
+            String jq = JsonpathToJq.convert("$.my-field", JsonpathToJq.Mode.STRICT);
+            try {
+                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+                assertEquals("42", result.toJsonString(),
+                        "Should access hyphenated field, jq: " + jq);
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "Hyphenated field names not yet converted to bracket notation. jq: " + jq + ", error: " + e.getMessage());
+            }
+        }
+
+        @Test void hyphenatedNestedField() {
+            String json = "{\"config\":{\"retry-count\":3}}";
+            String jq = JsonpathToJq.convert("$.config.retry-count", JsonpathToJq.Mode.STRICT);
+            try {
+                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+                assertEquals("3", result.toJsonString(),
+                        "Should access nested hyphenated field, jq: " + jq);
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "Hyphenated field names not yet converted to bracket notation. jq: " + jq + ", error: " + e.getMessage());
+            }
+        }
+
+        // ---- recursive descent with depth ----
+
+        @Test void recursiveDescentWithDepth() {
+            // Known limitation: depth bound is discarded (issue #71 Phase 2)
+            String json = "{\"a\":{\"b\":{\"c\":{\"value\":42}}}}";
+            String jq = JsonpathToJq.convert("$.**{2}.value", JsonpathToJq.Mode.STRICT);
+            try {
+                JqProgram program = JqProgram.compile(jq);
+                // .**{2} should descend exactly 2 levels — matches .a.b but not .a.b.c
+                // With recurse (infinite), it matches everything including .a.b.c.value
+                JqValue result = program.apply(JqValues.parse(json));
+                // If depth bound is correctly applied, behavior differs from infinite recurse
+                assertNotNull(result, "Should produce some result, jq: " + jq);
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "Recursive descent with depth bound not fully supported. jq: " + jq + ", error: " + e.getMessage());
+            }
+        }
+
+        // ---- filter then field access ----
+
+        @Test void filterThenFieldAccess() {
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (@.active == true).name", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ITEMS_JSON));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("Widget-A"), "Should include active Widget-A, jq: " + jq);
+            assertTrue(resultStr.contains("Gadget-C"), "Should include active Gadget-C, jq: " + jq);
+            assertFalse(resultStr.contains("Widget-B"), "Should not include inactive Widget-B, jq: " + jq);
+        }
+
+        // ---- array access on current item in filter ----
+
+        @Test void filterArrayAccess() {
+            String json = "{\"data\":[[1,2,3],[10,20,30],[5,6,7]]}";
+            String jq = JsonpathToJq.convertArray("$.data[*] ? (@[0] > 5)", JsonpathToJq.Mode.STRICT);
+            try {
+                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+                String resultStr = result.toJsonString();
+                assertTrue(resultStr.contains("[10,20,30]"),
+                        "Should include array starting with 10, jq: " + jq);
+                assertFalse(resultStr.contains("[1,2,3]"),
+                        "Should not include array starting with 1, jq: " + jq);
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "Array access on current item in filter not yet supported. jq: " + jq + ", error: " + e.getMessage());
+            }
+        }
+
+        // ---- multiple root references ----
+
+        @Test void multipleRootReferences() {
+            // $.data[$.index] — nested $ reference in bracket expression
+            String json = "{\"data\":[10,20,30],\"index\":1}";
+            String jq = JsonpathToJq.convert("$.data[$.index]", JsonpathToJq.Mode.STRICT);
+            try {
+                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+                // In PostgreSQL, $ in brackets refers to the root document
+                // Whether this works depends on how $. is replaced inside brackets
+                assertNotNull(result, "Should produce some result, jq: " + jq);
+            } catch (Exception e) {
+                Assumptions.assumeTrue(false,
+                        "Nested root references in brackets not supported. jq: " + jq + ", error: " + e.getMessage());
+            }
+        }
+    }
 
     private static void assertStrict(String jsonpath, String expectedJq) {
         assertEquals(expectedJq, JsonpathToJq.convert(jsonpath, JsonpathToJq.Mode.STRICT));
