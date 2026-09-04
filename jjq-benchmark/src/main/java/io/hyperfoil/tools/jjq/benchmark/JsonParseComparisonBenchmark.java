@@ -1,8 +1,8 @@
 package io.hyperfoil.tools.jjq.benchmark;
 
 import com.alibaba.fastjson2.JSON;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.openjdk.jmh.annotations.*;

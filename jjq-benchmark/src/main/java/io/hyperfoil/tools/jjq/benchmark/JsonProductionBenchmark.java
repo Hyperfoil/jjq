@@ -2,10 +2,9 @@ package io.hyperfoil.tools.jjq.benchmark;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.fastjson2.FastjsonEngine;
-import io.hyperfoil.tools.jjq.jackson.JacksonConverter;
 import io.hyperfoil.tools.jjq.value.*;
 import org.openjdk.jmh.annotations.*;
 
@@ -142,25 +141,6 @@ public class JsonProductionBenchmark {
         JSONObject root = (JSONObject) fastjsonValue;
         return root.getJSONObject("autobench_workload").getJSONArray("data")
                 .getJSONObject(0).get("results");
-    }
-
-    // ========================================================================
-    //  Conversion: Jackson <-> JqValue (what h5m currently pays)
-    // ========================================================================
-
-    @Benchmark
-    public JqValue convert_jackson_to_jjq_lazy() {
-        return JacksonConverter.fromJsonNodeLazy(jacksonValue);
-    }
-
-    @Benchmark
-    public JqValue convert_jackson_to_jjq_eager() {
-        return JacksonConverter.fromJsonNode(jacksonValue);
-    }
-
-    @Benchmark
-    public JsonNode convert_jjq_to_jackson() {
-        return JacksonConverter.toJsonNode(jjqValue, MAPPER);
     }
 
     // ========================================================================

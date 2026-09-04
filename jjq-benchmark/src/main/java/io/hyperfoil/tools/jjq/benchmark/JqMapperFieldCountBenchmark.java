@@ -1,8 +1,8 @@
 package io.hyperfoil.tools.jjq.benchmark;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
@@ -131,17 +131,17 @@ public class JqMapperFieldCountBenchmark {
     // ========================================================================
 
     @Benchmark
-    public FieldCountRecords.Gen5 jackson_05fields() throws JsonProcessingException {
+    public FieldCountRecords.Gen5 jackson_05fields() throws JacksonException {
         return JACKSON.treeToValue(jn5, FieldCountRecords.Gen5.class);
     }
 
     @Benchmark
-    public FieldCountRecords.Gen10 jackson_10fields() throws JsonProcessingException {
+    public FieldCountRecords.Gen10 jackson_10fields() throws JacksonException {
         return JACKSON.treeToValue(jn10, FieldCountRecords.Gen10.class);
     }
 
     @Benchmark
-    public FieldCountRecords.Gen20 jackson_20fields() throws JsonProcessingException {
+    public FieldCountRecords.Gen20 jackson_20fields() throws JacksonException {
         return JACKSON.treeToValue(jn20, FieldCountRecords.Gen20.class);
     }
 }

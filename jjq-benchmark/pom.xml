@@ -23,11 +23,12 @@
         </dependency>
         <dependency>
             <groupId>io.hyperfoil.tools</groupId>
-            <artifactId>jjq-jackson</artifactId>
+            <artifactId>jjq-fastjson2</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.hyperfoil.tools</groupId>
-            <artifactId>jjq-fastjson2</artifactId>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>3.2.2</version>
         </dependency>
         <dependency>
             <groupId>io.hyperfoil.tools</groupId>
@@ -38,11 +39,7 @@
             <artifactId>jjq-mapper-processor</artifactId>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>net.thisptr</groupId>
-            <artifactId>jackson-jq</artifactId>
-            <version>1.6.0</version>
-        </dependency>
+
         <dependency>
             <groupId>org.openjdk.jol</groupId>
             <artifactId>jol-core</artifactId>

@@ -1,7 +1,8 @@
 package io.hyperfoil.tools.jjq.benchmark;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonGenerator;
+import tools.jackson.core.JsonGenerator;
+import tools.jackson.core.ObjectWriteContext;
+import tools.jackson.core.json.JsonFactory;
 import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
@@ -181,7 +182,7 @@ public class JqEscapeBenchmark {
     @Benchmark
     public byte[] ser_jackson_writeString() throws IOException {
         jacksonOut.reset();
-        try (JsonGenerator gen = jsonFactory.createGenerator(jacksonOut)) {
+        try (JsonGenerator gen = jsonFactory.createGenerator(ObjectWriteContext.empty(), jacksonOut)) {
             gen.writeString(nextString());
         }
         return jacksonOut.toByteArray();

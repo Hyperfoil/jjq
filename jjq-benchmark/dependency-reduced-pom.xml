@@ -3,7 +3,7 @@
   <parent>
     <artifactId>jjq-parent</artifactId>
     <groupId>io.hyperfoil.tools</groupId>
-    <version>0.1.5-SNAPSHOT</version>
+    <version>0.1.12-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>jjq-benchmark</artifactId>
@@ -49,12 +49,23 @@
               <artifactId>jmh-generator-annprocess</artifactId>
               <version>${jmh.version}</version>
             </path>
+            <path>
+              <groupId>io.hyperfoil.tools</groupId>
+              <artifactId>jjq-mapper-processor</artifactId>
+              <version>${project.version}</version>
+            </path>
           </annotationProcessorPaths>
         </configuration>
       </plugin>
     </plugins>
   </build>
   <dependencies>
+    <dependency>
+      <groupId>io.hyperfoil.tools</groupId>
+      <artifactId>jjq-mapper-processor</artifactId>
+      <version>0.1.12-SNAPSHOT</version>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>org.openjdk.jmh</groupId>
       <artifactId>jmh-generator-annprocess</artifactId>

@@ -1,10 +1,7 @@
 package io.hyperfoil.tools.jjq.benchmark;
 
 import com.alibaba.fastjson2.JSON;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.fastjson2.FastjsonEngine;
-import io.hyperfoil.tools.jjq.jackson.JacksonConverter;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.openjdk.jmh.annotations.*;
@@ -43,42 +40,15 @@ public class JsonConversionBenchmark {
     @Param({"1kb", "10kb", "100kb"})
     String size;
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     // Pre-parsed into each library's native type
-    private JsonNode jacksonValue;
     private Object fastjsonValue;
     private JqValue jjqValue;
 
     @Setup(Level.Trial)
     public void setup() throws IOException {
         String json = loadResource("benchmark-data/nested-" + size + ".json");
-        jacksonValue = MAPPER.readTree(json);
         fastjsonValue = JSON.parse(json);
         jjqValue = JqValues.parse(json);
-    }
-
-    // ========================================================================
-    //  Jackson -> JqValue (what h5m does before jq evaluation)
-    // ========================================================================
-
-    @Benchmark
-    public JqValue convert_jackson_to_jjq_lazy() {
-        return JacksonConverter.fromJsonNodeLazy(jacksonValue);
-    }
-
-    @Benchmark
-    public JqValue convert_jackson_to_jjq_eager() {
-        return JacksonConverter.fromJsonNode(jacksonValue);
-    }
-
-    // ========================================================================
-    //  JqValue -> Jackson (what h5m does after jq evaluation)
-    // ========================================================================
-
-    @Benchmark
-    public JsonNode convert_jjq_to_jackson() {
-        return JacksonConverter.toJsonNode(jjqValue, MAPPER);
     }
 
     // ========================================================================

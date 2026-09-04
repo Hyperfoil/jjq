@@ -1,10 +1,6 @@
 package io.hyperfoil.tools.jjq.benchmark;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.JqProgram;
-import io.hyperfoil.tools.jjq.jackson.JacksonConverter;
-import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.openjdk.jmh.annotations.*;
@@ -12,7 +8,6 @@ import org.openjdk.jmh.annotations.*;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -27,10 +22,6 @@ import java.util.concurrent.TimeUnit;
  * <h3>Round-trip benchmarks</h3>
  * Parse JSON string -> apply jq filter -> serialize back via
  * {@code toJsonString()}. Captures the full pipeline cost.
- *
- * <h3>Jackson round-trip benchmarks</h3>
- * {@code JsonNode -> fromJsonNodeLazy() -> VM execute -> toJsonNode()}.
- * Measures the h5m-realistic integration path through {@link JacksonJqEngine}.
  *
  * <h3>Running with profilers</h3>
  * <pre>
@@ -95,18 +86,6 @@ public class JjqParserBenchmark {
 
     private String roundTripInput; // ~10KB string-heavy input
 
-    // ========================================================================
-    //  Jackson round-trip benchmark state
-    // ========================================================================
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-    private JacksonJqEngine engine;
-
-    private JsonNode jacksonNestedInput;  // h5m-style nested input as JsonNode
-    private JqProgram jacksonProgIdentity;
-    private JqProgram jacksonProgFieldAccess;
-    private JqProgram jacksonProgCollectIterate;
-
     @Setup
     public void setup() throws IOException {
         // Load parser benchmark inputs from resources
@@ -147,14 +126,6 @@ public class JjqParserBenchmark {
         progObjectConstruct = JqProgram.compile("[.[] | {name, dept}]");
 
         roundTripInput = stringsJson10kb;
-
-        // Jackson round-trip state
-        engine = new JacksonJqEngine(MAPPER);
-        jacksonNestedInput = MAPPER.readTree(nestedJson10kb);
-        jacksonProgIdentity = engine.compile(".");
-        jacksonProgFieldAccess = engine.compile(".[0].config.QUARKUS_VERSION");
-        jacksonProgCollectIterate = engine.compile(
-                "[.[0].results[].load.avThroughput]");
     }
 
     private static String loadResource(String name) throws IOException {
@@ -268,22 +239,4 @@ public class JjqParserBenchmark {
         return result.toJsonString();
     }
 
-    // ========================================================================
-    //  Jackson round-trip benchmarks: JsonNode -> JqValue -> VM -> JsonNode
-    // ========================================================================
-
-    @Benchmark
-    public List<JsonNode> jackson_roundTrip_identity() {
-        return engine.apply(jacksonProgIdentity, jacksonNestedInput);
-    }
-
-    @Benchmark
-    public JsonNode jackson_roundTrip_fieldAccess() {
-        return engine.applyFirst(jacksonProgFieldAccess, jacksonNestedInput);
-    }
-
-    @Benchmark
-    public List<JsonNode> jackson_roundTrip_collectIterate() {
-        return engine.apply(jacksonProgCollectIterate, jacksonNestedInput);
-    }
 }

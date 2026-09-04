@@ -1,8 +1,8 @@
 package io.hyperfoil.tools.jjq.benchmark;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.value.JqValue;
@@ -154,7 +154,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public SimpleRecord deser_simple_jackson_fromString() throws JsonProcessingException {
+    public SimpleRecord deser_simple_jackson_fromString() throws JacksonException {
         return jacksonMapper.readValue(simpleJson, SimpleRecord.class);
     }
 
@@ -164,7 +164,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public PersonRecord deser_nested_jackson_fromString() throws JsonProcessingException {
+    public PersonRecord deser_nested_jackson_fromString() throws JacksonException {
         return jacksonMapper.readValue(nestedJson, PersonRecord.class);
     }
 
@@ -174,7 +174,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public OrderRecord deser_list_jackson_fromString() throws JsonProcessingException {
+    public OrderRecord deser_list_jackson_fromString() throws JacksonException {
         return jacksonMapper.readValue(listJson, OrderRecord.class);
     }
 
@@ -222,7 +222,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public SimpleRecord deser_simple_jackson_preParsed() throws JsonProcessingException {
+    public SimpleRecord deser_simple_jackson_preParsed() throws JacksonException {
         return jacksonMapper.treeToValue(simpleJsonNode, SimpleRecord.class);
     }
 
@@ -232,7 +232,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public PersonRecord deser_nested_jackson_preParsed() throws JsonProcessingException {
+    public PersonRecord deser_nested_jackson_preParsed() throws JacksonException {
         return jacksonMapper.treeToValue(nestedJsonNode, PersonRecord.class);
     }
 
@@ -242,7 +242,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public OrderRecord deser_list_jackson_preParsed() throws JsonProcessingException {
+    public OrderRecord deser_list_jackson_preParsed() throws JacksonException {
         return jacksonMapper.treeToValue(listJsonNode, OrderRecord.class);
     }
 
@@ -256,7 +256,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public String ser_simple_jackson() throws JsonProcessingException {
+    public String ser_simple_jackson() throws JacksonException {
         return jacksonMapper.writeValueAsString(simpleRecord);
     }
 
@@ -266,7 +266,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public String ser_nested_jackson() throws JsonProcessingException {
+    public String ser_nested_jackson() throws JacksonException {
         return jacksonMapper.writeValueAsString(personRecord);
     }
 
@@ -276,7 +276,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public String ser_list_jackson() throws JsonProcessingException {
+    public String ser_list_jackson() throws JacksonException {
         return jacksonMapper.writeValueAsString(orderRecord);
     }
 
@@ -290,7 +290,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public byte[] ser_simple_jackson_bytes() throws JsonProcessingException {
+    public byte[] ser_simple_jackson_bytes() throws JacksonException {
         return jacksonMapper.writeValueAsBytes(simpleRecord);
     }
 
@@ -300,7 +300,7 @@ public class JqMapperBenchmark {
     }
 
     @Benchmark
-    public byte[] ser_nested_jackson_bytes() throws JsonProcessingException {
+    public byte[] ser_nested_jackson_bytes() throws JacksonException {
         return jacksonMapper.writeValueAsBytes(personRecord);
     }
 
