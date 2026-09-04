@@ -1170,7 +1170,6 @@ public final class JqValues {
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
         String[] previousKeys;
-        int previousKeyCount;
         // Second-level schema cache, checked when previousKeys misses. Objects complete in
         // post-order, so for nested schemas the previous completed object is never the same
         // schema and a one-entry cache never hits.
