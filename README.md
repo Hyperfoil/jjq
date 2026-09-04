@@ -2,7 +2,7 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, and parses **1.5-2.3x faster than Jackson 3**.
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.3x faster than Jackson 3**, and serializes **1.8x faster**.
 
 ## Features
 
@@ -523,6 +523,20 @@ End-to-end deserialization from `byte[]` to Java records:
 | list | **826 ns** | 976 ns | **1.2x** |
 
 The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct enum-switch dispatch, avoiding reflection and lambda overhead. The generated mappings maintain a **6-11x advantage** over Jackson 3 on pre-parsed data, narrowing to 2x at 20 fields due to register spilling on x86_64.
+
+### JSON Serialization: jjq vs Jackson 3
+
+Serialization throughput (ms/op, lower is better). JMH, 3 forks, 5+5 iterations, JDK 25.0.2 Temurin.
+
+| Input | jjq | Jackson 3 | jjq speedup |
+|-------|-----|-----------|-------------|
+| **Production 14MB** | **10.3 ms** | 18.4 ms | **1.78x** |
+| flat 1MB | **1.79 ms** | 2.05 ms | **1.14x** |
+| strings 1MB | **0.88 ms** | 1.57 ms | **1.77x** |
+| numbers 1MB | **2.08 ms** | 2.87 ms | **1.38x** |
+| nested 1MB | **1.47 ms** | 2.38 ms | **1.61x** |
+
+jjq serializes **1.1-1.8x faster than Jackson 3** across all inputs. The speedup comes from pre-computed JSON key forms for interned field names (no escape scanning), type-specialized `appendTo` dispatch, and pre-sized StringBuilder buffers based on the source byte length (eliminates repeated buffer doubling for large documents).
 
 ### CLI Performance: jjq native-image vs jq 1.8.1
 
