@@ -581,4 +581,162 @@ class JqMapperTest {
         assertEquals("simple-registered", builderMapper.fromJqValue(json, SimpleRecord.class).name());
         assertEquals(42, builderMapper.fromJqValue(json, NumericRecord.class).i());
     }
+
+    // ---- POJO support ----
+
+    static class SimplePojo {
+        private String name;
+        private int age;
+        private boolean active;
+
+        public SimplePojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public int getAge() { return age; }
+        public void setAge(int age) { this.age = age; }
+        public boolean isActive() { return active; }
+        public void setActive(boolean active) { this.active = active; }
+    }
+
+    @Test
+    void fromJqValue_simplePojo() {
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}");
+        SimplePojo p = mapper.fromJqValue(json, SimplePojo.class);
+        assertEquals("Alice", p.getName());
+        assertEquals(30, p.getAge());
+        assertTrue(p.isActive());
+    }
+
+    @Test
+    void toJqValue_simplePojo() {
+        SimplePojo p = new SimplePojo();
+        p.setName("Bob");
+        p.setAge(25);
+        p.setActive(false);
+        JqValue result = mapper.toJqValue(p);
+        assertInstanceOf(JqObject.class, result);
+        assertEquals("Bob", result.getField("name").stringValue());
+        assertEquals(25L, result.getField("age").longValue());
+        assertFalse(result.getField("active").booleanValue());
+    }
+
+    @Test
+    void roundTrip_simplePojo() {
+        SimplePojo original = new SimplePojo();
+        original.setName("Alice");
+        original.setAge(30);
+        original.setActive(true);
+        JqValue json = mapper.toJqValue(original);
+        SimplePojo restored = mapper.fromJqValue(json, SimplePojo.class);
+        assertEquals(original.getName(), restored.getName());
+        assertEquals(original.getAge(), restored.getAge());
+        assertEquals(original.isActive(), restored.isActive());
+    }
+
+    // ---- POJO with public fields ----
+
+    static class PublicFieldPojo {
+        public String name;
+        public int value;
+
+        public PublicFieldPojo() {}
+    }
+
+    @Test
+    void fromJqValue_publicFieldPojo() {
+        JqValue json = JqValues.parse("{\"name\":\"test\",\"value\":42}");
+        PublicFieldPojo p = mapper.fromJqValue(json, PublicFieldPojo.class);
+        assertEquals("test", p.name);
+        assertEquals(42, p.value);
+    }
+
+    @Test
+    void toJqValue_publicFieldPojo() {
+        PublicFieldPojo p = new PublicFieldPojo();
+        p.name = "test";
+        p.value = 42;
+        JqValue result = mapper.toJqValue(p);
+        assertEquals("test", result.getField("name").stringValue());
+        assertEquals(42L, result.getField("value").longValue());
+    }
+
+    // ---- POJO with @JqIgnore ----
+
+    static class PojoWithIgnore {
+        private String name;
+        @JqIgnore
+        private String secret;
+        private int value;
+
+        public PojoWithIgnore() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getSecret() { return secret; }
+        public void setSecret(String secret) { this.secret = secret; }
+        public int getValue() { return value; }
+        public void setValue(int value) { this.value = value; }
+    }
+
+    @Test
+    void fromJqValue_pojoWithIgnore() {
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"secret\":\"hidden\",\"value\":42}");
+        PojoWithIgnore p = mapper.fromJqValue(json, PojoWithIgnore.class);
+        assertEquals("Alice", p.getName());
+        assertNull(p.getSecret()); // ignored field should be null
+        assertEquals(42, p.getValue());
+    }
+
+    @Test
+    void toJqValue_pojoWithIgnore() {
+        PojoWithIgnore p = new PojoWithIgnore();
+        p.setName("Alice");
+        p.setSecret("hidden");
+        p.setValue(42);
+        JqValue result = mapper.toJqValue(p);
+        assertEquals("Alice", result.getField("name").stringValue());
+        assertEquals(42L, result.getField("value").longValue());
+        // Secret should NOT be in the output
+        assertTrue(result.getField("secret") instanceof JqNull);
+    }
+
+    // ---- POJO without no-arg constructor ----
+
+    static class NoDefaultConstructor {
+        private final String name;
+        NoDefaultConstructor(String name) { this.name = name; }
+        public String getName() { return name; }
+    }
+
+    @Test
+    void fromJqValue_pojoNoConstructor_throws() {
+        JqValue json = JqValues.parse("{\"name\":\"test\"}");
+        assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(json, NoDefaultConstructor.class));
+    }
+
+    // ---- Nested POJO ----
+
+    // ---- POJO with boolean isX() getter ----
+
+    static class BooleanPojo {
+        private boolean enabled;
+        private String label;
+
+        public BooleanPojo() {}
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+    }
+
+    @Test
+    void fromJqValue_booleanIsGetter() {
+        JqValue json = JqValues.parse("{\"enabled\":true,\"label\":\"test\"}");
+        BooleanPojo p = mapper.fromJqValue(json, BooleanPojo.class);
+        assertTrue(p.isEnabled());
+        assertEquals("test", p.getLabel());
+    }
 }

@@ -126,22 +126,45 @@ class JqMapperProcessorTest {
     }
 
     @Test
-    void errorOnNonRecord() throws Exception {
+    void pojoClassCompiles() throws Exception {
         String source = """
                 package test;
                 
                 import io.hyperfoil.tools.jjq.mapper.JqMapped;
                 
                 @JqMapped
-                public class NotARecord {
+                public class SimplePojo {
                     public String name;
+                    public int age;
+                    
+                    public SimplePojo() {}
                 }
                 """;
 
-        // Should fail compilation with an error
+        // Should succeed — POJOs with @JqMapped are supported
         Path outDir = Files.createTempDirectory("jjq-proc-test");
-        boolean success = compileSource("test.NotARecord", source, outDir);
-        assertFalse(success, "Compilation should fail for @JqMapped on a non-record type");
+        boolean success = compileSource("test.SimplePojo", source, outDir);
+        assertTrue(success, "Compilation should succeed for @JqMapped on a class");
+        deleteDir(outDir);
+    }
+
+    @Test
+    void errorOnInterface() throws Exception {
+        String source = """
+                package test;
+                
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                
+                @JqMapped
+                public interface NotAClassOrRecord {
+                    String name();
+                }
+                """;
+
+        // Should fail — interfaces are not supported
+        Path outDir = Files.createTempDirectory("jjq-proc-test");
+        boolean success = compileSource("test.NotAClassOrRecord", source, outDir);
+        assertFalse(success, "Compilation should fail for @JqMapped on an interface");
         deleteDir(outDir);
     }
 

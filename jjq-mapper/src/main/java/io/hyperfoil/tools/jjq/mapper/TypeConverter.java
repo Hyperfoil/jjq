@@ -47,6 +47,7 @@ public final class TypeConverter {
         if (targetType == Map.class || targetType == LinkedHashMap.class || targetType == HashMap.class) return Kind.MAP;
         if (targetType.isEnum()) return Kind.ENUM;
         if (targetType.isRecord()) return Kind.RECORD;
+        if (targetType.isAnnotationPresent(JqMapped.class)) return Kind.RECORD; // POJOs with @JqMapped use the mapper
         return Kind.DEFAULT;
     }
 
@@ -163,6 +164,9 @@ public final class TypeConverter {
             return JqString.of(((Enum<?>) value).name());
         }
         if (value.getClass().isRecord()) {
+            return mapper.toJqValue(value);
+        }
+        if (value.getClass().isAnnotationPresent(JqMapped.class)) {
             return mapper.toJqValue(value);
         }
         return JqValues.fromJavaObject(value);

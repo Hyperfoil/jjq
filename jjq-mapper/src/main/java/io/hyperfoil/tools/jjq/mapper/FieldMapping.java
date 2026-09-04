@@ -34,19 +34,35 @@ final class FieldMapping {
     private final Class<?> type;          // target Java type
     private final Type genericType;       // generic type (for List<T>, Map<String, V>, etc.)
     private final MethodHandle getter;    // reads the field value from an instance (for serialization)
-    private final int constructorIndex;   // index in the canonical constructor parameter list
+    private final MethodHandle setter;    // writes the field value on an instance (POJO deserialization), null for records
+    private final int constructorIndex;   // index in the canonical constructor parameter list (-1 for POJOs)
     private final boolean ignored;        // true if @JqIgnore is present
     private final TypeConverter.Kind conversionKind; // pre-resolved conversion strategy
 
+    /** Constructor for record components (positional constructor, no setter). */
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
+        this(name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored);
+    }
+
+    /** Constructor for POJO fields (setter-based, no positional index). */
+    FieldMapping(String name, String directFieldName, JqProgram program,
+                 Class<?> type, Type genericType,
+                 MethodHandle getter, MethodHandle setter, boolean ignored) {
+        this(name, directFieldName, program, type, genericType, getter, setter, -1, ignored);
+    }
+
+    private FieldMapping(String name, String directFieldName, JqProgram program,
+                         Class<?> type, Type genericType,
+                         MethodHandle getter, MethodHandle setter, int constructorIndex, boolean ignored) {
         this.name = name;
         this.directFieldName = directFieldName;
         this.program = program;
         this.type = type;
         this.genericType = genericType;
         this.getter = getter;
+        this.setter = setter;
         this.constructorIndex = constructorIndex;
         this.ignored = ignored;
         this.conversionKind = ignored ? TypeConverter.Kind.DEFAULT
@@ -78,6 +94,17 @@ final class FieldMapping {
         }
     }
 
+    /** Write a field value on a POJO instance (via setter or direct field access). */
+    void writeValue(Object instance, Object value) {
+        if (setter == null) throw new JqMapperException("No setter for field '" + name + "'");
+        try {
+            setter.invoke(instance, value);
+        } catch (Throwable e) {
+            throw new JqMapperException("Failed to write field '" + name + "' on " + instance.getClass().getName(), e);
+        }
+    }
+
+    boolean hasSetter() { return setter != null; }
     String name() { return name; }
     Class<?> type() { return type; }
     Type genericType() { return genericType; }

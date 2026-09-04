@@ -235,7 +235,8 @@ public final class JqMapper {
         GeneratedMapping<T> generated = loadGenerated(type);
         if (generated != null) return generated;
         // Fall back to reflection-based mapping
-        return ClassMapping.forRecord(type);
+        if (type.isRecord()) return ClassMapping.forRecord(type);
+        return ClassMapping.forClass(type);
     }
 
     /**

@@ -12,8 +12,10 @@ import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
@@ -44,15 +46,20 @@ public class JqMapperProcessor extends AbstractProcessor {
         var mappingsByPackage = new java.util.LinkedHashMap<String, List<String>>();
 
         for (Element element : roundEnv.getElementsAnnotatedWith(JqMapped.class)) {
-            if (element.getKind() != ElementKind.RECORD) {
+            if (element.getKind() != ElementKind.RECORD && element.getKind() != ElementKind.CLASS) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                        "@JqMapped can only be applied to record types", element);
+                        "@JqMapped can only be applied to record or class types", element);
                 continue;
             }
-            TypeElement recordType = (TypeElement) element;
-            String mappingClassName = processRecord(recordType);
+            TypeElement typeElement = (TypeElement) element;
+            String mappingClassName;
+            if (element.getKind() == ElementKind.RECORD) {
+                mappingClassName = processRecord(typeElement);
+            } else {
+                mappingClassName = processClass(typeElement);
+            }
             if (mappingClassName != null) {
-                String pkg = processingEnv.getElementUtils().getPackageOf(recordType).getQualifiedName().toString();
+                String pkg = processingEnv.getElementUtils().getPackageOf(typeElement).getQualifiedName().toString();
                 mappingsByPackage.computeIfAbsent(pkg, k -> new ArrayList<>()).add(mappingClassName);
             }
         }
@@ -130,6 +137,104 @@ public class JqMapperProcessor extends AbstractProcessor {
     }
 
     /**
+     * Process a single {@code @JqMapped} POJO class and generate its mapping class.
+     * @return the simple mapping class name (e.g., "User_JqMapping"), or null on error
+     */
+    private String processClass(TypeElement classType) {
+        // Collect field metadata (declared fields only, skip static/synthetic)
+        List<PropertyInfo> properties = new ArrayList<>();
+        // Collect method names for getter/setter resolution
+        var methods = new java.util.HashSet<String>();
+        for (Element enclosed : classType.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD) {
+                methods.add(enclosed.getSimpleName().toString());
+            }
+        }
+
+        for (Element enclosed : classType.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) continue;
+            VariableElement field = (VariableElement) enclosed;
+            if (field.getModifiers().contains(Modifier.STATIC)) continue;
+
+            String name = field.getSimpleName().toString();
+            String typeName = field.asType().toString();
+            boolean ignored = field.getAnnotation(JqIgnore.class) != null;
+
+            String jqExpr = "." + name;
+            JqField jqField = field.getAnnotation(JqField.class);
+            if (jqField != null) {
+                jqExpr = jqField.value();
+                try {
+                    JqProgram.compile(jqExpr);
+                } catch (Exception e) {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "Invalid jq expression in @JqField(\"" + jqExpr + "\"): " + e.getMessage(), field);
+                    return null;
+                }
+            }
+
+            // Determine access strategy
+            boolean isPublic = field.getModifiers().contains(Modifier.PUBLIC);
+            boolean isFinal = field.getModifiers().contains(Modifier.FINAL);
+            String capitalized = Character.toUpperCase(name.charAt(0)) + name.substring(1);
+
+            // Getter: public field, getX(), isX() for boolean
+            String getterName;
+            if (isPublic) {
+                getterName = null; // direct field access
+            } else if (methods.contains("get" + capitalized)) {
+                getterName = "get" + capitalized;
+            } else if ((typeName.equals("boolean") || typeName.equals("java.lang.Boolean"))
+                       && methods.contains("is" + capitalized)) {
+                getterName = "is" + capitalized;
+            } else {
+                getterName = null; // will use setAccessible at runtime
+            }
+
+            // Setter: public field, setX()
+            String setterName;
+            if (isPublic && !isFinal) {
+                setterName = null; // direct field access
+            } else if (methods.contains("set" + capitalized) && !isFinal) {
+                setterName = "set" + capitalized;
+            } else {
+                setterName = null; // will use setAccessible at runtime, or read-only
+            }
+
+            properties.add(new PropertyInfo(name, typeName, jqExpr, ignored, jqField != null,
+                    getterName, setterName, isPublic));
+        }
+
+        // Generate the mapping class
+        String packageName = processingEnv.getElementUtils().getPackageOf(classType).getQualifiedName().toString();
+        String classQualifiedName = classType.getQualifiedName().toString();
+
+        String classSourceName;
+        if (!packageName.isEmpty() && classQualifiedName.startsWith(packageName + ".")) {
+            classSourceName = classQualifiedName.substring(packageName.length() + 1);
+        } else {
+            classSourceName = classQualifiedName;
+        }
+        String mappingClassName = classSourceName.replace('.', '_') + "_JqMapping";
+        String qualifiedMappingName = packageName.isEmpty() ? mappingClassName : packageName + "." + mappingClassName;
+
+        String source = MappingCodeGenerator.generateForClass(
+                packageName, classSourceName, classQualifiedName, mappingClassName, properties);
+
+        try {
+            JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
+            try (PrintWriter writer = new PrintWriter(file.openWriter())) {
+                writer.print(source);
+            }
+        } catch (IOException e) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to write generated mapping: " + e.getMessage(), classType);
+            return null;
+        }
+        return mappingClassName;
+    }
+
+    /**
      * Generate a {@code JqMappingRegistry} class for a package that registers
      * all generated mappings in a single method call.
      */
@@ -152,4 +257,8 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField) {}
+
+    /** Metadata for a single POJO field. */
+    record PropertyInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
+                        String getterName, String setterName, boolean isPublicField) {}
 }
