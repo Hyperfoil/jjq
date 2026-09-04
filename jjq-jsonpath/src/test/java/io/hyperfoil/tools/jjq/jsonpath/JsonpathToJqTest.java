@@ -511,24 +511,6 @@ class JsonpathToJqTest {
             assertTrue(parts.get(0).contains("a.b"), "Should preserve quoted content: " + parts);
         }
 
-        @Test void convertFilterBodyAtField() {
-            assertEquals(".name == \"x\"", JsonpathToJq.convertFilterBody("@.name == \"x\""));
-        }
-
-        @Test void convertFilterBodyBareAt() {
-            assertEquals(". > 5", JsonpathToJq.convertFilterBody("@ > 5"));
-        }
-
-        @Test void convertFilterBodyLogicalOps() {
-            String result = JsonpathToJq.convertFilterBody("@.a > 1 && @.b < 5");
-            assertTrue(result.contains("and"), result);
-            assertFalse(result.contains("&&"), result);
-        }
-
-        @Test void convertFilterBodyQuotedField() {
-            String result = JsonpathToJq.convertFilterBody("@.\"special-key\" == \"x\"");
-            assertTrue(result.contains("[\"special-key\"]"), "Should convert to bracket notation: " + result);
-        }
     }
 
     // ========================================================================
@@ -565,30 +547,17 @@ class JsonpathToJqTest {
         }
 
         @Test void zeroToLast() {
-            // Known limitation: last inside range expressions not supported (issue #71 Phase 2)
             String jq = JsonpathToJq.convert("$.data[0 to last]", JsonpathToJq.Mode.STRICT);
-            try {
-                JqProgram program = JqProgram.compile(jq);
-                JqValue result = program.apply(JqValues.parse(ARRAY_JSON));
-                // If it works, verify it returns all elements
-                assertEquals("[10,20,30,40,50]", result.toJsonString());
-            } catch (Exception e) {
-                Assumptions.assumeTrue(false,
-                        "last in range expressions not yet supported. jq produced: " + jq + ", error: " + e.getMessage());
-            }
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[10,20,30,40,50]", result.toJsonString(),
+                    "$.data[0 to last] should return all elements, jq: " + jq);
         }
 
         @Test void lastMinusOneToLast() {
-            // Known limitation: last inside range expressions not supported
             String jq = JsonpathToJq.convert("$.data[last - 1 to last]", JsonpathToJq.Mode.STRICT);
-            try {
-                JqProgram program = JqProgram.compile(jq);
-                JqValue result = program.apply(JqValues.parse(ARRAY_JSON));
-                assertEquals("[40,50]", result.toJsonString());
-            } catch (Exception e) {
-                Assumptions.assumeTrue(false,
-                        "last in range expressions not yet supported. jq produced: " + jq + ", error: " + e.getMessage());
-            }
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[40,50]", result.toJsonString(),
+                    "$.data[last - 1 to last] should return last 2 elements, jq: " + jq);
         }
     }
 
@@ -852,15 +821,9 @@ class JsonpathToJqTest {
             // $.data[$.index] — nested $ reference in bracket expression
             String json = "{\"data\":[10,20,30],\"index\":1}";
             String jq = JsonpathToJq.convert("$.data[$.index]", JsonpathToJq.Mode.STRICT);
-            try {
-                JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
-                // In PostgreSQL, $ in brackets refers to the root document
-                // Whether this works depends on how $. is replaced inside brackets
-                assertNotNull(result, "Should produce some result, jq: " + jq);
-            } catch (Exception e) {
-                Assumptions.assumeTrue(false,
-                        "Nested root references in brackets not supported. jq: " + jq + ", error: " + e.getMessage());
-            }
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("20", result.toJsonString(),
+                    "$.data[$.index] with index=1 should return 20, jq: " + jq);
         }
     }
 

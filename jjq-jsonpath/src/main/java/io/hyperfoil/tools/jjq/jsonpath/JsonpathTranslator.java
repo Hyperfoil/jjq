@@ -70,8 +70,13 @@ public final class JsonpathTranslator {
 
     /** Translate a complete path expression: $ .field [idx] .method() ?(filter) ... */
     private void translatePath() {
+        // Handle parenthesized expression: (expr).method() or (expr)[idx]
+        if (peek().is(LPAREN)) {
+            advance(); // consume (
+            translateParenthesizedExpr();
+        }
         // Handle root reference
-        if (peek().is(ROOT)) {
+        else if (peek().is(ROOT)) {
             advance();
             // If nothing follows $, emit identity
             if (peek().is(EOF)) {
@@ -93,6 +98,21 @@ public final class JsonpathTranslator {
         while (!peek().is(EOF) && !peek().is(RPAREN)) {
             translatePathStep();
         }
+    }
+
+    /**
+     * Translate a parenthesized expression: (expr).method() or (expr)[idx].
+     * The opening LPAREN has already been consumed.
+     * Emits the inner expression, consumes RPAREN, then any trailing path steps
+     * are handled by the main loop.
+     */
+    private void translateParenthesizedExpr() {
+        // Translate the inner expression — it may be a full path or a comparison
+        while (!peek().is(RPAREN) && !peek().is(EOF)) {
+            translatePathStep();
+        }
+        if (peek().is(RPAREN)) advance(); // consume )
+        // Any subsequent .method() or [idx] will be handled by the main translatePath loop
     }
 
     /** Translate a single path step: .field, [idx], .method(), ?(filter), *, ** */
@@ -162,14 +182,15 @@ public final class JsonpathTranslator {
                 advance();
                 translateRecursiveDescent();
             }
-            case IDENT -> {
+             case IDENT -> {
                 String name = next.value();
                 advance();
-                // Check if this is a method call: IDENT LPAREN RPAREN
+                // Check if this is a method call: IDENT LPAREN ... RPAREN
                 if (peek().is(LPAREN) && METHODS.contains(name)) {
                     advance(); // consume LPAREN
-                    if (peek().is(RPAREN)) advance(); // consume RPAREN
-                    translateMethod(name);
+                    // Collect method arguments (if any) before consuming RPAREN
+                    var methodArgs = consumeMethodArgs();
+                    translateMethod(name, methodArgs);
                 } else if (name.contains("-")) {
                     // Hyphenated field name → bracket notation
                     jq.append(".[\"").append(name).append("\"]");
@@ -393,8 +414,8 @@ public final class JsonpathTranslator {
                         // Check for method call inside brackets
                         if (peek().is(LPAREN) && METHODS.contains(name)) {
                             advance(); // LPAREN
-                            if (peek().is(RPAREN)) advance(); // RPAREN
-                            translateMethod(name);
+                            var mArgs = consumeMethodArgs();
+                            translateMethod(name, mArgs);
                         } else {
                             jq.append(".").append(name);
                         }
@@ -422,11 +443,51 @@ public final class JsonpathTranslator {
     //  Methods: .size(), .double(), .keyvalue(), etc.
     // ========================================================================
 
-    private void translateMethod(String methodName) {
+    /**
+     * Consume method arguments between LPAREN (already consumed) and RPAREN.
+     * Returns the list of argument values (strings). Consumes the closing RPAREN.
+     */
+    private List<String> consumeMethodArgs() {
+        var args = new java.util.ArrayList<String>();
+        while (!peek().is(RPAREN) && !peek().is(EOF)) {
+            var tok = advance();
+            if (tok.is(COMMA)) continue; // skip separators
+            if (tok.is(PLUS)) continue;  // skip unary +
+            if (tok.is(MINUS)) {
+                // Negative number: consume the next token and prepend '-'
+                if (peek().is(INTEGER) || peek().is(DECIMAL)) {
+                    args.add("-" + advance().value());
+                }
+                continue;
+            }
+            if (tok.value() != null) args.add(tok.value());
+        }
+        if (peek().is(RPAREN)) advance(); // consume RPAREN
+        return args;
+    }
+
+    private void translateMethod(String methodName, List<String> args) {
         switch (methodName) {
             case "size" -> jq.append(" | length");
             case "keyvalue" -> jq.append(" | to_entries[]");
-            case "double", "number", "decimal" -> jq.append(" | tonumber");
+            case "double", "number" -> jq.append(" | tonumber");
+            case "decimal" -> {
+                if (args.size() >= 2) {
+                    // decimal(precision, scale) — round to 'scale' decimal places
+                    // jq: tonumber * 10^scale | round / 10^scale
+                    String scale = args.get(1);
+                    int s = Integer.parseInt(scale);
+                    if (s >= 0) {
+                        jq.append(" | tonumber * ").append(pow10(s)).append(" | round / ").append(pow10(s));
+                    } else {
+                        // Negative scale: round to nearest 10^|s|
+                        int absS = -s;
+                        jq.append(" | tonumber / ").append(pow10(absS)).append(" | round * ").append(pow10(absS));
+                    }
+                } else {
+                    jq.append(" | tonumber");
+                }
+            }
             case "string" -> jq.append(" | tostring");
             case "type" -> jq.append(" | type");
             case "boolean" -> jq.append(" | if type == \"boolean\" then ." +
@@ -441,6 +502,13 @@ public final class JsonpathTranslator {
         }
     }
 
+    /** Return 10^n as a long (for scale calculations). */
+    private static long pow10(int n) {
+        long result = 1;
+        for (int i = 0; i < n; i++) result *= 10;
+        return result;
+    }
+
     // ========================================================================
     //  Recursive descent: **{N}, **{M to N}, **
     // ========================================================================
@@ -451,7 +519,8 @@ public final class JsonpathTranslator {
             // **{N} or **{M to N}
             if (peek().is(INTEGER)) {
                 advance(); // consume depth — currently discarded (TODO: depth-limited recurse)
-                if (peek().is(KW_TO)) {
+                // 'to' is context-sensitive: inside [] it's KW_TO, but inside {} it's IDENT
+                if (peek().is(KW_TO) || (peek().is(IDENT) && "to".equals(peek().value()))) {
                     advance(); // consume TO
                     if (peek().is(INTEGER)) advance(); // consume max depth
                 }
@@ -694,13 +763,5 @@ public final class JsonpathTranslator {
         }
         // Expected token not found — return current token for error context
         return advance();
-    }
-
-    private boolean match(JsonpathTokenType type) {
-        if (peek().is(type)) {
-            advance();
-            return true;
-        }
-        return false;
     }
 }
