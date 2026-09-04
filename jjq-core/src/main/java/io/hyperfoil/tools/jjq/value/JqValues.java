@@ -1470,54 +1470,28 @@ public final class JqValues {
      * comparison via stored key bytes (quad-style, avoids char-by-char crossing).
      */
     private static String parseAndInternKeyBytes(JsonByteReader r) {
-        r.pos++; // skip opening "
-        int start = r.pos;
+        final byte[] d = r.data;
+        final int end = r.end;
+        final int start = r.pos + 1;
+        int p = start;
         int hash = 0;
-
-        // Fused SWAR scan + hash: compute hash DURING the scan
-        while (r.pos + 8 <= r.end) {
-            long word = SwarUtil.loadLong(r.data, r.pos);
-            long quoteHits = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN);
-            long bsHits = SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
-            long anyHit = quoteHits | bsHits;
-            if (anyHit != 0) {
-                // Process partial word: hash bytes up to the hit
-                int hitIdx = SwarUtil.getIndex(anyHit);
-                for (int j = 0; j < hitIdx; j++) {
-                    hash = hash * 31 + (r.data[r.pos + j] & 0xFF);
-                }
-                r.pos += hitIdx;
-                if ((r.data[r.pos] & 0xFF) == '"') {
-                    return internKeyWithHash(r.data, start, r.pos++, hash);
-                }
-                break; // backslash — slow path
-            }
-            // No special chars in 8 bytes — accumulate hash inline
-            hash = hash * 31 + (r.data[r.pos] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 1] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 2] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 3] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 4] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 5] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 6] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 7] & 0xFF);
-            r.pos += 8;
-        }
-        // Scalar tail with fused hash
-        while (r.pos < r.end) {
-            int b = r.data[r.pos] & 0xFF;
-            if (b == '"') {
-                return internKeyWithHash(r.data, start, r.pos++, hash);
-            }
-            if (b == '\\') break;
+        while (p < end) {
+            int b = d[p] & 0xFF;
+            if ((b == '"') | (b == '\\')) break;
             hash = hash * 31 + b;
-            r.pos++;
+            p++;
         }
+        if (p < end && (d[p] & 0xFF) == '"') {
+            r.pos = p + 1;
+            return internKeyWithHash(d, start, p, hash);
+        }
+        return internKeyEscaped(r, start);
+    }
 
-        // Slow path: escaped key — parse normally and intern
-        r.pos = start - 1; // back to opening "
-        String result = parseStringRawBytes(r);
-        return internFieldName(result);
+    /** Cold path: escape inside the key. Kept out of the scan loop. */
+    private static String internKeyEscaped(JsonByteReader r, int start) {
+        r.pos = start - 1;
+        return internFieldName(parseStringRawBytes(r));
     }
 
     /**
