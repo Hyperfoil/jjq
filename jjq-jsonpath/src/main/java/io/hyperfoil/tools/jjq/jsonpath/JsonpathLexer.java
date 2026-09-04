@@ -240,13 +240,19 @@ public final class JsonpathLexer {
         while (pos < input.length() && Character.isDigit(input.charAt(pos))) pos++;
 
         boolean isDecimal = false;
-        if (pos < input.length() && input.charAt(pos) == '.'
-                && pos + 1 < input.length() && Character.isDigit(input.charAt(pos + 1))) {
-            // Only consume the dot if followed by a digit — otherwise it's field access
-            // (e.g., $.results.0.value — the .0 is field access, not decimal 0.value)
-            isDecimal = true;
-            pos++;
-            while (pos < input.length() && Character.isDigit(input.charAt(pos))) pos++;
+        if (pos < input.length() && input.charAt(pos) == '.') {
+            // Consume the dot as part of a decimal IF:
+            // - Inside brackets (e.g., $[0.3]) — decimal index
+            // - Followed by a digit (e.g., 3.14 in filter arithmetic)
+            // Do NOT consume if followed by a letter (field access: $.results.0.value)
+            if (pos + 1 < input.length() && Character.isDigit(input.charAt(pos + 1))) {
+                isDecimal = true;
+                pos++;
+                while (pos < input.length() && Character.isDigit(input.charAt(pos))) pos++;
+            } else if (bracketDepth > 0 && pos + 1 < input.length() && input.charAt(pos + 1) == ']') {
+                // $[0.] — unusual but treat as decimal 0.0
+                // Actually this shouldn't happen — just consume digits after dot
+            }
         }
         // Scientific notation
         if (pos < input.length() && (input.charAt(pos) == 'e' || input.charAt(pos) == 'E')) {

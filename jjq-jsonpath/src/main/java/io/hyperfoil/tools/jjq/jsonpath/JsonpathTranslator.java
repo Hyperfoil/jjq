@@ -104,13 +104,39 @@ public final class JsonpathTranslator {
             case QUESTION -> translateFilter();
             case STAR -> {
                 advance();
-                // .* wildcard — emit []?
-                jq.append("[]?");
+                // Context: if preceded by a method/operator or followed by a number,
+                // this is multiplication, not wildcard
+                if (peek().is(INTEGER) || peek().is(DECIMAL) || peek().is(NAMED_VARIABLE) || peek().is(ROOT)) {
+                    jq.append(" * ");
+                } else {
+                    // .* wildcard — emit []?
+                    jq.append("[]?");
+                }
             }
             case DOUBLESTAR -> {
                 advance();
                 translateRecursiveDescent();
             }
+            case NAMED_VARIABLE -> {
+                // $varname at path level — emit as jq variable reference
+                jq.append("$").append(advance().value());
+            }
+            // Comparison/arithmetic operators at path level (e.g., $.s < $s)
+            case EQ -> { advance(); jq.append(" == "); }
+            case NEQ, LTGT -> { advance(); jq.append(" != "); }
+            case LT -> { advance(); jq.append(" < "); }
+            case GT -> { advance(); jq.append(" > "); }
+            case LE -> { advance(); jq.append(" <= "); }
+            case GE -> { advance(); jq.append(" >= "); }
+            case PLUS -> { advance(); jq.append(" + "); }
+            case MINUS -> { advance(); jq.append(" - "); }
+            case SLASH -> { advance(); jq.append(" / "); }
+            case PERCENT -> { advance(); jq.append(" % "); }
+            case INTEGER, DECIMAL -> jq.append(advance().value());
+            case STRING -> { jq.append("\"").append(advance().value()).append("\""); }
+            case TRUE -> { advance(); jq.append("true"); }
+            case FALSE -> { advance(); jq.append("false"); }
+            case NULL -> { advance(); jq.append("null"); }
             default -> {
                 // Unexpected token — skip to avoid infinite loop
                 advance();
@@ -275,7 +301,7 @@ public final class JsonpathTranslator {
         jq.append("[-1]");
     }
 
-    /** [N], [N to M], [N to last], [N,M,...] */
+    /** [N], [N.M], [N to M], [N to last], [N,M,...] */
     private void translateBracketIndex() {
         // Parse the first number
         boolean negative = false;
@@ -284,6 +310,13 @@ public final class JsonpathTranslator {
             advance();
         }
         JsonpathToken num = advance(); // INTEGER or DECIMAL
+        if (num.is(DECIMAL)) {
+            // Decimal index like [0.3] — emit as-is (PostgreSQL truncates to integer)
+            String numStr = (negative ? "-" : "") + num.value();
+            expect(RBRACKET);
+            jq.append("[").append(numStr).append("]");
+            return;
+        }
         int firstVal = Integer.parseInt(num.value());
         if (negative) firstVal = -firstVal;
 
@@ -506,16 +539,36 @@ public final class JsonpathTranslator {
                     // Nested filter: ?(@.x ?(subfilter))
                     translateFilter();
                 }
+                case LBRACKET -> {
+                    // Bracket access in filter body: @.a[*], @.a[0], etc.
+                    translateBracket();
+                }
                 case DOT -> {
                     // .field access (after @ was already converted)
                     advance();
                     if (peek().is(IDENT)) {
-                        jq.append(".").append(advance().value());
+                        String name = advance().value();
+                        if (name.contains("-")) {
+                            jq.append(".[\"").append(name).append("\"]");
+                        } else {
+                            jq.append(".").append(name);
+                        }
+                    } else if (peek().is(STRING)) {
+                        jq.append(".[\"").append(advance().value()).append("\"]");
                     }
                 }
                 case IDENT -> {
                     // Bare identifier in filter — could be a field reference
                     jq.append(advance().value());
+                }
+                case ROOT -> {
+                    // $ inside filter — root reference
+                    advance();
+                    jq.append("$");
+                }
+                case NAMED_VARIABLE -> {
+                    // $varname — PostgreSQL parameterized variable
+                    jq.append("$").append(advance().value());
                 }
                 default -> advance(); // skip unknown tokens
             }
