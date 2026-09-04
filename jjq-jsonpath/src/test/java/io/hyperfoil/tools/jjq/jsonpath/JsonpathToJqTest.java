@@ -780,6 +780,38 @@ class JsonpathToJqTest {
                     "Should not include array starting with 1, jq: " + jq);
         }
 
+        // ---- exists() in filters ----
+
+        @Test void existsSimpleField() {
+            String json = "{\"items\":[{\"name\":\"A\",\"desc\":\"good\"},{\"name\":\"B\"},{\"name\":\"C\",\"desc\":null}]}";
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (exists(@.desc))", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            String resultStr = result.toJsonString();
+            // Items A and C have "desc" (C has null value — key exists)
+            assertTrue(resultStr.contains("\"name\":\"A\""), "Should include A (has desc), jq: " + jq);
+            assertFalse(resultStr.contains("\"name\":\"B\""), "Should not include B (no desc), jq: " + jq);
+        }
+
+        @Test void existsNestedPath() {
+            String json = "{\"items\":[{\"name\":\"A\",\"meta\":{\"tag\":\"x\"}},{\"name\":\"B\"}]}";
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (exists(@.meta.tag))", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("\"name\":\"A\""), "Should include A (has meta.tag), jq: " + jq);
+            assertFalse(resultStr.contains("\"name\":\"B\""), "Should not include B (no meta), jq: " + jq);
+        }
+
+        // ---- quote-aware method replacements ----
+
+        @Test void quotedFieldNameWithMethodName() {
+            // A field literally named "size()" should not be replaced by | length
+            String json = "{\"data\":{\"size()\":42,\"name\":\"test\"}}";
+            String jq = JsonpathToJq.convert("$.data.\"size()\"", JsonpathToJq.Mode.STRICT);
+            // The quoted field should be preserved, not replaced
+            assertFalse(jq.contains("| length"),
+                    "Quoted field 'size()' should not be replaced by | length, jq: " + jq);
+        }
+
         // ---- multiple root references ----
 
         @Test void multipleRootReferences() {

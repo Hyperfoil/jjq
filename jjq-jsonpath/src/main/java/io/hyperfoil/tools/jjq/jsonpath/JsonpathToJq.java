@@ -121,21 +121,24 @@ public final class JsonpathToJq {
         // Handle .size() inside array brackets first — these need different treatment:
         // $[$.path.size()-1] → [.path | length-1] (not [.path | length-1])
         // The $.path inside brackets is already converted to .path by the $. replacement above.
+        // Replace PostgreSQL jsonpath methods with jq equivalents.
+        // Use replaceOutsideQuotes to avoid matching inside quoted field names
+        // (e.g., a field literally named "size()" should not be replaced).
         jq = convertSizeInBrackets(jq);
-        jq = jq.replace(".size()", " | length");
-        jq = jq.replace(".keyvalue()", " | to_entries[]");
-        jq = jq.replace(".double()", " | tonumber");
-        jq = jq.replace(".string()", " | tostring");
-        jq = jq.replace(".type()", " | type");
-        jq = jq.replace(".boolean()",
+        jq = replaceOutsideQuotes(jq, ".size()", " | length");
+        jq = replaceOutsideQuotes(jq, ".keyvalue()", " | to_entries[]");
+        jq = replaceOutsideQuotes(jq, ".double()", " | tonumber");
+        jq = replaceOutsideQuotes(jq, ".string()", " | tostring");
+        jq = replaceOutsideQuotes(jq, ".type()", " | type");
+        jq = replaceOutsideQuotes(jq, ".boolean()",
                 " | if type == \"boolean\" then ." +
                 " elif type == \"number\" then . != 0" +
                 " elif type == \"string\" then (. == \"t\" or . == \"true\" or . == \"y\" or . == \"yes\" or . == \"on\" or . == \"1\")" +
                 " elif . == null then false" +
                 " else null end");
-        jq = jq.replace(".ceiling()", " | ceil");
-        jq = jq.replace(".floor()", " | floor");
-        jq = jq.replace(".abs()", " | fabs");
+        jq = replaceOutsideQuotes(jq, ".ceiling()", " | ceil");
+        jq = replaceOutsideQuotes(jq, ".floor()", " | floor");
+        jq = replaceOutsideQuotes(jq, ".abs()", " | fabs");
 
         // Convert PostgreSQL jsonpath filter expressions to jq select()
         if (jq.contains("?")) {
@@ -293,11 +296,17 @@ public final class JsonpathToJq {
     /** Find the closing bracket matching the one at position {@code openPos}. */
     private static int findClosingBracket(String s, int openPos) {
         int depth = 0;
+        boolean inQuotes = false;
         for (int i = openPos; i < s.length(); i++) {
-            if (s.charAt(i) == '[') depth++;
-            else if (s.charAt(i) == ']') {
-                depth--;
-                if (depth == 0) return i;
+            char c = s.charAt(i);
+            if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) {
+                inQuotes = !inQuotes;
+            } else if (!inQuotes) {
+                if (c == '[') depth++;
+                else if (c == ']') {
+                    depth--;
+                    if (depth == 0) return i;
+                }
             }
         }
         return -1;
@@ -428,6 +437,16 @@ public final class JsonpathToJq {
      * Handles @.field → .field, && → and, || → or, like_regex → test(), etc.
      */
     static String convertFilterBody(String body) {
+        // Handle exists() BEFORE @. conversion — it needs to see the @. prefix
+        // exists(@.field) → has("field") for simple field check
+        body = body.replaceAll(
+                "exists\\s*\\(\\s*@\\.([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\)",
+                "has(\"$1\")");
+        // exists(@.path.to.field) → (try .path.to.field // null) != null
+        body = body.replaceAll(
+                "exists\\s*\\(\\s*@(\\.[^)]+)\\s*\\)",
+                "((try $1 // null) != null)");
+
         // Convert @."special" → .["special"] (quoted field access on current item)
         body = body.replaceAll("@\\.\"([^\"]+)\"", ".[\"$1\"]");
         // Convert @.field → .field (field access on current item)
