@@ -248,6 +248,24 @@ class JsonpathTokenizerTest {
             assertRoundTrip("{\"my-field\":42}", "$.my-field", "42");
         }
 
+        @Test void unionIndices() {
+            String json = "{\"data\":[10,20,30,40,50]}";
+            String jq = JsonpathToJq.convertTokenized("$.data[0,2,4]", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            // Union produces multiple outputs — collect via applyAll
+            var results = program.applyAll(JqValues.parse(json));
+            assertEquals(3, results.size(), "Should produce 3 results, jq: " + jq);
+        }
+
+        @Test void notOperator() {
+            String json = "{\"items\":[{\"active\":true},{\"active\":false}]}";
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (!(@ .active == true))", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("false"), "Should include item with active=false, jq: " + jq);
+            assertFalse(resultStr.contains("\"active\":true"), "Should not include active=true, jq: " + jq);
+        }
+
         private void assertRoundTrip(String json, String jsonpath, String expected) {
             String jq = JsonpathToJq.convertTokenized(jsonpath, JsonpathToJq.Mode.STRICT);
             JqProgram program = JqProgram.compile(jq);

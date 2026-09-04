@@ -353,9 +353,10 @@ public final class JsonpathTranslator {
         }
 
         if (peek().is(COMMA)) {
-            // Union: [N,M,...] → (.[N], .[M], ...) — multiple outputs
+            // Union: [N,M,...] → | (.[N], .[M], ...) — multiple outputs
             // jq doesn't have [N,M] syntax but comma produces multiple outputs
-            jq.append("(.[").append(firstVal).append("]");
+            // Need a pipe to separate from the preceding path
+            jq.append(" | (.[").append(firstVal).append("]");
             while (peek().is(COMMA)) {
                 advance(); // consume comma
                 boolean negNext = false;
