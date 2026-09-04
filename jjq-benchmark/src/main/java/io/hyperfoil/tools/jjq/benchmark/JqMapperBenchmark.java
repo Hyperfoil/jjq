@@ -142,6 +142,17 @@ public class JqMapperBenchmark {
         // Warmup generated mapping caches
         jqMapper.fromJqValue(simpleJqValue, BenchmarkRecords.SimpleRecord.class);
         jqMapper.fromJqValue(nestedJqValue, BenchmarkRecords.PersonRecord.class);
+
+        // POJO instances (for serialization benchmarks)
+        simplePojo = new BenchmarkRecords.SimplePojo();
+        simplePojo.setName("Alice");
+        simplePojo.setAge(30);
+        simplePojo.setScore(98.5);
+        simplePojo.setActive(true);
+        simplePojo.setEmail("alice@example.com");
+
+        // Warmup POJO mapping cache
+        jqMapper.fromJqValue(simpleJqValue, BenchmarkRecords.SimplePojo.class);
     }
 
     // ========================================================================
@@ -334,5 +345,27 @@ public class JqMapperBenchmark {
     @Benchmark
     public String ser_nested_jjq_generated() {
         return jqMapper.toJson(genPersonRecord);
+    }
+
+    // ========================================================================
+    //  POJO mapping benchmarks (uses @JqMapped SimplePojo from BenchmarkRecords)
+    //  Compares POJO mapping performance vs records and Jackson.
+    // ========================================================================
+
+    private BenchmarkRecords.SimplePojo simplePojo;
+
+    @Benchmark
+    public BenchmarkRecords.SimplePojo deser_simple_pojo_generated_preParsed() {
+        return jqMapper.fromJqValue(simpleJqValue, BenchmarkRecords.SimplePojo.class);
+    }
+
+    @Benchmark
+    public BenchmarkRecords.SimplePojo deser_simple_pojo_fromBytes() {
+        return jqMapper.fromJson(simpleJsonBytes, BenchmarkRecords.SimplePojo.class);
+    }
+
+    @Benchmark
+    public String ser_simple_pojo_generated() {
+        return jqMapper.toJson(simplePojo);
     }
 }
