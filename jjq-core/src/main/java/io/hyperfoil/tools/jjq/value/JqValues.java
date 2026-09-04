@@ -33,9 +33,9 @@ public final class JqValues {
     //  in JqObject.get() via String.equals short-circuit (this == other).
     // ========================================================================
 
-    private static final int INTERN_TABLE_SIZE = 1024; // power of 2
+    private static final int INTERN_TABLE_SIZE = 4096; // power of 2
     private static final int INTERN_MASK = INTERN_TABLE_SIZE - 1;
-    private static final int INTERN_MAX_PROBES = 4; // linear probing depth before eviction
+    private static final int INTERN_MAX_PROBES = 8; // linear probing depth before eviction
 
     /**
      * Immutable snapshot of all interned data for a single field name slot.
@@ -70,29 +70,29 @@ public final class JqValues {
         // L1 lookup (thread-local, no contention)
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(hash + p) & L1_MASK];
+            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
             if (cached != null && name.equals(cached.key)) return cached.key;
         }
         // L2 lookup (global, atomic snapshots)
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (hash + probe) & INTERN_MASK;
+            int s = (mix(hash) + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) {
                 InternSlot newSlot = createInternSlot(name, hash);
                 INTERN_SLOTS[s] = newSlot;
-                l1[hash & L1_MASK] = newSlot; // promote to L1
+                l1[mix(hash) & L1_MASK] = newSlot; // promote to L1
                 return name;
             }
             if (name.equals(slot.key)) {
-                l1[hash & L1_MASK] = slot; // promote to L1
+                l1[mix(hash) & L1_MASK] = slot; // promote to L1
                 return slot.key;
             }
         }
         // All probes occupied — evict first slot
-        int s = hash & INTERN_MASK;
+        int s = mix(hash) & INTERN_MASK;
         InternSlot newSlot = createInternSlot(name, hash);
         INTERN_SLOTS[s] = newSlot;
-        l1[hash & L1_MASK] = newSlot; // promote to L1
+        l1[mix(hash) & L1_MASK] = newSlot; // promote to L1
         return name;
     }
 
@@ -121,16 +121,16 @@ public final class JqValues {
         // L1 lookup (reference equality — interned keys match by identity)
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(hash + p) & L1_MASK];
+            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
             if (cached != null && cached.key == key) return cached.jsonKey;
         }
         // L2 lookup
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (hash + probe) & INTERN_MASK;
+            int s = (mix(hash) + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) break;
             if (slot.key == key) {
-                l1[hash & L1_MASK] = slot; // promote to L1
+                l1[mix(hash) & L1_MASK] = slot; // promote to L1
                 return slot.jsonKey;
             }
         }
@@ -146,16 +146,16 @@ public final class JqValues {
         // L1 lookup
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(hash + p) & L1_MASK];
+            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
             if (cached != null && cached.key == key) return cached.jsonKeyBytes;
         }
         // L2 lookup
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (hash + probe) & INTERN_MASK;
+            int s = (mix(hash) + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) break;
             if (slot.key == key) {
-                l1[hash & L1_MASK] = slot; // promote to L1
+                l1[mix(hash) & L1_MASK] = slot; // promote to L1
                 return slot.jsonKeyBytes;
             }
         }
@@ -189,6 +189,16 @@ public final class JqValues {
 
     private static final ThreadLocal<BytOutput> BYTE_SERIALIZER_BUFFER =
             ThreadLocal.withInitial(() -> new BytOutput(SERIALIZE_BUFFER_INIT));
+
+    /**
+     * Spread hash bits before masking. Similar field names (e.g. "...-cpu0", "...-cpu1")
+     * differ only in low bits of the polynomial hash, which clusters them into adjacent
+     * slots and fills linear-probe windows.
+     */
+    private static int mix(int h) {
+        h *= 0x9E3779B1;
+        return h ^ (h >>> 16);
+    }
 
     private JqValues() {}
 
@@ -936,7 +946,7 @@ public final class JqValues {
         // L1 lookup (thread-local)
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(hash + p) & L1_MASK];
+            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
             if (cached != null && cached.key.length() == keyLen) {
                 boolean match = true;
                 for (int i = 0; i < keyLen; i++) {
@@ -947,7 +957,7 @@ public final class JqValues {
         }
         // L2 lookup (global)
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int idx = (hash + probe) & INTERN_MASK;
+            int idx = (mix(hash) + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[idx];
             if (slot == null) break;
             if (slot.key.length() == keyLen) {
@@ -956,7 +966,7 @@ public final class JqValues {
                     if (slot.key.charAt(i) != s.charAt(start + i)) { match = false; break; }
                 }
                 if (match) {
-                    l1[hash & L1_MASK] = slot; // promote to L1
+                    l1[mix(hash) & L1_MASK] = slot; // promote to L1
                     return slot.key;
                 }
             }
@@ -1161,6 +1171,19 @@ public final class JqValues {
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
         String[] previousKeys;
         int previousKeyCount;
+        // Second-level schema cache, checked when previousKeys misses. Objects complete in
+        // post-order, so for nested schemas the previous completed object is never the same
+        // schema and a one-entry cache never hits.
+        private static final int SCHEMA_CACHE_SIZE = 8;
+        private final String[][] schemaCache = new String[SCHEMA_CACHE_SIZE][];
+        private int schemaCacheNext;
+        // Per-depth scratch buffers for objects with more than 8 members. The member count
+        // is unknown until '}', so the arrays must grow; growing them fresh per object is
+        // the doubling garbage this avoids. Keys at 2*depth, values at 2*depth+1.
+        // A buffer is dropped once its unused slack exceeds MAX_SCRATCH_SLACK, which bounds
+        // retained waste per depth without assuming anything about object sizes.
+        private static final int MAX_SCRATCH_SLACK = 1024;
+        private Object[][] scratch = new Object[32][];
 
         JsonByteReader(byte[] data, int offset, int end) {
             this.data = data;
@@ -1168,28 +1191,82 @@ public final class JqValues {
             this.end = end;
         }
 
+        String[] growKeys(int depth, String[] keys, int count) {
+            if (2 * depth + 1 >= scratch.length) {
+                scratch = java.util.Arrays.copyOf(scratch, Math.max(2 * depth + 2, scratch.length * 2));
+            }
+            String[] k = (String[]) scratch[2 * depth];
+            if (k == null || k.length < count * 2) {
+                k = new String[Math.max(count * 2, 32)];
+                scratch[2 * depth] = k;
+            }
+            System.arraycopy(keys, 0, k, 0, count);
+            return k;
+        }
+
+        JqValue[] growValues(int depth, JqValue[] values, int count) {
+            JqValue[] v = (JqValue[]) scratch[2 * depth + 1];
+            if (v == null || v.length < count * 2) {
+                v = new JqValue[Math.max(count * 2, 32)];
+                scratch[2 * depth + 1] = v;
+            }
+            System.arraycopy(values, 0, v, 0, count);
+            return v;
+        }
+
+        /**
+         * Drop both buffers at this depth once their unused slack exceeds
+         * {@value #MAX_SCRATCH_SLACK} slots, so retained waste is bounded per depth however
+         * large an object happened to be.
+         * <p>
+         * Only the buffers are dropped, never their contents. Clearing the cells would free
+         * nothing: every reference in them is also stored in the {@link JqObject} that was just
+         * built and handed to the caller. Lifetime is bounded by the reader, which is created
+         * inside {@code parse()} and unreachable when it returns; {@link #parseAll} reuses one
+         * reader for a whole stream, so there the bound is per stream rather than per document.
+         */
+        void releaseScratchIfWasteful(int depth, int capacity, int count) {
+            if (capacity - count > MAX_SCRATCH_SLACK) {
+                scratch[2 * depth] = null;
+                scratch[2 * depth + 1] = null;
+            }
+        }
+
+        String[] findSharedKeys(String[] keys, int count) {
+            String[] prev = previousKeys;
+            if (prev != null && prev.length == count) {
+                int i = 0;
+                while (i < count && prev[i] == keys[i]) i++;
+                if (i == count) return prev;
+            }
+            for (String[] c : schemaCache) {
+                if (c == null || c.length != count) continue;
+                int i = 0;
+                while (i < count && c[i] == keys[i]) i++;
+                if (i == count) { previousKeys = c; return c; }
+            }
+            return null;
+        }
+
+        void rememberKeys(String[] exactKeys) {
+            previousKeys = exactKeys;
+            schemaCache[schemaCacheNext] = exactKeys;
+            schemaCacheNext = (schemaCacheNext + 1) & (SCHEMA_CACHE_SIZE - 1);
+        }
+
         int peek() { return data[pos] & 0xFF; }
 
         void skipWs() {
-            // SWAR fast path: scan 8 bytes at a time for non-whitespace.
-            // For compact JSON this typically exits on the first word.
-            // For pretty-printed JSON with deep indentation (e.g., 20+ spaces),
-            // this processes whitespace runs ~8x faster than the scalar loop.
-            while (pos + 8 <= end) {
-                long word = SwarUtil.loadLong(data, pos);
-                long nonWs = SwarUtil.findNonWhitespace(word);
-                if (nonWs != 0) {
-                    pos += SwarUtil.getIndex(nonWs);
-                    return;
-                }
-                pos += 8;
-            }
-            // Scalar tail for remaining < 8 bytes
-            while (pos < end) {
-                int b = data[pos] & 0xFF;
+            int p = pos;
+            final byte[] d = data;
+            final int e = end;
+            if (p < e && (d[p] & 0xFF) > ' ') return;   // compact JSON: no whitespace at all
+            while (p < e) {
+                int b = d[p] & 0xFF;
                 if (b != ' ' && b != '\n' && b != '\r' && b != '\t') break;
-                pos++;
+                p++;
             }
+            pos = p;
         }
     }
 
@@ -1383,8 +1460,9 @@ public final class JqValues {
                 throw new IllegalArgumentException("Expected '\"' for object key");
             }
             if (count >= keys.length) {
-                keys = java.util.Arrays.copyOf(keys, keys.length * 2);
-                values = java.util.Arrays.copyOf(values, values.length * 2);
+                // Large object: continue in per-depth scratch buffers, no doubling garbage
+                keys = r.growKeys(depth, keys, count);
+                values = r.growValues(depth, values, count);
             }
             // Keys interned for deduplication and reference equality in JqObject.get()
             keys[count] = parseAndInternKeyBytes(r);
@@ -1396,17 +1474,19 @@ public final class JqValues {
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) == '}') { r.pos++; break; }
             r.pos++; // skip ,
         }
-        // Key sharing: if this object has the same interned keys as the previous one,
-        // reuse the shared keys[] array. Saves ~1KB per object for 127-key PCP entries.
+        // Objects that overflowed into the scratch buffers get exact-size arrays; small
+        // objects keep the arrays they were built in, as before.
+        boolean scratch = count > 8;
+        if (scratch) values = java.util.Arrays.copyOf(values, count);
+        if (scratch) r.releaseScratchIfWasteful(depth, keys.length, count);
         // Reference equality is safe because all keys are interned.
-        String[] sharedKeys = tryShareKeys(keys, count, r.previousKeys, r.previousKeyCount);
+        String[] sharedKeys = r.findSharedKeys(keys, count);
         if (sharedKeys != null) {
             return JqObject.ofArrays(sharedKeys, values, count);
         }
-        // New schema — remember this key set for next comparison
-        r.previousKeys = java.util.Arrays.copyOf(keys, count);
-        r.previousKeyCount = count;
-        return JqObject.ofArrays(r.previousKeys, values, count);
+        String[] exactKeys = (scratch || count != keys.length) ? java.util.Arrays.copyOf(keys, count) : keys;
+        r.rememberKeys(exactKeys);
+        return JqObject.ofArrays(exactKeys, values, count);
     }
 
     /** Parse a JSON string value from bytes, returning a deferred JqString. */
@@ -1479,54 +1559,28 @@ public final class JqValues {
      * comparison via stored key bytes (quad-style, avoids char-by-char crossing).
      */
     private static String parseAndInternKeyBytes(JsonByteReader r) {
-        r.pos++; // skip opening "
-        int start = r.pos;
+        final byte[] d = r.data;
+        final int end = r.end;
+        final int start = r.pos + 1;
+        int p = start;
         int hash = 0;
-
-        // Fused SWAR scan + hash: compute hash DURING the scan
-        while (r.pos + 8 <= r.end) {
-            long word = SwarUtil.loadLong(r.data, r.pos);
-            long quoteHits = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN);
-            long bsHits = SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
-            long anyHit = quoteHits | bsHits;
-            if (anyHit != 0) {
-                // Process partial word: hash bytes up to the hit
-                int hitIdx = SwarUtil.getIndex(anyHit);
-                for (int j = 0; j < hitIdx; j++) {
-                    hash = hash * 31 + (r.data[r.pos + j] & 0xFF);
-                }
-                r.pos += hitIdx;
-                if ((r.data[r.pos] & 0xFF) == '"') {
-                    return internKeyWithHash(r.data, start, r.pos++, hash);
-                }
-                break; // backslash — slow path
-            }
-            // No special chars in 8 bytes — accumulate hash inline
-            hash = hash * 31 + (r.data[r.pos] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 1] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 2] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 3] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 4] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 5] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 6] & 0xFF);
-            hash = hash * 31 + (r.data[r.pos + 7] & 0xFF);
-            r.pos += 8;
-        }
-        // Scalar tail with fused hash
-        while (r.pos < r.end) {
-            int b = r.data[r.pos] & 0xFF;
-            if (b == '"') {
-                return internKeyWithHash(r.data, start, r.pos++, hash);
-            }
-            if (b == '\\') break;
+        while (p < end) {
+            int b = d[p] & 0xFF;
+            if ((b == '"') | (b == '\\')) break;
             hash = hash * 31 + b;
-            r.pos++;
+            p++;
         }
+        if (p < end && (d[p] & 0xFF) == '"') {
+            r.pos = p + 1;
+            return internKeyWithHash(d, start, p, hash);
+        }
+        return internKeyEscaped(r, start);
+    }
 
-        // Slow path: escaped key — parse normally and intern
-        r.pos = start - 1; // back to opening "
-        String result = parseStringRawBytes(r);
-        return internFieldName(result);
+    /** Cold path: escape inside the key. Kept out of the scan loop. */
+    private static String internKeyEscaped(JsonByteReader r, int start) {
+        r.pos = start - 1;
+        return internFieldName(parseStringRawBytes(r));
     }
 
     /**
@@ -1553,7 +1607,7 @@ public final class JqValues {
         // L1 lookup (thread-local, no contention, no cross-thread eviction)
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(hash + p) & L1_MASK];
+            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
             if (cached != null && cached.hash == hash && cached.qlen == keyLen
                     && cached.q1 == q1
                     && (keyLen <= 4 || cached.q2 == q2)
@@ -1566,7 +1620,7 @@ public final class JqValues {
         // L2 lookup (global, atomic snapshots)
         int firstEmpty = -1;
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (hash + probe) & INTERN_MASK;
+            int s = (mix(hash) + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) {
                 if (firstEmpty < 0) firstEmpty = s;
@@ -1579,21 +1633,21 @@ public final class JqValues {
             if (keyLen > 12) {
                 if (!matchBytesFrom(slot.keyBytes, data, start, 12, keyLen)) continue;
             }
-            l1[hash & L1_MASK] = slot; // promote to L1
+            l1[mix(hash) & L1_MASK] = slot; // promote to L1
             return slot.key;
         }
 
         // Cache miss: create string and store in both L1 and L2
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
         result.hashCode(); // force JDK to cache hashCode
-        int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK);
+        int storeSlot = firstEmpty >= 0 ? firstEmpty : (mix(hash) & INTERN_MASK);
         String jsonKey = buildJsonKey(result);
         InternSlot newSlot = new InternSlot(result, jsonKey,
                 jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 java.util.Arrays.copyOfRange(data, start, end),
                 hash, q1, q2, q3, keyLen);
         INTERN_SLOTS[storeSlot] = newSlot;
-        l1[hash & L1_MASK] = newSlot; // store in L1
+        l1[mix(hash) & L1_MASK] = newSlot; // store in L1
         return result;
     }
 
