@@ -240,7 +240,10 @@ public final class JsonpathLexer {
         while (pos < input.length() && Character.isDigit(input.charAt(pos))) pos++;
 
         boolean isDecimal = false;
-        if (pos < input.length() && input.charAt(pos) == '.') {
+        if (pos < input.length() && input.charAt(pos) == '.'
+                && pos + 1 < input.length() && Character.isDigit(input.charAt(pos + 1))) {
+            // Only consume the dot if followed by a digit — otherwise it's field access
+            // (e.g., $.results.0.value — the .0 is field access, not decimal 0.value)
             isDecimal = true;
             pos++;
             while (pos < input.length() && Character.isDigit(input.charAt(pos))) pos++;

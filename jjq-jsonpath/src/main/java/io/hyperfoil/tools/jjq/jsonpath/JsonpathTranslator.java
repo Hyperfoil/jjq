@@ -157,6 +157,10 @@ public final class JsonpathTranslator {
                 advance();
                 jq.append(".[\"").append(fieldName).append("\"]");
             }
+            case INTEGER -> {
+                // .0, .1, etc. — numeric field name (array index via dot notation)
+                jq.append(".").append(advance().value());
+            }
             default -> {
                 // Just a dot — unusual but possible
             }
@@ -175,14 +179,19 @@ public final class JsonpathTranslator {
         if (first.is(STAR)) {
             // [*] → []?
             advance();
-            // Check if followed by ].keyvalue() — collapse (issue #70)
             if (peek().is(RBRACKET)) {
                 advance();
+                // Check if followed by .keyvalue() — collapse (issue #70)
                 if (peek().is(DOT) && peekAt(1) != null && peekAt(1).is(IDENT)
                         && "keyvalue".equals(peekAt(1).value())) {
                     // [*].keyvalue() → .keyvalue() (collapse iteration before keyvalue)
-                    // Don't emit []? — the keyvalue translation handles it
                     return;
+                }
+                // Check if followed by .* — collapse [*].* to just []?
+                if (peek().is(DOT) && peekAt(1) != null && peekAt(1).is(STAR)) {
+                    // [*].* → []? (already emitting []? below, consume the .*)
+                    advance(); // consume DOT
+                    advance(); // consume STAR
                 }
                 jq.append("[]?");
                 return;
@@ -202,14 +211,12 @@ public final class JsonpathTranslator {
             return;
         }
 
-        // Unknown bracket content — pass through
+        // Complex bracket expression — may contain path expressions, .size(), arithmetic
+        // Translate as a jq bracket expression
         jq.append("[");
-        while (!peek().is(RBRACKET) && !peek().is(EOF)) {
-            jq.append(advance().value() != null ? advance().value() : "");
-            // Safety: actually advance was already called, let me fix
-        }
-        if (peek().is(RBRACKET)) advance();
+        translateBracketExpression();
         jq.append("]");
+        if (peek().is(RBRACKET)) advance();
     }
 
     /** [last], [last - N] */
@@ -331,6 +338,47 @@ public final class JsonpathTranslator {
         jq.append("[").append(firstVal).append("]");
     }
 
+    /** Translate a complex expression inside brackets (e.g., $.path.size()-1). */
+    private void translateBracketExpression() {
+        while (!peek().is(RBRACKET) && !peek().is(EOF)) {
+            JsonpathToken token = peek();
+            switch (token.type()) {
+                case ROOT -> {
+                    advance();
+                    // $ inside brackets refers to root
+                }
+                case DOT -> {
+                    advance();
+                    if (peek().is(IDENT)) {
+                        String name = advance().value();
+                        // Check for method call inside brackets
+                        if (peek().is(LPAREN) && METHODS.contains(name)) {
+                            advance(); // LPAREN
+                            if (peek().is(RPAREN)) advance(); // RPAREN
+                            translateMethod(name);
+                        } else {
+                            jq.append(".").append(name);
+                        }
+                    }
+                }
+                case IDENT -> jq.append(advance().value());
+                case INTEGER, DECIMAL -> jq.append(advance().value());
+                case PLUS -> { advance(); jq.append("+"); }
+                case MINUS -> { advance(); jq.append("-"); }
+                case STAR -> { advance(); jq.append("*"); }
+                case SLASH -> { advance(); jq.append("/"); }
+                case LBRACKET -> {
+                    advance();
+                    jq.append("[");
+                    translateBracketExpression();
+                    jq.append("]");
+                    if (peek().is(RBRACKET)) advance();
+                }
+                default -> advance(); // skip unknown
+            }
+        }
+    }
+
     // ========================================================================
     //  Methods: .size(), .double(), .keyvalue(), etc.
     // ========================================================================
@@ -386,6 +434,14 @@ public final class JsonpathTranslator {
             return;
         }
         advance(); // consume LPAREN
+
+        // If the path before the filter doesn't end with []? (array iteration),
+        // add []? to iterate elements before filtering.
+        // This matches PostgreSQL behavior: $.data ?(@.active) iterates data's elements.
+        String currentJq = jq.toString();
+        if (!currentJq.endsWith("[]?") && !currentJq.endsWith("[]")) {
+            jq.append("[]?");
+        }
 
         jq.append(" | select(");
         translateFilterBody();

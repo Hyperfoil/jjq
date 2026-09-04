@@ -79,13 +79,19 @@ public final class JsonpathToJq {
 
     /**
      * Convert a SQL/JSON path expression to jq with the specified mode.
-     * Uses the legacy string-replacement approach.
+     * Delegates to the tokenizing parser (issue #72).
      *
      * @param jsonpath the SQL/JSON path expression
      * @param mode strict or lax evaluation mode
      * @return the equivalent jq expression
      */
     public static String convert(String jsonpath, Mode mode) {
+        // Delegate to tokenizing parser (issue #72)
+        return convertTokenized(jsonpath, mode);
+    }
+
+    /** Legacy string-replacement converter — kept for reference during migration. */
+    static String convertLegacy(String jsonpath, Mode mode) {
         if (jsonpath == null || jsonpath.isEmpty()) return ".";
 
         String jq = jsonpath.trim();
