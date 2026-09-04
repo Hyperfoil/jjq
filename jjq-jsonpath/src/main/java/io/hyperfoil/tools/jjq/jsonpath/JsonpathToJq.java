@@ -52,7 +52,34 @@ public final class JsonpathToJq {
     }
 
     /**
+     * Convert a SQL/JSON path expression to jq using the tokenizing parser.
+     * This is the new implementation that replaces the string-replacement approach.
+     *
+     * @param jsonpath the SQL/JSON path expression
+     * @param mode strict or lax evaluation mode
+     * @return the equivalent jq expression
+     */
+    public static String convertTokenized(String jsonpath, Mode mode) {
+        if (jsonpath == null || jsonpath.isEmpty()) return ".";
+        String trimmed = jsonpath.trim();
+        if (trimmed.isEmpty()) return ".";
+
+        // Detect mode from expression prefix
+        if (trimmed.startsWith("strict ")) {
+            mode = Mode.STRICT;
+            trimmed = trimmed.substring(7).trim();
+        } else if (trimmed.startsWith("lax ")) {
+            mode = Mode.LAX;
+            trimmed = trimmed.substring(4).trim();
+        }
+
+        var tokens = new JsonpathLexer(trimmed).tokenize();
+        return new JsonpathTranslator(tokens, mode).translate();
+    }
+
+    /**
      * Convert a SQL/JSON path expression to jq with the specified mode.
+     * Uses the legacy string-replacement approach.
      *
      * @param jsonpath the SQL/JSON path expression
      * @param mode strict or lax evaluation mode
@@ -242,6 +269,16 @@ public final class JsonpathToJq {
      *   <li>{@code lax $[*]} on scalar {@code 1} → wraps as {@code [1]}, then {@code [*]} → {@code 1}</li>
      * </ul>
      */
+    /** Package-private for use by {@link JsonpathTranslator}. */
+    static String applyLaxAutoWrapStatic(String jq) {
+        return applyLaxAutoWrap(jq);
+    }
+
+    /** Package-private for use by {@link JsonpathTranslator}. */
+    static String applyLaxErrorSuppressionStatic(String jq) {
+        return applyLaxErrorSuppression(jq);
+    }
+
     private static String applyLaxAutoWrap(String jq) {
         // Handle root-level bracket access: .[N], .[N,M], .[N:M], .[]?
         // These need auto-wrapping when the input is not an array.
