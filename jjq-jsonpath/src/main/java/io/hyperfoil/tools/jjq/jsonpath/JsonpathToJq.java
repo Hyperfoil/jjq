@@ -139,6 +139,11 @@ public final class JsonpathToJq {
         jq = replaceOutsideQuotes(jq, ".ceiling()", " | ceil");
         jq = replaceOutsideQuotes(jq, ".floor()", " | floor");
         jq = replaceOutsideQuotes(jq, ".abs()", " | fabs");
+        // PostgreSQL 17 numeric cast methods
+        jq = replaceOutsideQuotes(jq, ".integer()", " | floor");
+        jq = replaceOutsideQuotes(jq, ".bigint()", " | floor");
+        jq = replaceOutsideQuotes(jq, ".number()", " | tonumber");
+        jq = replaceOutsideQuotes(jq, ".decimal()", " | tonumber");
 
         // Convert PostgreSQL jsonpath filter expressions to jq select()
         if (jq.contains("?")) {
@@ -460,19 +465,22 @@ public final class JsonpathToJq {
         // Handle like_regex with optional flags → test()
         // Includes type guard: PostgreSQL lax mode silently skips non-string values,
         // but jq's test() throws on non-strings. Guard with (type == "string" and ...).
+        // Subject capture: \S+ for simple paths, or \([^)]+\) for parenthesized expressions.
         // flag "" (empty flags) → test() without flags argument
+        String subjectPattern = "(\\S+|\\([^)]+\\))";
         body = body.replaceAll(
-                "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"\"",
+                subjectPattern + "\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"\"",
                 "($1 | type == \"string\" and test(\"$2\"))");
         body = body.replaceAll(
-                "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"([^\"]+)\"",
+                subjectPattern + "\\s+like_regex\\s+\"([^\"]+)\"\\s+flag\\s+\"([^\"]+)\"",
                 "($1 | type == \"string\" and test(\"$2\"; \"$3\"))");
         body = body.replaceAll(
-                "(\\S+)\\s+like_regex\\s+\"([^\"]+)\"",
+                subjectPattern + "\\s+like_regex\\s+\"([^\"]+)\"",
                 "($1 | type == \"string\" and test(\"$2\"))");
         // Handle starts with → startswith()
+        // Same subject pattern for compound expressions
         body = body.replaceAll(
-                "(\\S+)\\s+starts\\s+with\\s+\"([^\"]+)\"",
+                subjectPattern + "\\s+starts\\s+with\\s+\"([^\"]+)\"",
                 "($1 | startswith(\"$2\"))");
         // Handle != → != (already valid in jq)
         // Handle == → == (already valid in jq)

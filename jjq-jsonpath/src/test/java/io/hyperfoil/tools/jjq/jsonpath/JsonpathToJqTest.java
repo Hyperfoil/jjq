@@ -801,6 +801,40 @@ class JsonpathToJqTest {
             assertFalse(resultStr.contains("\"name\":\"B\""), "Should not include B (no meta), jq: " + jq);
         }
 
+        // ---- PostgreSQL 17 numeric cast methods ----
+
+        @Test void integerMethod() {
+            String jq = JsonpathToJq.convert("$.value.integer()", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse("{\"value\":3.7}"));
+            assertEquals("3", result.toJsonString(),
+                    ".integer() should truncate to integer, jq: " + jq);
+        }
+
+        @Test void bigintMethod() {
+            String jq = JsonpathToJq.convert("$.value.bigint()", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse("{\"value\":9.9}"));
+            assertEquals("9", result.toJsonString(),
+                    ".bigint() should truncate to integer, jq: " + jq);
+        }
+
+        @Test void numberMethod() {
+            String jq = JsonpathToJq.convert("$.value.number()", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse("{\"value\":\"42\"}"));
+            assertEquals("42", result.toJsonString(),
+                    ".number() should convert string to number, jq: " + jq);
+        }
+
+        @Test void decimalMethod() {
+            String jq = JsonpathToJq.convert("$.value.decimal()", JsonpathToJq.Mode.STRICT);
+            JqProgram program = JqProgram.compile(jq);
+            JqValue result = program.apply(JqValues.parse("{\"value\":\"3.14\"}"));
+            assertEquals("3.14", result.toJsonString(),
+                    ".decimal() should convert string to number, jq: " + jq);
+        }
+
         // ---- quote-aware method replacements ----
 
         @Test void quotedFieldNameWithMethodName() {

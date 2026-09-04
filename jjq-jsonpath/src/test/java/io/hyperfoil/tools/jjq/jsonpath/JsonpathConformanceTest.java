@@ -97,16 +97,8 @@ class JsonpathConformanceTest {
         }
         // array range (to) — now supported
         // last keyword — now supported
-        if (jsonpath.contains("exists(") || jsonpath.contains("exists (")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: exists()");
-        }
-        // starts with — now supported
-        if (jsonpath.contains(".bigint(") || jsonpath.contains(".integer(") ||
-                jsonpath.contains(".number(") || jsonpath.contains(".decimal(")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: numeric cast methods");
-        }
+        // exists() — now supported (issue #71 Phase 3)
+        // .bigint(), .integer(), .number(), .decimal() — now supported (issue #71 Phase 4)
         if (jsonpath.contains(".lower(") || jsonpath.contains(".upper(") ||
                 jsonpath.contains(".initcap(") || jsonpath.contains(".replace(") ||
                 jsonpath.contains(".ltrim(") || jsonpath.contains(".rtrim(") ||
