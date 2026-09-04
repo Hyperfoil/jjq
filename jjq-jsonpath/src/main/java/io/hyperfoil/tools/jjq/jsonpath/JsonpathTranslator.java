@@ -353,15 +353,20 @@ public final class JsonpathTranslator {
         }
 
         if (peek().is(COMMA)) {
-            // Union: [N,M,...] — jq doesn't have direct equivalent
-            // Emit as .[N], .[M], ... or use select
-            // For now, emit the first index and skip the rest (limitation)
-            // TODO: proper union support
-            jq.append("[").append(firstVal).append("]");
+            // Union: [N,M,...] → (.[N], .[M], ...) — multiple outputs
+            // jq doesn't have [N,M] syntax but comma produces multiple outputs
+            jq.append("(.[").append(firstVal).append("]");
             while (peek().is(COMMA)) {
-                advance(); // skip comma
-                if (peek().is(INTEGER) || peek().is(MINUS)) advance(); // skip number
+                advance(); // consume comma
+                boolean negNext = false;
+                if (peek().is(MINUS)) { negNext = true; advance(); }
+                if (peek().is(INTEGER)) {
+                    int nextVal = Integer.parseInt(advance().value());
+                    if (negNext) nextVal = -nextVal;
+                    jq.append(", .[").append(nextVal).append("]");
+                }
             }
+            jq.append(")");
             if (peek().is(RBRACKET)) advance();
             return;
         }
@@ -507,7 +512,23 @@ public final class JsonpathTranslator {
                 }
                 case AND -> { advance(); jq.append(" and "); }
                 case OR -> { advance(); jq.append(" or "); }
-                case NOT -> { advance(); jq.append(" not "); }
+                case NOT -> {
+                    advance();
+                    // PostgreSQL ! is prefix: !(expr). jq 'not' is postfix: (expr | not).
+                    // If followed by (, translate the parenthesized expression then append | not
+                    if (peek().is(LPAREN)) {
+                        advance(); // consume (
+                        jq.append("(");
+                        translateFilterBody();
+                        jq.append(" | not)");
+                        if (peek().is(RPAREN)) advance(); // consume )
+                    } else {
+                        // Bare ! — approximate as postfix not on next expression
+                        jq.append("(");
+                        translateFilterBody(); // will consume the next expression
+                        jq.append(" | not)");
+                    }
+                }
                 case EQ -> { advance(); jq.append(" == "); }
                 case NEQ, LTGT -> { advance(); jq.append(" != "); }
                 case LT -> { advance(); jq.append(" < "); }
