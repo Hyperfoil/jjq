@@ -577,13 +577,24 @@ public final class JqObject implements JqValue {
      * Look up a key in the hash index. Returns the index into keys[]/values[],
      * or -1 if not found. Uses open-addressing with linear probing.
      */
+    /**
+     * Spread hash bits before masking. Multiplicative hashing with the golden ratio
+     * constant avoids clustering from String.hashCode() low-bit collisions.
+     * Same function as in {@link JqValues} intern table.
+     * @see <a href="https://lemire.me/blog/2015/10/22/faster-hashing-without-effort/">Lemire: Faster hashing without effort</a>
+     */
+    private static int mix(int h) {
+        h *= 0x9E3779B1;
+        return h ^ (h >>> 16);
+    }
+
     private int hashLookup(String key) {
         int[] slots = hashSlots;
         if (slots == null) {
             slots = buildHashSlots();
         }
         int mask = hashMask;
-        int slot = key.hashCode() & mask;
+        int slot = mix(key.hashCode()) & mask;
         while (true) {
             int idx = slots[slot];
             if (idx < 0) return -1; // empty slot
@@ -604,7 +615,10 @@ public final class JqObject implements JqValue {
         int[] slots = new int[capacity];
         java.util.Arrays.fill(slots, -1);
         for (int i = 0; i < size; i++) {
-            int slot = keys[i].hashCode() & mask;
+            // Mix hash bits before masking to avoid clustering from String.hashCode()
+            // low-bit collisions (e.g., PCP metric keys sharing low 12 bits).
+            // See https://lemire.me/blog/2015/10/22/faster-hashing-without-effort/
+            int slot = mix(keys[i].hashCode()) & mask;
             while (slots[slot] >= 0) {
                 slot = (slot + 1) & mask; // linear probe
             }
