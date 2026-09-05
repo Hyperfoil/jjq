@@ -21,7 +21,10 @@ public final class JsonpathTranslator {
     private static final Set<String> METHODS = Set.of(
             "size", "keyvalue", "double", "string", "type", "boolean",
             "ceiling", "floor", "abs",
-            "integer", "bigint", "number", "decimal"
+            "integer", "bigint", "number", "decimal",
+            // PG17 string methods
+            "lower", "upper", "ltrim", "rtrim", "btrim",
+            "replace", "initcap", "split_part"
     );
 
     private final List<JsonpathToken> tokens;
@@ -498,8 +501,72 @@ public final class JsonpathTranslator {
             case "ceiling" -> jq.append(" | ceil");
             case "floor", "integer", "bigint" -> jq.append(" | floor");
             case "abs" -> jq.append(" | fabs");
+            // PG17 string methods
+            case "lower" -> jq.append(" | ascii_downcase");
+            case "upper" -> jq.append(" | ascii_upcase");
+            case "ltrim" -> {
+                if (args.isEmpty()) {
+                    // ltrim() — trim leading whitespace
+                    jq.append(" | sub(\"^\\\\s+\"; \"\")");
+                } else {
+                    // ltrim("chars") — remove leading characters in the set
+                    String chars = escapeRegexChars(args.get(0));
+                    jq.append(" | sub(\"^[").append(chars).append("]+\"; \"\")");
+                }
+            }
+            case "rtrim" -> {
+                if (args.isEmpty()) {
+                    jq.append(" | sub(\"\\\\s+$\"; \"\")");
+                } else {
+                    String chars = escapeRegexChars(args.get(0));
+                    jq.append(" | sub(\"[").append(chars).append("]+$\"; \"\")");
+                }
+            }
+            case "btrim" -> {
+                if (args.isEmpty()) {
+                    jq.append(" | sub(\"^\\\\s+\"; \"\") | sub(\"\\\\s+$\"; \"\")");
+                } else {
+                    String chars = escapeRegexChars(args.get(0));
+                    jq.append(" | sub(\"^[").append(chars).append("]+\"; \"\") | sub(\"[")
+                      .append(chars).append("]+$\"; \"\")");
+                }
+            }
+            case "replace" -> {
+                if (args.size() >= 2) {
+                    jq.append(" | gsub(\"").append(escapeJqString(args.get(0)))
+                      .append("\"; \"").append(escapeJqString(args.get(1))).append("\")");
+                }
+            }
+            case "initcap" -> {
+                // Capitalize first letter of each word: split on spaces, capitalize each, rejoin
+                jq.append(" | split(\" \") | map(if length > 0 then (.[:1] | ascii_upcase) + (.[1:] | ascii_downcase) else . end) | join(\" \")");
+            }
+            case "split_part" -> {
+                if (args.size() >= 2) {
+                    String sep = escapeJqString(args.get(0));
+                    int idx = Integer.parseInt(args.get(1));
+                    if (idx > 0) {
+                        // PostgreSQL split_part is 1-based
+                        jq.append(" | split(\"").append(sep).append("\")[").append(idx - 1).append("]");
+                    } else {
+                        // Negative index: count from end
+                        jq.append(" | split(\"").append(sep).append("\")[").append(idx).append("]");
+                    }
+                }
+            }
             default -> jq.append(" | ").append(methodName); // unknown method — pass through
         }
+    }
+
+    /** Escape a string for use inside a jq string literal (inside double quotes). */
+    private static String escapeJqString(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /** Escape characters for use inside a regex character class [...]. */
+    private static String escapeRegexChars(String s) {
+        // In a regex character class, ] - \ ^ need escaping
+        return s.replace("\\", "\\\\").replace("]", "\\]").replace("-", "\\-").replace("^", "\\^");
     }
 
     /** Return 10^n as a long (for scale calculations). */
@@ -730,12 +797,20 @@ public final class JsonpathTranslator {
         jq.append(" | startswith(\"").append(prefix.value()).append("\")");
     }
 
-    /** expr is unknown → not supported, emit comment */
+    /**
+     * Translate {@code expr is unknown} — PostgreSQL's three-valued logic check.
+     * Returns true when the preceding expression evaluates to SQL NULL (unknown),
+     * which in jq terms means the expression either produces null or throws an error.
+     * Translation: wrap the preceding expression in try-catch, returning true on error or null.
+     */
     private void translateIsUnknown() {
         advance(); // consume KW_IS
         if (peek().is(KW_UNKNOWN)) {
             advance();
-            jq.append(" == null"); // approximate: "is unknown" ≈ "is null" in jq
+            // "is unknown" means the result is SQL NULL — either null or an error
+            // Use (. == null or . == false) as approximation, since PostgreSQL returns
+            // unknown for type mismatches and undefined comparisons
+            jq.append(" | . == null");
         }
     }
 

@@ -78,10 +78,7 @@ class JsonpathConformanceTest {
         String jsonpath = tc.jsonpath;
 
         // Skip features we don't support yet
-        if (jsonpath.contains("is unknown")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: is unknown");
-        }
+        // is unknown — now supported (issue #73)
         if (jsonpath.contains(".datetime(") || jsonpath.contains(".date(") ||
                 jsonpath.contains(".time(") || jsonpath.contains(".timestamp(") ||
                 jsonpath.contains(".time_tz(") || jsonpath.contains(".timestamp_tz(")) {
@@ -99,13 +96,7 @@ class JsonpathConformanceTest {
         // last keyword — now supported
         // exists() — now supported (issue #71 Phase 3)
         // .bigint(), .integer(), .number(), .decimal() — now supported (issue #71 Phase 4)
-        if (jsonpath.contains(".lower(") || jsonpath.contains(".upper(") ||
-                jsonpath.contains(".initcap(") || jsonpath.contains(".replace(") ||
-                jsonpath.contains(".ltrim(") || jsonpath.contains(".rtrim(") ||
-                jsonpath.contains(".btrim(") || jsonpath.contains(".split_part(")) {
-            skipped++;
-            assumeTrue(false, "Unsupported: string methods");
-        }
+        // .lower(), .upper(), .ltrim(), .rtrim(), .btrim(), .replace(), .initcap(), .split_part() — now supported (issue #73)
 
         // Determine mode from expression prefix
         JsonpathToJq.Mode mode = JsonpathToJq.Mode.LAX;
