@@ -53,6 +53,8 @@
         <module>jjq-jsonpath</module>
         <module>jjq-mapper</module>
         <module>jjq-mapper-processor</module>
+        <module>jjq-mapper-jackson</module>
+        <module>jjq-mapper-jsonb</module>
     </modules>
 
     <properties>
@@ -60,6 +62,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <fastjson2.version>2.0.53</fastjson2.version>
         <jackson.version>2.18.2</jackson.version>
+        <jakarta.json.bind.version>3.0.1</jakarta.json.bind.version>
         <aesh.version>2.7</aesh.version>
         <junit.version>5.11.3</junit.version>
         <version.sonatype.central>0.11.0</version.sonatype.central>
@@ -99,6 +102,21 @@
                 <groupId>io.hyperfoil.tools</groupId>
                 <artifactId>jjq-mapper-processor</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-mapper-jackson</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-mapper-jsonb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>jakarta.json.bind</groupId>
+                <artifactId>jakarta.json.bind-api</artifactId>
+                <version>${jakarta.json.bind.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
