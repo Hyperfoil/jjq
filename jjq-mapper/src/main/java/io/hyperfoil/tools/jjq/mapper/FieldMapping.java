@@ -37,25 +37,28 @@ final class FieldMapping {
     private final MethodHandle setter;    // writes the field value on an instance (POJO deserialization), null for records
     private final int constructorIndex;   // index in the canonical constructor parameter list (-1 for POJOs)
     private final boolean ignored;        // true if @JqIgnore is present
+    private final JqInclude.Include inclusion; // serialization inclusion strategy
     private final TypeConverter.Kind conversionKind; // pre-resolved conversion strategy
 
     /** Constructor for record components (positional constructor, no setter). */
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
-        this(name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored);
+        this(name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS);
     }
 
     /** Constructor for POJO fields (setter-based, no positional index). */
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, MethodHandle setter, boolean ignored) {
-        this(name, directFieldName, program, type, genericType, getter, setter, -1, ignored);
+        this(name, directFieldName, program, type, genericType, getter, setter, -1, ignored, JqInclude.Include.ALWAYS);
     }
 
-    private FieldMapping(String name, String directFieldName, JqProgram program,
-                         Class<?> type, Type genericType,
-                         MethodHandle getter, MethodHandle setter, int constructorIndex, boolean ignored) {
+    /** Full constructor with inclusion strategy. */
+    FieldMapping(String name, String directFieldName, JqProgram program,
+                 Class<?> type, Type genericType,
+                 MethodHandle getter, MethodHandle setter, int constructorIndex,
+                 boolean ignored, JqInclude.Include inclusion) {
         this.name = name;
         this.directFieldName = directFieldName;
         this.program = program;
@@ -65,6 +68,7 @@ final class FieldMapping {
         this.setter = setter;
         this.constructorIndex = constructorIndex;
         this.ignored = ignored;
+        this.inclusion = inclusion;
         this.conversionKind = ignored ? TypeConverter.Kind.DEFAULT
                                      : TypeConverter.resolveKind(type, genericType);
     }
@@ -104,7 +108,35 @@ final class FieldMapping {
         }
     }
 
+    /**
+     * Check whether a serialized value should be included based on the inclusion strategy.
+     * @param value the Java value read from the field (may be null)
+     * @return true if the value should be included in the serialized output
+     */
+    boolean shouldInclude(Object value) {
+        return switch (inclusion) {
+            case ALWAYS -> true;
+            case NON_NULL -> value != null;
+            case NON_EMPTY -> {
+                if (value == null) yield false;
+                if (value instanceof String s && s.isEmpty()) yield false;
+                if (value instanceof java.util.Collection<?> c && c.isEmpty()) yield false;
+                if (value instanceof java.util.Map<?, ?> m && m.isEmpty()) yield false;
+                yield true;
+            }
+            case NON_DEFAULT -> {
+                if (value == null) yield false;
+                if (value instanceof Number n && n.doubleValue() == 0.0) yield false;
+                if (value instanceof Boolean b && !b) yield false;
+                if (value instanceof Character c && c == '\0') yield false;
+                if (value instanceof String s && s.isEmpty()) yield false;
+                yield true;
+            }
+        };
+    }
+
     boolean hasSetter() { return setter != null; }
+    JqInclude.Include inclusion() { return inclusion; }
     String name() { return name; }
     Class<?> type() { return type; }
     Type genericType() { return genericType; }

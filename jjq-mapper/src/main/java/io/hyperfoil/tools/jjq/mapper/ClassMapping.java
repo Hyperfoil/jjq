@@ -75,6 +75,9 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Cannot create private lookup for " + type.getName(), e);
         }
 
+        // Resolve class-level @JqInclude (default for all fields)
+        JqInclude.Include classInclusion = resolveClassInclusion(type);
+
         for (int i = 0; i < components.length; i++) {
             RecordComponent rc = components[i];
             String name = rc.getName();
@@ -99,6 +102,10 @@ final class ClassMapping<T> implements Mapping<T> {
                 program = null;
             }
 
+            // Resolve field-level @JqInclude (overrides class-level)
+            JqInclude fieldInclude = rc.getAnnotation(JqInclude.class);
+            JqInclude.Include inclusion = fieldInclude != null ? fieldInclude.value() : classInclusion;
+
             // Create MethodHandle for the accessor method (e.g., record.name())
             MethodHandle getter;
             try {
@@ -107,7 +114,8 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("Cannot access record component accessor: " + name, e);
             }
 
-            fields[i] = new FieldMapping(name, directFieldName, program, fieldType, genericType, getter, i, ignored);
+            fields[i] = new FieldMapping(name, directFieldName, program, fieldType, genericType,
+                    getter, null, i, ignored, inclusion);
         }
 
         // Find and cache the canonical constructor
@@ -173,6 +181,9 @@ final class ClassMapping<T> implements Mapping<T> {
         } catch (IllegalAccessException e) {
             throw new JqMapperException("Cannot access no-arg constructor of " + type.getName(), e);
         }
+
+        // Resolve class-level @JqInclude (default for all fields)
+        JqInclude.Include classInclusion = resolveClassInclusion(type);
 
         // Discover fields (declared only, skip static/synthetic/transient)
         var fieldMappings = new ArrayList<FieldMapping>();
@@ -241,8 +252,12 @@ final class ClassMapping<T> implements Mapping<T> {
                 }
             }
 
+            // Resolve field-level @JqInclude (overrides class-level)
+            JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
+            JqInclude.Include inclusion = fieldInclude != null ? fieldInclude.value() : classInclusion;
+
             fieldMappings.add(new FieldMapping(name, directFieldName, program,
-                    fieldType, genericType, getter, setter, ignored));
+                    fieldType, genericType, getter, setter, -1, ignored, inclusion));
         }
 
         FieldMapping[] fields = fieldMappings.toArray(new FieldMapping[0]);
@@ -364,6 +379,7 @@ final class ClassMapping<T> implements Mapping<T> {
         for (FieldMapping field : fields) {
             if (field.isIgnored()) continue;
             Object value = field.readValue(instance);
+            if (!field.shouldInclude(value)) continue;
             builder.put(field.name(), TypeConverter.toJqValue(value, mapper));
         }
         return builder.build();
@@ -381,6 +397,12 @@ final class ClassMapping<T> implements Mapping<T> {
             args[idx] = fields[idx].convert(entry.getValue(), mapper);
         }
         return args;
+    }
+
+    /** Resolve class-level @JqInclude, defaulting to ALWAYS. */
+    private static JqInclude.Include resolveClassInclusion(Class<?> type) {
+        JqInclude classInclude = type.getAnnotation(JqInclude.class);
+        return classInclude != null ? classInclude.value() : JqInclude.Include.ALWAYS;
     }
 
     Class<T> type() { return type; }

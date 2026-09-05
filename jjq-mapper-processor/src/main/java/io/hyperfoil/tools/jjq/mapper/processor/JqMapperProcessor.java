@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
+import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -77,6 +78,9 @@ public class JqMapperProcessor extends AbstractProcessor {
      * @return the simple mapping class name (e.g., "User_JqMapping"), or null on error
      */
     private String processRecord(TypeElement recordType) {
+        // Resolve class-level @JqInclude
+        String classInclusion = resolveClassInclusion(recordType);
+
         // Collect record component metadata
         List<ComponentInfo> components = new ArrayList<>();
         for (Element enclosed : recordType.getEnclosedElements()) {
@@ -99,7 +103,11 @@ public class JqMapperProcessor extends AbstractProcessor {
                     }
                 }
 
-                components.add(new ComponentInfo(name, typeName, jqExpr, ignored, jqField != null));
+                // Resolve field-level @JqInclude (overrides class-level)
+                JqInclude fieldInclude = rc.getAnnotation(JqInclude.class);
+                String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
+
+                components.add(new ComponentInfo(name, typeName, jqExpr, ignored, jqField != null, inclusion));
             }
         }
 
@@ -141,6 +149,9 @@ public class JqMapperProcessor extends AbstractProcessor {
      * @return the simple mapping class name (e.g., "User_JqMapping"), or null on error
      */
     private String processClass(TypeElement classType) {
+        // Resolve class-level @JqInclude
+        String classInclusion = resolveClassInclusion(classType);
+
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();
         // Collect method names for getter/setter resolution
@@ -201,8 +212,12 @@ public class JqMapperProcessor extends AbstractProcessor {
                 setterName = null; // will use setAccessible at runtime, or read-only
             }
 
+            // Resolve field-level @JqInclude (overrides class-level)
+            JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
+            String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
+
             properties.add(new PropertyInfo(name, typeName, jqExpr, ignored, jqField != null,
-                    getterName, setterName, isPublic));
+                    getterName, setterName, isPublic, inclusion));
         }
 
         // Generate the mapping class
@@ -255,10 +270,17 @@ public class JqMapperProcessor extends AbstractProcessor {
         }
     }
 
+    /** Resolve class-level @JqInclude, defaulting to "ALWAYS". */
+    private String resolveClassInclusion(TypeElement type) {
+        JqInclude classInclude = type.getAnnotation(JqInclude.class);
+        return classInclude != null ? classInclude.value().name() : "ALWAYS";
+    }
+
     /** Metadata for a single record component. */
-    record ComponentInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField) {}
+    record ComponentInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
+                         String inclusion) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
-                        String getterName, String setterName, boolean isPublicField) {}
+                        String getterName, String setterName, boolean isPublicField, String inclusion) {}
 }

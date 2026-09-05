@@ -739,4 +739,99 @@ class JqMapperTest {
         assertTrue(p.isEnabled());
         assertEquals("test", p.getLabel());
     }
+
+    // ---- @JqInclude tests ----
+
+    @JqInclude(JqInclude.Include.NON_NULL)
+    record NonNullRecord(String data, String error, String debug) {}
+
+    @Test
+    void toJqValue_nonNullRecord_excludesNulls() {
+        JqValue result = mapper.toJqValue(new NonNullRecord("hello", null, null));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"data\""), "Should include non-null data: " + json);
+        assertFalse(json.contains("\"error\""), "Should exclude null error: " + json);
+        assertFalse(json.contains("\"debug\""), "Should exclude null debug: " + json);
+    }
+
+    @Test
+    void toJqValue_nonNullRecord_includesAllWhenNoNulls() {
+        JqValue result = mapper.toJqValue(new NonNullRecord("hello", "oops", "trace"));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"data\""), json);
+        assertTrue(json.contains("\"error\""), json);
+        assertTrue(json.contains("\"debug\""), json);
+    }
+
+    @JqInclude(JqInclude.Include.NON_NULL)
+    record NonNullWithOverride(
+            String name,
+            @JqInclude(JqInclude.Include.ALWAYS) String status // always included, even if null
+    ) {}
+
+    @Test
+    void toJqValue_nonNullWithFieldOverride() {
+        JqValue result = mapper.toJqValue(new NonNullWithOverride(null, null));
+        String json = result.toJsonString();
+        assertFalse(json.contains("\"name\""), "name should be excluded (NON_NULL): " + json);
+        assertTrue(json.contains("\"status\""), "status should be included (ALWAYS override): " + json);
+    }
+
+    @JqInclude(JqInclude.Include.NON_EMPTY)
+    record NonEmptyRecord(String name, String value, List<String> items) {}
+
+    @Test
+    void toJqValue_nonEmpty_excludesEmptyStringsAndCollections() {
+        JqValue result = mapper.toJqValue(new NonEmptyRecord("Alice", "", List.of()));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"name\""), "Non-empty name should be included: " + json);
+        assertFalse(json.contains("\"value\""), "Empty string should be excluded: " + json);
+        assertFalse(json.contains("\"items\""), "Empty list should be excluded: " + json);
+    }
+
+    @JqInclude(JqInclude.Include.NON_DEFAULT)
+    record NonDefaultRecord(String name, int count, boolean active, double score) {}
+
+    @Test
+    void toJqValue_nonDefault_excludesDefaults() {
+        JqValue result = mapper.toJqValue(new NonDefaultRecord(null, 0, false, 0.0));
+        String json = result.toJsonString();
+        assertEquals("{}", json, "All defaults should be excluded");
+    }
+
+    @Test
+    void toJqValue_nonDefault_includesNonDefaults() {
+        JqValue result = mapper.toJqValue(new NonDefaultRecord("Alice", 5, true, 3.14));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"name\""), json);
+        assertTrue(json.contains("\"count\""), json);
+        assertTrue(json.contains("\"active\""), json);
+        assertTrue(json.contains("\"score\""), json);
+    }
+
+    // ---- @JqInclude on POJO ----
+
+    @JqInclude(JqInclude.Include.NON_NULL)
+    static class NonNullPojo {
+        private String name;
+        private String optional;
+
+        public NonNullPojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getOptional() { return optional; }
+        public void setOptional(String optional) { this.optional = optional; }
+    }
+
+    @Test
+    void toJqValue_nonNullPojo() {
+        NonNullPojo p = new NonNullPojo();
+        p.setName("Alice");
+        // optional left null
+        JqValue result = mapper.toJqValue(p);
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"name\""), "Non-null name should be included: " + json);
+        assertFalse(json.contains("\"optional\""), "Null optional should be excluded: " + json);
+    }
 }

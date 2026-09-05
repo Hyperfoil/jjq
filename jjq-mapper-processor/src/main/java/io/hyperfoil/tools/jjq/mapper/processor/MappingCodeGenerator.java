@@ -216,20 +216,86 @@ final class MappingCodeGenerator {
     private static void generateToJqValue(StringBuilder sb, String recordSimpleName,
                                             List<JqMapperProcessor.ComponentInfo> components) {
         int activeCount = (int) components.stream().filter(c -> !c.ignored()).count();
+        boolean hasInclusion = components.stream()
+                .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public JqValue toJqValue(").append(recordSimpleName).append(" instance, JqMapper mapper) {\n");
-        sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
 
-        for (var comp : components) {
-            if (comp.ignored()) continue;
-            sb.append("            .put(\"").append(comp.name()).append("\", ");
-            generateSerializationValue(sb, comp);
-            sb.append(")\n");
+        if (!hasInclusion) {
+            // Fast path: no inclusion filtering, use fluent builder
+            sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                sb.append("            .put(\"").append(comp.name()).append("\", ");
+                generateSerializationValue(sb, comp);
+                sb.append(")\n");
+            }
+            sb.append("            .build();\n");
+        } else {
+            // Inclusion filtering: use explicit builder with conditional puts
+            sb.append("        var _b = JqObject.builder(").append(activeCount).append(");\n");
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                String accessor = "instance." + comp.name() + "()";
+                if ("ALWAYS".equals(comp.inclusion())) {
+                    sb.append("        _b.put(\"").append(comp.name()).append("\", ");
+                    generateSerializationValue(sb, comp);
+                    sb.append(");\n");
+                } else {
+                    generateInclusionCheck(sb, comp, accessor);
+                }
+            }
+            sb.append("        return _b.build();\n");
         }
 
-        sb.append("            .build();\n");
         sb.append("    }\n\n");
+    }
+
+    /** Generate an inclusion-conditional put for a record component. */
+    private static void generateInclusionCheck(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
+        String inclusion = comp.inclusion();
+        switch (inclusion) {
+            case "NON_NULL" -> {
+                sb.append("        if (").append(accessor).append(" != null) ");
+                sb.append("_b.put(\"").append(comp.name()).append("\", ");
+                generateSerializationValue(sb, comp);
+                sb.append(");\n");
+            }
+            case "NON_EMPTY" -> {
+                String typeName = comp.typeName();
+                if (typeName.equals("java.lang.String")) {
+                    sb.append("        if (").append(accessor).append(" != null && !").append(accessor).append(".isEmpty()) ");
+                } else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")) {
+                    sb.append("        if (").append(accessor).append(" != null && !").append(accessor).append(".isEmpty()) ");
+                } else {
+                    sb.append("        if (").append(accessor).append(" != null) ");
+                }
+                sb.append("_b.put(\"").append(comp.name()).append("\", ");
+                generateSerializationValue(sb, comp);
+                sb.append(");\n");
+            }
+            case "NON_DEFAULT" -> {
+                String typeName = comp.typeName();
+                String check = switch (typeName) {
+                    case "int", "long", "short", "byte" -> accessor + " != 0";
+                    case "double", "float" -> accessor + " != 0.0";
+                    case "boolean" -> accessor;
+                    case "char" -> accessor + " != '\\0'";
+                    default -> accessor + " != null";
+                };
+                sb.append("        if (").append(check).append(") ");
+                sb.append("_b.put(\"").append(comp.name()).append("\", ");
+                generateSerializationValue(sb, comp);
+                sb.append(");\n");
+            }
+            default -> {
+                // ALWAYS — no check
+                sb.append("        _b.put(\"").append(comp.name()).append("\", ");
+                generateSerializationValue(sb, comp);
+                sb.append(");\n");
+            }
+        }
     }
 
     private static void generateSerializationValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
@@ -355,27 +421,42 @@ final class MappingCodeGenerator {
 
         // toJqValue: getter calls
         int activeCount = (int) properties.stream().filter(p -> !p.ignored()).count();
+        boolean hasInclusion = properties.stream()
+                .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
+
         sb.append("    @Override\n");
         sb.append("    public JqValue toJqValue(").append(classSimpleName).append(" instance, JqMapper mapper) {\n");
-        sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
 
-        for (var prop : properties) {
-            if (prop.ignored()) continue;
-            String readExpr;
-            if (prop.isPublicField() && prop.getterName() == null) {
-                readExpr = "instance." + prop.name();
-            } else if (prop.getterName() != null) {
-                readExpr = "instance." + prop.getterName() + "()";
-            } else {
-                // No getter and not public — skip in generated code (runtime handles via setAccessible)
-                continue;
+        if (!hasInclusion) {
+            // Fast path: no inclusion filtering
+            sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                sb.append("            .put(\"").append(prop.name()).append("\", ");
+                generateSerializationValueForPojo(sb, prop, readExpr);
+                sb.append(")\n");
             }
-            sb.append("            .put(\"").append(prop.name()).append("\", ");
-            generateSerializationValueForPojo(sb, prop, readExpr);
-            sb.append(")\n");
+            sb.append("            .build();\n");
+        } else {
+            // Inclusion filtering: explicit builder with conditional puts
+            sb.append("        var _b = JqObject.builder(").append(activeCount).append(");\n");
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                if ("ALWAYS".equals(prop.inclusion())) {
+                    sb.append("        _b.put(\"").append(prop.name()).append("\", ");
+                    generateSerializationValueForPojo(sb, prop, readExpr);
+                    sb.append(");\n");
+                } else {
+                    generatePojoInclusionCheck(sb, prop, readExpr);
+                }
+            }
+            sb.append("        return _b.build();\n");
         }
 
-        sb.append("            .build();\n");
         sb.append("    }\n\n");
 
         // type()
@@ -412,6 +493,62 @@ final class MappingCodeGenerator {
                 yield "mapper.fromJqValue(" + apply + ", " + typeName + ".class)";
             }
         };
+    }
+
+    /** Resolve read expression for a POJO field. Returns null if not accessible. */
+    private static String resolvePojoReadExpr(JqMapperProcessor.PropertyInfo prop) {
+        if (prop.isPublicField() && prop.getterName() == null) {
+            return "instance." + prop.name();
+        } else if (prop.getterName() != null) {
+            return "instance." + prop.getterName() + "()";
+        }
+        return null; // not accessible in generated code
+    }
+
+    /** Generate an inclusion-conditional put for a POJO property. */
+    private static void generatePojoInclusionCheck(StringBuilder sb,
+                                                    JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        String inclusion = prop.inclusion();
+        switch (inclusion) {
+            case "NON_NULL" -> {
+                sb.append("        if (").append(readExpr).append(" != null) ");
+                sb.append("_b.put(\"").append(prop.name()).append("\", ");
+                generateSerializationValueForPojo(sb, prop, readExpr);
+                sb.append(");\n");
+            }
+            case "NON_EMPTY" -> {
+                String typeName = prop.typeName();
+                if (typeName.equals("java.lang.String")) {
+                    sb.append("        if (").append(readExpr).append(" != null && !").append(readExpr).append(".isEmpty()) ");
+                } else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")) {
+                    sb.append("        if (").append(readExpr).append(" != null && !").append(readExpr).append(".isEmpty()) ");
+                } else {
+                    sb.append("        if (").append(readExpr).append(" != null) ");
+                }
+                sb.append("_b.put(\"").append(prop.name()).append("\", ");
+                generateSerializationValueForPojo(sb, prop, readExpr);
+                sb.append(");\n");
+            }
+            case "NON_DEFAULT" -> {
+                String typeName = prop.typeName();
+                String check = switch (typeName) {
+                    case "int", "long", "short", "byte" -> readExpr + " != 0";
+                    case "double", "float" -> readExpr + " != 0.0";
+                    case "boolean" -> readExpr;
+                    case "char" -> readExpr + " != '\\0'";
+                    default -> readExpr + " != null";
+                };
+                sb.append("        if (").append(check).append(") ");
+                sb.append("_b.put(\"").append(prop.name()).append("\", ");
+                generateSerializationValueForPojo(sb, prop, readExpr);
+                sb.append(");\n");
+            }
+            default -> {
+                sb.append("        _b.put(\"").append(prop.name()).append("\", ");
+                generateSerializationValueForPojo(sb, prop, readExpr);
+                sb.append(");\n");
+            }
+        }
     }
 
     /** Generate the serialization value expression for a POJO field. */
