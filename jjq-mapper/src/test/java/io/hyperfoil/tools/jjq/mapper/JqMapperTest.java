@@ -1,8 +1,12 @@
 package io.hyperfoil.tools.jjq.mapper;
 
+import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.value.*;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.AnnotatedElement;
+import java.lang.reflect.Field;
+import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -1046,5 +1050,110 @@ class JqMapperTest {
         p.setTimestamp(Instant.parse("2026-09-05T12:00:00Z"));
         JqValue result = mapper.toJqValue(p);
         assertEquals("2026-09-05T12:00:00Z", result.getField("timestamp").stringValue());
+    }
+
+    // ---- AnnotationBridge tests ----
+
+    /** Mock bridge that renames "name" to "full_name" and ignores fields named "secret". */
+    static class MockBridge implements AnnotationBridge {
+        @Override
+        public String resolveFieldName(AnnotatedElement element) {
+            String fieldName = getFieldName(element);
+            if ("name".equals(fieldName)) return "full_name";
+            return null;
+        }
+        @Override
+        public boolean isIgnored(AnnotatedElement element) {
+            return "secret".equals(getFieldName(element));
+        }
+        @Override
+        public JqInclude.Include resolveInclusion(AnnotatedElement element) {
+            return null; // no override
+        }
+        @Override
+        public JqNaming.Strategy resolveNaming(Class<?> type) {
+            return null; // no override
+        }
+        private String getFieldName(AnnotatedElement element) {
+            if (element instanceof RecordComponent rc) return rc.getName();
+            if (element instanceof Field f) return f.getName();
+            return null;
+        }
+    }
+
+    record BridgeRecord(String name, int age, String secret) {}
+
+    @Test
+    void bridge_renamesField() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new MockBridge())
+                .build();
+        JqValue json = JqValues.parse("{\"full_name\":\"Alice\",\"age\":30,\"secret\":\"hidden\"}");
+        BridgeRecord r = bridgeMapper.fromJqValue(json, BridgeRecord.class);
+        assertEquals("Alice", r.name()); // "full_name" -> name via bridge
+        assertEquals(30, r.age());
+    }
+
+    @Test
+    void bridge_ignoresField() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new MockBridge())
+                .build();
+        JqValue json = JqValues.parse("{\"full_name\":\"Alice\",\"age\":30,\"secret\":\"hidden\"}");
+        BridgeRecord r = bridgeMapper.fromJqValue(json, BridgeRecord.class);
+        assertNull(r.secret()); // bridge ignores "secret"
+    }
+
+    @Test
+    void bridge_serializesWithRenamedKey() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new MockBridge())
+                .build();
+        JqValue result = bridgeMapper.toJqValue(new BridgeRecord("Alice", 30, "hidden"));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"full_name\""), "Should use bridge-renamed key: " + json);
+        assertFalse(json.contains("\"secret\""), "Should exclude bridge-ignored field: " + json);
+    }
+
+    @Test
+    void bridge_jqAnnotationWinsOverBridge() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new MockBridge())
+                .build();
+        // BridgeRecordWithJqField has @JqField on name — should override bridge
+        JqValue json = JqValues.parse("{\"custom\":\"Alice\",\"age\":30,\"secret\":\"hidden\"}");
+        BridgeRecordWithJqField r = bridgeMapper.fromJqValue(json, BridgeRecordWithJqField.class);
+        assertEquals("Alice", r.name()); // @JqField wins over bridge
+    }
+
+    record BridgeRecordWithJqField(@JqField(".custom") String name, int age, String secret) {}
+
+    // ---- Bridge on POJO ----
+
+    static class BridgePojo {
+        private String name;
+        private int age;
+        private String secret;
+
+        public BridgePojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public int getAge() { return age; }
+        public void setAge(int age) { this.age = age; }
+        public String getSecret() { return secret; }
+        public void setSecret(String secret) { this.secret = secret; }
+    }
+
+    @Test
+    void bridge_worksWithPojo() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new MockBridge())
+                .build();
+        JqValue json = JqValues.parse("{\"full_name\":\"Bob\",\"age\":25,\"secret\":\"hidden\"}");
+        BridgePojo p = bridgeMapper.fromJqValue(json, BridgePojo.class);
+        assertEquals("Bob", p.getName());
+        assertEquals(25, p.getAge());
+        assertNull(p.getSecret()); // bridge ignores "secret"
     }
 }

@@ -3,8 +3,11 @@ package io.hyperfoil.tools.jjq.mapper;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.value.*;
 
+import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -13,6 +16,7 @@ import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -55,7 +59,7 @@ final class ClassMapping<T> implements Mapping<T> {
      * @throws JqMapperException if the class is not a record or introspection fails
      */
     @SuppressWarnings("unchecked")
-    static <T> ClassMapping<T> forRecord(Class<T> type) {
+    static <T> ClassMapping<T> forRecord(Class<T> type, List<AnnotationBridge> bridges) {
         if (!type.isRecord()) {
             throw new JqMapperException("Only record types are supported: " + type.getName());
         }
@@ -75,9 +79,20 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Cannot create private lookup for " + type.getName(), e);
         }
 
-        // Resolve class-level @JqInclude and @JqNaming
+        // Resolve class-level annotations: jjq-native first, then bridges
         JqInclude.Include classInclusion = resolveClassInclusion(type);
         JqNaming.Strategy namingStrategy = resolveNamingStrategy(type);
+        // Bridges can override class-level settings
+        for (AnnotationBridge bridge : bridges) {
+            if (classInclusion == JqInclude.Include.ALWAYS) {
+                JqInclude.Include bridgeInclusion = bridge.resolveInclusion(type);
+                if (bridgeInclusion != null) classInclusion = bridgeInclusion;
+            }
+            if (namingStrategy == JqNaming.Strategy.IDENTITY) {
+                JqNaming.Strategy bridgeNaming = bridge.resolveNaming(type);
+                if (bridgeNaming != null) namingStrategy = bridgeNaming;
+            }
+        }
 
         for (int i = 0; i < components.length; i++) {
             RecordComponent rc = components[i];
@@ -86,30 +101,50 @@ final class ClassMapping<T> implements Mapping<T> {
             Type genericType = rc.getGenericType();
             ctorParamTypes[i] = fieldType;
 
-            // Check for @JqIgnore
+            // Check for @JqIgnore, then bridge isIgnored
             boolean ignored = rc.isAnnotationPresent(JqIgnore.class);
+            if (!ignored) {
+                for (AnnotationBridge bridge : bridges) {
+                    if (bridge.isIgnored(rc)) { ignored = true; break; }
+                }
+            }
 
             // Apply naming strategy to get the JSON name
             String jsonName = namingStrategy.transform(name);
 
             // Determine extraction strategy:
-            // - @JqField: compile the jq expression and use JqProgram.apply()
-            // - Default: use JqObject.get(jsonName) directly (uses transformed name)
+            // 1. @JqField: compile the jq expression
+            // 2. Bridge resolveFieldName: use as JSON name
+            // 3. Default: use naming-transformed name
             String directFieldName;
             JqProgram program;
             JqField jqFieldAnnotation = rc.getAnnotation(JqField.class);
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
-                jsonName = name; // @JqField overrides naming strategy for serialization key
+                jsonName = name; // @JqField overrides naming strategy
+            } else if (!ignored) {
+                // Check bridges for field name override
+                String bridgeName = resolveBridgeFieldName(rc, bridges);
+                if (bridgeName != null) {
+                    jsonName = bridgeName;
+                }
+                directFieldName = jsonName;
+                program = null;
             } else {
-                directFieldName = jsonName; // use transformed name for lookup
+                directFieldName = jsonName;
                 program = null;
             }
 
-            // Resolve field-level @JqInclude (overrides class-level)
+            // Resolve field-level @JqInclude, then bridge inclusion
             JqInclude fieldInclude = rc.getAnnotation(JqInclude.class);
             JqInclude.Include inclusion = fieldInclude != null ? fieldInclude.value() : classInclusion;
+            if (fieldInclude == null) {
+                for (AnnotationBridge bridge : bridges) {
+                    JqInclude.Include bridgeInclusion = bridge.resolveInclusion(rc);
+                    if (bridgeInclusion != null) { inclusion = bridgeInclusion; break; }
+                }
+            }
 
             // Create MethodHandle for the accessor method (e.g., record.name())
             MethodHandle getter;
@@ -170,7 +205,7 @@ final class ClassMapping<T> implements Mapping<T> {
      * @throws JqMapperException if the class has no no-arg constructor or introspection fails
      */
     @SuppressWarnings("unchecked")
-    static <T> ClassMapping<T> forClass(Class<T> type) {
+    static <T> ClassMapping<T> forClass(Class<T> type, List<AnnotationBridge> bridges) {
         MethodHandles.Lookup lookup;
         try {
             lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
@@ -190,9 +225,19 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Cannot access no-arg constructor of " + type.getName(), e);
         }
 
-        // Resolve class-level @JqInclude and @JqNaming
+        // Resolve class-level annotations: jjq-native first, then bridges
         JqInclude.Include classInclusion = resolveClassInclusion(type);
         JqNaming.Strategy namingStrategy = resolveNamingStrategy(type);
+        for (AnnotationBridge bridge : bridges) {
+            if (classInclusion == JqInclude.Include.ALWAYS) {
+                JqInclude.Include bridgeInclusion = bridge.resolveInclusion(type);
+                if (bridgeInclusion != null) classInclusion = bridgeInclusion;
+            }
+            if (namingStrategy == JqNaming.Strategy.IDENTITY) {
+                JqNaming.Strategy bridgeNaming = bridge.resolveNaming(type);
+                if (bridgeNaming != null) namingStrategy = bridgeNaming;
+            }
+        }
 
         // Discover fields (declared only, skip static/synthetic/transient)
         var fieldMappings = new ArrayList<FieldMapping>();
@@ -207,8 +252,13 @@ final class ClassMapping<T> implements Mapping<T> {
             // Apply naming strategy
             String jsonName = namingStrategy.transform(name);
 
-            // Check annotations
+            // Check annotations: jjq-native first, then bridges
             boolean ignored = field.isAnnotationPresent(JqIgnore.class);
+            if (!ignored) {
+                for (AnnotationBridge bridge : bridges) {
+                    if (bridge.isIgnored(field)) { ignored = true; break; }
+                }
+            }
             String directFieldName;
             JqProgram program;
             JqField jqFieldAnnotation = field.getAnnotation(JqField.class);
@@ -216,8 +266,16 @@ final class ClassMapping<T> implements Mapping<T> {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
                 jsonName = name; // @JqField overrides naming strategy
+            } else if (!ignored) {
+                // Check bridges for field name override
+                String bridgeName = resolveBridgeFieldName(field, bridges);
+                if (bridgeName != null) {
+                    jsonName = bridgeName;
+                }
+                directFieldName = jsonName;
+                program = null;
             } else {
-                directFieldName = jsonName; // use transformed name for lookup
+                directFieldName = jsonName;
                 program = null;
             }
 
@@ -265,9 +323,15 @@ final class ClassMapping<T> implements Mapping<T> {
                 }
             }
 
-            // Resolve field-level @JqInclude (overrides class-level)
+            // Resolve field-level @JqInclude, then bridge inclusion
             JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
             JqInclude.Include inclusion = fieldInclude != null ? fieldInclude.value() : classInclusion;
+            if (fieldInclude == null) {
+                for (AnnotationBridge bridge : bridges) {
+                    JqInclude.Include bridgeInclusion = bridge.resolveInclusion(field);
+                    if (bridgeInclusion != null) { inclusion = bridgeInclusion; break; }
+                }
+            }
 
             // Resolve @JqConverter
             ValueConverter<?> converter = resolveConverter(field.getAnnotation(JqConverter.class));
@@ -413,6 +477,15 @@ final class ClassMapping<T> implements Mapping<T> {
             args[idx] = fields[idx].convert(entry.getValue(), mapper);
         }
         return args;
+    }
+
+    /** Consult bridges for a field name override. Returns null if no bridge provides one. */
+    private static String resolveBridgeFieldName(AnnotatedElement element, List<AnnotationBridge> bridges) {
+        for (AnnotationBridge bridge : bridges) {
+            String name = bridge.resolveFieldName(element);
+            if (name != null) return name;
+        }
+        return null;
     }
 
     /** Resolve class-level @JqInclude, defaulting to ALWAYS. */

@@ -1,8 +1,12 @@
 package io.hyperfoil.tools.jjq.mapper;
 
+import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -61,8 +65,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class JqMapper {
 
     private final ConcurrentHashMap<Class<?>, Mapping<?>> cache = new ConcurrentHashMap<>();
+    private final List<AnnotationBridge> bridges;
 
-    private JqMapper() {}
+    private JqMapper(List<AnnotationBridge> bridges) {
+        this.bridges = bridges;
+    }
 
     /**
      * Create a new JqMapper with default settings.
@@ -73,7 +80,11 @@ public final class JqMapper {
      * to pre-register generated mappings without reflective discovery.</p>
      */
     public static JqMapper create() {
-        return new JqMapper();
+        var bridges = new ArrayList<AnnotationBridge>();
+        for (AnnotationBridge bridge : ServiceLoader.load(AnnotationBridge.class)) {
+            bridges.add(bridge);
+        }
+        return new JqMapper(bridges);
     }
 
     /**
@@ -109,6 +120,7 @@ public final class JqMapper {
      */
     public static final class Builder {
         private final java.util.List<GeneratedMapping<?>> mappings = new java.util.ArrayList<>();
+        private final java.util.List<AnnotationBridge> bridges = new java.util.ArrayList<>();
 
         private Builder() {}
 
@@ -126,14 +138,31 @@ public final class JqMapper {
         }
 
         /**
-         * Build the mapper with all registered mappings.
+         * Register an annotation bridge for reading external framework annotations
+         * (Jackson, JSON-B, etc.) as jjq-mapper configuration.
+         *
+         * <p>Bridges are consulted in registration order, after jjq-native annotations.
+         * Multiple bridges can be registered; the first one that returns a non-null
+         * value wins.</p>
+         *
+         * @param bridge the annotation bridge to register
+         * @return this builder for chaining
+         * @see AnnotationBridge
+         */
+        public Builder bridge(AnnotationBridge bridge) {
+            bridges.add(bridge);
+            return this;
+        }
+
+        /**
+         * Build the mapper with all registered mappings and bridges.
          * Types not pre-registered will still fall back to {@code Class.forName()}
          * discovery and reflection-based mapping.
          *
          * @return a new thread-safe JqMapper
          */
         public JqMapper build() {
-            JqMapper mapper = new JqMapper();
+            JqMapper mapper = new JqMapper(List.copyOf(bridges));
             for (var m : mappings) {
                 mapper.cache.put(m.type(), m);
             }
@@ -235,8 +264,8 @@ public final class JqMapper {
         GeneratedMapping<T> generated = loadGenerated(type);
         if (generated != null) return generated;
         // Fall back to reflection-based mapping
-        if (type.isRecord()) return ClassMapping.forRecord(type);
-        return ClassMapping.forClass(type);
+        if (type.isRecord()) return ClassMapping.forRecord(type, bridges);
+        return ClassMapping.forClass(type, bridges);
     }
 
     /**
