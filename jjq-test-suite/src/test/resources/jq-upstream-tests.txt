@@ -4,6 +4,8 @@
 # Tests are groups of three lines: program, input, expected output
 # Blank lines and lines starting with # are ignored
 
+# Tests are groups of three lines: program, input, expected output
+
 #
 # Simple value tests to check parser. Input is irrelevant
 #
@@ -23,6 +25,7 @@ null
 1
 null
 1
+
 
 -1
 null
@@ -430,6 +433,7 @@ flatten(3,2,1)
 [0,1,2,[3]]
 [0,1,[2],[[3]]]
 
+
 #
 # Slices
 #
@@ -693,6 +697,7 @@ utf8bytelength
 [[], {}, [1,2], 55, true, false]
 ["array ([]) only strings have UTF-8 byte length","object ({}) only strings have UTF-8 byte length","array ([1,2]) only strings have UTF-8 byte length","number (55) only strings have UTF-8 byte length","boolean (true) only strings have UTF-8 byte length","boolean (false) only strings have UTF-8 byte length"]
 
+
 map(keys)
 [{}, {"abcd":1,"abc":2,"abcde":3}, {"x":1, "z": 3, "y":2}]
 [[], ["abc","abcd","abcde"], ["x","y","z"]]
@@ -801,6 +806,7 @@ null
 [(3.141592 / 2) * (range(0;20) / 20)|sin * 1000000|floor / 1000000]
 null
 [0,0.078459,0.156434,0.233445,0.309016,0.382683,0.45399,0.522498,0.587785,0.649447,0.707106,0.760405,0.809016,0.85264,0.891006,0.923879,0.951056,0.972369,0.987688,0.996917]
+
 
 def f(x): x | x; f([.], . + [42])
 [1,2,3]
@@ -1387,6 +1393,7 @@ null
 [contains("@"), contains("\u0000@"), contains("\u0000what")]
 "ab\u0000cd"
 [false, false, false]
+
 
 # Try/catch and general `?` operator
 [.[]|try if . == 0 then error("foo") elif . == 1 then .a elif . == 2 then empty else . end catch .]
@@ -2063,6 +2070,7 @@ false
 #["as","def","module","import","include","if","then","else","elif","end","reduce","foreach","and","or","try","catch","label","break","__loc__"]
 #null
 
+
 #
 # Tests to cover the new toliteral number functionality
 # For an example see #1652 and other linked issues
@@ -2087,6 +2095,7 @@ true
 (13911860366432393 == 13911860366432392) | . == if have_decnum then false else true end
 null
 true
+
 
 # Applying arithmetic to the value will truncate the result to double
 
@@ -2180,6 +2189,7 @@ reduce .[] as $then (4 as $else | $else; . as $elif | . + $then * $elif)
 [10,9,8,7]
 [10,19,27,34]
 
+
 # Object construction
 
 { a, $__loc__, c }
@@ -2189,6 +2199,7 @@ reduce .[] as $then (4 as $else | $else; . as $elif | . + $then * $elif)
 1 as $x | "2" as $y | "3" as $z | { $x, as, $y: 4, ($z): 5, if: 6, foo: 7 }
 {"as":8}
 {"x":1,"as":8,"2":4,"3":5,"if":6,"foo":7}
+
 
 # nan is parsed as a valid NaN value from JSON
 
@@ -2275,6 +2286,7 @@ null
 any(keys[]|tostring?;true)
 {"a":"1","b":"2","c":"3"}
 true
+
 
 # explode/implode
 # test replacement character (65533) for outside codepoint range and 0xd800 (55296) - 0xdfff (57343) utf16 surrogate pair range
@@ -2367,6 +2379,7 @@ try ("foobar" | .[1.5]) catch .
 null
 "Cannot index string with number (1.5)"
 
+
 # setpath/2 does not leak the input after an invalid get #2970
 
 try ["ok", setpath([1]; 1)] catch ["ko", .]
@@ -2404,6 +2417,7 @@ try ltrimstr("x") catch "x", try rtrimstr("x") catch "x" | "ok"
 ["ko","endswith() requires string inputs"]
 ["ok",""]
 ["ko","endswith() requires string inputs"]
+
 
 # oss-fuzz #66061: setpath/2 leaks when indexing array with array
 
