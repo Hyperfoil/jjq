@@ -5,6 +5,7 @@ import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqNaming;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
@@ -78,8 +79,9 @@ public class JqMapperProcessor extends AbstractProcessor {
      * @return the simple mapping class name (e.g., "User_JqMapping"), or null on error
      */
     private String processRecord(TypeElement recordType) {
-        // Resolve class-level @JqInclude
+        // Resolve class-level @JqInclude and @JqNaming
         String classInclusion = resolveClassInclusion(recordType);
+        JqNaming.Strategy namingStrategy = resolveNamingStrategy(recordType);
 
         // Collect record component metadata
         List<ComponentInfo> components = new ArrayList<>();
@@ -89,7 +91,9 @@ public class JqMapperProcessor extends AbstractProcessor {
                 String typeName = rc.asType().toString();
                 boolean ignored = rc.getAnnotation(JqIgnore.class) != null;
 
-                String jqExpr = "." + name;
+                // Apply naming strategy for default expression
+                String jsonName = namingStrategy.transform(name);
+                String jqExpr = "." + jsonName;
                 JqField jqField = rc.getAnnotation(JqField.class);
                 if (jqField != null) {
                     jqExpr = jqField.value();
@@ -107,7 +111,8 @@ public class JqMapperProcessor extends AbstractProcessor {
                 JqInclude fieldInclude = rc.getAnnotation(JqInclude.class);
                 String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
 
-                components.add(new ComponentInfo(name, typeName, jqExpr, ignored, jqField != null, inclusion));
+                String serName = (jqField != null) ? name : jsonName; // @JqField overrides naming
+                components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion));
             }
         }
 
@@ -149,8 +154,9 @@ public class JqMapperProcessor extends AbstractProcessor {
      * @return the simple mapping class name (e.g., "User_JqMapping"), or null on error
      */
     private String processClass(TypeElement classType) {
-        // Resolve class-level @JqInclude
+        // Resolve class-level @JqInclude and @JqNaming
         String classInclusion = resolveClassInclusion(classType);
+        JqNaming.Strategy namingStrategy = resolveNamingStrategy(classType);
 
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();
@@ -171,7 +177,9 @@ public class JqMapperProcessor extends AbstractProcessor {
             String typeName = field.asType().toString();
             boolean ignored = field.getAnnotation(JqIgnore.class) != null;
 
-            String jqExpr = "." + name;
+            // Apply naming strategy
+            String jsonName = namingStrategy.transform(name);
+            String jqExpr = "." + jsonName;
             JqField jqField = field.getAnnotation(JqField.class);
             if (jqField != null) {
                 jqExpr = jqField.value();
@@ -216,7 +224,8 @@ public class JqMapperProcessor extends AbstractProcessor {
             JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
             String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
 
-            properties.add(new PropertyInfo(name, typeName, jqExpr, ignored, jqField != null,
+            String serName = (jqField != null) ? name : jsonName;
+            properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion));
         }
 
@@ -276,11 +285,17 @@ public class JqMapperProcessor extends AbstractProcessor {
         return classInclude != null ? classInclude.value().name() : "ALWAYS";
     }
 
+    /** Resolve class-level @JqNaming, defaulting to IDENTITY. */
+    private JqNaming.Strategy resolveNamingStrategy(TypeElement type) {
+        JqNaming naming = type.getAnnotation(JqNaming.class);
+        return naming != null ? naming.value() : JqNaming.Strategy.IDENTITY;
+    }
+
     /** Metadata for a single record component. */
-    record ComponentInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
+    record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                          String inclusion) {}
 
     /** Metadata for a single POJO field. */
-    record PropertyInfo(String name, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
+    record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion) {}
 }

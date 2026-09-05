@@ -28,7 +28,8 @@ import java.lang.reflect.Type;
  */
 final class FieldMapping {
 
-    private final String name;            // Java field/component name (also the JSON key for serialization)
+    private final String name;            // Java field/component name
+    private final String jsonName;        // JSON key for serialization (may differ from name due to @JqNaming)
     private final String directFieldName; // non-null for direct JqObject.get() extraction (no @JqField)
     private final JqProgram program;      // non-null for @JqField expressions
     private final Class<?> type;          // target Java type
@@ -44,22 +45,16 @@ final class FieldMapping {
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
-        this(name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS);
+        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS);
     }
 
-    /** Constructor for POJO fields (setter-based, no positional index). */
-    FieldMapping(String name, String directFieldName, JqProgram program,
-                 Class<?> type, Type genericType,
-                 MethodHandle getter, MethodHandle setter, boolean ignored) {
-        this(name, directFieldName, program, type, genericType, getter, setter, -1, ignored, JqInclude.Include.ALWAYS);
-    }
-
-    /** Full constructor with inclusion strategy. */
-    FieldMapping(String name, String directFieldName, JqProgram program,
+    /** Full constructor with all options. */
+    FieldMapping(String name, String jsonName, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, MethodHandle setter, int constructorIndex,
                  boolean ignored, JqInclude.Include inclusion) {
         this.name = name;
+        this.jsonName = jsonName;
         this.directFieldName = directFieldName;
         this.program = program;
         this.type = type;
@@ -138,6 +133,8 @@ final class FieldMapping {
     boolean hasSetter() { return setter != null; }
     JqInclude.Include inclusion() { return inclusion; }
     String name() { return name; }
+    /** The JSON key name for serialization (may differ from name() due to @JqNaming). */
+    String jsonName() { return jsonName; }
     Class<?> type() { return type; }
     Type genericType() { return genericType; }
     int constructorIndex() { return constructorIndex; }

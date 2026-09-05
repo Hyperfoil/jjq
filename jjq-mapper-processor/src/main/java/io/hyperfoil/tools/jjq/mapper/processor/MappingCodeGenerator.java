@@ -227,7 +227,7 @@ final class MappingCodeGenerator {
             sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
             for (var comp : components) {
                 if (comp.ignored()) continue;
-                sb.append("            .put(\"").append(comp.name()).append("\", ");
+                sb.append("            .put(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(")\n");
             }
@@ -239,7 +239,7 @@ final class MappingCodeGenerator {
                 if (comp.ignored()) continue;
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
-                    sb.append("        _b.put(\"").append(comp.name()).append("\", ");
+                    sb.append("        _b.put(\"").append(comp.jsonName()).append("\", ");
                     generateSerializationValue(sb, comp);
                     sb.append(");\n");
                 } else {
@@ -258,7 +258,7 @@ final class MappingCodeGenerator {
         switch (inclusion) {
             case "NON_NULL" -> {
                 sb.append("        if (").append(accessor).append(" != null) ");
-                sb.append("_b.put(\"").append(comp.name()).append("\", ");
+                sb.append("_b.put(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(");\n");
             }
@@ -271,7 +271,7 @@ final class MappingCodeGenerator {
                 } else {
                     sb.append("        if (").append(accessor).append(" != null) ");
                 }
-                sb.append("_b.put(\"").append(comp.name()).append("\", ");
+                sb.append("_b.put(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(");\n");
             }
@@ -285,13 +285,13 @@ final class MappingCodeGenerator {
                     default -> accessor + " != null";
                 };
                 sb.append("        if (").append(check).append(") ");
-                sb.append("_b.put(\"").append(comp.name()).append("\", ");
+                sb.append("_b.put(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(");\n");
             }
             default -> {
                 // ALWAYS — no check
-                sb.append("        _b.put(\"").append(comp.name()).append("\", ");
+                sb.append("        _b.put(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(");\n");
             }
@@ -434,7 +434,7 @@ final class MappingCodeGenerator {
                 if (prop.ignored()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
-                sb.append("            .put(\"").append(prop.name()).append("\", ");
+                sb.append("            .put(\"").append(prop.jsonName()).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(")\n");
             }
@@ -447,7 +447,7 @@ final class MappingCodeGenerator {
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {
-                    sb.append("        _b.put(\"").append(prop.name()).append("\", ");
+                    sb.append("        _b.put(\"").append(prop.jsonName()).append("\", ");
                     generateSerializationValueForPojo(sb, prop, readExpr);
                     sb.append(");\n");
                 } else {
@@ -512,7 +512,7 @@ final class MappingCodeGenerator {
         switch (inclusion) {
             case "NON_NULL" -> {
                 sb.append("        if (").append(readExpr).append(" != null) ");
-                sb.append("_b.put(\"").append(prop.name()).append("\", ");
+                sb.append("_b.put(\"").append(prop.jsonName()).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(");\n");
             }
@@ -525,7 +525,7 @@ final class MappingCodeGenerator {
                 } else {
                     sb.append("        if (").append(readExpr).append(" != null) ");
                 }
-                sb.append("_b.put(\"").append(prop.name()).append("\", ");
+                sb.append("_b.put(\"").append(prop.jsonName()).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(");\n");
             }
@@ -539,12 +539,12 @@ final class MappingCodeGenerator {
                     default -> readExpr + " != null";
                 };
                 sb.append("        if (").append(check).append(") ");
-                sb.append("_b.put(\"").append(prop.name()).append("\", ");
+                sb.append("_b.put(\"").append(prop.jsonName()).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(");\n");
             }
             default -> {
-                sb.append("        _b.put(\"").append(prop.name()).append("\", ");
+                sb.append("        _b.put(\"").append(prop.jsonName()).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(");\n");
             }

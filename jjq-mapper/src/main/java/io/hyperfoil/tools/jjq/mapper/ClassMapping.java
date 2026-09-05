@@ -75,8 +75,9 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Cannot create private lookup for " + type.getName(), e);
         }
 
-        // Resolve class-level @JqInclude (default for all fields)
+        // Resolve class-level @JqInclude and @JqNaming
         JqInclude.Include classInclusion = resolveClassInclusion(type);
+        JqNaming.Strategy namingStrategy = resolveNamingStrategy(type);
 
         for (int i = 0; i < components.length; i++) {
             RecordComponent rc = components[i];
@@ -88,17 +89,21 @@ final class ClassMapping<T> implements Mapping<T> {
             // Check for @JqIgnore
             boolean ignored = rc.isAnnotationPresent(JqIgnore.class);
 
+            // Apply naming strategy to get the JSON name
+            String jsonName = namingStrategy.transform(name);
+
             // Determine extraction strategy:
             // - @JqField: compile the jq expression and use JqProgram.apply()
-            // - Default: use JqObject.get(name) directly (faster — no JqProgram overhead)
+            // - Default: use JqObject.get(jsonName) directly (uses transformed name)
             String directFieldName;
             JqProgram program;
             JqField jqFieldAnnotation = rc.getAnnotation(JqField.class);
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
+                jsonName = name; // @JqField overrides naming strategy for serialization key
             } else {
-                directFieldName = name;
+                directFieldName = jsonName; // use transformed name for lookup
                 program = null;
             }
 
@@ -114,7 +119,7 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("Cannot access record component accessor: " + name, e);
             }
 
-            fields[i] = new FieldMapping(name, directFieldName, program, fieldType, genericType,
+            fields[i] = new FieldMapping(name, jsonName, directFieldName, program, fieldType, genericType,
                     getter, null, i, ignored, inclusion);
         }
 
@@ -137,7 +142,7 @@ final class ClassMapping<T> implements Mapping<T> {
                 canUseFastPath = false;
                 break;
             }
-            nameMap.put(fields[i].name(), i);
+            nameMap.put(fields[i].jsonName(), i);
         }
 
         return new ClassMapping<>(type, fields, ctor,
@@ -182,8 +187,9 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Cannot access no-arg constructor of " + type.getName(), e);
         }
 
-        // Resolve class-level @JqInclude (default for all fields)
+        // Resolve class-level @JqInclude and @JqNaming
         JqInclude.Include classInclusion = resolveClassInclusion(type);
+        JqNaming.Strategy namingStrategy = resolveNamingStrategy(type);
 
         // Discover fields (declared only, skip static/synthetic/transient)
         var fieldMappings = new ArrayList<FieldMapping>();
@@ -195,6 +201,9 @@ final class ClassMapping<T> implements Mapping<T> {
             Class<?> fieldType = field.getType();
             Type genericType = field.getGenericType();
 
+            // Apply naming strategy
+            String jsonName = namingStrategy.transform(name);
+
             // Check annotations
             boolean ignored = field.isAnnotationPresent(JqIgnore.class);
             String directFieldName;
@@ -203,8 +212,9 @@ final class ClassMapping<T> implements Mapping<T> {
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
+                jsonName = name; // @JqField overrides naming strategy
             } else {
-                directFieldName = name;
+                directFieldName = jsonName; // use transformed name for lookup
                 program = null;
             }
 
@@ -256,7 +266,7 @@ final class ClassMapping<T> implements Mapping<T> {
             JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
             JqInclude.Include inclusion = fieldInclude != null ? fieldInclude.value() : classInclusion;
 
-            fieldMappings.add(new FieldMapping(name, directFieldName, program,
+            fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
                     fieldType, genericType, getter, setter, -1, ignored, inclusion));
         }
 
@@ -270,7 +280,7 @@ final class ClassMapping<T> implements Mapping<T> {
                 canUseFastPath = false;
                 break;
             }
-            nameMap.put(fields[i].name(), i);
+            nameMap.put(fields[i].jsonName(), i);
         }
 
         return new ClassMapping<>(type, fields, ctor,
@@ -380,7 +390,7 @@ final class ClassMapping<T> implements Mapping<T> {
             if (field.isIgnored()) continue;
             Object value = field.readValue(instance);
             if (!field.shouldInclude(value)) continue;
-            builder.put(field.name(), TypeConverter.toJqValue(value, mapper));
+            builder.put(field.jsonName(), TypeConverter.toJqValue(value, mapper));
         }
         return builder.build();
     }
@@ -403,6 +413,12 @@ final class ClassMapping<T> implements Mapping<T> {
     private static JqInclude.Include resolveClassInclusion(Class<?> type) {
         JqInclude classInclude = type.getAnnotation(JqInclude.class);
         return classInclude != null ? classInclude.value() : JqInclude.Include.ALWAYS;
+    }
+
+    /** Resolve class-level @JqNaming, defaulting to IDENTITY. */
+    private static JqNaming.Strategy resolveNamingStrategy(Class<?> type) {
+        JqNaming naming = type.getAnnotation(JqNaming.class);
+        return naming != null ? naming.value() : JqNaming.Strategy.IDENTITY;
     }
 
     Class<T> type() { return type; }

@@ -834,4 +834,95 @@ class JqMapperTest {
         assertTrue(json.contains("\"name\""), "Non-null name should be included: " + json);
         assertFalse(json.contains("\"optional\""), "Null optional should be excluded: " + json);
     }
+
+    // ---- @JqNaming tests ----
+
+    @JqNaming(JqNaming.Strategy.SNAKE_CASE)
+    record SnakeCaseRecord(String userName, int userAge, boolean isActive) {}
+
+    @Test
+    void fromJqValue_snakeCaseRecord() {
+        JqValue json = JqValues.parse("{\"user_name\":\"Alice\",\"user_age\":30,\"is_active\":true}");
+        SnakeCaseRecord r = mapper.fromJqValue(json, SnakeCaseRecord.class);
+        assertEquals("Alice", r.userName());
+        assertEquals(30, r.userAge());
+        assertTrue(r.isActive());
+    }
+
+    @Test
+    void toJqValue_snakeCaseRecord() {
+        JqValue result = mapper.toJqValue(new SnakeCaseRecord("Bob", 25, false));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"user_name\""), "Should use snake_case key: " + json);
+        assertTrue(json.contains("\"user_age\""), "Should use snake_case key: " + json);
+        assertTrue(json.contains("\"is_active\""), "Should use snake_case key: " + json);
+        assertFalse(json.contains("\"userName\""), "Should not use camelCase: " + json);
+    }
+
+    @Test
+    void roundTrip_snakeCaseRecord() {
+        SnakeCaseRecord original = new SnakeCaseRecord("Alice", 30, true);
+        JqValue json = mapper.toJqValue(original);
+        SnakeCaseRecord restored = mapper.fromJqValue(json, SnakeCaseRecord.class);
+        assertEquals(original, restored);
+    }
+
+    @JqNaming(JqNaming.Strategy.SNAKE_CASE)
+    record SnakeCaseWithOverride(
+            String firstName,
+            @JqField(".custom_key") String customField
+    ) {}
+
+    @Test
+    void fromJqValue_snakeCaseWithFieldOverride() {
+        JqValue json = JqValues.parse("{\"first_name\":\"Alice\",\"custom_key\":\"value\"}");
+        SnakeCaseWithOverride r = mapper.fromJqValue(json, SnakeCaseWithOverride.class);
+        assertEquals("Alice", r.firstName());
+        assertEquals("value", r.customField());
+    }
+
+    @Test
+    void toSnakeCase_utility() {
+        assertEquals("metric_name", JqNaming.Strategy.toSnakeCase("metricName"));
+        assertEquals("is_active", JqNaming.Strategy.toSnakeCase("isActive"));
+        assertEquals("http_url", JqNaming.Strategy.toSnakeCase("httpURL"));
+        assertEquals("already_snake", JqNaming.Strategy.toSnakeCase("already_snake"));
+        assertEquals("a", JqNaming.Strategy.toSnakeCase("a"));
+        assertEquals("", JqNaming.Strategy.toSnakeCase(""));
+        assertEquals("abc", JqNaming.Strategy.toSnakeCase("ABC"));
+    }
+
+    // ---- @JqNaming on POJO ----
+
+    @JqNaming(JqNaming.Strategy.SNAKE_CASE)
+    static class SnakeCasePojo {
+        private String userName;
+        private int userAge;
+
+        public SnakeCasePojo() {}
+
+        public String getUserName() { return userName; }
+        public void setUserName(String userName) { this.userName = userName; }
+        public int getUserAge() { return userAge; }
+        public void setUserAge(int userAge) { this.userAge = userAge; }
+    }
+
+    @Test
+    void fromJqValue_snakeCasePojo() {
+        JqValue json = JqValues.parse("{\"user_name\":\"Alice\",\"user_age\":30}");
+        SnakeCasePojo p = mapper.fromJqValue(json, SnakeCasePojo.class);
+        assertEquals("Alice", p.getUserName());
+        assertEquals(30, p.getUserAge());
+    }
+
+    @Test
+    void toJqValue_snakeCasePojo() {
+        SnakeCasePojo p = new SnakeCasePojo();
+        p.setUserName("Bob");
+        p.setUserAge(25);
+        JqValue result = mapper.toJqValue(p);
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"user_name\""), "Should use snake_case: " + json);
+        assertTrue(json.contains("\"user_age\""), "Should use snake_case: " + json);
+    }
 }
