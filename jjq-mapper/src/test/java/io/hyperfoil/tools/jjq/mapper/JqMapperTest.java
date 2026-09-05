@@ -4,6 +4,7 @@ import io.hyperfoil.tools.jjq.value.*;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -924,5 +925,126 @@ class JqMapperTest {
         String json = result.toJsonString();
         assertTrue(json.contains("\"user_name\""), "Should use snake_case: " + json);
         assertTrue(json.contains("\"user_age\""), "Should use snake_case: " + json);
+    }
+
+    // ---- @JqConverter tests ----
+
+    /** Test converter: Instant <-> ISO-8601 string */
+    public static class InstantConverter implements ValueConverter<Instant> {
+        @Override
+        public Instant fromJqValue(JqValue value) {
+            return value.isNull() ? null : Instant.parse(value.stringValue());
+        }
+        @Override
+        public JqValue toJqValue(Instant value) {
+            return value == null ? JqNull.NULL : JqString.of(value.toString());
+        }
+    }
+
+    /** Test converter: int[] <-> JSON array of numbers */
+    public static class IntArrayConverter implements ValueConverter<int[]> {
+        @Override
+        public int[] fromJqValue(JqValue value) {
+            if (value.isNull() || !(value instanceof JqArray arr)) return new int[0];
+            int[] result = new int[arr.size()];
+            for (int i = 0; i < arr.size(); i++) {
+                result[i] = (int) arr.get(i).longValue();
+            }
+            return result;
+        }
+        @Override
+        public JqValue toJqValue(int[] value) {
+            if (value == null) return JqNull.NULL;
+            JqValue[] elements = new JqValue[value.length];
+            for (int i = 0; i < value.length; i++) {
+                elements[i] = JqNumber.of(value[i]);
+            }
+            return JqArray.of(elements);
+        }
+    }
+
+    record EventRecord(
+            String name,
+            @JqConverter(InstantConverter.class) Instant timestamp
+    ) {}
+
+    @Test
+    void fromJqValue_withConverter() {
+        JqValue json = JqValues.parse("{\"name\":\"deploy\",\"timestamp\":\"2026-09-05T12:00:00Z\"}");
+        EventRecord r = mapper.fromJqValue(json, EventRecord.class);
+        assertEquals("deploy", r.name());
+        assertEquals(Instant.parse("2026-09-05T12:00:00Z"), r.timestamp());
+    }
+
+    @Test
+    void toJqValue_withConverter() {
+        Instant ts = Instant.parse("2026-09-05T12:00:00Z");
+        JqValue result = mapper.toJqValue(new EventRecord("deploy", ts));
+        assertEquals("deploy", result.getField("name").stringValue());
+        assertEquals("2026-09-05T12:00:00Z", result.getField("timestamp").stringValue());
+    }
+
+    @Test
+    void roundTrip_withConverter() {
+        EventRecord original = new EventRecord("deploy", Instant.parse("2026-09-05T12:00:00Z"));
+        JqValue json = mapper.toJqValue(original);
+        EventRecord restored = mapper.fromJqValue(json, EventRecord.class);
+        assertEquals(original, restored);
+    }
+
+    @Test
+    void fromJqValue_converterWithNullValue() {
+        JqValue json = JqValues.parse("{\"name\":\"deploy\",\"timestamp\":null}");
+        EventRecord r = mapper.fromJqValue(json, EventRecord.class);
+        assertEquals("deploy", r.name());
+        assertNull(r.timestamp());
+    }
+
+    record DataRecord(
+            String label,
+            @JqConverter(IntArrayConverter.class) int[] values
+    ) {}
+
+    @Test
+    void roundTrip_intArrayConverter() {
+        DataRecord original = new DataRecord("temps", new int[]{72, 75, 68, 80});
+        JqValue json = mapper.toJqValue(original);
+        assertEquals("[72,75,68,80]", json.getField("values").toJsonString());
+
+        DataRecord restored = mapper.fromJqValue(json, DataRecord.class);
+        assertEquals("temps", restored.label());
+        assertArrayEquals(new int[]{72, 75, 68, 80}, restored.values());
+    }
+
+    // ---- @JqConverter on POJO ----
+
+    static class EventPojo {
+        private String name;
+        @JqConverter(InstantConverter.class)
+        private Instant timestamp;
+
+        public EventPojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public Instant getTimestamp() { return timestamp; }
+        public void setTimestamp(Instant timestamp) { this.timestamp = timestamp; }
+    }
+
+    @Test
+    void fromJqValue_pojoWithConverter() {
+        JqValue json = JqValues.parse("{\"name\":\"deploy\",\"timestamp\":\"2026-09-05T12:00:00Z\"}");
+        EventPojo p = mapper.fromJqValue(json, EventPojo.class);
+        assertEquals("deploy", p.getName());
+        assertEquals(Instant.parse("2026-09-05T12:00:00Z"), p.getTimestamp());
+    }
+
+    @Test
+    void toJqValue_pojoWithConverter() {
+        EventPojo p = new EventPojo();
+        p.setName("deploy");
+        p.setTimestamp(Instant.parse("2026-09-05T12:00:00Z"));
+        JqValue result = mapper.toJqValue(p);
+        assertEquals("2026-09-05T12:00:00Z", result.getField("timestamp").stringValue());
     }
 }

@@ -119,8 +119,11 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("Cannot access record component accessor: " + name, e);
             }
 
+            // Resolve @JqConverter
+            ValueConverter<?> converter = resolveConverter(rc.getAnnotation(JqConverter.class));
+
             fields[i] = new FieldMapping(name, jsonName, directFieldName, program, fieldType, genericType,
-                    getter, null, i, ignored, inclusion);
+                    getter, null, i, ignored, inclusion, converter);
         }
 
         // Find and cache the canonical constructor
@@ -266,8 +269,11 @@ final class ClassMapping<T> implements Mapping<T> {
             JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
             JqInclude.Include inclusion = fieldInclude != null ? fieldInclude.value() : classInclusion;
 
+            // Resolve @JqConverter
+            ValueConverter<?> converter = resolveConverter(field.getAnnotation(JqConverter.class));
+
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
-                    fieldType, genericType, getter, setter, -1, ignored, inclusion));
+                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter));
         }
 
         FieldMapping[] fields = fieldMappings.toArray(new FieldMapping[0]);
@@ -390,7 +396,7 @@ final class ClassMapping<T> implements Mapping<T> {
             if (field.isIgnored()) continue;
             Object value = field.readValue(instance);
             if (!field.shouldInclude(value)) continue;
-            builder.put(field.jsonName(), TypeConverter.toJqValue(value, mapper));
+            builder.put(field.jsonName(), field.toJqValue(value, mapper));
         }
         return builder.build();
     }
@@ -419,6 +425,16 @@ final class ClassMapping<T> implements Mapping<T> {
     private static JqNaming.Strategy resolveNamingStrategy(Class<?> type) {
         JqNaming naming = type.getAnnotation(JqNaming.class);
         return naming != null ? naming.value() : JqNaming.Strategy.IDENTITY;
+    }
+
+    /** Instantiate a ValueConverter from a @JqConverter annotation. Returns null if no annotation. */
+    private static ValueConverter<?> resolveConverter(JqConverter annotation) {
+        if (annotation == null) return null;
+        try {
+            return annotation.value().getDeclaredConstructor().newInstance();
+        } catch (Exception e) {
+            throw new JqMapperException("Failed to instantiate converter: " + annotation.value().getName(), e);
+        }
     }
 
     Class<T> type() { return type; }

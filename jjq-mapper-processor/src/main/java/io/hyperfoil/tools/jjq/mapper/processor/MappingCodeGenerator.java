@@ -76,6 +76,14 @@ final class MappingCodeGenerator {
                   .append("\");\n");
             }
         }
+        // Static converter fields for @JqConverter annotations
+        for (var comp : components) {
+            if (!comp.ignored() && comp.converterClass() != null) {
+                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> CONV_")
+                  .append(comp.name().toUpperCase())
+                  .append(" = new ").append(comp.converterClass()).append("();\n");
+            }
+        }
         sb.append("\n");
 
         // fromJqValue method
@@ -144,6 +152,13 @@ final class MappingCodeGenerator {
     private static void generateExtraction(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
         String program = "P_" + comp.name().toUpperCase();
         String apply = program + ".apply(input)";
+
+        // Custom converter takes priority
+        if (comp.converterClass() != null) {
+            sb.append("(").append(comp.typeName()).append(") CONV_")
+              .append(comp.name().toUpperCase()).append(".fromJqValue(").append(apply).append(")");
+            return;
+        }
 
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append(apply).append(".asString(null)");
@@ -298,8 +313,16 @@ final class MappingCodeGenerator {
         }
     }
 
+    @SuppressWarnings("rawtypes")
     private static void generateSerializationValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
         String accessor = "instance." + comp.name() + "()";
+
+        // Custom converter takes priority
+        if (comp.converterClass() != null) {
+            sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append(")");
+            return;
+        }
 
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append(accessor);

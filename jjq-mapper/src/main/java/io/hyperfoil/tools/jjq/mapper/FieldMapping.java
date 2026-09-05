@@ -40,19 +40,20 @@ final class FieldMapping {
     private final boolean ignored;        // true if @JqIgnore is present
     private final JqInclude.Include inclusion; // serialization inclusion strategy
     private final TypeConverter.Kind conversionKind; // pre-resolved conversion strategy
+    private final ValueConverter<?> customConverter; // custom converter (from @JqConverter), null if none
 
     /** Constructor for record components (positional constructor, no setter). */
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
-        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS);
+        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null);
     }
 
     /** Full constructor with all options. */
     FieldMapping(String name, String jsonName, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, MethodHandle setter, int constructorIndex,
-                 boolean ignored, JqInclude.Include inclusion) {
+                 boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter) {
         this.name = name;
         this.jsonName = jsonName;
         this.directFieldName = directFieldName;
@@ -64,6 +65,7 @@ final class FieldMapping {
         this.constructorIndex = constructorIndex;
         this.ignored = ignored;
         this.inclusion = inclusion;
+        this.customConverter = customConverter;
         this.conversionKind = ignored ? TypeConverter.Kind.DEFAULT
                                      : TypeConverter.resolveKind(type, genericType);
     }
@@ -80,7 +82,11 @@ final class FieldMapping {
     }
 
     /** Convert the extracted JqValue to the target Java type. */
+    @SuppressWarnings("unchecked")
     Object convert(JqValue extracted, JqMapper mapper) {
+        if (customConverter != null) {
+            return customConverter.fromJqValue(extracted);
+        }
         return TypeConverter.convert(extracted, conversionKind, type, genericType, mapper);
     }
 
@@ -130,6 +136,16 @@ final class FieldMapping {
         };
     }
 
+    /** Convert a Java value to JqValue for serialization, using custom converter if present. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    JqValue toJqValue(Object value, JqMapper mapper) {
+        if (customConverter != null) {
+            return ((ValueConverter) customConverter).toJqValue(value);
+        }
+        return TypeConverter.toJqValue(value, mapper);
+    }
+
+    boolean hasCustomConverter() { return customConverter != null; }
     boolean hasSetter() { return setter != null; }
     JqInclude.Include inclusion() { return inclusion; }
     String name() { return name; }

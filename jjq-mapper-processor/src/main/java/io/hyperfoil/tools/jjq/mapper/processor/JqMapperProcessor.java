@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.mapper.processor;
 
 import io.hyperfoil.tools.jjq.JqProgram;
+import io.hyperfoil.tools.jjq.mapper.JqConverter;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
@@ -112,7 +113,10 @@ public class JqMapperProcessor extends AbstractProcessor {
                 String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
 
                 String serName = (jqField != null) ? name : jsonName; // @JqField overrides naming
-                components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion));
+                JqConverter jqConverter = rc.getAnnotation(JqConverter.class);
+                String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
+
+                components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass));
             }
         }
 
@@ -225,8 +229,11 @@ public class JqMapperProcessor extends AbstractProcessor {
             String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
 
             String serName = (jqField != null) ? name : jsonName;
+            JqConverter jqConverter = field.getAnnotation(JqConverter.class);
+            String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
+
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
-                    getterName, setterName, isPublic, inclusion));
+                    getterName, setterName, isPublic, inclusion, converterClass));
         }
 
         // Generate the mapping class
@@ -293,9 +300,10 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
-                         String inclusion) {}
+                         String inclusion, String converterClass) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
-                        String getterName, String setterName, boolean isPublicField, String inclusion) {}
+                        String getterName, String setterName, boolean isPublicField, String inclusion,
+                        String converterClass) {}
 }
