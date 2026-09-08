@@ -18,6 +18,11 @@
             <artifactId>jjq-core</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-mapper</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
             <version>${snakeyaml.version}</version>

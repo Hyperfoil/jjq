@@ -129,6 +129,76 @@ public final class JqYaml {
     }
 
     // ========================================================================
+    //  YAML → Java object mapping (requires jjq-mapper on the classpath)
+    // ========================================================================
+
+    /**
+     * Parse YAML and map to a Java record or POJO.
+     * Combines {@link #parse(String)} with {@link io.hyperfoil.tools.jjq.mapper.JqMapper#fromJqValue}.
+     *
+     * <p>Requires {@code jjq-mapper} on the classpath. The mapper uses
+     * {@code @JqField}, {@code @JqIgnore}, and annotation bridges
+     * ({@code @JsonProperty}, {@code @JsonbProperty}) for field mapping.</p>
+     *
+     * <pre>{@code
+     * SpawnConfig config = JqYaml.fromYaml(yamlString, mapper, SpawnConfig.class);
+     * }</pre>
+     *
+     * @param yaml   the YAML string to parse
+     * @param mapper the JqMapper to use for deserialization
+     * @param type   the target class
+     * @param <T>    the target type
+     * @return a new instance populated from the YAML
+     */
+    public static <T> T fromYaml(String yaml, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, Class<T> type) {
+        return mapper.fromJqValue(parse(yaml), type);
+    }
+
+    /**
+     * Parse YAML from an InputStream and map to a Java record or POJO.
+     *
+     * @param in     the InputStream to read YAML from
+     * @param mapper the JqMapper to use for deserialization
+     * @param type   the target class
+     * @param <T>    the target type
+     * @return a new instance populated from the YAML
+     */
+    public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, Class<T> type) {
+        return mapper.fromJqValue(parse(in), type);
+    }
+
+    /**
+     * Parse YAML and map using a generic type (e.g., {@code List<Item>}).
+     *
+     * <pre>{@code
+     * Type listOfItems = new TypeToken<List<Item>>(){}.getType();
+     * List<Item> items = JqYaml.fromYaml(yamlString, mapper, listOfItems);
+     * }</pre>
+     *
+     * @param yaml   the YAML string to parse
+     * @param mapper the JqMapper to use for deserialization
+     * @param type   the target generic type
+     * @param <T>    the target type
+     * @return the deserialized value
+     */
+    public static <T> T fromYaml(String yaml, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type) {
+        return mapper.fromJqValue(parse(yaml), type);
+    }
+
+    /**
+     * Parse YAML from an InputStream and map using a generic type.
+     *
+     * @param in     the InputStream to read YAML from
+     * @param mapper the JqMapper to use for deserialization
+     * @param type   the target generic type
+     * @param <T>    the target type
+     * @return the deserialized value
+     */
+    public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type) {
+        return mapper.fromJqValue(parse(in), type);
+    }
+
+    // ========================================================================
     //  SnakeYAML Node → JqValue conversion
     // ========================================================================
 

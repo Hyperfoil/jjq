@@ -235,6 +235,9 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * <pre>{@code
      * // Safe chaining — never throws, even if "user" is not an object
      * String name = data.getField("user").getField("name").asString("unknown");
+     *
+     * // Jackson-compatible alias: path() behaves identically to getField()
+     * String name = data.path("user").path("name").asString("unknown");
      * }</pre>
      *
      * <p><b>When to use this vs {@link JqObject#get(String)}:</b></p>
@@ -252,6 +255,61 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     default JqValue getField(String key) {
         if (this instanceof JqObject obj) return obj.get(key);
         return JqNull.NULL;
+    }
+
+    /**
+     * Null-safe field navigation — alias for {@link #getField(String)}.
+     *
+     * <p>Provided for Jackson migration compatibility. Behaves identically to
+     * {@code getField()}: returns the field value if this is an object and the key
+     * exists, {@link JqNull#NULL} otherwise. Enables fluent chaining:</p>
+     * <pre>{@code
+     * // Jackson:  node.path("metadata").path("name").asText("")
+     * // jjq:      value.path("metadata").path("name").asString("")
+     * }</pre>
+     *
+     * <p>Note: jjq collapses Jackson's {@code MissingNode} and {@code NullNode}
+     * into {@link JqNull#NULL}. Use {@link #tryGet(String)} when you need to
+     * distinguish "key absent" from "key present with null value".</p>
+     *
+     * @param key the field name to look up
+     * @return the field value, or {@link JqNull#NULL} if missing or not an object
+     * @see #getField(String)
+     */
+    default JqValue path(String key) {
+        return getField(key);
+    }
+
+    /**
+     * Check whether this value represents a missing/absent node.
+     *
+     * <p>Provided for Jackson migration compatibility. In Jackson, {@code isMissingNode()}
+     * returns true for the sentinel {@code MissingNode} returned by {@code path()} when
+     * a key doesn't exist. In jjq, absent keys return {@link JqNull#NULL}, so this
+     * method returns {@code true} for null values.</p>
+     *
+     * <p>Use {@link #tryGet(String)} when you need to distinguish between a truly
+     * absent key and a key present with JSON null.</p>
+     *
+     * @return {@code true} if this value is null (absent or explicitly null)
+     */
+    default boolean isMissingNode() {
+        return isNull();
+    }
+
+    /**
+     * Return the string value, or the default if this is not a string or is null.
+     *
+     * <p>Provided for Jackson migration compatibility. Equivalent to Jackson's
+     * {@code JsonNode.asText(defaultValue)}. Differs from {@link #asText()} which
+     * returns {@code toJsonString()} for non-string types; this method returns
+     * the default instead.</p>
+     *
+     * @param defaultValue the value to return if this is not a string
+     * @return the string value, or {@code defaultValue}
+     */
+    default String asText(String defaultValue) {
+        return isString() ? stringValue() : defaultValue;
     }
 
     /**

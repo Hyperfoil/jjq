@@ -241,4 +241,61 @@ class JqYamlTest {
         assertEquals("my-service", names.get(0).stringValue());
         assertEquals("my-deployment", names.get(1).stringValue());
     }
+
+    // ---- Jackson compat: path(), isMissingNode(), asText(String) ----
+
+    @Test
+    void pathNavigation() {
+        JqValue config = JqYaml.parse("""
+                server:
+                  host: localhost
+                  port: 8080
+                """);
+        // path() is an alias for getField()
+        assertEquals("localhost", config.path("server").path("host").asString(""));
+        assertEquals(8080L, config.path("server").path("port").asLong(0));
+        // Missing paths return JqNull
+        assertTrue(config.path("nonexistent").isNull());
+        assertTrue(config.path("server").path("nonexistent").isMissingNode());
+    }
+
+    @Test
+    void asTextWithDefault() {
+        JqValue config = JqYaml.parse("name: Alice\nage: 30");
+        assertEquals("Alice", config.path("name").asText("unknown"));
+        assertEquals("unknown", config.path("missing").asText("unknown"));
+        // Non-string types return the default (unlike asText() no-arg which returns toJsonString)
+        assertEquals("default", config.path("age").asText("default"));
+    }
+
+    // ---- fromYaml with JqMapper ----
+
+    record ServerConfig(String host, int port) {}
+
+    @Test
+    void fromYamlToRecord() {
+        var mapper = io.hyperfoil.tools.jjq.mapper.JqMapper.create();
+        ServerConfig config = JqYaml.fromYaml("""
+                host: localhost
+                port: 8080
+                """, mapper, ServerConfig.class);
+        assertEquals("localhost", config.host());
+        assertEquals(8080, config.port());
+    }
+
+    record DatabaseConfig(String primary, java.util.List<String> replicas) {}
+
+    @Test
+    void fromYamlWithList() {
+        var mapper = io.hyperfoil.tools.jjq.mapper.JqMapper.create();
+        DatabaseConfig config = JqYaml.fromYaml("""
+                primary: db.example.com
+                replicas:
+                  - replica1.example.com
+                  - replica2.example.com
+                """, mapper, DatabaseConfig.class);
+        assertEquals("db.example.com", config.primary());
+        assertEquals(2, config.replicas().size());
+        assertEquals("replica1.example.com", config.replicas().get(0));
+    }
 }

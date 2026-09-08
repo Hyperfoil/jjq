@@ -4,6 +4,8 @@ import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceLoader;
@@ -211,6 +213,56 @@ public final class JqMapper {
      * @return a new instance of the record class
      */
     public <T> T fromJson(byte[] json, Class<T> type) {
+        return fromJqValue(JqValues.parse(json), type);
+    }
+
+    /**
+     * Deserialize a JqValue using a generic type (e.g., {@code List<MyRecord>}).
+     *
+     * <p>Use this when the target type has generic parameters that a plain
+     * {@code Class<T>} cannot express. For simple (non-generic) types, prefer
+     * {@link #fromJqValue(JqValue, Class)}.</p>
+     *
+     * <pre>{@code
+     * // Jackson equivalent: mapper.readValue(json, new TypeReference<List<Item>>(){})
+     * Type listOfItems = new TypeToken<List<Item>>(){}.getType();
+     * List<Item> items = mapper.fromJqValue(value, listOfItems);
+     * }</pre>
+     *
+     * @param value the JqValue to deserialize
+     * @param type  the target generic type
+     * @param <T>   the target type
+     * @return the deserialized value
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T fromJqValue(JqValue value, Type type) {
+        Class<?> rawClass = TypeConverter.rawClass(type);
+        return (T) TypeConverter.toJava(value, rawClass, type, this);
+    }
+
+    /**
+     * Deserialize a JSON string using a generic type.
+     *
+     * @param json the JSON string to parse and deserialize
+     * @param type the target generic type
+     * @param <T>  the target type
+     * @return the deserialized value
+     * @see #fromJqValue(JqValue, Type)
+     */
+    public <T> T fromJson(String json, Type type) {
+        return fromJqValue(JqValues.parse(json), type);
+    }
+
+    /**
+     * Deserialize a JSON byte array using a generic type.
+     *
+     * @param json the JSON bytes to parse and deserialize
+     * @param type the target generic type
+     * @param <T>  the target type
+     * @return the deserialized value
+     * @see #fromJqValue(JqValue, Type)
+     */
+    public <T> T fromJson(byte[] json, Type type) {
         return fromJqValue(JqValues.parse(json), type);
     }
 
