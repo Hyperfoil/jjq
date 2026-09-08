@@ -1156,4 +1156,237 @@ class JqMapperTest {
         assertEquals(25, p.getAge());
         assertNull(p.getSecret()); // bridge ignores "secret"
     }
+
+    // ========================================================================
+    //  Polymorphic @JqConverter spike — mirrors incus-spawn's StdDeserializer patterns
+    // ========================================================================
+
+    // ---- Pattern 1: ToolRef — string-or-single-key-map (incus-spawn ToolDef.ToolRef) ----
+
+    record ToolRefSpike(String name, Map<String, String> params) {
+        ToolRefSpike(String name) { this(name, Map.of()); }
+    }
+
+    /** Converter: array element is either "name" (string) or {"name": {param: val}} (single-key map). */
+    public static class ToolRefListConverter implements ValueConverter<List<ToolRefSpike>> {
+        @Override
+        public List<ToolRefSpike> fromJqValue(JqValue value) {
+            if (value.isNull() || !(value instanceof JqArray arr)) return List.of();
+            var result = new java.util.ArrayList<ToolRefSpike>();
+            for (JqValue elem : arr) {
+                if (elem.isString()) {
+                    result.add(new ToolRefSpike(elem.stringValue()));
+                } else if (elem.isObject()) {
+                    var obj = (JqObject) elem;
+                    for (var entry : obj.entries()) {
+                        var params = new java.util.LinkedHashMap<String, String>();
+                        if (entry.getValue().isObject()) {
+                            entry.getValue().objectValue().forEach((k, v) -> params.put(k, v.asString("")));
+                        }
+                        result.add(new ToolRefSpike(entry.getKey(), params));
+                    }
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public JqValue toJqValue(List<ToolRefSpike> refs) {
+            if (refs == null) return JqNull.NULL;
+            var arr = JqArray.arrayBuilder(refs.size());
+            for (var ref : refs) {
+                if (ref.params().isEmpty()) {
+                    arr.add(ref.name());
+                } else {
+                    var paramsBuilder = JqObject.builder(ref.params().size());
+                    ref.params().forEach(paramsBuilder::put);
+                    arr.add(JqObject.of(ref.name(), paramsBuilder.build()));
+                }
+            }
+            return arr.build();
+        }
+    }
+
+    record ToolConfig(String name, @JqConverter(ToolRefListConverter.class) List<ToolRefSpike> requires) {}
+
+    @Test
+    void converter_toolRefStringOrMap() {
+        JqValue json = JqValues.parse("""
+                {"name":"myTool","requires":["maven-3",{"idea-backend":{"memory":"8g"}}]}
+                """);
+        ToolConfig config = mapper.fromJqValue(json, ToolConfig.class);
+        assertEquals("myTool", config.name());
+        assertEquals(2, config.requires().size());
+        assertEquals("maven-3", config.requires().get(0).name());
+        assertEquals(Map.of(), config.requires().get(0).params());
+        assertEquals("idea-backend", config.requires().get(1).name());
+        assertEquals("8g", config.requires().get(1).params().get("memory"));
+    }
+
+    @Test
+    void converter_toolRefRoundTrip() {
+        var original = new ToolConfig("test", List.of(
+                new ToolRefSpike("maven-3"),
+                new ToolRefSpike("idea", Map.of("memory", "8g", "plugins", "true"))));
+        JqValue json = mapper.toJqValue(original);
+        ToolConfig restored = mapper.fromJqValue(json, ToolConfig.class);
+        assertEquals(original.name(), restored.name());
+        assertEquals(original.requires().size(), restored.requires().size());
+        assertEquals("maven-3", restored.requires().get(0).name());
+        assertEquals("8g", restored.requires().get(1).params().get("memory"));
+    }
+
+    // ---- Pattern 2: EnvEntry — string-or-object (incus-spawn EnvEntry) ----
+
+    record EnvEntrySpike(String name, String value, String strategy) {
+        static EnvEntrySpike raw(String line) { return new EnvEntrySpike(null, line, "raw"); }
+        static EnvEntrySpike set(String name, String value) { return new EnvEntrySpike(name, value, "set"); }
+    }
+
+    public static class EnvEntryListConverter implements ValueConverter<List<EnvEntrySpike>> {
+        @Override
+        public List<EnvEntrySpike> fromJqValue(JqValue value) {
+            if (value.isNull() || !(value instanceof JqArray arr)) return List.of();
+            var result = new java.util.ArrayList<EnvEntrySpike>();
+            for (JqValue elem : arr) {
+                if (elem.isString()) {
+                    result.add(EnvEntrySpike.raw(elem.stringValue()));
+                } else if (elem.isObject()) {
+                    result.add(new EnvEntrySpike(
+                            elem.getField("name").asString(null),
+                            elem.getField("value").asString(null),
+                            elem.getField("strategy").asString("set")));
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public JqValue toJqValue(List<EnvEntrySpike> entries) {
+            if (entries == null) return JqNull.NULL;
+            var arr = JqArray.arrayBuilder(entries.size());
+            for (var e : entries) {
+                if ("raw".equals(e.strategy())) {
+                    arr.add(e.value());
+                } else {
+                    arr.add(JqObject.builder(3)
+                            .put("name", e.name())
+                            .put("value", e.value())
+                            .put("strategy", e.strategy())
+                            .build());
+                }
+            }
+            return arr.build();
+        }
+    }
+
+    record ImageConfig(String name, @JqConverter(EnvEntryListConverter.class) List<EnvEntrySpike> env) {}
+
+    @Test
+    void converter_envEntryStringOrObject() {
+        JqValue json = JqValues.parse("""
+                {"name":"myImage","env":["export FOO=bar",{"name":"PATH","value":"/usr/bin","strategy":"prepend"}]}
+                """);
+        ImageConfig config = mapper.fromJqValue(json, ImageConfig.class);
+        assertEquals("myImage", config.name());
+        assertEquals(2, config.env().size());
+        assertEquals("raw", config.env().get(0).strategy());
+        assertEquals("export FOO=bar", config.env().get(0).value());
+        assertEquals("PATH", config.env().get(1).name());
+        assertEquals("prepend", config.env().get(1).strategy());
+    }
+
+    // ---- Pattern 3: SkillsDef — list-or-object (incus-spawn ImageDef.SkillsDef) ----
+
+    record SkillsDefSpike(String repo, List<String> list) {
+        SkillsDefSpike(List<String> list) { this(null, list); }
+    }
+
+    public static class SkillsDefConverter implements ValueConverter<SkillsDefSpike> {
+        @Override
+        public SkillsDefSpike fromJqValue(JqValue value) {
+            if (value.isNull()) return new SkillsDefSpike(null, List.of());
+            if (value instanceof JqArray arr) {
+                // List shorthand: skills: [...]
+                return new SkillsDefSpike(arr.arrayValue().stream()
+                        .map(v -> v.asString("")).toList());
+            }
+            // Object form: skills: {repo: ..., list: [...]}
+            return new SkillsDefSpike(
+                    value.getField("repo").asString(null),
+                    value.getField("list").isNull() ? List.of()
+                            : ((JqArray) value.getField("list")).arrayValue().stream()
+                            .map(v -> v.asString("")).toList());
+        }
+
+        @Override
+        public JqValue toJqValue(SkillsDefSpike skills) {
+            if (skills == null) return JqNull.NULL;
+            if (skills.repo() == null) {
+                return JqArray.of(skills.list().stream().map(JqString::of).toArray(JqValue[]::new));
+            }
+            return JqObject.builder(2)
+                    .put("repo", skills.repo())
+                    .putArray("list", arr -> skills.list().forEach(arr::add))
+                    .build();
+        }
+    }
+
+    record SkillsConfig(String name, @JqConverter(SkillsDefConverter.class) SkillsDefSpike skills) {}
+
+    @Test
+    void converter_skillsDefListShorthand() {
+        JqValue json = JqValues.parse("""
+                {"name":"myImage","skills":["security-review","code-review"]}
+                """);
+        SkillsConfig config = mapper.fromJqValue(json, SkillsConfig.class);
+        assertNull(config.skills().repo());
+        assertEquals(List.of("security-review", "code-review"), config.skills().list());
+    }
+
+    @Test
+    void converter_skillsDefObjectForm() {
+        JqValue json = JqValues.parse("""
+                {"name":"myImage","skills":{"repo":"https://github.com/skills","list":["review","test"]}}
+                """);
+        SkillsConfig config = mapper.fromJqValue(json, SkillsConfig.class);
+        assertEquals("https://github.com/skills", config.skills().repo());
+        assertEquals(List.of("review", "test"), config.skills().list());
+    }
+
+    @Test
+    void converter_skillsDefRoundTrip() {
+        // List shorthand round-trip
+        var list = new SkillsConfig("img", new SkillsDefSpike(List.of("a", "b")));
+        JqValue json = mapper.toJqValue(list);
+        assertTrue(json.getField("skills") instanceof JqArray);
+        SkillsConfig restored = mapper.fromJqValue(json, SkillsConfig.class);
+        assertEquals(list.skills().list(), restored.skills().list());
+
+        // Object form round-trip
+        var obj = new SkillsConfig("img", new SkillsDefSpike("https://repo", List.of("x")));
+        JqValue json2 = mapper.toJqValue(obj);
+        assertTrue(json2.getField("skills") instanceof JqObject);
+        SkillsConfig restored2 = mapper.fromJqValue(json2, SkillsConfig.class);
+        assertEquals("https://repo", restored2.skills().repo());
+    }
+
+    // ---- Verify @JqConverter composes with @JqField ----
+
+    record DeepConverterRecord(
+            String name,
+            @JqField(".data.entries") @JqConverter(EnvEntryListConverter.class) List<EnvEntrySpike> env
+    ) {}
+
+    @Test
+    void converter_composesWithJqField() {
+        JqValue json = JqValues.parse("""
+                {"name":"test","data":{"entries":["export X=1",{"name":"Y","value":"2","strategy":"set"}]}}
+                """);
+        DeepConverterRecord r = mapper.fromJqValue(json, DeepConverterRecord.class);
+        assertEquals("test", r.name());
+        assertEquals(2, r.env().size());
+        assertEquals("export X=1", r.env().get(0).value());
+        assertEquals("Y", r.env().get(1).name());
+    }
 }
