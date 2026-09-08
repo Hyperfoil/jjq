@@ -58,6 +58,20 @@ List<JqValue> names = JqProgram.compile(".[].metadata.name").applyAll((JqValue) 
 - **Flow and block styles** — both supported (`{a: 1}` and `a: 1`)
 - **Round-trip to JSON** — parse YAML, then `toJsonString()` for JSON output
 
+## Emitting YAML
+
+```java
+JqValue config = JqYaml.parse("name: Alice\nage: 30\n");
+
+String yaml = JqYaml.toYaml(config);
+
+try (var out = Files.newOutputStream(path)) {
+    JqYaml.toYaml(config, out);
+}
+```
+
+Emission converts the tree to plain Java values and dumps block-style YAML via SnakeYAML.
+
 ## Example: Querying Application Config
 
 ```yaml

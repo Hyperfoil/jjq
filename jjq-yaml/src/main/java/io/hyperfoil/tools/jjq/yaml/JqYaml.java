@@ -1,13 +1,19 @@
 package io.hyperfoil.tools.jjq.yaml;
 
 import io.hyperfoil.tools.jjq.value.*;
+import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.nodes.*;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.StringReader;
+import java.io.Writer;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -126,6 +132,26 @@ public final class JqYaml {
      */
     public static JqArray parseAllAsArray(InputStream in) {
         return JqArray.ofTrusted(parseAll(in));
+    }
+
+    public static String toYaml(JqValue value) {
+        return new Yaml(blockOptions()).dump(value.toJavaObject());
+    }
+
+    public static void toYaml(JqValue value, OutputStream out) throws IOException {
+        OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
+        toYaml(value, writer);
+        writer.flush();
+    }
+
+    public static void toYaml(JqValue value, Writer writer) {
+        new Yaml(blockOptions()).dump(value.toJavaObject(), writer);
+    }
+
+    private static DumperOptions blockOptions() {
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        return options;
     }
 
     // ========================================================================

@@ -283,6 +283,48 @@ class JqYamlTest {
         assertEquals(8080, config.port());
     }
 
+    @Test
+    void toYamlRoundTrip() {
+        JqValue original = JqYaml.parse("name: Alice\nage: 30\nactive: true\n");
+        String yaml = JqYaml.toYaml(original);
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertEquals("Alice", reparsed.getField("name").stringValue());
+        assertEquals(30L, reparsed.getField("age").longValue());
+        assertTrue(reparsed.getField("active").booleanValue());
+    }
+
+    @Test
+    void toYamlBlockStyle() {
+        JqValue value = JqValues.parse("{\"server\":{\"host\":\"localhost\",\"ports\":[8080,8081]}}");
+        String yaml = JqYaml.toYaml(value);
+        assertFalse(yaml.contains("{"));
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertEquals("localhost", reparsed.getField("server").getField("host").stringValue());
+        assertEquals(8081L, reparsed.getField("server").getField("ports").getElement(1).longValue());
+    }
+
+    @Test
+    void toYamlSpecialValues() {
+        JqValue value = JqValues.parse("{\"a\":null,\"b\":true,\"c\":1.5,\"d\":\"hello\"}");
+        String yaml = JqYaml.toYaml(value);
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertTrue(reparsed.getField("a").isNull());
+        assertTrue(reparsed.getField("b").booleanValue());
+        assertEquals(1.5, reparsed.getField("c").doubleValue(), 0.001);
+        assertEquals("hello", reparsed.getField("d").stringValue());
+    }
+
+    @Test
+    void toYamlStreams() throws Exception {
+        JqValue value = JqYaml.parse("name: Alice\n");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        JqYaml.toYaml(value, out);
+        assertEquals("Alice", JqYaml.parse(out.toString(java.nio.charset.StandardCharsets.UTF_8)).getField("name").stringValue());
+        java.io.StringWriter writer = new java.io.StringWriter();
+        JqYaml.toYaml(value, writer);
+        assertEquals("Alice", JqYaml.parse(writer.toString()).getField("name").stringValue());
+    }
+
     record DatabaseConfig(String primary, java.util.List<String> replicas) {}
 
     @Test
