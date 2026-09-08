@@ -409,6 +409,40 @@ public final class JqObject implements JqValue {
             return this;
         }
 
+        /**
+         * Build a nested object and add it as a field.
+         * The consumer populates the child builder; the result is frozen and added.
+         *
+         * <pre>{@code
+         * // Jackson:  var child = root.putObject("attribution"); child.put("commit", "...");
+         * // jjq:
+         * builder.putObject("attribution", child -> {
+         *     child.put("commit", "...");
+         * });
+         * }</pre>
+         */
+        public Builder putObject(String key, java.util.function.Consumer<Builder> populate) {
+            Builder child = new Builder(4);
+            populate.accept(child);
+            return put(key, child.build());
+        }
+
+        /**
+         * Build a nested array and add it as a field.
+         * The consumer populates the child array builder; the result is frozen and added.
+         *
+         * <pre>{@code
+         * // Jackson:  var profiles = putBody.putArray("profiles"); items.forEach(p -> profiles.add(p));
+         * // jjq:
+         * builder.putArray("profiles", arr -> items.forEach(p -> arr.add(p)));
+         * }</pre>
+         */
+        public Builder putArray(String key, java.util.function.Consumer<JqArray.ArrayBuilder> populate) {
+            JqArray.ArrayBuilder child = JqArray.arrayBuilder();
+            populate.accept(child);
+            return put(key, child.build());
+        }
+
         /** Add all entries from a Map. Duplicate keys are replaced (last wins). */
         public Builder putAll(java.util.Map<String, JqValue> map) {
             for (var entry : map.entrySet()) {

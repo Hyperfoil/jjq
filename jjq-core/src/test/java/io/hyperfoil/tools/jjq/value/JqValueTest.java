@@ -242,6 +242,82 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  JqObject.Builder putObject/putArray tests
+    // ========================================================================
+
+    @Test
+    void testBuilderPutObject() {
+        // ClaudeSetup pattern: conditional nested object
+        var commitTrailer = "claude";
+        String prAttribution = null;
+
+        var obj = JqObject.builder()
+                .put("disableDeepLinkRegistration", "disable")
+                .putObject("attribution", child -> {
+                    if (commitTrailer != null) child.put("commit", commitTrailer);
+                    if (prAttribution != null) child.put("pr", prAttribution);
+                })
+                .build();
+
+        assertEquals("disable", obj.get("disableDeepLinkRegistration").stringValue());
+        assertEquals("claude", obj.get("attribution").getField("commit").stringValue());
+        assertTrue(obj.get("attribution").getField("pr").isNull());
+    }
+
+    @Test
+    void testBuilderPutObjectEmpty() {
+        var obj = JqObject.builder()
+                .put("name", "test")
+                .putObject("empty", child -> {})
+                .build();
+        assertEquals("{}", obj.get("empty").toJsonString());
+    }
+
+    @Test
+    void testBuilderPutArray() {
+        // IncusApi.removeDevice pattern: filtered copy into array
+        var sourceProfiles = List.of("default", "custom", "gpu");
+
+        var obj = JqObject.builder()
+                .put("description", "my instance")
+                .putArray("profiles", arr -> sourceProfiles.forEach(arr::add))
+                .build();
+
+        assertEquals("my instance", obj.get("description").stringValue());
+        var profiles = obj.get("profiles");
+        assertInstanceOf(JqArray.class, profiles);
+        assertEquals(3, ((JqArray) profiles).size());
+        assertEquals("default", profiles.getElement(0).stringValue());
+        assertEquals("gpu", profiles.getElement(2).stringValue());
+    }
+
+    @Test
+    void testBuilderPutArrayEmpty() {
+        var obj = JqObject.builder()
+                .putArray("items", arr -> {})
+                .build();
+        assertEquals("[]", obj.get("items").toJsonString());
+    }
+
+    @Test
+    void testBuilderPutObjectNested() {
+        // Two-level nesting
+        var obj = JqObject.builder()
+                .putObject("server", s -> {
+                    s.put("host", "localhost");
+                    s.put("port", 8080L);
+                    s.putObject("tls", tls -> {
+                        tls.put("enabled", true);
+                        tls.put("cert", "/path/to/cert");
+                    });
+                })
+                .build();
+
+        assertEquals("localhost", obj.path("server").path("host").asString(""));
+        assertTrue(obj.path("server").path("tls").path("enabled").asBoolean(false));
+    }
+
+    // ========================================================================
     //  JqObject.with() tests
     // ========================================================================
 
