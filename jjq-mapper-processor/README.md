@@ -1,9 +1,14 @@
 # jjq-mapper-processor
 
 Compile-time annotation processor for [jjq-mapper](../jjq-mapper/README.md) that generates
-optimized mapping classes for `@JqMapped` records. Eliminates runtime reflection, MethodHandle
-dispatch, and type conversion cascades — achieving **5-6x faster deserialization** than both
-reflection-based jjq-mapper and Jackson.
+optimized mapping classes for `@JqMapped` records and POJOs. Eliminates runtime reflection,
+MethodHandle dispatch, and type conversion cascades — achieving **6-11x faster deserialization**
+than Jackson 3.
+
+Generates:
+- `_JqMapping` classes with direct constructor/setter calls and inlined type conversions
+- `JqMappingRegistry` per package for bulk registration (`JqMapper.builder()`)
+- Supports `@JqField`, `@JqIgnore`, `@JqInclude`, `@JqNaming`, `@JqConverter` annotations
 
 ## Setup
 

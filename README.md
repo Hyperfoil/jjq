@@ -25,13 +25,16 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jackson` | Jackson integration — `JsonNode` ↔ `JqValue` conversion, `JqValueModule` for native POJO serialization |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-jakarta` | Hibernate persistence, JPA `AttributeConverter`, JAX-RS providers, `ParamConverter`, and JSON-B serializers |
-| `jjq-mapper` | Zero-dependency record data binding — map `JqValue` to/from Java records using compiled jq queries |
+| `jjq-mapper` | Record and POJO data binding — map `JqValue` to/from Java types with `@JqField`, `@JqInclude`, `@JqNaming`, `@JqConverter` |
 | `jjq-mapper-processor` | Compile-time annotation processor for `jjq-mapper` — generates optimized mappings (6-11x faster than Jackson 3) |
+| `jjq-mapper-jackson` | Bridges Jackson 2 annotations (`@JsonProperty`, `@JsonIgnore`, `@JsonInclude`) into jjq-mapper |
+| `jjq-mapper-jsonb` | Bridges JSON-B annotations (`@JsonbProperty`, `@JsonbTransient`, `@JsonbNillable`) into jjq-mapper |
+| `jjq-yaml` | YAML parsing into `JqValue` trees via SnakeYAML — enables jq queries over YAML documents |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
-| `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support |
+| `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 123/558 conformance |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
-| `jjq-test-suite` | 466 conformance tests + 508 upstream jq tests (96.7% passing) |
-| `jjq-benchmark` | JMH benchmarks: library comparison, production queries, allocation profiling |
+| `jjq-test-suite` | 466 conformance tests + 525 upstream jq tests (96.0% passing) |
+| `jjq-benchmark` | JMH benchmarks vs Jackson 3.2.2: parsing, serialization, mapper, allocation profiling |
 
 ## Quick Start
 
