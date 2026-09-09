@@ -1,6 +1,6 @@
 # jjq-yaml
 
-Parses YAML into jjq's [JqValue](../jjq-core) tree, enabling jq queries over YAML documents.
+YAML parsing, querying, emission, and POJO mapping via jjq's [JqValue](../jjq-core) tree.
 
 ## Quick Start
 
@@ -71,6 +71,39 @@ try (var out = Files.newOutputStream(path)) {
 ```
 
 Emission converts the tree to plain Java values and dumps block-style YAML via SnakeYAML.
+
+## YAML → Java Object Mapping
+
+With `jjq-mapper` on the classpath (optional dependency), parse YAML directly into records or POJOs:
+
+```java
+import io.hyperfoil.tools.jjq.mapper.JqMapper;
+
+record ServerConfig(String host, int port) {}
+
+JqMapper mapper = JqMapper.create();
+ServerConfig config = JqYaml.fromYaml(yamlString, mapper, ServerConfig.class);
+```
+
+Works with `@JqField`, `@JqIgnore`, `@JqInclude`, `@JqNaming`, `@JqConverter`, and Jackson/JSON-B annotation bridges. See [jjq-mapper](../jjq-mapper/README.md).
+
+## Jackson Migration
+
+`JqValue` provides Jackson-compatible navigation aliases for mechanical migration:
+
+```java
+// Jackson:  node.path("server").path("host").asText("")
+// jjq:     value.path("server").path("host").asText("")
+
+// Jackson:  if (node.path("config").isMissingNode()) ...
+// jjq:     if (value.path("config").isMissingNode()) ...
+
+// Jackson:  YAML.writeValue(file, config)
+// jjq:     JqYaml.toYaml(mapper.toJqValue(config), outputStream)
+
+// Jackson:  YAML.readValue(yaml, Config.class)
+// jjq:     JqYaml.fromYaml(yaml, mapper, Config.class)
+```
 
 ## Example: Querying Application Config
 
