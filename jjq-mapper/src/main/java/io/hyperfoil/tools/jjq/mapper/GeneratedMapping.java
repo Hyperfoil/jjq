@@ -52,6 +52,13 @@ import io.hyperfoil.tools.jjq.value.JqValue;
  */
 public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
 
-    /** Return the record class this mapping handles. */
+    /** Creates a new GeneratedMapping. */
+    protected GeneratedMapping() {}
+
+    /**
+     * Return the record class this mapping handles.
+     *
+     * @return the mapped record class
+     */
     public abstract Class<T> type();
 }

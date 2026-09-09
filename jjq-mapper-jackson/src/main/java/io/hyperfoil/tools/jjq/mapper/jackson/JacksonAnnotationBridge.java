@@ -35,6 +35,9 @@ import java.util.Set;
  */
 public class JacksonAnnotationBridge implements AnnotationBridge {
 
+    /** Creates a new JacksonAnnotationBridge. */
+    public JacksonAnnotationBridge() {}
+
     /** Cached set of ignored property names from @JsonIgnoreProperties at class level. */
     private volatile Set<String> ignoredProperties;
     private volatile Class<?> ignoredPropertiesClass;

@@ -57,7 +57,11 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
         this(JqMapper.create());
     }
 
-    /** Creates a new writer with the given JqMapper (for pre-registered generated mappings). */
+    /**
+     * Creates a new writer with the given JqMapper (for pre-registered generated mappings).
+     *
+     * @param mapper the JqMapper to use for serialization
+     */
     public JqMappedMessageBodyWriter(JqMapper mapper) {
         this.mapper = mapper;
     }

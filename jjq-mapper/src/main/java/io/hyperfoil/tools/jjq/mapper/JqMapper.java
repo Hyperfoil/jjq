@@ -80,6 +80,8 @@ public final class JqMapper {
      *
      * <p>For GraalVM native-image or Quarkus native builds, use {@link #builder()}
      * to pre-register generated mappings without reflective discovery.</p>
+     *
+     * @return a new thread-safe JqMapper
      */
     public static JqMapper create() {
         var bridges = new ArrayList<AnnotationBridge>();

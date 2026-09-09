@@ -32,6 +32,10 @@ import java.lang.annotation.Target;
 @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface JqField {
-    /** The jq expression to extract this field's value. */
+    /**
+     * The jq expression to extract this field's value.
+     *
+     * @return the jq expression
+     */
     String value();
 }

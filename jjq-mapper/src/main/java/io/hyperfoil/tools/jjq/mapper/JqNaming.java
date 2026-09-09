@@ -42,6 +42,8 @@ public @interface JqNaming {
 
     /**
      * The naming strategy to apply.
+     *
+     * @return the configured naming strategy
      */
     Strategy value();
 

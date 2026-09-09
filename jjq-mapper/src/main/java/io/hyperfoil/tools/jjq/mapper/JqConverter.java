@@ -33,6 +33,8 @@ public @interface JqConverter {
 
     /**
      * The converter class to use for this field.
+     *
+     * @return the converter class
      */
     Class<? extends ValueConverter<?>> value();
 }

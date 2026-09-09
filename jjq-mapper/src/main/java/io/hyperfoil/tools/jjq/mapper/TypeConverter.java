@@ -17,10 +17,42 @@ import java.util.*;
  */
 public final class TypeConverter {
 
-    /** Pre-resolved conversion strategy — one enum constant per target type category. */
+    /** Pre-resolved conversion strategy -- one enum constant per target type category. */
     public enum Kind {
-        STRING, INT, LONG, DOUBLE, FLOAT, BOOLEAN, SHORT, BYTE, CHAR,
-        BIG_DECIMAL, OPTIONAL, LIST, MAP, ENUM, RECORD, JQ_VALUE, DEFAULT
+        /** Target is {@code String}. */
+        STRING,
+        /** Target is {@code int} or {@code Integer}. */
+        INT,
+        /** Target is {@code long} or {@code Long}. */
+        LONG,
+        /** Target is {@code double} or {@code Double}. */
+        DOUBLE,
+        /** Target is {@code float} or {@code Float}. */
+        FLOAT,
+        /** Target is {@code boolean} or {@code Boolean}. */
+        BOOLEAN,
+        /** Target is {@code short} or {@code Short}. */
+        SHORT,
+        /** Target is {@code byte} or {@code Byte}. */
+        BYTE,
+        /** Target is {@code char} or {@code Character}. */
+        CHAR,
+        /** Target is {@link java.math.BigDecimal}. */
+        BIG_DECIMAL,
+        /** Target is {@link java.util.Optional}. */
+        OPTIONAL,
+        /** Target is {@link java.util.List}. */
+        LIST,
+        /** Target is {@link java.util.Map}. */
+        MAP,
+        /** Target is an {@code enum} type. */
+        ENUM,
+        /** Target is a record or {@code @JqMapped} POJO. */
+        RECORD,
+        /** Target is a {@link io.hyperfoil.tools.jjq.value.JqValue} subtype. */
+        JQ_VALUE,
+        /** Fallback for unrecognized types. */
+        DEFAULT
     }
 
     private TypeConverter() {}
@@ -29,6 +61,10 @@ public final class TypeConverter {
      * Resolve the conversion kind for a target type at introspection time.
      * This replaces the if/else chain in the old toJava() with a single
      * enum constant that can be dispatched via switch.
+     *
+     * @param targetType  the raw target class
+     * @param genericType the generic type (may carry type arguments)
+     * @return the resolved conversion kind
      */
     public static Kind resolveKind(Class<?> targetType, Type genericType) {
         if (targetType == Optional.class) return Kind.OPTIONAL;
@@ -53,7 +89,14 @@ public final class TypeConverter {
 
     /**
      * Convert a JqValue to the target Java type using the pre-resolved kind.
-     * Single switch dispatch — no if/else chains, no lambda classes.
+     * Single switch dispatch -- no if/else chains, no lambda classes.
+     *
+     * @param value       the JqValue to convert (may be null)
+     * @param kind        the pre-resolved conversion kind
+     * @param targetType  the raw target class
+     * @param genericType the generic type (may carry type arguments)
+     * @param mapper      the mapper for nested record conversions
+     * @return the converted Java value
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static Object convert(JqValue value, Kind kind, Class<?> targetType, Type genericType, JqMapper mapper) {
@@ -119,7 +162,13 @@ public final class TypeConverter {
     }
 
     /**
-     * Convert a JqValue to the target Java type (full dispatch — fallback path).
+     * Convert a JqValue to the target Java type (full dispatch -- fallback path).
+     *
+     * @param value       the JqValue to convert (may be null)
+     * @param targetType  the raw target class
+     * @param genericType the generic type (may carry type arguments)
+     * @param mapper      the mapper for nested record conversions
+     * @return the converted Java value
      */
     @SuppressWarnings("unchecked")
     public static Object toJava(JqValue value, Class<?> targetType, Type genericType, JqMapper mapper) {
@@ -136,6 +185,10 @@ public final class TypeConverter {
      * Convert a Java value to a JqValue (serialization direction).
      * Public so that generated mapping classes can call this for complex types
      * (List, Map, Optional, Enum, nested records).
+     *
+     * @param value  the Java value to convert (may be null)
+     * @param mapper the mapper for nested record conversions
+     * @return the corresponding JqValue
      */
     public static JqValue toJqValue(Object value, JqMapper mapper) {
         if (value == null) return JqNull.NULL;

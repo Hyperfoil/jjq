@@ -30,6 +30,9 @@ import java.lang.reflect.AnnotatedElement;
  */
 public class JsonbAnnotationBridge implements AnnotationBridge {
 
+    /** Creates a new JsonbAnnotationBridge. */
+    public JsonbAnnotationBridge() {}
+
     @Override
     public String resolveFieldName(AnnotatedElement element) {
         AnnotatedElement effective = resolveToField(element);

@@ -171,6 +171,12 @@
                     <version>${version.maven.javadoc}</version>
                     <configuration>
                         <release>22</release>
+                        <!-- Suppress missing-javadoc warnings for internal/engine code.
+                             Public API surface (JqValue, JqMapper, JqYaml, annotations,
+                             bridges, jakarta) is fully documented. Internal classes
+                             (VM, evaluator, compiler, parser, adapter engines) are not
+                             user-facing and have incomplete javadoc. -->
+                        <doclint>all,-missing</doclint>
                     </configuration>
                 </plugin>
                 <plugin>

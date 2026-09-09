@@ -134,16 +134,35 @@ public final class JqYaml {
         return JqArray.ofTrusted(parseAll(in));
     }
 
+    /**
+     * Serialize a JqValue to a YAML string using block style.
+     *
+     * @param value the JqValue to serialize
+     * @return the YAML string
+     */
     public static String toYaml(JqValue value) {
         return new Yaml(blockOptions()).dump(value.toJavaObject());
     }
 
+    /**
+     * Serialize a JqValue to YAML, writing to the given OutputStream.
+     *
+     * @param value the JqValue to serialize
+     * @param out   the OutputStream to write YAML to
+     * @throws IOException if writing fails
+     */
     public static void toYaml(JqValue value, OutputStream out) throws IOException {
         OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
         toYaml(value, writer);
         writer.flush();
     }
 
+    /**
+     * Serialize a JqValue to YAML, writing to the given Writer.
+     *
+     * @param value  the JqValue to serialize
+     * @param writer the Writer to write YAML to
+     */
     public static void toYaml(JqValue value, Writer writer) {
         new Yaml(blockOptions()).dump(value.toJavaObject(), writer);
     }

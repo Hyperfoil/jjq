@@ -49,6 +49,7 @@ import java.sql.Types;
  */
 public class JqValueJdbcType implements JdbcType {
 
+    /** Shared singleton instance. */
     public static final JqValueJdbcType INSTANCE = new JqValueJdbcType();
 
     /** Creates a new JqValueJdbcType. */

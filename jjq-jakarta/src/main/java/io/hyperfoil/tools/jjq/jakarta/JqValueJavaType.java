@@ -28,6 +28,7 @@ import java.nio.charset.StandardCharsets;
  */
 public class JqValueJavaType extends AbstractClassJavaType<JqValue> {
 
+    /** Shared singleton instance. */
     public static final JqValueJavaType INSTANCE = new JqValueJavaType();
 
     /** Creates a new JqValueJavaType. */

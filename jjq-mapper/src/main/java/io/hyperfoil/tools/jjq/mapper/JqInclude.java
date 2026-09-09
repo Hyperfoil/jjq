@@ -44,6 +44,8 @@ public @interface JqInclude {
 
     /**
      * The inclusion strategy to apply.
+     *
+     * @return the configured inclusion strategy
      */
     Include value() default Include.ALWAYS;
 

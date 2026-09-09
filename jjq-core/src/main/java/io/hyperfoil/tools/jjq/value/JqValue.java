@@ -29,13 +29,25 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     default boolean isString() { return this instanceof JqString; }
     default boolean isArray() { return this instanceof JqArray; }
     default boolean isObject() { return this instanceof JqObject; }
-    /** True for arrays and objects (composite types that contain other values). */
+    /**
+     * True for arrays and objects (composite types that contain other values).
+     * @return {@code true} if this value is an array or object
+     */
     default boolean isContainer() { return isArray() || isObject(); }
-    /** True for null, boolean, number, and string (leaf types). */
+    /**
+     * True for null, boolean, number, and string (leaf types).
+     * @return {@code true} if this value is a scalar type
+     */
     default boolean isScalar() { return !isContainer(); }
-    /** True for integral numbers (backed by long). False for non-numbers and floating-point. */
+    /**
+     * True for integral numbers (backed by long). False for non-numbers and floating-point.
+     * @return {@code true} if this value is an integral number
+     */
     default boolean isIntegralNumber() { return this instanceof JqNumber n && n.isIntegral(); }
-    /** True for floating-point numbers. False for non-numbers and integral numbers. */
+    /**
+     * True for floating-point numbers. False for non-numbers and integral numbers.
+     * @return {@code true} if this value is a floating-point number
+     */
     default boolean isFloatingPointNumber() { return this instanceof JqNumber n && !n.isIntegral(); }
 
     default boolean booleanValue() { throw new JqTypeError("Cannot get boolean from " + type()); }
@@ -50,6 +62,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the string value, or the default if this is not a string.
+     * @param defaultValue the value to return if this is not a string
+     * @return the string value, or {@code defaultValue}
      */
     default String asString(String defaultValue) {
         return isString() ? stringValue() : defaultValue;
@@ -57,6 +71,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the long value, or the default if this is not a number.
+     * @param defaultValue the value to return if this is not a number
+     * @return the long value, or {@code defaultValue}
      */
     default long asLong(long defaultValue) {
         return isNumber() ? longValue() : defaultValue;
@@ -64,6 +80,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the int value (narrowed from long), or the default if this is not a number.
+     * @param defaultValue the value to return if this is not a number
+     * @return the int value, or {@code defaultValue}
      */
     default int asInt(int defaultValue) {
         return isNumber() ? (int) longValue() : defaultValue;
@@ -71,6 +89,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the double value, or the default if this is not a number.
+     * @param defaultValue the value to return if this is not a number
+     * @return the double value, or {@code defaultValue}
      */
     default double asDouble(double defaultValue) {
         return isNumber() ? doubleValue() : defaultValue;
@@ -78,6 +98,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the boolean value, or the default if this is not a boolean.
+     * @param defaultValue the value to return if this is not a boolean
+     * @return the boolean value, or {@code defaultValue}
      */
     default boolean asBoolean(boolean defaultValue) {
         return isBoolean() ? booleanValue() : defaultValue;
@@ -89,6 +111,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * Try to extract a double from this value. Returns the double for numbers,
      * tries to parse {@code stringValue()} for strings, returns {@code null} otherwise.
      * Useful for data that may arrive as either a JSON number or a quoted numeric string.
+     * @return the extracted double, or {@code null} if extraction fails
      */
     default Double tryDouble() {
         if (this instanceof JqNumber n) return n.doubleValue();
@@ -104,6 +127,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * (truncating non-integral values, e.g. 3.14 becomes 3), tries to parse
      * {@code stringValue()} for strings, returns {@code null} otherwise.
      * Useful for data that may arrive as either a JSON number or a quoted numeric string.
+     * @return the extracted long, or {@code null} if extraction fails
      */
     default Long tryLong() {
         if (this instanceof JqNumber n) return n.longValue();
@@ -119,6 +143,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * (truncating non-integral values and narrowing from long), tries to parse
      * {@code stringValue()} for strings, returns {@code null} otherwise.
      * Useful for data that may arrive as either a JSON number or a quoted numeric string.
+     * @return the extracted int, or {@code null} if extraction fails
      */
     default Integer tryInt() {
         if (this instanceof JqNumber n) return (int) n.longValue();
@@ -134,6 +159,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * {@code null} for null, {@code toJsonString()} for all other types.
      * Useful for display, logging, and string extraction without requiring
      * the caller to check the type.
+     * @return the string representation, or {@code null} for null values
      */
     default String asText() {
         return switch (this) {
@@ -145,6 +171,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the int value, narrowing from long.
+     * @return the int value
      * @throws JqTypeError if this value is not a number
      */
     default int intValue() {
@@ -154,6 +181,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     /**
      * Return true if this value is empty: empty array, empty object, empty string, or null.
      * Numbers and booleans are never empty.
+     * @return {@code true} if this value is empty
      */
     default boolean isEmpty() {
         return switch (this) {
@@ -167,6 +195,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the array elements, or an empty list if this is not an array.
+     * @return the array elements, or an empty list
      */
     default List<JqValue> asList() {
         return isArray() ? arrayValue() : List.of();
@@ -174,6 +203,7 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     /**
      * Return the object entries, or an empty map if this is not an object.
+     * @return the object entries, or an empty map
      */
     default Map<String, JqValue> asMap() {
         return isObject() ? objectValue() : Map.of();
@@ -251,6 +281,9 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      *
      * <p>Both methods return {@link JqNull#NULL} for missing keys — they never return
      * Java {@code null}.</p>
+     *
+     * @param key the field name to look up
+     * @return the field value, or {@link JqNull#NULL} if missing or not an object
      */
     default JqValue getField(String key) {
         if (this instanceof JqObject obj) return obj.get(key);
@@ -316,6 +349,9 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * Returns a new object with the field added or replaced.
      * If the key already exists, the value is replaced at its current position.
      *
+     * @param key the field name
+     * @param value the value to set
+     * @return a new object with the field added or replaced
      * @throws JqTypeError if this value is not an object
      */
     default JqValue withField(String key, JqValue value) {
@@ -326,6 +362,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     /**
      * Get an element from an array. Supports negative indexing ({@code -1} = last).
      * Returns {@link JqNull#NULL} for non-array values (enables fluent navigation chains).
+     * @param index the array index (supports negative indexing)
+     * @return the element at the given index, or {@link JqNull#NULL}
      */
     default JqValue getElement(int index) {
         if (this instanceof JqArray arr) return arr.get(index);
@@ -336,6 +374,9 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * Returns a new array with the element at the given index replaced.
      * Supports negative indexing ({@code -1} = last).
      *
+     * @param index the array index (supports negative indexing)
+     * @param value the replacement value
+     * @return a new array with the element replaced
      * @throws JqTypeError if this value is not an array
      * @throws IndexOutOfBoundsException if the resolved index is out of range
      */
@@ -380,6 +421,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     /**
      * Check if this object contains a field with the given key.
      * Returns {@code false} for non-object values.
+     * @param key the field name to check
+     * @return {@code true} if this object contains the given key
      */
     default boolean has(String key) {
         return this instanceof JqObject obj && obj.has(key);
@@ -388,6 +431,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     /**
      * Check if this array contains an element at the given index.
      * Supports negative indexing. Returns {@code false} for non-array values.
+     * @param index the array index to check (supports negative indexing)
+     * @return {@code true} if this array contains an element at the given index
      */
     default boolean has(int index) {
         return this instanceof JqArray arr && arr.has(index);
@@ -440,6 +485,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * Get a required field value from an object. Like {@link #getField(String)} but
      * throws {@link JqTypeError} if the field is missing or this is not an object.
      *
+     * @param key the field name to look up
+     * @return the field value
      * @throws JqTypeError if the field is missing, the value is null, or this is not an object
      */
     default JqValue required(String key) {
@@ -454,6 +501,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * Get a required element from an array. Like {@link #getElement(int)} but
      * throws {@link JqTypeError} if the index is out of bounds or this is not an array.
      *
+     * @param index the array index (supports negative indexing)
+     * @return the element at the given index
      * @throws JqTypeError if the index is out of bounds or this is not an array
      */
     default JqValue required(int index) {
@@ -554,7 +603,10 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
         throw new JqTypeError("Cannot multiply " + type() + " and " + other.type());
     }
 
-    /** @hidden */
+    /**
+     * Maximum recursion depth for deep merge and comparison operations.
+     * @hidden
+     */
     static final int MAX_MERGE_DEPTH = 10000;
 
     // Deep merge implementation moved to JqObject.deepMerge()
@@ -634,7 +686,14 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
         return compareToDepth(this, other, 0);
     }
 
-    /** @hidden */
+    /**
+     * Depth-limited comparison of two JqValues.
+     * @param a the left-hand value
+     * @param b the right-hand value
+     * @param depth the current recursion depth
+     * @return a negative integer, zero, or a positive integer as {@code a} is less than, equal to, or greater than {@code b}
+     * @hidden
+     */
     static int compareToDepth(JqValue a, JqValue b, int depth) {
         // Iterative descent for linear chains (single-element arrays, single-key objects)
         while (true) {
@@ -721,6 +780,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * For nested structures (arrays, objects), this method calls {@code appendTo}
      * recursively on child values, writing everything into the single shared buffer
      * without creating intermediate StringBuilders.
+     *
+     * @param sb the StringBuilder to append to
      */
      void appendTo(StringBuilder sb);
 
@@ -734,6 +795,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      *   <li>{@link JqObject} writes pre-computed interned key bytes directly</li>
      *   <li>No intermediate {@code String} or {@code StringBuilder} allocation</li>
      * </ul>
+     *
+     * @param out the byte output buffer to write to
      */
     void appendToBytes(BytOutput out);
 
@@ -748,6 +811,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      * (which requires positive values).</p>
      *
      * <p>O(1) — no tree walking, no serialization. Designed for cache weighers.</p>
+     *
+     * @return the estimated size in bytes
      */
     default int estimatedSizeInBytes() { return 1; }
 

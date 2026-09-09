@@ -38,6 +38,9 @@ import java.util.Set;
 @SupportedAnnotationTypes("io.hyperfoil.tools.jjq.mapper.JqMapped")
 public class JqMapperProcessor extends AbstractProcessor {
 
+    /** Creates a new JqMapperProcessor. */
+    public JqMapperProcessor() {}
+
     @Override
     public SourceVersion getSupportedSourceVersion() {
         return SourceVersion.latest();

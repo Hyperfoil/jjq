@@ -11,3 +11,5 @@ io.hyperfoil.tools.jjq.benchmark.*/
 *.versionsBackup
 
 .cachebro*
+benchmark-results/
+loop-dependency-analysis.html

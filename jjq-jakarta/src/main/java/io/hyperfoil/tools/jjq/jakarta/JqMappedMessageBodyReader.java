@@ -58,7 +58,11 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
         this(JqMapper.create());
     }
 
-    /** Creates a new reader with the given JqMapper (for pre-registered generated mappings). */
+    /**
+     * Creates a new reader with the given JqMapper (for pre-registered generated mappings).
+     *
+     * @param mapper the JqMapper to use for deserialization
+     */
     public JqMappedMessageBodyReader(JqMapper mapper) {
         this.mapper = mapper;
     }
