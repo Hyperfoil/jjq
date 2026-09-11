@@ -470,13 +470,26 @@ final class ClassMapping<T> implements Mapping<T> {
      * Single-pass extraction using indexed access over parallel arrays.
      * Returns the populated args array, or null if any key didn't match a field name.
      * Zero allocation beyond the args array itself — no Iterator, no Map.Entry, no AbstractSet.
+     *
+     * <p>Uses a positional-first heuristic: checks if the key at position i matches
+     * the field at position i (common for in-order JSON). If yes, avoids the HashMap
+     * lookup entirely. Falls back to HashMap for out-of-order keys.</p>
      */
     private Object[] forEachExtract(JqObject obj, JqMapper mapper) {
         Object[] args = new Object[fields.length];
         int n = obj.size();
         for (int i = 0; i < n; i++) {
-            Integer idx = nameToIndex.get(obj.keyAt(i));
-            if (idx == null) return null; // unknown key — fall back to standard path
+            String key = obj.keyAt(i);
+            // Positional-first: if key matches the field at position i, use it directly.
+            // String identity check first (interned keys), then equals fallback.
+            int idx;
+            if (key == fields[i].jsonName() || key.equals(fields[i].jsonName())) {
+                idx = i;
+            } else {
+                Integer mapped = nameToIndex.get(key);
+                if (mapped == null) return null; // unknown key — fall back to standard path
+                idx = mapped;
+            }
             args[idx] = fields[idx].convert(obj.valueAt(i), mapper);
         }
         return args;

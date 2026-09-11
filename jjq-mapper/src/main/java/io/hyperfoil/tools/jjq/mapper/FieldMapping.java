@@ -55,7 +55,7 @@ final class FieldMapping {
                  MethodHandle getter, MethodHandle setter, int constructorIndex,
                  boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter) {
         this.name = name;
-        this.jsonName = jsonName;
+        this.jsonName = jsonName.intern();
         this.directFieldName = directFieldName != null ? directFieldName.intern() : null;
         this.program = program;
         this.type = type;
