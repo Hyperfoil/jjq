@@ -79,6 +79,9 @@ final class MappingCodeGenerator {
         // toJqValue method
         generateToJqValue(sb, recordSimpleName, components);
 
+        // appendJson method — direct-to-JSON, bypasses JqValue tree
+        generateAppendJson(sb, recordSimpleName, components);
+
         // type() method
         sb.append("    @Override\n");
         sb.append("    public Class<").append(recordSimpleName).append("> type() {\n");
@@ -341,6 +344,137 @@ final class MappingCodeGenerator {
         }
     }
 
+    /**
+     * Generate the appendJson method — direct field-to-JSON serialization
+     * that bypasses intermediate JqValue tree construction.
+     */
+    private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
+                                            List<JqMapperProcessor.ComponentInfo> components) {
+        boolean hasInclusion = components.stream()
+                .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
+
+        sb.append("    @Override\n");
+        sb.append("    public void appendJson(").append(recordSimpleName)
+          .append(" instance, StringBuilder _sb, JqMapper mapper) {\n");
+        sb.append("        _sb.append('{');\n");
+
+        if (!hasInclusion) {
+            // No inclusion filtering — all fields always present, known separator positions
+            boolean first = true;
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                if (!first) sb.append("        _sb.append(',');\n");
+                appendJsonField(sb, comp);
+                first = false;
+            }
+        } else {
+            // Inclusion filtering — need a separator flag
+            sb.append("        boolean _sep = false;\n");
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                String accessor = "instance." + comp.name() + "()";
+                if ("ALWAYS".equals(comp.inclusion())) {
+                    sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
+                    appendJsonField(sb, comp);
+                } else {
+                    appendJsonFieldWithInclusion(sb, comp, accessor);
+                }
+            }
+        }
+
+        sb.append("        _sb.append('}');\n");
+        sb.append("    }\n\n");
+    }
+
+    /** Append a single field as JSON key:value to the StringBuilder. */
+    private static void appendJsonField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
+        String accessor = "instance." + comp.name() + "()";
+        // Key — pre-escaped literal since JSON keys from Java identifiers never need escaping
+        sb.append("        _sb.append(\"\\\"").append(escapeJava(comp.jsonName())).append("\\\":\");\n");
+        // Value
+        appendJsonValue(sb, comp, accessor);
+    }
+
+    /** Append a field with inclusion check. */
+    private static void appendJsonFieldWithInclusion(StringBuilder sb,
+                                                      JqMapperProcessor.ComponentInfo comp, String accessor) {
+        String inclusion = comp.inclusion();
+        String condition = switch (inclusion) {
+            case "NON_NULL" -> accessor + " != null";
+            case "NON_EMPTY" -> {
+                String typeName = comp.typeName();
+                if (typeName.equals("java.lang.String"))
+                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
+                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
+                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                else
+                    yield accessor + " != null";
+            }
+            case "NON_DEFAULT" -> switch (comp.typeName()) {
+                case "int", "long", "short", "byte" -> accessor + " != 0";
+                case "double", "float" -> accessor + " != 0.0";
+                case "boolean" -> accessor;
+                case "char" -> accessor + " != '\\0'";
+                default -> accessor + " != null";
+            };
+            default -> "true";
+        };
+        sb.append("        if (").append(condition).append(") {\n");
+        sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
+        sb.append("            _sb.append(\"\\\"").append(escapeJava(comp.jsonName())).append("\\\":\");\n");
+        sb.append("    ");
+        appendJsonValue(sb, comp, accessor);
+        sb.append("        }\n");
+    }
+
+    /** Append the JSON value for a single field. */
+    private static void appendJsonValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
+        // Custom converter — must go through JqValue
+        if (comp.converterClass() != null) {
+            sb.append("        ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append(").appendTo(_sb);\n");
+            return;
+        }
+
+        switch (comp.typeName()) {
+            case "java.lang.String" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(");\n");
+            case "int", "java.lang.Integer" ->
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "long", "java.lang.Long" ->
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "double", "java.lang.Double" ->
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "float", "java.lang.Float" ->
+                sb.append("        _sb.append((double) ").append(accessor).append(");\n");
+            case "boolean", "java.lang.Boolean" ->
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "short", "java.lang.Short" ->
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "byte", "java.lang.Byte" ->
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "char", "java.lang.Character" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, String.valueOf(").append(accessor).append("));\n");
+            case "java.math.BigDecimal" ->
+                sb.append("        _sb.append(").append(accessor).append(" != null ? ").append(accessor).append(".toPlainString() : \"null\");\n");
+            default -> {
+                String typeName = comp.typeName();
+                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                    || typeName.equals("JqValue")
+                    || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
+                    // JqValue — use its appendTo directly
+                    sb.append("        ").append(accessor).append(".appendTo(_sb);\n");
+                } else {
+                    // Complex types (records, enums, lists, maps, optionals) —
+                    // fall back to TypeConverter for now
+                    sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
+                      .append(accessor).append(", mapper).appendTo(_sb);\n");
+                }
+            }
+        }
+    }
+
     /** Escape a string for use in a Java string literal. */
     private static String escapeJava(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
@@ -474,6 +608,9 @@ final class MappingCodeGenerator {
 
         sb.append("    }\n\n");
 
+        // appendJson — direct-to-JSON, bypasses JqValue tree
+        generateAppendJsonForPojo(sb, classSimpleName, properties);
+
         // type()
         sb.append("    @Override\n");
         sb.append("    public Class<").append(classSimpleName).append("> type() {\n");
@@ -482,6 +619,105 @@ final class MappingCodeGenerator {
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /**
+     * Generate appendJson for POJOs — same pattern as records but uses getter/field access.
+     */
+    private static void generateAppendJsonForPojo(StringBuilder sb, String classSimpleName,
+                                                   List<JqMapperProcessor.PropertyInfo> properties) {
+        boolean hasInclusion = properties.stream()
+                .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
+
+        sb.append("    @Override\n");
+        sb.append("    public void appendJson(").append(classSimpleName)
+          .append(" instance, StringBuilder _sb, JqMapper mapper) {\n");
+        sb.append("        _sb.append('{');\n");
+
+        if (!hasInclusion) {
+            boolean first = true;
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                if (!first) sb.append("        _sb.append(',');\n");
+                sb.append("        _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+                appendJsonValueForPojo(sb, prop, readExpr);
+                first = false;
+            }
+        } else {
+            sb.append("        boolean _sep = false;\n");
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                if ("ALWAYS".equals(prop.inclusion())) {
+                    sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
+                    sb.append("        _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+                    appendJsonValueForPojo(sb, prop, readExpr);
+                } else {
+                    appendJsonFieldWithInclusionForPojo(sb, prop, readExpr);
+                }
+            }
+        }
+
+        sb.append("        _sb.append('}');\n");
+        sb.append("    }\n\n");
+    }
+
+    /** Append JSON value for a POJO field. */
+    private static void appendJsonValueForPojo(StringBuilder sb,
+                                                JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        switch (prop.typeName()) {
+            case "java.lang.String" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(");\n");
+            case "int", "java.lang.Integer", "long", "java.lang.Long",
+                 "double", "java.lang.Double", "boolean", "java.lang.Boolean",
+                 "short", "java.lang.Short", "byte", "java.lang.Byte" ->
+                sb.append("        _sb.append(").append(readExpr).append(");\n");
+            case "float", "java.lang.Float" ->
+                sb.append("        _sb.append((double) ").append(readExpr).append(");\n");
+            case "char", "java.lang.Character" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, String.valueOf(").append(readExpr).append("));\n");
+            case "java.math.BigDecimal" ->
+                sb.append("        _sb.append(").append(readExpr).append(" != null ? ").append(readExpr).append(".toPlainString() : \"null\");\n");
+            default ->
+                sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
+                  .append(readExpr).append(", mapper).appendTo(_sb);\n");
+        }
+    }
+
+    /** Append a POJO field with inclusion check in appendJson. */
+    private static void appendJsonFieldWithInclusionForPojo(StringBuilder sb,
+                                                             JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        String inclusion = prop.inclusion();
+        String condition = switch (inclusion) {
+            case "NON_NULL" -> readExpr + " != null";
+            case "NON_EMPTY" -> {
+                String typeName = prop.typeName();
+                if (typeName.equals("java.lang.String"))
+                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
+                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
+                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                else
+                    yield readExpr + " != null";
+            }
+            case "NON_DEFAULT" -> switch (prop.typeName()) {
+                case "int", "long", "short", "byte" -> readExpr + " != 0";
+                case "double", "float" -> readExpr + " != 0.0";
+                case "boolean" -> readExpr;
+                case "char" -> readExpr + " != '\\0'";
+                default -> readExpr + " != null";
+            };
+            default -> "true";
+        };
+        sb.append("        if (").append(condition).append(") {\n");
+        sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
+        sb.append("            _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+        sb.append("    ");
+        appendJsonValueForPojo(sb, prop, readExpr);
+        sb.append("        }\n");
     }
 
     /** Build a type-coerced extraction expression for a POJO field. */

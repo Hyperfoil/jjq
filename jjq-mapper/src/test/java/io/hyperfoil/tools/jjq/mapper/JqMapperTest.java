@@ -1555,6 +1555,88 @@ class JqMapperTest {
         assertEquals("SF", addresses.get(1).city());
     }
 
+    // ---- toJson vs toJqValue consistency ----
+
+    @Test
+    void toJson_matchesToJqValue_simple() {
+        SimpleRecord r = new SimpleRecord("Alice", 30, true);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson, "toJson should produce same output as toJqValue().toJsonString()");
+    }
+
+    @Test
+    void toJson_matchesToJqValue_nested() {
+        Person p = new Person("Bob", new Address("SF", "94105"));
+        String viaJqValue = mapper.toJqValue(p).toJsonString();
+        String viaToJson = mapper.toJson(p);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_list() {
+        WithList r = new WithList("Alice", List.of(95, 87, 92));
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_enum() {
+        WithEnum r = new WithEnum("Alice", Status.ACTIVE);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_pojo() {
+        SimplePojo p = new SimplePojo();
+        p.setName("Bob");
+        p.setAge(25);
+        p.setActive(false);
+        String viaJqValue = mapper.toJqValue(p).toJsonString();
+        String viaToJson = mapper.toJson(p);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_null() {
+        assertEquals("null", mapper.toJson(null));
+    }
+
+    @Test
+    void toJson_matchesToJqValue_nonNull() {
+        NonNullRecord r = new NonNullRecord("hello", null, null);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_nonDefault() {
+        NonDefaultRecord r = new NonDefaultRecord(null, 0, false, 0.0);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_converter() {
+        EventRecord r = new EventRecord("deploy", Instant.parse("2026-09-05T12:00:00Z"));
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_charRecord() {
+        CharRecord r = new CharRecord("Alice", 'A', 'B');
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
     // Helper for capturing generic types (like Jackson's TypeReference)
     static abstract class TypeToken<T> {
         java.lang.reflect.Type getType() {

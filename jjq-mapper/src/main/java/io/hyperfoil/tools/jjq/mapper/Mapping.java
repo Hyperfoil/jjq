@@ -31,4 +31,20 @@ sealed interface Mapping<T> permits ClassMapping, GeneratedMapping {
      * @return a JqObject with fields populated from the instance
      */
     JqValue toJqValue(T instance, JqMapper mapper);
+
+    /**
+     * Serialize an instance of type T directly to JSON in a StringBuilder,
+     * bypassing intermediate JqValue tree construction.
+     *
+     * <p>The default implementation falls back to {@code toJqValue().appendTo()}.
+     * Generated mappings override this with direct field-to-JSON writing,
+     * eliminating JqObject/JqString/Builder allocation.</p>
+     *
+     * @param instance the Java object to serialize
+     * @param sb       the target StringBuilder
+     * @param mapper   the parent mapper (for recursive nested record mapping)
+     */
+    default void appendJson(T instance, StringBuilder sb, JqMapper mapper) {
+        toJqValue(instance, mapper).appendTo(sb);
+    }
 }

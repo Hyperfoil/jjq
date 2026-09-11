@@ -226,6 +226,56 @@ class JqMapperProcessorTest {
         assertEquals(java.util.Optional.empty(), recordClass.getMethod("count").invoke(r2));
     }
 
+    @Test
+    void generatedMapping_appendJson() throws Exception {
+        String source = """
+                package test;
+                
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                
+                @JqMapped
+                public record Config(String host, int port, boolean ssl) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Config", source);
+        JqMapper mapper = JqMapper.create();
+
+        // Create instance via reflection
+        var ctor = recordClass.getDeclaredConstructor(String.class, int.class, boolean.class);
+        Object config = ctor.newInstance("localhost", 8080, true);
+
+        // toJson (uses appendJson internally) should match toJqValue().toJsonString()
+        String viaToJson = mapper.toJson(config);
+        String viaJqValue = mapper.toJqValue(config).toJsonString();
+        assertEquals(viaJqValue, viaToJson,
+                "Generated appendJson should produce same output as toJqValue path");
+    }
+
+    @Test
+    void generatedMapping_appendJson_withStringsNeedingEscape() throws Exception {
+        String source = """
+                package test;
+                
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                
+                @JqMapped
+                public record Message(String text, int code) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Message", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(String.class, int.class);
+        // String with characters that need JSON escaping
+        Object msg = ctor.newInstance("hello \"world\"\nnewline\\backslash", 42);
+
+        String viaToJson = mapper.toJson(msg);
+        String viaJqValue = mapper.toJqValue(msg).toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+        assertTrue(viaToJson.contains("\\\"world\\\""), "Should contain escaped quotes: " + viaToJson);
+        assertTrue(viaToJson.contains("\\n"), "Should contain escaped newline: " + viaToJson);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
@@ -254,10 +304,11 @@ class JqMapperProcessorTest {
         // Build classpath from current classpath
         String classpath = System.getProperty("java.class.path");
 
+        var diagnostics = new javax.tools.DiagnosticCollector<JavaFileObject>();
         var task = compiler.getTask(
                 null, // default writer
                 null, // default file manager
-                null, // default diagnostic listener
+                diagnostics, // capture diagnostics
                 List.of("-d", outDir.toString(), "-classpath", classpath),
                 null, // no annotation classes to process
                 List.of(sourceFile)
@@ -266,7 +317,13 @@ class JqMapperProcessorTest {
         // Set the annotation processor explicitly
         task.setProcessors(List.of(new JqMapperProcessor()));
 
-        return task.call();
+        boolean success = task.call();
+        if (!success) {
+            for (var d : diagnostics.getDiagnostics()) {
+                System.err.println(d.getKind() + ": " + d.getMessage(null));
+            }
+        }
+        return success;
     }
 
     private static class InMemorySource extends SimpleJavaFileObject {

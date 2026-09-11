@@ -288,13 +288,17 @@ public final class JqMapper {
 
     /**
      * Serialize a Java record to a JSON string.
-     * Convenience method that maps to JqValue, then serializes.
+     * Uses direct-to-JSON serialization when a generated mapping provides
+     * {@code appendJson}, bypassing intermediate JqValue tree construction.
      *
      * @param value the record instance to serialize
      * @return the compact JSON string representation
      */
     public String toJson(Object value) {
-        return toJqValue(value).toJsonString();
+        if (value == null) return "null";
+        StringBuilder sb = JqValues.acquireSerializerBuffer();
+        appendJson(value, sb);
+        return JqValues.releaseSerializerBuffer(sb);
     }
 
     /**
@@ -306,6 +310,24 @@ public final class JqMapper {
      */
     public byte[] toJsonBytes(Object value) {
         return JqValues.serializeToBytes(toJqValue(value));
+    }
+
+    /**
+     * Append the JSON serialization of a Java object directly to a StringBuilder,
+     * bypassing intermediate JqValue tree construction when possible.
+     *
+     * <p>Generated mappings write field values directly to the StringBuilder.
+     * Reflection-based mappings fall back to building a JqValue tree and calling
+     * {@code appendTo}.</p>
+     *
+     * @param value the object to serialize (may be null)
+     * @param sb    the target StringBuilder
+     */
+    @SuppressWarnings("unchecked")
+    public void appendJson(Object value, StringBuilder sb) {
+        if (value == null) { sb.append("null"); return; }
+        Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+        mapping.appendJson(value, sb, this);
     }
 
     @SuppressWarnings("unchecked")

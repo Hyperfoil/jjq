@@ -203,6 +203,57 @@ public final class JqValues {
     private JqValues() {}
 
     /**
+     * Append a JSON-quoted, escaped string to a StringBuilder.
+     * Writes the opening quote, the escaped content, and the closing quote.
+     * Null values are written as the JSON literal {@code null} (unquoted).
+     *
+     * <p>Used by generated mapping classes for direct-to-JSON serialization
+     * without building intermediate JqValue objects.</p>
+     *
+     * @param sb the target StringBuilder
+     * @param value the string to write (may be null)
+     */
+    public static void appendJsonString(StringBuilder sb, String value) {
+        if (value == null) {
+            sb.append("null");
+            return;
+        }
+        sb.append('"');
+        JqString.escapeJson(value, sb);
+        sb.append('"');
+    }
+
+    /**
+     * Return the thread-local StringBuilder for JSON serialization.
+     * The caller must call {@link #releaseSerializerBuffer(StringBuilder)} after use.
+     *
+     * <p>Used by generated mapping classes and JqMapper for direct-to-JSON
+     * serialization without allocating a new StringBuilder per call.</p>
+     *
+     * @return a reset StringBuilder ready for use
+     */
+    public static StringBuilder acquireSerializerBuffer() {
+        StringBuilder sb = SERIALIZER_BUFFER.get();
+        sb.setLength(0);
+        return sb;
+    }
+
+    /**
+     * Release the thread-local StringBuilder after use.
+     * If the buffer grew beyond the retention limit, replaces it with a fresh buffer.
+     *
+     * @param sb the StringBuilder previously obtained from {@link #acquireSerializerBuffer()}
+     * @return the serialized JSON string
+     */
+    public static String releaseSerializerBuffer(StringBuilder sb) {
+        String result = sb.toString();
+        if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
+            SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
+        }
+        return result;
+    }
+
+    /**
      * Serialize a JqValue to a JSON string using a thread-local StringBuilder.
      * The buffer is reused across calls on the same thread, eliminating per-call
      * StringBuilder allocation. For nested structures, {@link JqValue#appendTo}
