@@ -662,7 +662,7 @@ public final class JqValues {
      * <p>The byte delegation also avoids {@code String.charAt()} calls that are
      * vulnerable to C2 profile pollution (see issue #68, #69).</p>
      */
-    private static final int BYTE_DELEGATION_THRESHOLD = 64 * 1024; // 64 KB
+    private static final int BYTE_DELEGATION_THRESHOLD = Integer.MAX_VALUE; // always delegate to byte path
 
     /**
      * Parse a JSON value from a String.
