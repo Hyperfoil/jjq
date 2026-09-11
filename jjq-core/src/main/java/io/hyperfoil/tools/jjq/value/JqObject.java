@@ -409,6 +409,26 @@ public final class JqObject implements JqValue {
             return this;
         }
 
+        /** Append a String-valued field without checking for duplicates. */
+        public Builder putUnchecked(String key, String value) {
+            return putUnchecked(key, JqString.of(value));
+        }
+
+        /** Append a long-valued field without checking for duplicates. */
+        public Builder putUnchecked(String key, long value) {
+            return putUnchecked(key, JqNumber.of(value));
+        }
+
+        /** Append a double-valued field without checking for duplicates. */
+        public Builder putUnchecked(String key, double value) {
+            return putUnchecked(key, JqNumber.of(value));
+        }
+
+        /** Append a boolean-valued field without checking for duplicates. */
+        public Builder putUnchecked(String key, boolean value) {
+            return putUnchecked(key, JqBoolean.of(value));
+        }
+
         /**
          * Build a nested object and add it as a field.
          * The consumer populates the child builder; the result is frozen and added.

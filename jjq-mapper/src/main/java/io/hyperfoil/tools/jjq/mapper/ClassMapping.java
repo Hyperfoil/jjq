@@ -460,7 +460,8 @@ final class ClassMapping<T> implements Mapping<T> {
             if (field.isIgnored()) continue;
             Object value = field.readValue(instance);
             if (!field.shouldInclude(value)) continue;
-            builder.put(field.jsonName(), field.toJqValue(value, mapper));
+            // putUnchecked: mapper jsonNames are unique per class by construction
+            builder.putUnchecked(field.jsonName(), field.toJqValue(value, mapper));
         }
         return builder.build();
     }

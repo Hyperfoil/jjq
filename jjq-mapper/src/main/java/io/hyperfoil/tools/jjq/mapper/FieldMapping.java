@@ -56,7 +56,7 @@ final class FieldMapping {
                  boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter) {
         this.name = name;
         this.jsonName = jsonName;
-        this.directFieldName = directFieldName;
+        this.directFieldName = directFieldName != null ? directFieldName.intern() : null;
         this.program = program;
         this.type = type;
         this.genericType = genericType;

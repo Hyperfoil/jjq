@@ -310,6 +310,8 @@ public final class JqMapper {
 
     @SuppressWarnings("unchecked")
     private <T> Mapping<T> getMapping(Class<T> type) {
+        Mapping<?> mapping = cache.get(type);
+        if (mapping != null) return (Mapping<T>) mapping;
         return (Mapping<T>) cache.computeIfAbsent(type, this::createMapping);
     }
 
