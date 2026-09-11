@@ -3,23 +3,10 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 import java.util.List;
 
 /**
- * Generates Java source code for a record mapping class.
+ * Generates Java source code for a record/POJO mapping class.
  * Uses raw StringBuilder — no code generation library dependency.
- *
- * <p>For records with more than {@value #HELPER_METHOD_THRESHOLD} non-ignored
- * components, field extractions are generated as separate {@code private static}
- * helper methods instead of being inlined into {@code fromJqValue()}. This gives
- * C2 the freedom to manage register pressure — on x86_64, inlining N extraction
- * calls into one method exhausts the 16 GP registers, causing register spills
- * (push/pop to stack). See issue #64.</p>
  */
 final class MappingCodeGenerator {
-
-    /**
-     * Records with more than this many non-ignored components generate per-field
-     * helper methods to avoid register spilling on x86_64.
-     */
-    static final int HELPER_METHOD_THRESHOLD = 8;
 
     private MappingCodeGenerator() {}
 
@@ -122,13 +109,6 @@ final class MappingCodeGenerator {
 
     private static void generateFromJqValue(StringBuilder sb, String recordSimpleName,
                                              List<JqMapperProcessor.ComponentInfo> components) {
-        // All extractions are inlined into fromJqValue regardless of field count.
-        // On x86_64 with >8 fields, C2 may spill registers (see issue #64 and
-        // Franz Nigro's blog on Jackson register spilling). However, the generated
-        // mapper is still faster than both reflection and Jackson up to ~25 fields.
-        // For larger records, the reflection-based ClassMapping with forEach fast
-        // path scales better — JqMapper falls back to it automatically when no
-        // generated mapping exists.
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
         sb.append("        return new ").append(recordSimpleName).append("(\n");
@@ -176,6 +156,9 @@ final class MappingCodeGenerator {
             case "java.lang.Short" -> sb.append("(short) ").append(apply).append(".asLong(0)");
             case "byte" -> sb.append("(byte) ").append(apply).append(".asLong(0)");
             case "java.lang.Byte" -> sb.append("(byte) ").append(apply).append(".asLong(0)");
+            case "char", "java.lang.Character" -> {
+                sb.append(apply).append(" instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
+            }
             case "java.math.BigDecimal" -> {
                 sb.append(apply).append(" instanceof JqNumber _n ? _n.decimalValue() : null");
             }
@@ -223,7 +206,14 @@ final class MappingCodeGenerator {
             case "java.lang.Integer", "Integer", "int" -> sb.append("(int) ").append(apply).append(".asLong(0)");
             case "java.lang.Long", "Long", "long" -> sb.append(apply).append(".asLong(0)");
             case "java.lang.Double", "Double", "double" -> sb.append(apply).append(".asDouble(0.0)");
+            case "java.lang.Float", "Float", "float" -> sb.append("(float) ").append(apply).append(".asDouble(0.0)");
             case "java.lang.Boolean", "Boolean", "boolean" -> sb.append(apply).append(".asBoolean(false)");
+            case "java.lang.Short", "Short", "short" -> sb.append("(short) ").append(apply).append(".asLong(0)");
+            case "java.lang.Byte", "Byte", "byte" -> sb.append("(byte) ").append(apply).append(".asLong(0)");
+            case "java.lang.Character", "Character", "char" ->
+                sb.append(apply).append(" instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
+            case "java.math.BigDecimal", "BigDecimal" ->
+                sb.append(apply).append(" instanceof JqNumber _n ? _n.decimalValue() : null");
             default -> sb.append(apply).append(".toJavaObject()");
         }
     }
@@ -333,6 +323,7 @@ final class MappingCodeGenerator {
             case "boolean", "java.lang.Boolean" -> sb.append(accessor);
             case "short", "java.lang.Short" -> sb.append("(long) ").append(accessor);
             case "byte", "java.lang.Byte" -> sb.append("(long) ").append(accessor);
+            case "char", "java.lang.Character" -> sb.append("JqString.of(String.valueOf(").append(accessor).append("))");
             case "java.math.BigDecimal" -> sb.append("JqNumber.of(").append(accessor).append(")");
             default -> {
                 String typeName = comp.typeName();
@@ -489,10 +480,6 @@ final class MappingCodeGenerator {
         sb.append("    }\n");
 
         sb.append("}\n");
-
-        // Wait — the generated fromJqValue uses P_*.apply() but we need to also generate
-        // the static fields for simple field accesses. Let me fix: for POJOs in generated code,
-        // we always use JqProgram since it has the interning advantage.
         return sb.toString();
     }
 
@@ -507,6 +494,8 @@ final class MappingCodeGenerator {
             case "boolean", "java.lang.Boolean" -> apply + ".asBoolean(false)";
             case "short", "java.lang.Short" -> "(short) " + apply + ".asLong(0)";
             case "byte", "java.lang.Byte" -> "(byte) " + apply + ".asLong(0)";
+            case "char", "java.lang.Character" ->
+                apply + " instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'";
             case "java.math.BigDecimal" -> apply + " instanceof JqNumber _n ? _n.decimalValue() : null";
             default -> {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
@@ -586,6 +575,7 @@ final class MappingCodeGenerator {
             case "boolean", "java.lang.Boolean" -> sb.append(readExpr);
             case "short", "java.lang.Short" -> sb.append("(long) ").append(readExpr);
             case "byte", "java.lang.Byte" -> sb.append("(long) ").append(readExpr);
+            case "char", "java.lang.Character" -> sb.append("JqString.of(String.valueOf(").append(readExpr).append("))");
             case "java.math.BigDecimal" -> sb.append("JqNumber.of(").append(readExpr).append(")");
             default -> sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                          .append(readExpr).append(", mapper)");

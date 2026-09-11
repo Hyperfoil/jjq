@@ -168,6 +168,64 @@ class JqMapperProcessorTest {
         deleteDir(outDir);
     }
 
+    @Test
+    void generatedMapping_charTypes() throws Exception {
+        String source = """
+                package test;
+                
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                
+                @JqMapped
+                public record CharRecord(String name, char initial, Character grade) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.CharRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        // Deserialize
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"initial\":\"A\",\"grade\":\"B\"}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals("Alice", recordClass.getMethod("name").invoke(r));
+        assertEquals('A', recordClass.getMethod("initial").invoke(r));
+        assertEquals('B', recordClass.getMethod("grade").invoke(r));
+
+        // Serialize round-trip
+        JqValue serialized = mapper.toJqValue(r);
+        assertEquals("A", serialized.getField("initial").stringValue());
+        assertEquals("B", serialized.getField("grade").stringValue());
+
+        // Round-trip
+        Object restored = mapper.fromJqValue(serialized, recordClass);
+        assertEquals(r, restored);
+    }
+
+    @Test
+    void generatedMapping_optionalScalars() throws Exception {
+        String source = """
+                package test;
+                
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.Optional;
+                
+                @JqMapped
+                public record OptRecord(Optional<Integer> count, Optional<Double> ratio, Optional<Boolean> flag) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.OptRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        // Present values
+        JqValue json = JqValues.parse("{\"count\":42,\"ratio\":3.14,\"flag\":true}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals(java.util.Optional.of(42), recordClass.getMethod("count").invoke(r));
+        assertTrue(((java.util.Optional<?>) recordClass.getMethod("flag").invoke(r)).isPresent());
+
+        // Empty values
+        JqValue empty = JqValues.parse("{}");
+        Object r2 = mapper.fromJqValue(empty, recordClass);
+        assertEquals(java.util.Optional.empty(), recordClass.getMethod("count").invoke(r2));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

@@ -1389,4 +1389,177 @@ class JqMapperTest {
         assertEquals("export X=1", r.env().get(0).value());
         assertEquals("Y", r.env().get(1).name());
     }
+
+    // ---- char / Character support ----
+
+    record CharRecord(String name, char initial, Character grade) {}
+
+    @Test
+    void fromJqValue_charRecord() {
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"initial\":\"A\",\"grade\":\"B\"}");
+        CharRecord r = mapper.fromJqValue(json, CharRecord.class);
+        assertEquals("Alice", r.name());
+        assertEquals('A', r.initial());
+        assertEquals('B', r.grade());
+    }
+
+    @Test
+    void toJqValue_charRecord() {
+        JqValue result = mapper.toJqValue(new CharRecord("Alice", 'A', 'B'));
+        assertEquals("Alice", result.getField("name").stringValue());
+        // char serializes as string
+        assertEquals("A", result.getField("initial").stringValue());
+        assertEquals("B", result.getField("grade").stringValue());
+    }
+
+    @Test
+    void roundTrip_charRecord() {
+        CharRecord original = new CharRecord("Alice", 'A', 'B');
+        JqValue json = mapper.toJqValue(original);
+        CharRecord restored = mapper.fromJqValue(json, CharRecord.class);
+        assertEquals(original, restored);
+    }
+
+    @Test
+    void fromJqValue_charDefaults() {
+        // Missing fields should get default char values
+        JqValue json = JqValues.parse("{\"name\":\"Alice\"}");
+        CharRecord r = mapper.fromJqValue(json, CharRecord.class);
+        assertEquals('\0', r.initial());
+        assertEquals('\0', r.grade()); // Character (boxed) gets '\0' default from TypeConverter
+    }
+
+    // ---- Optional with non-String scalar types ----
+
+    record OptionalScalarsRecord(
+            Optional<Integer> count,
+            Optional<Long> bigCount,
+            Optional<Double> ratio,
+            Optional<Float> smallRatio,
+            Optional<Boolean> flag,
+            Optional<Short> shortVal,
+            Optional<Byte> byteVal,
+            Optional<BigDecimal> precise
+    ) {}
+
+    @Test
+    void fromJqValue_optionalScalars_present() {
+        JqValue json = JqValues.parse("""
+                {"count":42,"bigCount":999999,"ratio":3.14,"smallRatio":2.5,
+                 "flag":true,"shortVal":100,"byteVal":7,"precise":3.14159}""");
+        OptionalScalarsRecord r = mapper.fromJqValue(json, OptionalScalarsRecord.class);
+        assertEquals(Optional.of(42), r.count());
+        assertEquals(Optional.of(999999L), r.bigCount());
+        assertEquals(3.14, r.ratio().orElse(0.0), 0.001);
+        assertEquals(2.5f, r.smallRatio().orElse(0f), 0.01f);
+        assertEquals(Optional.of(true), r.flag());
+        assertEquals(Optional.of((short) 100), r.shortVal());
+        assertEquals(Optional.of((byte) 7), r.byteVal());
+        assertTrue(r.precise().isPresent());
+    }
+
+    @Test
+    void fromJqValue_optionalScalars_empty() {
+        JqValue json = JqValues.parse("{}");
+        OptionalScalarsRecord r = mapper.fromJqValue(json, OptionalScalarsRecord.class);
+        assertEquals(Optional.empty(), r.count());
+        assertEquals(Optional.empty(), r.bigCount());
+        assertEquals(Optional.empty(), r.ratio());
+        assertEquals(Optional.empty(), r.smallRatio());
+        assertEquals(Optional.empty(), r.flag());
+        assertEquals(Optional.empty(), r.shortVal());
+        assertEquals(Optional.empty(), r.byteVal());
+        assertEquals(Optional.empty(), r.precise());
+    }
+
+    // ---- NON_EMPTY with Set ----
+
+    @JqInclude(JqInclude.Include.NON_EMPTY)
+    record NonEmptySetRecord(String name, java.util.Set<String> tags) {}
+
+    @Test
+    void toJqValue_nonEmpty_excludesEmptySet() {
+        JqValue result = mapper.toJqValue(new NonEmptySetRecord("test", java.util.Set.of()));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"name\""), "Non-empty name should be included: " + json);
+        assertFalse(json.contains("\"tags\""), "Empty set should be excluded: " + json);
+    }
+
+    @Test
+    void toJqValue_nonEmpty_includesNonEmptySet() {
+        JqValue result = mapper.toJqValue(new NonEmptySetRecord("test", java.util.Set.of("a", "b")));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"tags\""), "Non-empty set should be included: " + json);
+    }
+
+    // ---- NON_DEFAULT with BigDecimal ----
+
+    @JqInclude(JqInclude.Include.NON_DEFAULT)
+    record NonDefaultBigDecimalRecord(String name, BigDecimal value) {}
+
+    @Test
+    void toJqValue_nonDefault_excludesNullBigDecimal() {
+        JqValue result = mapper.toJqValue(new NonDefaultBigDecimalRecord("test", null));
+        String json = result.toJsonString();
+        assertFalse(json.contains("\"value\""), "Null BigDecimal should be excluded: " + json);
+    }
+
+    @Test
+    void toJqValue_nonDefault_includesNonNullBigDecimal() {
+        JqValue result = mapper.toJqValue(new NonDefaultBigDecimalRecord("test", BigDecimal.TEN));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"value\""), "Non-null BigDecimal should be included: " + json);
+    }
+
+    // ---- POJO with char ----
+
+    static class CharPojo {
+        private char initial;
+        private Character grade;
+
+        public CharPojo() {}
+
+        public char getInitial() { return initial; }
+        public void setInitial(char initial) { this.initial = initial; }
+        public Character getGrade() { return grade; }
+        public void setGrade(Character grade) { this.grade = grade; }
+    }
+
+    @Test
+    void fromJqValue_charPojo() {
+        JqValue json = JqValues.parse("{\"initial\":\"X\",\"grade\":\"A\"}");
+        CharPojo p = mapper.fromJqValue(json, CharPojo.class);
+        assertEquals('X', p.getInitial());
+        assertEquals('A', p.getGrade());
+    }
+
+    @Test
+    void toJqValue_charPojo() {
+        CharPojo p = new CharPojo();
+        p.setInitial('X');
+        p.setGrade('A');
+        JqValue result = mapper.toJqValue(p);
+        assertEquals("X", result.getField("initial").stringValue());
+        assertEquals("A", result.getField("grade").stringValue());
+    }
+
+    // ---- fromJqValue with Type parameter ----
+
+    @Test
+    void fromJqValue_genericType_listOfRecords() {
+        JqValue json = JqValues.parse("[{\"city\":\"NYC\",\"zip\":\"10001\"},{\"city\":\"SF\",\"zip\":\"94105\"}]");
+        java.lang.reflect.Type listType = new TypeToken<List<Address>>(){}.getType();
+        List<Address> addresses = mapper.fromJqValue(json, listType);
+        assertEquals(2, addresses.size());
+        assertEquals("NYC", addresses.get(0).city());
+        assertEquals("SF", addresses.get(1).city());
+    }
+
+    // Helper for capturing generic types (like Jackson's TypeReference)
+    static abstract class TypeToken<T> {
+        java.lang.reflect.Type getType() {
+            return ((java.lang.reflect.ParameterizedType) getClass().getGenericSuperclass())
+                    .getActualTypeArguments()[0];
+        }
+    }
 }

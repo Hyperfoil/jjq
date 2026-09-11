@@ -196,6 +196,7 @@ public final class TypeConverter {
         if (value instanceof String s) return JqString.of(s);
         if (value instanceof Number n) return JqNumber.of(n);
         if (value instanceof Boolean b) return JqBoolean.of(b);
+        if (value instanceof Character c) return JqString.of(String.valueOf(c));
         if (value instanceof Optional<?> opt) {
             return opt.map(v -> toJqValue(v, mapper)).orElse(JqNull.NULL);
         }
