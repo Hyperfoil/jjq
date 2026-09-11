@@ -208,7 +208,7 @@ public final class TypeConverter {
             for (int i = 0; i < list.size(); i++) {
                 elements[i] = toJqValue(list.get(i), mapper);
             }
-            return JqArray.of(elements);
+            return JqArray.ofTrusted(elements);
         }
         if (value instanceof Map<?, ?> map) {
             var builder = JqObject.builder(map.size());

@@ -39,16 +39,21 @@ final class ClassMapping<T> implements Mapping<T> {
     private final Class<T> type;
     private final FieldMapping[] fields;
     private final MethodHandle constructor; // canonical constructor MethodHandle
+    // Pre-cached spreader: accepts Object[] and spreads to positional args.
+    // Avoids per-call asSpreader/MethodType allocation in invokeWithArguments.
+    private final MethodHandle spreadConstructor;
     // Fast-path: name→index map for single-pass forEach extraction.
     // Non-null only when all fields use direct field names (no @JqField, no @JqIgnore).
     private final Map<String, Integer> nameToIndex;
     private final boolean useForEachFastPath;
 
     private ClassMapping(Class<T> type, FieldMapping[] fields, MethodHandle constructor,
+                         MethodHandle spreadConstructor,
                          Map<String, Integer> nameToIndex, boolean useForEachFastPath) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
+        this.spreadConstructor = spreadConstructor;
         this.nameToIndex = nameToIndex;
         this.useForEachFastPath = useForEachFastPath;
     }
@@ -161,12 +166,14 @@ final class ClassMapping<T> implements Mapping<T> {
                     getter, null, i, ignored, inclusion, converter);
         }
 
-        // Find and cache the canonical constructor
+        // Find and cache the canonical constructor + pre-cached spreader
         MethodHandle ctor;
+        MethodHandle spread;
         try {
             Constructor<T> javaConstructor = type.getDeclaredConstructor(ctorParamTypes);
             javaConstructor.setAccessible(true);
             ctor = lookup.unreflectConstructor(javaConstructor);
+            spread = ctor.asSpreader(Object[].class, components.length);
         } catch (NoSuchMethodException | IllegalAccessException e) {
             throw new JqMapperException("Cannot find canonical constructor for record " + type.getName(), e);
         }
@@ -183,7 +190,7 @@ final class ClassMapping<T> implements Mapping<T> {
             nameMap.put(fields[i].jsonName(), i);
         }
 
-        return new ClassMapping<>(type, fields, ctor,
+        return new ClassMapping<>(type, fields, ctor, spread,
                 canUseFastPath ? nameMap : null, canUseFastPath);
     }
 
@@ -353,7 +360,7 @@ final class ClassMapping<T> implements Mapping<T> {
             nameMap.put(fields[i].jsonName(), i);
         }
 
-        return new ClassMapping<>(type, fields, ctor,
+        return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath);
     }
 
@@ -410,7 +417,7 @@ final class ClassMapping<T> implements Mapping<T> {
             Object[] args = forEachExtract(obj, mapper);
             if (args != null) {
                 try {
-                    return (T) constructor.invokeWithArguments(args);
+                    return (T) spreadConstructor.invoke(args);
                 } catch (Throwable e) {
                     throw new JqMapperException("Failed to construct " + type.getName(), e);
                 }
@@ -426,7 +433,7 @@ final class ClassMapping<T> implements Mapping<T> {
             args[field.constructorIndex()] = field.convert(extracted, mapper);
         }
         try {
-            return (T) constructor.invokeWithArguments(args);
+            return (T) spreadConstructor.invoke(args);
         } catch (Throwable e) {
             throw new JqMapperException("Failed to construct " + type.getName(), e);
         }
