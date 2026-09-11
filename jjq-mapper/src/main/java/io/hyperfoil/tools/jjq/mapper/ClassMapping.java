@@ -467,15 +467,17 @@ final class ClassMapping<T> implements Mapping<T> {
     }
 
     /**
-     * Single-pass extraction using entrySet iteration. Returns the populated
-     * args array, or null if any key didn't match a field name.
+     * Single-pass extraction using indexed access over parallel arrays.
+     * Returns the populated args array, or null if any key didn't match a field name.
+     * Zero allocation beyond the args array itself — no Iterator, no Map.Entry, no AbstractSet.
      */
     private Object[] forEachExtract(JqObject obj, JqMapper mapper) {
         Object[] args = new Object[fields.length];
-        for (var entry : obj.objectValue().entrySet()) {
-            Integer idx = nameToIndex.get(entry.getKey());
+        int n = obj.size();
+        for (int i = 0; i < n; i++) {
+            Integer idx = nameToIndex.get(obj.keyAt(i));
             if (idx == null) return null; // unknown key — fall back to standard path
-            args[idx] = fields[idx].convert(entry.getValue(), mapper);
+            args[idx] = fields[idx].convert(obj.valueAt(i), mapper);
         }
         return args;
     }

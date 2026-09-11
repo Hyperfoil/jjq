@@ -144,8 +144,11 @@ public final class TypeConverter {
                 Type valueType = extractTypeArgument(genericType, 1);
                 Class<?> valueClass = rawClass(valueType);
                 Kind innerKind = resolveKind(valueClass, valueType);
-                var map = new LinkedHashMap<String, Object>();
-                obj.forEach((k, v) -> map.put(k, convert(v, innerKind, valueClass, valueType, mapper)));
+                int n = obj.size();
+                var map = new LinkedHashMap<String, Object>(n * 4 / 3 + 1);
+                for (int i = 0; i < n; i++) {
+                    map.put(obj.keyAt(i), convert(obj.valueAt(i), innerKind, valueClass, valueType, mapper));
+                }
                 yield map;
             }
             case ENUM -> {

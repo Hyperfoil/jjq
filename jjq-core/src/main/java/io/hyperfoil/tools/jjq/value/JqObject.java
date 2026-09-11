@@ -496,6 +496,42 @@ public final class JqObject implements JqValue {
     /** Return the number of fields. */
     public int size() { return externalMap != null ? externalMap.size() : size; }
 
+    /**
+     * Return the key at the given index (insertion order).
+     * For array-backed objects this is O(1) with no allocation.
+     * For map-backed objects, falls back to map iteration.
+     *
+     * @throws IndexOutOfBoundsException if index is out of range
+     */
+    public String keyAt(int index) {
+        if (keys != null) return keys[index];
+        // Map-backed: iterate to index (rare path — only for adapter-wrapped objects)
+        int i = 0;
+        for (String key : externalMap.keySet()) {
+            if (i == index) return key;
+            i++;
+        }
+        throw new IndexOutOfBoundsException(index);
+    }
+
+    /**
+     * Return the value at the given index (insertion order).
+     * For array-backed objects this is O(1) with no allocation.
+     * For map-backed objects, falls back to map iteration.
+     *
+     * @throws IndexOutOfBoundsException if index is out of range
+     */
+    public JqValue valueAt(int index) {
+        if (values != null) return values[index];
+        // Map-backed: iterate to index (rare path — only for adapter-wrapped objects)
+        int i = 0;
+        for (JqValue value : externalMap.values()) {
+            if (i == index) return value;
+            i++;
+        }
+        throw new IndexOutOfBoundsException(index);
+    }
+
     @Override
     public int estimatedSizeInBytes() { return sourceLengthBytes > 0 ? sourceLengthBytes : 1; }
 
