@@ -407,9 +407,23 @@ public final class JqValues {
         final String json;
         final int len;
         int pos;
-        // Key sharing: same as JsonByteReader — track previous object's keys
+        // Key sharing: track previous object's keys for schema detection.
+        // When consecutive objects have the same interned keys (reference equality),
+        // share the keys[] array to reduce heap pressure and improve L1 cache locality.
         String[] previousKeys;
-        int previousKeyCount;
+        // Second-level schema cache, checked when previousKeys misses. Objects complete in
+        // post-order, so for nested schemas the previous completed object is never the same
+        // schema and a one-entry cache never hits. Mirrors JsonByteReader.schemaCache.
+        private static final int SCHEMA_CACHE_SIZE = 8;
+        private final String[][] schemaCache = new String[SCHEMA_CACHE_SIZE][];
+        private int schemaCacheNext;
+        // Per-depth scratch buffers for objects with more than 8 members. The member count
+        // is unknown until '}', so the arrays must grow; growing them fresh per object is
+        // the doubling garbage this avoids. Keys at 2*depth, values at 2*depth+1.
+        // A buffer is dropped once its unused slack exceeds MAX_SCRATCH_SLACK, which bounds
+        // retained waste per depth without assuming anything about object sizes.
+        private static final int MAX_SCRATCH_SLACK = 1024;
+        private Object[][] scratch = new Object[32][];
 
         JsonReader(String json) {
             this.json = json;
@@ -430,6 +444,58 @@ public final class JqValues {
                 p++;
             }
             pos = p;
+        }
+
+        String[] growKeys(int depth, String[] keys, int count) {
+            if (2 * depth + 1 >= scratch.length) {
+                scratch = java.util.Arrays.copyOf(scratch, Math.max(2 * depth + 2, scratch.length * 2));
+            }
+            String[] k = (String[]) scratch[2 * depth];
+            if (k == null || k.length < count * 2) {
+                k = new String[Math.max(count * 2, 32)];
+                scratch[2 * depth] = k;
+            }
+            System.arraycopy(keys, 0, k, 0, count);
+            return k;
+        }
+
+        JqValue[] growValues(int depth, JqValue[] values, int count) {
+            JqValue[] v = (JqValue[]) scratch[2 * depth + 1];
+            if (v == null || v.length < count * 2) {
+                v = new JqValue[Math.max(count * 2, 32)];
+                scratch[2 * depth + 1] = v;
+            }
+            System.arraycopy(values, 0, v, 0, count);
+            return v;
+        }
+
+        void releaseScratchIfWasteful(int depth, int capacity, int count) {
+            if (capacity - count > MAX_SCRATCH_SLACK) {
+                scratch[2 * depth] = null;
+                scratch[2 * depth + 1] = null;
+            }
+        }
+
+        String[] findSharedKeys(String[] keys, int count) {
+            String[] prev = previousKeys;
+            if (prev != null && prev.length == count) {
+                int i = 0;
+                while (i < count && prev[i] == keys[i]) i++;
+                if (i == count) return prev;
+            }
+            for (String[] c : schemaCache) {
+                if (c == null || c.length != count) continue;
+                int i = 0;
+                while (i < count && c[i] == keys[i]) i++;
+                if (i == count) { previousKeys = c; return c; }
+            }
+            return null;
+        }
+
+        void rememberKeys(String[] exactKeys) {
+            previousKeys = exactKeys;
+            schemaCache[schemaCacheNext] = exactKeys;
+            schemaCacheNext = (schemaCacheNext + 1) & (SCHEMA_CACHE_SIZE - 1);
         }
     }
 
@@ -822,7 +888,7 @@ public final class JqValues {
         r.pos++; // skip {
         r.skipWs();
         if (r.pos < r.len && r.json.charAt(r.pos) == '}') { r.pos++; return JqObject.EMPTY; }
-        // Direct array construction -- no LinkedHashMap intermediate
+
         String[] keys = new String[8];
         JqValue[] values = new JqValue[8];
         int count = 0;
@@ -836,8 +902,9 @@ public final class JqValues {
                                 + " (while parsing '" + r.json + "')");
             }
             if (count >= keys.length) {
-                keys = java.util.Arrays.copyOf(keys, keys.length * 2);
-                values = java.util.Arrays.copyOf(values, values.length * 2);
+                // Large object: continue in per-depth scratch buffers, no doubling garbage
+                keys = r.growKeys(depth, keys, count);
+                values = r.growValues(depth, values, count);
             }
             keys[count] = parseAndInternKey(r);
             r.skipWs();
@@ -848,14 +915,19 @@ public final class JqValues {
             if (r.pos >= r.len || r.json.charAt(r.pos) == '}') { r.pos++; break; }
             r.pos++; // skip ,
         }
-        // Key sharing: reuse previous keys[] if same schema
-        String[] sharedKeys = tryShareKeys(keys, count, r.previousKeys, r.previousKeyCount);
+        // Objects that overflowed into scratch buffers get exact-size arrays;
+        // small objects keep the arrays they were built in.
+        boolean scratch = count > 8;
+        if (scratch) values = java.util.Arrays.copyOf(values, count);
+        if (scratch) r.releaseScratchIfWasteful(depth, keys.length, count);
+        // Key sharing: 8-entry schema cache with reference equality on interned keys
+        String[] sharedKeys = r.findSharedKeys(keys, count);
         if (sharedKeys != null) {
             return JqObject.ofArrays(sharedKeys, values, count);
         }
-        r.previousKeys = java.util.Arrays.copyOf(keys, count);
-        r.previousKeyCount = count;
-        return JqObject.ofArrays(r.previousKeys, values, count);
+        String[] exactKeys = (scratch || count != keys.length) ? java.util.Arrays.copyOf(keys, count) : keys;
+        r.rememberKeys(exactKeys);
+        return JqObject.ofArrays(exactKeys, values, count);
     }
 
     /**
@@ -1347,19 +1419,7 @@ public final class JqValues {
         return b == ' ' || b == '\n' || b == '\r' || b == '\t';
     }
 
-    /**
-     * Try to share keys with a previously parsed object.
-     * Returns the shared keys array if all keys match by reference equality (interned),
-     * or null if the schemas differ (caller should create a new previousKeys).
-     */
-    private static String[] tryShareKeys(String[] keys, int count,
-                                          String[] previousKeys, int previousKeyCount) {
-        if (previousKeys == null || count != previousKeyCount) return null;
-        for (int i = 0; i < count; i++) {
-            if (keys[i] != previousKeys[i]) return null; // reference equality — interned keys
-        }
-        return previousKeys; // same schema — share the array
-    }
+    // tryShareKeys removed — replaced by JsonReader.findSharedKeys() with 8-entry schema cache
 
     /** Set source byte length on root values for cache weighing. No-op for scalars and singletons. */
     private static void setSourceLength(JqValue value, int length) {
