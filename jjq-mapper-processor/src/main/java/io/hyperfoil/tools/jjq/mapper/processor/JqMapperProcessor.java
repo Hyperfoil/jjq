@@ -119,7 +119,8 @@ public class JqMapperProcessor extends AbstractProcessor {
                 JqConverter jqConverter = rc.getAnnotation(JqConverter.class);
                 String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
 
-                components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass));
+                components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
+                        isRecordType(rc.asType())));
             }
         }
 
@@ -236,7 +237,8 @@ public class JqMapperProcessor extends AbstractProcessor {
             String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
 
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
-                    getterName, setterName, isPublic, inclusion, converterClass));
+                    getterName, setterName, isPublic, inclusion, converterClass,
+                    isRecordType(field.asType())));
         }
 
         // Generate the mapping class
@@ -303,10 +305,25 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
-                         String inclusion, String converterClass) {}
+                         String inclusion, String converterClass, boolean nestedRecord) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
-                        String converterClass) {}
+                        String converterClass, boolean nestedRecord) {}
+
+    /**
+     * True if the type is a record. Only records recurse into
+     * {@code mapper.appendJson} in generated serializers: the canonical
+     * constructor is guaranteed by the language and records are final,
+     * so the runtime value is always mappable. Every other shape
+     * (POJO, enum, container, scalar) keeps the TypeConverter fallback,
+     * which alone handles unmappable classes via fromJavaObject.
+     */
+    private boolean isRecordType(javax.lang.model.type.TypeMirror type) {
+        javax.lang.model.element.Element element =
+                processingEnv.getTypeUtils().asElement(type);
+        return element != null
+                && element.getKind() == javax.lang.model.element.ElementKind.RECORD;
+    }
 }

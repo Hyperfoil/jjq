@@ -427,6 +427,131 @@ class JqMapperProcessorTest {
         assertEquals(viaJqValue, viaToJson);
     }
 
+    @Test
+    void generatedMapping_nestedRecordRecursion() throws Exception {
+        String addressSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Address(String city, String zip) {}
+                """;
+        String personSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Person(String name, Address address) {}
+                """;
+
+        // Compile both records in one round so each sees the other
+        URLClassLoader loader = compileSources(
+                new String[]{"test.Address", "test.Person"},
+                new String[]{addressSource, personSource});
+        Class<?> personClass = Class.forName("test.Person", true, loader);
+        Class<?> addressClass = Class.forName("test.Address", true, loader);
+
+        JqMapper mapper = JqMapper.create();
+
+        Object address = addressClass.getDeclaredConstructor(String.class, String.class)
+                .newInstance("NYC", "10001");
+        Object person = personClass.getDeclaredConstructor(String.class, addressClass)
+                .newInstance("Alice", address);
+
+        // String path
+        assertEquals(mapper.toJqValue(person).toJsonString(), mapper.toJson(person));
+        // Bytes path
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(person)),
+                mapper.toJsonBytes(person));
+
+        // Null nested record — both paths must render JSON null
+        Object noAddress = personClass.getDeclaredConstructor(String.class, addressClass)
+                .newInstance("Bob", null);
+        assertEquals(mapper.toJqValue(noAddress).toJsonString(), mapper.toJson(noAddress));
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(noAddress)),
+                mapper.toJsonBytes(noAddress));
+        assertTrue(mapper.toJson(noAddress).contains("\"address\":null"));
+    }
+
+    @Test
+    void generatedMapping_threeLevelNesting() throws Exception {
+        String l3Source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record L3(String value) {}
+                """;
+        String l2Source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record L2(String name, L3 inner) {}
+                """;
+        String l1Source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record L1(String id, L2 nested) {}
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.L3", "test.L2", "test.L1"},
+                new String[]{l3Source, l2Source, l1Source});
+        Class<?> l1 = Class.forName("test.L1", true, loader);
+        Class<?> l2 = Class.forName("test.L2", true, loader);
+        Class<?> l3 = Class.forName("test.L3", true, loader);
+
+        JqMapper mapper = JqMapper.create();
+        Object leaf = l3.getDeclaredConstructor(String.class).newInstance("deep");
+        Object mid = l2.getDeclaredConstructor(String.class, l3).newInstance("mid", leaf);
+        Object root = l1.getDeclaredConstructor(String.class, l2).newInstance("root", mid);
+
+        assertEquals(mapper.toJqValue(root).toJsonString(), mapper.toJson(root));
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(root)),
+                mapper.toJsonBytes(root));
+    }
+
+    @Test
+    void generatedMapping_enumFieldUsesFallback() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record WithStatus(String name, Status status) {
+                    public enum Status { ACTIVE, INACTIVE }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.WithStatus", source);
+        Class<?> statusClass = Class.forName("test.WithStatus$Status", true,
+                recordClass.getClassLoader());
+        JqMapper mapper = JqMapper.create();
+
+        Object active = statusClass.getEnumConstants()[0];
+        Object r = recordClass.getDeclaredConstructor(String.class, statusClass)
+                .newInstance("Alice", active);
+
+        // Enum must serialize via TypeConverter (name string), not mapper recursion
+        assertEquals(mapper.toJqValue(r).toJsonString(), mapper.toJson(r));
+        assertTrue(mapper.toJson(r).contains("\"status\":\"ACTIVE\""));
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(r)),
+                mapper.toJsonBytes(r));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
@@ -442,6 +567,34 @@ class JqMapperProcessorTest {
         );
         Class<?> cls = Class.forName(className, true, loader);
         return cls;
+    }
+
+    /** Compile several sources in one round (so nested types see each other) and return a loader. */
+    private URLClassLoader compileSources(String[] classNames, String[] sources) throws Exception {
+        Path outDir = Files.createTempDirectory("jjq-proc-test");
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            throw new IllegalStateException("No Java compiler available — run tests with a JDK, not a JRE");
+        }
+        var files = new java.util.ArrayList<JavaFileObject>();
+        for (int i = 0; i < classNames.length; i++) {
+            files.add(new InMemorySource(classNames[i], sources[i]));
+        }
+        String classpath = System.getProperty("java.class.path");
+        var diagnostics = new javax.tools.DiagnosticCollector<JavaFileObject>();
+        var task = compiler.getTask(null, null, diagnostics,
+                List.of("-d", outDir.toString(), "-classpath", classpath), null, files);
+        task.setProcessors(List.of(new JqMapperProcessor()));
+        boolean success = task.call();
+        if (!success) {
+            for (var d : diagnostics.getDiagnostics()) {
+                System.err.println(d.getKind() + ": " + d.getMessage(null));
+            }
+        }
+        assertTrue(success, "Compilation failed");
+        return new URLClassLoader(
+                new URL[]{outDir.toUri().toURL()},
+                this.getClass().getClassLoader());
     }
 
     private boolean compileSource(String className, String source, Path outDir) throws IOException {
