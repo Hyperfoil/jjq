@@ -45,7 +45,7 @@ JqMapper mapper = JqMapper.builder()
 
 When multiple annotation systems are present on the same field:
 
-1. **jjq annotations** (`@JqField`, `@JqIgnore`, `@JqInclude`) — always win
+1. **jjq annotations** (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqNaming`, `@JqConverter`) — always win
 2. **JSON-B annotations** — used as fallback when jjq annotations are absent
 3. **Default** — Java field name, include all
 

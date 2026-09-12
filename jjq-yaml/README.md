@@ -145,4 +145,4 @@ String json = config.toJsonString();
 
 ## Dependencies
 
-Uses [SnakeYAML](https://bitbucket.org/snakeyaml/snakeyaml/) 2.6 for YAML parsing. SnakeYAML is already bundled by Quarkus and Spring Boot — adding this module typically introduces no new transitive dependencies.
+Uses [SnakeYAML](https://bitbucket.org/snakeyaml/snakeyaml/) for YAML parsing (see `${snakeyaml.version}` in the root `pom.xml`). SnakeYAML is already bundled by Quarkus and Spring Boot — adding this module typically introduces no new transitive dependencies.
