@@ -2,12 +2,12 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.3x faster than Jackson 3**, and serializes **1.8x faster**.
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.3x faster than Jackson 3**, and serializes **1.1-1.8x faster** (1.78x on 14MB production data).
 
 ## Features
 
 - **Full jq syntax** — pipes, field access, iteration, array/object construction, string interpolation, reduce, foreach, try-catch, label-break, destructuring bind, function definitions, and more
-- **179 builtin functions** — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
+- **168 builtin functions** (195 name/arity registrations, as of 2026-09-12 — see `BuiltinRegistry.java`) — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
 - **Bytecode VM** — fused iteration opcodes, whole-program shape detection, constant folding, peephole optimization, pre-allocated stacks
 - **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing, field name interning with hash mixing. 1.5-2.3x faster than Jackson 3 on 1MB inputs; 1.5x faster on 14MB production data
 - **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
@@ -47,28 +47,28 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-core</artifactId>
-    <version>0.1.4-SNAPSHOT</version>
+    <version>0.1.12-SNAPSHOT</version>
 </dependency>
 
 <!-- For Jackson integration -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jackson</artifactId>
-    <version>0.1.4-SNAPSHOT</version>
+    <version>0.1.12-SNAPSHOT</version>
 </dependency>
 
 <!-- For Hibernate/JAX-RS integration -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jakarta</artifactId>
-    <version>0.1.4-SNAPSHOT</version>
+    <version>0.1.12-SNAPSHOT</version>
 </dependency>
 
 <!-- For JSONata support -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jsonata</artifactId>
-    <version>0.1.4-SNAPSHOT</version>
+    <version>0.1.12-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -332,7 +332,7 @@ JqProgram program = JsonataCompiler.compile("$sum(orders.price)");
 JqValue result = program.apply(data);
 ```
 
-Supports navigation, operators, predicates, 35+ built-in functions, implicit array mapping, variable binding, lambdas (`$map`/`$filter`/`$reduce`), `~>` pipe operator, `**` recursive descent, and more. See the [jjq-jsonata README](jjq-jsonata/README.md) for full details and conformance status.
+Supports navigation, operators, predicates, 35+ built-in functions, and implicit array mapping. Lambdas (`$map`/`$filter`/`$reduce`), variable binding (`$x :=`), block expressions, regex literals, `**` recursive descent, and the `~>` pipe operator are not yet supported (throw `JsonataException`). See the [jjq-jsonata README](jjq-jsonata/README.md) for full details and conformance status.
 
 ### Jakarta EE integration (jjq-jakarta)
 
@@ -494,7 +494,7 @@ jjq's byte[] parser is **1.5-2.3x faster than Jackson 3** across all input types
 
 ### Production Query Execution on 14MB Document
 
-Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects). Times via `JqProgram.apply()` — the h5m API path including compiled program dispatch:
+Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects). Times via `JqProgram.apply()` — the library API path including compiled program dispatch:
 
 | Query | Expression | Time | Allocation |
 |-------|-----------|------|------------|
@@ -509,7 +509,7 @@ Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 object
 | Extract metric (502 entries) | `[.pcp_time_series[] \| .["mem.util.used"]]` | 13 us | 2.1 KB |
 | Round-trip (extract + serialize) | `.user` | 15 ns | 56 B |
 
-Seven of fifteen production benchmarks achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation. Single field access bypasses the VM entirely via inlined fast path detection.
+Five of the ten production benchmarks above achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation. Single field access bypasses the VM entirely via inlined fast path detection.
 
 ### Record Data Binding: jjq-mapper vs Jackson 3
 
@@ -517,18 +517,18 @@ Deserialization from pre-parsed tree to Java records (ns/op, lower is better). J
 
 | Record type | jjq generated | jjq reflection | Jackson 3 | gen vs Jackson |
 |------------|--------------|----------------|-----------|----------------|
-| simple (5 fields) | **22 ns** | 128 ns | 227 ns | **10.3x** |
-| nested (record in record) | **33 ns** | 206 ns | 364 ns | **11.2x** |
+| simple (5 fields) | **20 ns** | 39 ns | 227 ns | **11.4x** |
+| nested (record in record) | **25 ns** | 51 ns | 364 ns | **14.6x** |
 
 End-to-end deserialization from `byte[]` to Java records:
 
 | Record type | jjq (fromBytes) | Jackson 3 (fromBytes) | jjq speedup |
 |------------|-----------------|----------------------|-------------|
-| simple | **252 ns** | 362 ns | **1.4x** |
-| nested | **374 ns** | 475 ns | **1.3x** |
+| simple | **158 ns** | 362 ns | **2.3x** |
+| nested | **202 ns** | 475 ns | **2.4x** |
 | list | **826 ns** | 976 ns | **1.2x** |
 
-The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct enum-switch dispatch, avoiding reflection and lambda overhead. The generated mappings maintain a **6-11x advantage** over Jackson 3 on pre-parsed data, narrowing to 2x at 20 fields due to register spilling on x86_64.
+The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct constructor and accessor calls, avoiding reflection and lambda overhead. The generated mappings maintain a **11-15x advantage** over Jackson 3 on pre-parsed data, narrowing to ~2x at 20 fields. Even the reflection-based mapper (no annotation processor) is **5-7x faster** than Jackson 3 thanks to pre-cached method handles and positional field matching.
 
 ### JSON Serialization: jjq vs Jackson 3
 
@@ -558,7 +558,7 @@ GraalVM native-image comparison on the 14MB production file (hyperfine, best of 
 
 For CLI one-shot usage, jq 1.8.1's C parser is ~36% faster on parse-dominated workloads. jjq wins on full round-trips (parse + serialize) due to faster serialization. The native-image binary is 15 MB vs jq's 36 KB.
 
-**jjq's strength is the library use case** — parse once, query many times. In h5m, a 14MB upload is parsed once and queried with dozens of jq expressions. The interning, zero-allocation queries, and pre-compiled bytecode VM amortize across all queries, achieving 3 ns field access with zero garbage. This is not measurable in CLI one-shot benchmarks where parse time dominates.
+**jjq's strength is the library use case** — parse once, query many times. A 14MB upload is parsed once and queried with dozens of jq expressions. The interning, zero-allocation queries, and pre-compiled bytecode VM amortize across all queries, achieving 3 ns field access with zero garbage. This is not measurable in CLI one-shot benchmarks where parse time dominates.
 
 ## Architecture
 
@@ -582,8 +582,8 @@ jq expression string
 
 ### Bytecode VM
 
-- **74 opcodes** with fused iteration (COLLECT_ITERATE, REDUCE_ITERATE, COLLECT_SELECT_ITERATE)
-- **21 inlined builtin opcodes** (length, type, keys, sort, add, etc.)
+- **75 opcodes** (as of 2026-09-12 — see `Opcode.java`) with fused iteration (COLLECT_ITERATE, REDUCE_ITERATE, COLLECT_SELECT_ITERATE)
+- **9 inlined builtin opcodes** (as of 2026-09-12 — see `JqProgram.isInlinableBuiltin`: length, type, keys, not, tostring, reverse, sort, abs, empty)
 - **Compound instructions** (DOT_FIELD2 for `.a.b`, BUILD_OBJECT with pre-computed layouts)
 - **Whole-program shape detection** — IDENTITY, FIELD_ACCESS, FIELD_ACCESS2, PIPE_FIELD_ARITH, BUILTIN bypass the VM loop entirely
 - **Constant folding** and **peephole optimization** at compile time
@@ -607,10 +607,10 @@ All JqValue types implement `Serializable` for Hibernate second-level cache supp
 - **byte[]-based parser** (`JqValues.parse(byte[])`) — parses UTF-8 bytes directly, no intermediate String
 - **SWAR scanning** — finds `"` and `\` in 8 bytes per iteration using Netty-style bit manipulation
 - **Deferred string values** — string values hold source references, materialized only when accessed
-- **Field name interning** — open-addressing hash table (1024 slots, 4-probe linear probing) with fused SWAR+hash computation. Quad-based cache verification (1-3 int comparisons for keys <=12 bytes) with hash fast-reject. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
+- **Field name interning** — open-addressing hash table (4096 slots, 8-probe linear probing, plus per-thread L1 with 256 slots and 2 probes) with fused SWAR+hash computation. Quad-based cache verification (1-3 int comparisons for keys <=12 bytes) with hash fast-reject. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
 - **Direct digit accumulation** — integers and decimals parsed to `long`/`double` without `BigDecimal` or `substring()` for numbers with ≤15 significant digits
 - **Thread-local buffer reuse** — both char-based (StringBuilder) and byte-based (BytOutput) serialization buffers grow once and are reused across calls
-- **Direct byte serialization** (`JqValues.serializeToBytes(byte[])`) — serializes directly to UTF-8 bytes without intermediate String. Deferred-bytes strings copy raw source bytes (zero encoding). Interned field names use pre-computed byte forms. Numbers serialize directly to ASCII digits.
+- **Direct byte serialization** (`JqValues.serializeToBytes(JqValue)`) — serializes directly to UTF-8 bytes without intermediate String. Deferred-bytes strings copy raw source bytes (zero encoding). Interned field names use pre-computed byte forms. Numbers serialize directly to ASCII digits.
 
 ## Building
 
@@ -629,13 +629,13 @@ mvn package -pl jjq-core,jjq-cli -Pnative -DskipTests
 
 # Run benchmarks
 mvn package -pl jjq-core,jjq-jackson,jjq-fastjson2,jjq-benchmark -DskipTests
-java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.12-SNAPSHOT.jar
 
 # Run specific benchmark class
 ./scripts/run-benchmarks.sh JsonParseComparisonBenchmark
 
 # Run with allocation profiling
-java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar \
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.12-SNAPSHOT.jar \
   JsonProductionBenchmark -prof gc -rf json -rff results.json
 ```
 
@@ -660,11 +660,11 @@ java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar
 - Path expressions (`path()`, `getpath`, `setpath`, `delpaths`, `del`)
 - Recursive descent (`..`)
 - Format strings (`@base64`, `@uri`, `@csv`, `@tsv`, `@html`, `@json`)
-- All standard builtins (179 functions)
+- All standard builtins (168 functions, as of 2026-09-12)
 
 ## Known Limitations
 
-jjq passes 491 of 508 upstream jq tests (96.7%). The remaining differences:
+jjq passes 504 of 525 upstream jq tests (96.0%, as of 2026-09-12). The remaining differences:
 
 ### Module system (`import` / `include` / `modulemeta`)
 
@@ -672,7 +672,11 @@ jjq does not implement jq's module system. The `import`, `include`, and `modulem
 
 ### Big integer precision
 
-jq uses arbitrary-precision integers internally. jjq uses `long` with `BigDecimal` fallback, which can produce slightly different results for integers beyond 2^53 (4 skipped tests). Normal-range arithmetic works correctly.
+jq uses arbitrary-precision integers internally. jjq uses `long` with `BigDecimal` fallback, which can produce slightly different results for integers beyond 2^53 (6 skipped tests). Normal-range arithmetic works correctly.
+
+### Internal string functions
+
+jq's internal `_strindices` function is not implemented (2 skipped tests).
 
 ### Minor error message differences
 

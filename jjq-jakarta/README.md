@@ -268,8 +268,8 @@ The `JqMappedMessageBodyReader` and `JqMappedMessageBodyWriter` are annotated wi
 other types fall through to Jackson or other registered providers.
 
 With the `jjq-mapper-processor` annotation processor on the classpath, mapping
-executes in ~22 ns per 5-field record (5.8x faster than Jackson). Without the
-processor, reflection-based mapping is used (~130 ns, comparable to Jackson).
+executes in ~20 ns per 5-field record (~11x faster than Jackson 3). Without the
+processor, reflection-based mapping is used (~39 ns, ~6x faster than Jackson 3).
 
 ## Jakarta JSON-B Support
 
@@ -337,8 +337,8 @@ Config restored = jsonb.fromJson(json, Config.class);
 The module leverages jjq's optimized parser and serializer:
 
 - **Parsing:** `JqValueMessageBodyReader` uses `JqValues.parse(byte[])` for zero-intermediate-String
-  parsing directly from the HTTP input stream. jjq's byte parser is 1.3-2.4x faster than Jackson on
-  10KB inputs with 26% less allocation.
+  parsing directly from the HTTP input stream. jjq's byte parser is 1.5-2.3x faster than Jackson 3
+  on 1MB inputs (see the [main README](../../README.md) benchmark tables).
 
 - **Serialization:** `JqValueMessageBodyWriter` uses `JqValues.serializeTo(value, outputStream)` which
   uses the direct byte serialization path — no intermediate String or StringBuilder.

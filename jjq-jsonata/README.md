@@ -8,7 +8,7 @@ Compile-time JSONata-to-jq transpiler for jjq. Parses [JSONata](https://jsonata.
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jsonata</artifactId>
-    <version>0.1.4-SNAPSHOT</version>
+    <version>0.1.12-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -169,16 +169,16 @@ Two-step paths (`A.B`) use simple direct access (`.A.B`) for efficiency. Three-o
 
 Tested against the upstream [JSONata conformance test suite](https://github.com/jsonata-js/jsonata/tree/master/test/test-suite) (527 test cases across 37 groups):
 
-| Status | Count | % |
-|--------|-------|---|
+| Status | Count | % of 1219 |
+|--------|-------|-----------|
 | **Passing** | 468 | 38.4% |
 | Skipped (error-code + unsupported + gaps) | 751 | 61.6% |
 
-*Note: 1219 total test cases from the full upstream JSONata test suite. Against the original 527 tests from Phases 1-2, ~350 pass (66.4%).*
+*Note: 1219 total test cases from the full upstream JSONata test suite. The 468 passing include ~350 of the original 527 tests from Phases 1-2 (~66% on that subset); the remainder come from additionally enabled groups.*
 
 Run the conformance tests:
 ```bash
-mvn test -Pjsonata -pl jjq-jsonata -Dtest=JsonataConformanceTest
+mvn test -pl jjq-jsonata -Dtest=JsonataConformanceTest
 ```
 
 ## Known Limitations
@@ -224,13 +224,13 @@ mvn test -Pjsonata -pl jjq-jsonata -Dtest=JsonataConformanceTest
 ```bash
 # Build (requires jjq-core to be installed first)
 mvn install -DskipTests          # install jjq-core
-mvn package -Pjsonata -pl jjq-jsonata
+mvn package -pl jjq-jsonata
 
 # Run tests
-mvn test -Pjsonata -pl jjq-jsonata
+mvn test -pl jjq-jsonata
 
 # Run conformance suite only
-mvn test -Pjsonata -pl jjq-jsonata -Dtest=JsonataConformanceTest
+mvn test -pl jjq-jsonata -Dtest=JsonataConformanceTest
 ```
 
 ## License
