@@ -1637,6 +1637,141 @@ class JqMapperTest {
         assertEquals(viaJqValue, viaToJson);
     }
 
+    record DoubleRecord(String name, double score, Double ratio, float factor, Float multiplier) {}
+
+    @Test
+    void toJson_matchesToJqValue_doubleRecord() {
+        DoubleRecord r = new DoubleRecord("test", 3.0, 2.5, 1.5f, 0.5f);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void toJson_matchesToJqValue_nullableBoxed() {
+        DoubleRecord r = new DoubleRecord("test", 3.0, null, 1.5f, null);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    record BigDecimalRecord(String name, BigDecimal plain, BigDecimal sci, BigDecimal integral) {}
+
+    @Test
+    void toJson_matchesToJqValue_bigDecimalRecord() {
+        BigDecimalRecord r = new BigDecimalRecord("test",
+                new BigDecimal("3.14"), new BigDecimal("1E+3"), new BigDecimal("100"));
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    record NullableCharRecord(String name, Character grade) {}
+
+    @Test
+    void toJson_matchesToJqValue_nullableCharacter() {
+        NullableCharRecord r = new NullableCharRecord("test", null);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        String viaToJson = mapper.toJson(r);
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    // ---- toJsonBytes vs toJqValue consistency ----
+
+    private void assertBytesMatch(Object value) {
+        byte[] viaTree = JqValues.serializeToBytes(mapper.toJqValue(value));
+        byte[] viaDirect = mapper.toJsonBytes(value);
+        assertArrayEquals(viaTree, viaDirect,
+                "toJsonBytes should produce same bytes as toJqValue + serializeToBytes");
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_simple() {
+        assertBytesMatch(new SimpleRecord("Alice", 30, true));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_nested() {
+        assertBytesMatch(new Person("Bob", new Address("SF", "94105")));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_list() {
+        assertBytesMatch(new WithList("Alice", List.of(95, 87, 92)));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_enum() {
+        assertBytesMatch(new WithEnum("Alice", Status.ACTIVE));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_pojo() {
+        SimplePojo p = new SimplePojo();
+        p.setName("Bob");
+        p.setAge(25);
+        p.setActive(false);
+        assertBytesMatch(p);
+    }
+
+    @Test
+    void toJsonBytes_null() {
+        assertArrayEquals("null".getBytes(), mapper.toJsonBytes(null));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_nonNull() {
+        assertBytesMatch(new NonNullRecord("hello", null, null));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_nonDefault() {
+        assertBytesMatch(new NonDefaultRecord(null, 0, false, 0.0));
+        assertBytesMatch(new NonDefaultRecord("Alice", 5, true, 3.14));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_converter() {
+        assertBytesMatch(new EventRecord("deploy", Instant.parse("2026-09-05T12:00:00Z")));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_charRecord() {
+        assertBytesMatch(new CharRecord("Alice", 'A', 'B'));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_doubleRecord() {
+        assertBytesMatch(new DoubleRecord("test", 3.0, 2.5, 1.5f, 0.5f));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_nullableBoxed() {
+        assertBytesMatch(new DoubleRecord("test", 3.0, null, 1.5f, null));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_bigDecimalRecord() {
+        assertBytesMatch(new BigDecimalRecord("test",
+                new BigDecimal("3.14"), new BigDecimal("1E+3"), new BigDecimal("100")));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_nullableCharacter() {
+        assertBytesMatch(new NullableCharRecord("test", null));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_map() {
+        assertBytesMatch(new WithMap("Alice", Map.of("math", 95)));
+    }
+
+    @Test
+    void toJsonBytes_matchesTree_optional() {
+        assertBytesMatch(new WithOptional("Alice", Optional.of("a@b.c")));
+        assertBytesMatch(new WithOptional("Bob", Optional.empty()));
+    }
+
     // Helper for capturing generic types (like Jackson's TypeReference)
     static abstract class TypeToken<T> {
         java.lang.reflect.Type getType() {

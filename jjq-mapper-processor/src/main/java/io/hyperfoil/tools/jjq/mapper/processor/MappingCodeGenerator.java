@@ -82,6 +82,9 @@ final class MappingCodeGenerator {
         // appendJson method — direct-to-JSON, bypasses JqValue tree
         generateAppendJson(sb, recordSimpleName, components);
 
+        // appendJsonBytes method — direct-to-bytes, bypasses JqValue tree
+        generateAppendJsonBytes(sb, recordSimpleName, components);
+
         // type() method
         sb.append("    @Override\n");
         sb.append("    public Class<").append(recordSimpleName).append("> type() {\n");
@@ -319,16 +322,34 @@ final class MappingCodeGenerator {
         }
 
         switch (comp.typeName()) {
-            case "java.lang.String" -> sb.append(accessor);
-            case "int", "java.lang.Integer" -> sb.append("(long) ").append(accessor);
-            case "long", "java.lang.Long" -> sb.append(accessor);
-            case "double", "java.lang.Double" -> sb.append(accessor);
-            case "float", "java.lang.Float" -> sb.append("(double) ").append(accessor);
-            case "boolean", "java.lang.Boolean" -> sb.append(accessor);
-            case "short", "java.lang.Short" -> sb.append("(long) ").append(accessor);
-            case "byte", "java.lang.Byte" -> sb.append("(long) ").append(accessor);
-            case "char", "java.lang.Character" -> sb.append("JqString.of(String.valueOf(").append(accessor).append("))");
-            case "java.math.BigDecimal" -> sb.append("JqNumber.of(").append(accessor).append(")");
+            case "java.lang.String" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(")");
+            case "int" -> sb.append("(long) ").append(accessor);
+            case "java.lang.Integer" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of((long) ").append(accessor).append(")");
+            case "long" -> sb.append(accessor);
+            case "java.lang.Long" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of(").append(accessor).append(")");
+            case "double" -> sb.append(accessor);
+            case "java.lang.Double" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of(").append(accessor).append(")");
+            case "float" -> sb.append("(double) ").append(accessor);
+            case "java.lang.Float" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of((double) ").append(accessor).append(")");
+            case "boolean" -> sb.append(accessor);
+            case "java.lang.Boolean" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqBoolean.of(").append(accessor).append(")");
+            case "short" -> sb.append("(long) ").append(accessor);
+            case "java.lang.Short" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of((long) ").append(accessor).append(")");
+            case "byte" -> sb.append("(long) ").append(accessor);
+            case "java.lang.Byte" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of((long) ").append(accessor).append(")");
+            case "char" -> sb.append("JqString.of(String.valueOf(").append(accessor).append("))");
+            case "java.lang.Character" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(String.valueOf(").append(accessor).append("))");
+            case "java.math.BigDecimal" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of(").append(accessor).append(")");
             default -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -430,46 +451,164 @@ final class MappingCodeGenerator {
 
     /** Append the JSON value for a single field. */
     private static void appendJsonValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
-        // Custom converter — must go through JqValue
+        // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (comp.converterClass() != null) {
-            sb.append("        ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append(").appendTo(_sb);\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append("));\n");
             return;
         }
 
         switch (comp.typeName()) {
-            case "java.lang.String" ->
+            case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(");\n");
             case "int", "java.lang.Integer" ->
                 sb.append("        _sb.append(").append(accessor).append(");\n");
             case "long", "java.lang.Long" ->
                 sb.append("        _sb.append(").append(accessor).append(");\n");
-            case "double", "java.lang.Double" ->
-                sb.append("        _sb.append(").append(accessor).append(");\n");
-            case "float", "java.lang.Float" ->
-                sb.append("        _sb.append((double) ").append(accessor).append(");\n");
+            case "double", "java.lang.Double", "float", "java.lang.Float" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDouble(_sb, ").append(accessor).append(");\n");
             case "boolean", "java.lang.Boolean" ->
                 sb.append("        _sb.append(").append(accessor).append(");\n");
             case "short", "java.lang.Short" ->
                 sb.append("        _sb.append(").append(accessor).append(");\n");
             case "byte", "java.lang.Byte" ->
                 sb.append("        _sb.append(").append(accessor).append(");\n");
-            case "char", "java.lang.Character" ->
-                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, String.valueOf(").append(accessor).append("));\n");
             case "java.math.BigDecimal" ->
-                sb.append("        _sb.append(").append(accessor).append(" != null ? ").append(accessor).append(".toPlainString() : \"null\");\n");
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_sb, ").append(accessor).append(");\n");
             default -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
-                    // JqValue — use its appendTo directly
-                    sb.append("        ").append(accessor).append(".appendTo(_sb);\n");
+                    // JqValue — null-safe via appendJqValue
+                    sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ").append(accessor).append(");\n");
                 } else {
                     // Complex types (records, enums, lists, maps, optionals) —
                     // fall back to TypeConverter for now
                     sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                       .append(accessor).append(", mapper).appendTo(_sb);\n");
+                }
+            }
+        }
+    }
+
+    /**
+     * Generate the appendJsonBytes method — direct field-to-bytes serialization
+     * that bypasses intermediate JqValue tree construction.
+     */
+    private static void generateAppendJsonBytes(StringBuilder sb, String recordSimpleName,
+                                                List<JqMapperProcessor.ComponentInfo> components) {
+        boolean hasInclusion = components.stream()
+                .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
+
+        sb.append("    @Override\n");
+        sb.append("    public void appendJsonBytes(").append(recordSimpleName)
+          .append(" instance, io.hyperfoil.tools.jjq.value.BytOutput _out, JqMapper mapper) {\n");
+        sb.append("        _out.writeByte('{');\n");
+
+        if (!hasInclusion) {
+            boolean first = true;
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                if (!first) sb.append("        _out.writeByte(',');\n");
+                appendJsonBytesField(sb, comp);
+                first = false;
+            }
+        } else {
+            sb.append("        boolean _sep = false;\n");
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                String accessor = "instance." + comp.name() + "()";
+                if ("ALWAYS".equals(comp.inclusion())) {
+                    sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
+                    appendJsonBytesField(sb, comp);
+                } else {
+                    appendJsonBytesFieldWithInclusion(sb, comp, accessor);
+                }
+            }
+        }
+
+        sb.append("        _out.writeByte('}');\n");
+        sb.append("    }\n\n");
+    }
+
+    /** Append a single field as JSON key:value bytes. */
+    private static void appendJsonBytesField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
+        String accessor = "instance." + comp.name() + "()";
+        sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(comp.jsonName())).append("\");\n");
+        sb.append("        _out.writeByte(':');\n");
+        appendJsonBytesValue(sb, comp, accessor);
+    }
+
+    /** Append a field with inclusion check as bytes. */
+    private static void appendJsonBytesFieldWithInclusion(StringBuilder sb,
+                                                           JqMapperProcessor.ComponentInfo comp, String accessor) {
+        String inclusion = comp.inclusion();
+        String condition = switch (inclusion) {
+            case "NON_NULL" -> accessor + " != null";
+            case "NON_EMPTY" -> {
+                String typeName = comp.typeName();
+                if (typeName.equals("java.lang.String"))
+                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
+                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
+                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                else
+                    yield accessor + " != null";
+            }
+            case "NON_DEFAULT" -> switch (comp.typeName()) {
+                case "int", "long", "short", "byte" -> accessor + " != 0";
+                case "double", "float" -> accessor + " != 0.0";
+                case "boolean" -> accessor;
+                case "char" -> accessor + " != '\\0'";
+                default -> accessor + " != null";
+            };
+            default -> "true";
+        };
+        sb.append("        if (").append(condition).append(") {\n");
+        sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
+        sb.append("            io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(comp.jsonName())).append("\");\n");
+        sb.append("            _out.writeByte(':');\n");
+        sb.append("    ");
+        appendJsonBytesValue(sb, comp, accessor);
+        sb.append("        }\n");
+    }
+
+    /** Append the JSON bytes for a single field value. */
+    private static void appendJsonBytesValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
+        // Custom converter — must go through JqValue (null-safe via appendJqValue)
+        if (comp.converterClass() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append("));\n");
+            return;
+        }
+
+        switch (comp.typeName()) {
+            case "java.lang.String", "char", "java.lang.Character" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(");\n");
+            case "int", "long", "short", "byte" ->
+                sb.append("        _out.writeLong(").append(accessor).append(");\n");
+            case "java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonLong(_out, ").append(accessor).append(");\n");
+            case "double", "float" ->
+                sb.append("        _out.writeDouble((double) ").append(accessor).append(");\n");
+            case "java.lang.Double", "java.lang.Float" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDouble(_out, ").append(accessor).append(");\n");
+            case "boolean" ->
+                sb.append("        if (").append(accessor).append(") _out.writeTrue(); else _out.writeFalse();\n");
+            case "java.lang.Boolean" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonBoolean(_out, ").append(accessor).append(");\n");
+            case "java.math.BigDecimal" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_out, ").append(accessor).append(");\n");
+            default -> {
+                String typeName = comp.typeName();
+                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                    || typeName.equals("JqValue")
+                    || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
+                    sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ").append(accessor).append(");\n");
+                } else {
+                    sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
+                      .append(accessor).append(", mapper).appendToBytes(_out);\n");
                 }
             }
         }
@@ -611,6 +750,9 @@ final class MappingCodeGenerator {
         // appendJson — direct-to-JSON, bypasses JqValue tree
         generateAppendJsonForPojo(sb, classSimpleName, properties);
 
+        // appendJsonBytes — direct-to-bytes, bypasses JqValue tree
+        generateAppendJsonBytesForPojo(sb, classSimpleName, properties);
+
         // type()
         sb.append("    @Override\n");
         sb.append("    public Class<").append(classSimpleName).append("> type() {\n");
@@ -665,25 +807,151 @@ final class MappingCodeGenerator {
         sb.append("    }\n\n");
     }
 
+    /**
+     * Generate appendJsonBytes for POJOs — same pattern as records but uses getter/field access.
+     */
+    private static void generateAppendJsonBytesForPojo(StringBuilder sb, String classSimpleName,
+                                                        List<JqMapperProcessor.PropertyInfo> properties) {
+        boolean hasInclusion = properties.stream()
+                .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
+
+        sb.append("    @Override\n");
+        sb.append("    public void appendJsonBytes(").append(classSimpleName)
+          .append(" instance, io.hyperfoil.tools.jjq.value.BytOutput _out, JqMapper mapper) {\n");
+        sb.append("        _out.writeByte('{');\n");
+
+        if (!hasInclusion) {
+            boolean first = true;
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                if (!first) sb.append("        _out.writeByte(',');\n");
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
+                sb.append("        _out.writeByte(':');\n");
+                appendJsonBytesValueForPojo(sb, prop, readExpr);
+                first = false;
+            }
+        } else {
+            sb.append("        boolean _sep = false;\n");
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                if ("ALWAYS".equals(prop.inclusion())) {
+                    sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
+                    sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
+                    sb.append("        _out.writeByte(':');\n");
+                    appendJsonBytesValueForPojo(sb, prop, readExpr);
+                } else {
+                    appendJsonBytesFieldWithInclusionForPojo(sb, prop, readExpr);
+                }
+            }
+        }
+
+        sb.append("        _out.writeByte('}');\n");
+        sb.append("    }\n\n");
+    }
+
+    /** Append JSON bytes for a POJO field value. */
+    private static void appendJsonBytesValueForPojo(StringBuilder sb,
+                                                     JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        switch (prop.typeName()) {
+            case "java.lang.String", "char", "java.lang.Character" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(");\n");
+            case "int", "long", "short", "byte" ->
+                sb.append("        _out.writeLong(").append(readExpr).append(");\n");
+            case "java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonLong(_out, ").append(readExpr).append(");\n");
+            case "double", "float" ->
+                sb.append("        _out.writeDouble((double) ").append(readExpr).append(");\n");
+            case "java.lang.Double", "java.lang.Float" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDouble(_out, ").append(readExpr).append(");\n");
+            case "boolean" ->
+                sb.append("        if (").append(readExpr).append(") _out.writeTrue(); else _out.writeFalse();\n");
+            case "java.lang.Boolean" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonBoolean(_out, ").append(readExpr).append(");\n");
+            case "java.math.BigDecimal" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_out, ").append(readExpr).append(");\n");
+            default -> {
+                String typeName = prop.typeName();
+                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                    || typeName.equals("JqValue")
+                    || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
+                    sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ").append(readExpr).append(");\n");
+                } else {
+                    sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
+                      .append(readExpr).append(", mapper).appendToBytes(_out);\n");
+                }
+            }
+        }
+    }
+
+    /** Append a POJO field with inclusion check as bytes. */
+    private static void appendJsonBytesFieldWithInclusionForPojo(StringBuilder sb,
+                                                                  JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        String inclusion = prop.inclusion();
+        String condition = switch (inclusion) {
+            case "NON_NULL" -> readExpr + " != null";
+            case "NON_EMPTY" -> {
+                String typeName = prop.typeName();
+                if (typeName.equals("java.lang.String"))
+                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
+                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
+                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                else
+                    yield readExpr + " != null";
+            }
+            case "NON_DEFAULT" -> switch (prop.typeName()) {
+                case "int", "long", "short", "byte" -> readExpr + " != 0";
+                case "double", "float" -> readExpr + " != 0.0";
+                case "boolean" -> readExpr;
+                case "char" -> readExpr + " != '\\0'";
+                default -> readExpr + " != null";
+            };
+            default -> "true";
+        };
+        sb.append("        if (").append(condition).append(") {\n");
+        sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
+        sb.append("            io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
+        sb.append("            _out.writeByte(':');\n");
+        sb.append("    ");
+        appendJsonBytesValueForPojo(sb, prop, readExpr);
+        sb.append("        }\n");
+    }
+
     /** Append JSON value for a POJO field. */
     private static void appendJsonValueForPojo(StringBuilder sb,
                                                 JqMapperProcessor.PropertyInfo prop, String readExpr) {
         switch (prop.typeName()) {
-            case "java.lang.String" ->
+            case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(");\n");
-            case "int", "java.lang.Integer", "long", "java.lang.Long",
-                 "double", "java.lang.Double", "boolean", "java.lang.Boolean",
-                 "short", "java.lang.Short", "byte", "java.lang.Byte" ->
+            case "int", "java.lang.Integer" ->
                 sb.append("        _sb.append(").append(readExpr).append(");\n");
-            case "float", "java.lang.Float" ->
-                sb.append("        _sb.append((double) ").append(readExpr).append(");\n");
-            case "char", "java.lang.Character" ->
-                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, String.valueOf(").append(readExpr).append("));\n");
+            case "long", "java.lang.Long" ->
+                sb.append("        _sb.append(").append(readExpr).append(");\n");
+            case "double", "java.lang.Double", "float", "java.lang.Float" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDouble(_sb, ").append(readExpr).append(");\n");
+            case "boolean", "java.lang.Boolean" ->
+                sb.append("        _sb.append(").append(readExpr).append(");\n");
+            case "short", "java.lang.Short" ->
+                sb.append("        _sb.append(").append(readExpr).append(");\n");
+            case "byte", "java.lang.Byte" ->
+                sb.append("        _sb.append(").append(readExpr).append(");\n");
             case "java.math.BigDecimal" ->
-                sb.append("        _sb.append(").append(readExpr).append(" != null ? ").append(readExpr).append(".toPlainString() : \"null\");\n");
-            default ->
-                sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
-                  .append(readExpr).append(", mapper).appendTo(_sb);\n");
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_sb, ").append(readExpr).append(");\n");
+            default -> {
+                String typeName = prop.typeName();
+                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                    || typeName.equals("JqValue")
+                    || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
+                    sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ").append(readExpr).append(");\n");
+                } else {
+                    sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
+                      .append(readExpr).append(", mapper).appendTo(_sb);\n");
+                }
+            }
         }
     }
 
@@ -805,16 +1073,34 @@ final class MappingCodeGenerator {
     private static void generateSerializationValueForPojo(StringBuilder sb,
                                                            JqMapperProcessor.PropertyInfo prop, String readExpr) {
         switch (prop.typeName()) {
-            case "java.lang.String" -> sb.append(readExpr);
-            case "int", "java.lang.Integer" -> sb.append("(long) ").append(readExpr);
-            case "long", "java.lang.Long" -> sb.append(readExpr);
-            case "double", "java.lang.Double" -> sb.append(readExpr);
-            case "float", "java.lang.Float" -> sb.append("(double) ").append(readExpr);
-            case "boolean", "java.lang.Boolean" -> sb.append(readExpr);
-            case "short", "java.lang.Short" -> sb.append("(long) ").append(readExpr);
-            case "byte", "java.lang.Byte" -> sb.append("(long) ").append(readExpr);
-            case "char", "java.lang.Character" -> sb.append("JqString.of(String.valueOf(").append(readExpr).append("))");
-            case "java.math.BigDecimal" -> sb.append("JqNumber.of(").append(readExpr).append(")");
+            case "java.lang.String" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(")");
+            case "int" -> sb.append("(long) ").append(readExpr);
+            case "java.lang.Integer" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of((long) ").append(readExpr).append(")");
+            case "long" -> sb.append(readExpr);
+            case "java.lang.Long" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of(").append(readExpr).append(")");
+            case "double" -> sb.append(readExpr);
+            case "java.lang.Double" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of(").append(readExpr).append(")");
+            case "float" -> sb.append("(double) ").append(readExpr);
+            case "java.lang.Float" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of((double) ").append(readExpr).append(")");
+            case "boolean" -> sb.append(readExpr);
+            case "java.lang.Boolean" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqBoolean.of(").append(readExpr).append(")");
+            case "short" -> sb.append("(long) ").append(readExpr);
+            case "java.lang.Short" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of((long) ").append(readExpr).append(")");
+            case "byte" -> sb.append("(long) ").append(readExpr);
+            case "java.lang.Byte" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of((long) ").append(readExpr).append(")");
+            case "char" -> sb.append("JqString.of(String.valueOf(").append(readExpr).append("))");
+            case "java.lang.Character" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(String.valueOf(").append(readExpr).append("))");
+            case "java.math.BigDecimal" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of(").append(readExpr).append(")");
             default -> sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                          .append(readExpr).append(", mapper)");
         }

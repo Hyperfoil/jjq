@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.jakarta;
 
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.value.BytOutput;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.WebApplicationException;
@@ -23,9 +24,10 @@ import java.lang.reflect.Type;
  * <p>Only activates for types annotated with {@code @JqMapped}. Other types
  * fall through to Jackson or other registered writers.</p>
  *
- * <p>Serializes via {@link JqMapper#toJqValue(Object)} then
- * {@link JqValues#serializeTo}, streaming directly to the response
- * output stream with no intermediate String allocation.</p>
+ * <p>Serializes via {@link JqMapper#appendJsonBytes(Object, io.hyperfoil.tools.jjq.value.BytOutput)}
+ * into a thread-local byte buffer, streaming directly to the response output
+ * stream with no intermediate String allocation and no intermediate JqValue
+ * tree for generated mappings.</p>
  *
  * <p>Usage — just annotate your record and return it from a REST endpoint:</p>
  * <pre>{@code
@@ -80,6 +82,8 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
         if (value == null) {
             return;
         }
-        JqValues.serializeTo(mapper.toJqValue(value), entityStream);
+        BytOutput out = JqValues.acquireByteBuffer();
+        mapper.appendJsonBytes(value, out);
+        JqValues.writeByteBuffer(out, entityStream);
     }
 }

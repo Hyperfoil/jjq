@@ -290,18 +290,11 @@ public final class JqNumber implements JqValue {
     }
 
     private static void appendDoubleBytes(BytOutput out, double d) {
-        long asLong = (long) d;
-        if ((double) asLong == d) {
-            out.writeLong(asLong); // 3.0 -> "3"
-        } else if ((d > 1e-3 && d < 1e15) || (d < -1e-3 && d > -1e15)) {
-            out.writeAsciiString(Double.toString(d));
-        } else {
-            out.writeAsciiString(BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
-        }
+        out.writeDouble(d);
     }
 
     /** Append a double to StringBuilder, matching jq's plain notation for common values. */
-    private static void appendDouble(StringBuilder sb, double d) {
+    public static void appendDouble(StringBuilder sb, double d) {
         long asLong = (long) d;
         if ((double) asLong == d) {
             sb.append(asLong); // 3.0 -> "3"

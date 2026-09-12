@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.mapper;
 
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
+import io.hyperfoil.tools.jjq.value.BytOutput;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 
@@ -303,13 +304,17 @@ public final class JqMapper {
 
     /**
      * Serialize a Java record to a UTF-8 JSON byte array.
-     * Uses the direct byte serialization path for maximum performance.
+     * Uses direct-to-bytes serialization when a generated mapping provides
+     * {@code appendJsonBytes}, bypassing intermediate JqValue tree construction.
      *
      * @param value the record instance to serialize
      * @return the UTF-8 encoded JSON byte array
      */
     public byte[] toJsonBytes(Object value) {
-        return JqValues.serializeToBytes(toJqValue(value));
+        if (value == null) return new byte[]{'n', 'u', 'l', 'l'};
+        BytOutput out = JqValues.acquireByteBuffer();
+        appendJsonBytes(value, out);
+        return JqValues.releaseByteBuffer(out);
     }
 
     /**
@@ -328,6 +333,24 @@ public final class JqMapper {
         if (value == null) { sb.append("null"); return; }
         Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
         mapping.appendJson(value, sb, this);
+    }
+
+    /**
+     * Append the JSON serialization of a Java object directly to a byte buffer,
+     * bypassing intermediate JqValue tree construction when possible.
+     *
+     * <p>Generated mappings write field values directly as UTF-8 bytes.
+     * Reflection-based mappings fall back to building a JqValue tree and calling
+     * {@code appendToBytes}.</p>
+     *
+     * @param value the object to serialize (may be null)
+     * @param out   the target byte buffer
+     */
+    @SuppressWarnings("unchecked")
+    public void appendJsonBytes(Object value, BytOutput out) {
+        if (value == null) { out.writeNull(); return; }
+        Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+        mapping.appendJsonBytes(value, out, this);
     }
 
     @SuppressWarnings("unchecked")

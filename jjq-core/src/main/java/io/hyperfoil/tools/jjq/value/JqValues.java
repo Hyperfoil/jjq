@@ -224,6 +224,339 @@ public final class JqValues {
     }
 
     /**
+     * Append a {@link Character} as JSON to a StringBuilder.
+     * Null renders as the JSON literal {@code null} (unquoted),
+     * matching JqValue tree serialization.
+     *
+     * @param sb the target StringBuilder
+     * @param value the character to write (may be null)
+     */
+    public static void appendJsonString(StringBuilder sb, Character value) {
+        if (value == null) {
+            sb.append("null");
+            return;
+        }
+        appendJsonString(sb, String.valueOf((char) value));
+    }
+
+    /**
+     * Append a double to a StringBuilder in jq's plain notation.
+     * Integral values serialize without a decimal point (3.0 becomes "3"),
+     * matching {@link JqNumber} tree serialization exactly.
+     *
+     * @param sb the target StringBuilder
+     * @param value the double to write
+     */
+    public static void appendJsonDouble(StringBuilder sb, double value) {
+        JqNumber.appendDouble(sb, value);
+    }
+
+    /**
+     * Append a boxed {@link Double} as JSON, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param sb the target StringBuilder
+     * @param value the double to write (may be null)
+     */
+    public static void appendJsonDouble(StringBuilder sb, Double value) {
+        if (value == null) {
+            sb.append("null");
+            return;
+        }
+        JqNumber.appendDouble(sb, (double) value);
+    }
+
+    /**
+     * Append a float as JSON in jq's plain notation.
+     *
+     * @param sb the target StringBuilder
+     * @param value the float to write
+     */
+    public static void appendJsonDouble(StringBuilder sb, float value) {
+        JqNumber.appendDouble(sb, (double) value);
+    }
+
+    /**
+     * Append a boxed {@link Float} as JSON, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param sb the target StringBuilder
+     * @param value the float to write (may be null)
+     */
+    public static void appendJsonDouble(StringBuilder sb, Float value) {
+        if (value == null) {
+            sb.append("null");
+            return;
+        }
+        JqNumber.appendDouble(sb, (double) value);
+    }
+
+    /**
+     * Append a {@link java.math.BigDecimal} as JSON.
+     * Null renders as the JSON literal {@code null}. Non-null values use
+     * {@link JqNumber} formatting (trailing-zero stripping), matching tree
+     * serialization exactly.
+     *
+     * @param sb the target StringBuilder
+     * @param value the decimal to write (may be null)
+     */
+    public static void appendJsonDecimal(StringBuilder sb, java.math.BigDecimal value) {
+        if (value == null) {
+            sb.append("null");
+            return;
+        }
+        JqNumber.of(value).appendTo(sb);
+    }
+
+    /**
+     * Append a {@link JqValue} as JSON, rendering a null reference as the
+     * JSON literal {@code null} (record fields of JqValue type may hold null
+     * when populated reflectively or via converters).
+     *
+     * @param sb the target StringBuilder
+     * @param value the value to write (may be null)
+     */
+    public static void appendJqValue(StringBuilder sb, JqValue value) {
+        if (value == null) {
+            sb.append("null");
+            return;
+        }
+        value.appendTo(sb);
+    }
+
+    /**
+     * Append a JSON-quoted, escaped string to a {@link BytOutput} buffer.
+     * Null renders as the JSON literal {@code null} (unquoted).
+     *
+     * @param out the target byte buffer
+     * @param value the string to write (may be null)
+     */
+    public static void appendJsonString(BytOutput out, String value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeJsonString(value);
+    }
+
+    /**
+     * Append a {@link Character} as JSON bytes.
+     * Null renders as the JSON literal {@code null} (unquoted).
+     *
+     * @param out the target byte buffer
+     * @param value the character to write (may be null)
+     */
+    public static void appendJsonString(BytOutput out, Character value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeJsonString(String.valueOf((char) value));
+    }
+
+    /**
+     * Append a double as JSON bytes in jq's plain notation.
+     *
+     * @param out the target byte buffer
+     * @param value the double to write
+     */
+    public static void appendJsonDouble(BytOutput out, double value) {
+        out.writeDouble(value);
+    }
+
+    /**
+     * Append a boxed {@link Double} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the double to write (may be null)
+     */
+    public static void appendJsonDouble(BytOutput out, Double value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeDouble((double) value);
+    }
+
+    /**
+     * Append a float as JSON bytes in jq's plain notation.
+     *
+     * @param out the target byte buffer
+     * @param value the float to write
+     */
+    public static void appendJsonDouble(BytOutput out, float value) {
+        out.writeDouble((double) value);
+    }
+
+    /**
+     * Append a boxed {@link Float} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the float to write (may be null)
+     */
+    public static void appendJsonDouble(BytOutput out, Float value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeDouble((double) value);
+    }
+
+    /**
+     * Append a {@link java.math.BigDecimal} as JSON bytes.
+     * Null renders as the JSON literal {@code null}. Non-null values use
+     * {@link JqNumber} formatting, matching tree serialization exactly.
+     *
+     * @param out the target byte buffer
+     * @param value the decimal to write (may be null)
+     */
+    public static void appendJsonDecimal(BytOutput out, java.math.BigDecimal value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        JqNumber.of(value).appendToBytes(out);
+    }
+
+    /**
+     * Append a boxed {@link Integer} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the integer to write (may be null)
+     */
+    public static void appendJsonLong(BytOutput out, Integer value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeLong((long) value);
+    }
+
+    /**
+     * Append a boxed {@link Long} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the long to write (may be null)
+     */
+    public static void appendJsonLong(BytOutput out, Long value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeLong((long) value);
+    }
+
+    /**
+     * Append a boxed {@link Short} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the short to write (may be null)
+     */
+    public static void appendJsonLong(BytOutput out, Short value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeLong((long) value);
+    }
+
+    /**
+     * Append a boxed {@link Byte} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the byte to write (may be null)
+     */
+    public static void appendJsonLong(BytOutput out, Byte value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        out.writeLong((long) value);
+    }
+
+    /**
+     * Append a boxed {@link Boolean} as JSON bytes, rendering null as the
+     * JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the boolean to write (may be null)
+     */
+    public static void appendJsonBoolean(BytOutput out, Boolean value) {
+        if (value == null) {
+            out.writeNull();
+        } else if (value) {
+            out.writeTrue();
+        } else {
+            out.writeFalse();
+        }
+    }
+
+    /**
+     * Append a {@link JqValue} as JSON bytes, rendering a null reference as
+     * the JSON literal {@code null}.
+     *
+     * @param out the target byte buffer
+     * @param value the value to write (may be null)
+     */
+    public static void appendJqValue(BytOutput out, JqValue value) {
+        if (value == null) {
+            out.writeNull();
+            return;
+        }
+        value.appendToBytes(out);
+    }
+
+    /**
+     * Return the thread-local byte buffer for JSON serialization.
+     * The caller must hand the buffer to {@link #releaseByteBuffer(BytOutput)}
+     * or {@link #writeByteBuffer(BytOutput, java.io.OutputStream)} after use.
+     *
+     * @return a reset BytOutput ready for use
+     */
+    public static BytOutput acquireByteBuffer() {
+        BytOutput out = BYTE_SERIALIZER_BUFFER.get();
+        out.reset();
+        return out;
+    }
+
+    /**
+     * Release the thread-local byte buffer, returning its contents as a
+     * freshly allocated array (safe ownership transfer — the thread-local
+     * buffer is never aliased to the caller).
+     *
+     * @param out the buffer previously obtained from {@link #acquireByteBuffer()}
+     * @return the serialized JSON bytes
+     */
+    public static byte[] releaseByteBuffer(BytOutput out) {
+        byte[] result = java.util.Arrays.copyOf(out.buf, out.pos);
+        if (out.buf.length > SERIALIZE_BUFFER_MAX_RETAINED) {
+            BYTE_SERIALIZER_BUFFER.set(new BytOutput(SERIALIZE_BUFFER_INIT));
+        }
+        return result;
+    }
+
+    /**
+     * Write the contents of a byte buffer to an OutputStream without copying,
+     * then perform the thread-local retention check.
+     *
+     * @param out the buffer previously obtained from {@link #acquireByteBuffer()}
+     * @param os the target stream
+     * @throws java.io.IOException if the stream write fails
+     */
+    public static void writeByteBuffer(BytOutput out, java.io.OutputStream os) throws java.io.IOException {
+        os.write(out.buf, 0, out.pos);
+        if (out.buf.length > SERIALIZE_BUFFER_MAX_RETAINED) {
+            BYTE_SERIALIZER_BUFFER.set(new BytOutput(SERIALIZE_BUFFER_INIT));
+        }
+    }
+
+    /**
      * Return the thread-local StringBuilder for JSON serialization.
      * The caller must call {@link #releaseSerializerBuffer(StringBuilder)} after use.
      *

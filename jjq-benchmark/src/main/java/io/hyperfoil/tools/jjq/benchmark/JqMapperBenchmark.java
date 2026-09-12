@@ -347,6 +347,21 @@ public class JqMapperBenchmark {
         return jqMapper.toJson(genPersonRecord);
     }
 
+    @Benchmark
+    public byte[] ser_simple_jjq_generated_bytes() {
+        return jqMapper.toJsonBytes(genSimpleRecord);
+    }
+
+    @Benchmark
+    public byte[] ser_nested_jjq_generated_bytes() {
+        return jqMapper.toJsonBytes(genPersonRecord);
+    }
+
+    @Benchmark
+    public byte[] ser_simple_pojo_generated_bytes() {
+        return jqMapper.toJsonBytes(simplePojo);
+    }
+
     // ========================================================================
     //  POJO mapping benchmarks (uses @JqMapped SimplePojo from BenchmarkRecords)
     //  Compares POJO mapping performance vs records and Jackson.

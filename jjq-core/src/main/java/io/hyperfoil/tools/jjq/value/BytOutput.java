@@ -7,9 +7,12 @@ import java.util.Arrays;
  * Used by {@link JqValue#appendToBytes(BytOutput)} to serialize JSON
  * directly to bytes without intermediate String/StringBuilder allocation.
  *
- * <p>Package-private — callers use {@link JqValues#serializeToBytes(JqValue)}.</p>
+ * <p>Public so generated mapping classes can emit JSON bytes directly.
+ * Obtain an instance via {@link JqValues#acquireByteBuffer()} and release it
+ * with {@link JqValues#releaseByteBuffer(BytOutput)} or
+ * {@link JqValues#writeByteBuffer(BytOutput, java.io.OutputStream)}.</p>
  */
-final class BytOutput {
+public final class BytOutput {
 
     private static final byte[] NULL_BYTES = {'n', 'u', 'l', 'l'};
     private static final byte[] TRUE_BYTES = {'t', 'r', 'u', 'e'};
@@ -18,43 +21,43 @@ final class BytOutput {
     byte[] buf;
     int pos;
 
-    BytOutput(int initialCapacity) {
+    public BytOutput(int initialCapacity) {
         this.buf = new byte[initialCapacity];
     }
 
     /** Create a BytOutput backed by the given buffer. Used for pre-sized serialization. */
-    BytOutput(byte[] buffer) {
+    public BytOutput(byte[] buffer) {
         this.buf = buffer;
     }
 
-    void reset() {
+    public void reset() {
         pos = 0;
     }
 
     // --- Primitive writes ---
 
-    void writeByte(int b) {
+    public void writeByte(int b) {
         ensureCapacity(1);
         buf[pos++] = (byte) b;
     }
 
-    void writeBytes(byte[] src, int off, int len) {
+    public void writeBytes(byte[] src, int off, int len) {
         ensureCapacity(len);
         System.arraycopy(src, off, buf, pos, len);
         pos += len;
     }
 
-    void writeBytes(byte[] src) {
+    public void writeBytes(byte[] src) {
         writeBytes(src, 0, src.length);
     }
 
-    void writeNull() { writeBytes(NULL_BYTES); }
-    void writeTrue() { writeBytes(TRUE_BYTES); }
-    void writeFalse() { writeBytes(FALSE_BYTES); }
+    public void writeNull() { writeBytes(NULL_BYTES); }
+    public void writeTrue() { writeBytes(TRUE_BYTES); }
+    public void writeFalse() { writeBytes(FALSE_BYTES); }
 
     // --- ASCII string write (field names, number formatting) ---
 
-    void writeAsciiString(String s) {
+    public void writeAsciiString(String s) {
         int len = s.length();
         ensureCapacity(len);
         for (int i = 0; i < len; i++) {
@@ -62,9 +65,24 @@ final class BytOutput {
         }
     }
 
+    /**
+     * Write a double in jq's plain notation for common values.
+     * Integral values serialize without a decimal point (3.0 becomes "3").
+     */
+    public void writeDouble(double d) {
+        long asLong = (long) d;
+        if ((double) asLong == d) {
+            writeLong(asLong);
+        } else if ((d > 1e-3 && d < 1e15) || (d < -1e-3 && d > -1e15)) {
+            writeAsciiString(Double.toString(d));
+        } else {
+            writeAsciiString(java.math.BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
+        }
+    }
+
     // --- Long to ASCII digits ---
 
-    void writeLong(long v) {
+    public void writeLong(long v) {
         if (v == 0) {
             writeByte('0');
             return;
@@ -97,7 +115,7 @@ final class BytOutput {
      * Encode a Java String as UTF-8 bytes (raw, no JSON escaping).
      * Used for number formatting and other non-string contexts.
      */
-    void writeUTF8(String s) {
+    public void writeUTF8(String s) {
         int len = s.length();
         ensureCapacity(len * 3); // worst case UTF-8
         for (int i = 0; i < len; i++) {
@@ -126,7 +144,7 @@ final class BytOutput {
      * Write a JSON-escaped string value as UTF-8 bytes (with surrounding quotes).
      * Handles escaping of control characters, backslash, and double quote.
      */
-    void writeJsonString(String s) {
+    public void writeJsonString(String s) {
         writeByte('"');
         escapeJsonToBytes(s);
         writeByte('"');
@@ -139,7 +157,7 @@ final class BytOutput {
      * tight (no buf/pos updates, no ensureCapacity) for the common case of
      * clean ASCII strings.
      */
-    void escapeJsonToBytes(String s) {
+    public void escapeJsonToBytes(String s) {
         final int len = s.length();
         ensureCapacity(len * 3 + 12); // worst case: all escaped + UTF-8 expansion
         int segStart = 0;
@@ -209,7 +227,7 @@ final class BytOutput {
         }
     }
 
-    byte[] toByteArray() {
+    public byte[] toByteArray() {
         return (pos == buf.length) ? buf : Arrays.copyOf(buf, pos);
     }
 

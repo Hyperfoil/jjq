@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.mapper;
 
+import io.hyperfoil.tools.jjq.value.BytOutput;
 import io.hyperfoil.tools.jjq.value.JqValue;
 
 /**
@@ -46,5 +47,21 @@ sealed interface Mapping<T> permits ClassMapping, GeneratedMapping {
      */
     default void appendJson(T instance, StringBuilder sb, JqMapper mapper) {
         toJqValue(instance, mapper).appendTo(sb);
+    }
+
+    /**
+     * Serialize an instance of type T directly to JSON bytes in a BytOutput,
+     * bypassing intermediate JqValue tree construction.
+     *
+     * <p>The default implementation falls back to {@code toJqValue().appendToBytes()}.
+     * Generated mappings override this with direct field-to-bytes writing,
+     * eliminating JqObject/JqString/Builder allocation.</p>
+     *
+     * @param instance the Java object to serialize
+     * @param out      the target byte buffer
+     * @param mapper   the parent mapper (for recursive nested record mapping)
+     */
+    default void appendJsonBytes(T instance, BytOutput out, JqMapper mapper) {
+        toJqValue(instance, mapper).appendToBytes(out);
     }
 }

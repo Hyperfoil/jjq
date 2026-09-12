@@ -276,6 +276,157 @@ class JqMapperProcessorTest {
         assertTrue(viaToJson.contains("\\n"), "Should contain escaped newline: " + viaToJson);
     }
 
+    @Test
+    void generatedMapping_appendJson_doubleFormatting() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Doubles(double score, Double ratio, float factor, Float multiplier) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Doubles", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(double.class, Double.class, float.class, Float.class);
+        Object r = ctor.newInstance(3.0, 2.5, 1.5f, 0.5f);
+
+        String viaToJson = mapper.toJson(r);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void generatedMapping_appendJson_bigDecimalFormatting() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.math.BigDecimal;
+
+                @JqMapped
+                public record Amounts(BigDecimal plain, BigDecimal sci, BigDecimal integral) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Amounts", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(
+                java.math.BigDecimal.class, java.math.BigDecimal.class, java.math.BigDecimal.class);
+        Object r = ctor.newInstance(
+                new java.math.BigDecimal("3.14"), new java.math.BigDecimal("1E+3"), new java.math.BigDecimal("100"));
+
+        String viaToJson = mapper.toJson(r);
+        String viaJqValue = mapper.toJqValue(r).toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+    }
+
+    @Test
+    void generatedMapping_appendJsonBytes_matchesTree() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Config(String host, int port, boolean ssl) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Config", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(String.class, int.class, boolean.class);
+        Object config = ctor.newInstance("localhost", 8080, true);
+
+        byte[] viaDirect = mapper.toJsonBytes(config);
+        byte[] viaTree = io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(config));
+        assertArrayEquals(viaTree, viaDirect);
+    }
+
+    @Test
+    void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.math.BigDecimal;
+
+                @JqMapped
+                public record Metrics(double score, Double ratio, BigDecimal amount) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Metrics", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(double.class, Double.class, java.math.BigDecimal.class);
+        Object r = ctor.newInstance(3.0, 2.5, new java.math.BigDecimal("3.00"));
+
+        byte[] viaDirect = mapper.toJsonBytes(r);
+        byte[] viaTree = io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(r));
+        assertArrayEquals(viaTree, viaDirect);
+    }
+
+    @Test
+    void generatedMapping_appendJsonBytes_nullableBoxed() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Nulled(String name, Integer count, Long big, Boolean flag, Character grade) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Nulled", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(
+                String.class, Integer.class, Long.class, Boolean.class, Character.class);
+        Object r = ctor.newInstance(null, null, null, null, null);
+
+        byte[] viaDirect = mapper.toJsonBytes(r);
+        byte[] viaTree = io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(r));
+        assertArrayEquals(viaTree, viaDirect);
+        assertEquals("{\"name\":null,\"count\":null,\"big\":null,\"flag\":null,\"grade\":null}",
+                new String(viaDirect, java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void generatedMapping_appendJson_nullableBoxed() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.math.BigDecimal;
+
+                @JqMapped
+                public record Nullable(String name, Integer count, Long big, Double ratio,
+                                       Float multiplier, Boolean flag, Short sh, Byte by,
+                                       Character grade, BigDecimal amount) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Nullable", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(String.class, Integer.class, Long.class,
+                Double.class, Float.class, Boolean.class, Short.class, Byte.class,
+                Character.class, java.math.BigDecimal.class);
+        Object r = ctor.newInstance(null, null, null, null, null, null, null, null, null, null);
+
+        // Must not throw — generated toJqValue must handle null boxed fields
+        JqValue tree = mapper.toJqValue(r);
+        for (String field : new String[]{"name", "count", "big", "ratio", "multiplier",
+                "flag", "sh", "by", "grade", "amount"}) {
+            assertTrue(tree.getField(field).isNull(), "Field " + field + " should be JSON null");
+        }
+
+        String viaToJson = mapper.toJson(r);
+        String viaJqValue = tree.toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

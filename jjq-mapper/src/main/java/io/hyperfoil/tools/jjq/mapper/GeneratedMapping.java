@@ -15,6 +15,8 @@ import io.hyperfoil.tools.jjq.value.JqValue;
  *   <li>Direct constructor calls (no {@code MethodHandle.invokeWithArguments})</li>
  *   <li>Direct accessor calls (no {@code MethodHandle.invoke})</li>
  *   <li>Inlined type conversions (no {@code TypeConverter} dispatch)</li>
+ *   <li>Direct-to-JSON serialization ({@code appendJson}) bypassing the JqValue tree</li>
+ *   <li>Direct-to-bytes serialization ({@code appendJsonBytes}) bypassing the JqValue tree</li>
  *   <li>Static {@code JqProgram} fields for {@code @JqField} expressions</li>
  *   <li>No reflection at runtime — GraalVM native-image friendly</li>
  * </ul>

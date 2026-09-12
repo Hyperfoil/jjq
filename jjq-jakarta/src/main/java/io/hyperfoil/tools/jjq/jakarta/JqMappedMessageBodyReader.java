@@ -25,8 +25,8 @@ import java.lang.reflect.Type;
  * <p>Uses jjq's byte[]-based parser for zero-intermediate-String parsing,
  * then maps to the target record via {@link JqMapper}. If a generated
  * {@code _JqMapping} class exists (from {@code jjq-mapper-processor}),
- * the mapping executes in ~22 ns per 5-field record. Otherwise, the
- * reflection-based mapper is used (~130 ns).</p>
+ * the mapping executes in ~20 ns per 5-field record. Otherwise, the
+ * reflection-based mapper is used (~37 ns).</p>
  *
  * <p>Usage — just annotate your record and use it as a REST parameter:</p>
  * <pre>{@code
