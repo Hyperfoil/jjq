@@ -83,9 +83,16 @@ import io.hyperfoil.tools.jjq.jackson.JacksonJqEngine;
 import io.hyperfoil.tools.jjq.JqProgram;
 
 JacksonJqEngine engine = new JacksonJqEngine(mapper);
+// Or with a default ObjectMapper: new JacksonJqEngine()
 
 // One-shot: parse, compile, execute, convert back
 List<JsonNode> results = engine.apply(".users[] | .name", jsonNode);
+
+// From JSON string directly (parses with the engine's ObjectMapper)
+List<JsonNode> fromString = engine.apply(".users[] | .name", jsonString);
+
+// Serialize results back to a JSON string
+String out = engine.applyToString(program, input);
 
 // Pre-compiled for repeated use (recommended)
 JqProgram program = engine.compile(".users[] | {name, email}");

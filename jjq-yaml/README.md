@@ -62,12 +62,15 @@ List<JqValue> names = JqProgram.compile(".[].metadata.name").applyAll((JqValue) 
 
 ```java
 JqValue config = JqYaml.parse("name: Alice\nage: 30\n");
+JqValue fromStream = JqYaml.parse(inputStream);
+JqValue fromReader = JqYaml.parse(reader);
 
 String yaml = JqYaml.toYaml(config);
 
 try (var out = Files.newOutputStream(path)) {
     JqYaml.toYaml(config, out);
 }
+JqYaml.toYaml(config, writer);
 ```
 
 Emission converts the tree to plain Java values and dumps block-style YAML via SnakeYAML.
@@ -83,6 +86,11 @@ record ServerConfig(String host, int port) {}
 
 JqMapper mapper = JqMapper.create();
 ServerConfig config = JqYaml.fromYaml(yamlString, mapper, ServerConfig.class);
+
+// From streams, and with generic types (e.g., List<ServerConfig>)
+ServerConfig fromStream = JqYaml.fromYaml(inputStream, mapper, ServerConfig.class);
+java.lang.reflect.Type listType = ...;
+List<ServerConfig> all = JqYaml.fromYaml(yamlString, mapper, listType);
 ```
 
 Works with `@JqField`, `@JqIgnore`, `@JqInclude`, `@JqNaming`, `@JqConverter`, and Jackson/JSON-B annotation bridges. See [jjq-mapper](../jjq-mapper/README.md).

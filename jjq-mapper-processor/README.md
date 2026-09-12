@@ -2,11 +2,12 @@
 
 Compile-time annotation processor for [jjq-mapper](../jjq-mapper/README.md) that generates
 optimized mapping classes for `@JqMapped` records and POJOs. Eliminates runtime reflection,
-MethodHandle dispatch, and type conversion cascades — achieving **6-11x faster deserialization**
+MethodHandle dispatch, and type conversion cascades — achieving **11-15x faster deserialization**
 than Jackson 3.
 
 Generates:
-- `_JqMapping` classes with direct constructor/setter calls and inlined type conversions
+- `_JqMapping` classes with direct constructor/setter calls, inlined type conversions,
+  and direct-to-JSON/byes serialization (`appendJson`/`appendJsonBytes`)
 - `JqMappingRegistry` per package for bulk registration (`JqMapper.builder()`)
 - Supports `@JqField`, `@JqIgnore`, `@JqInclude`, `@JqNaming`, `@JqConverter` annotations
 
@@ -111,10 +112,41 @@ public final class User_JqMapping extends GeneratedMapping<User> {
     @Override
     public JqValue toJqValue(User instance, JqMapper mapper) {
         return JqObject.builder(3)
-            .put("name", instance.name())
-            .put("age", (long) instance.age())
-            .put("active", instance.active())
+            .putUnchecked("name", instance.name())
+            .putUnchecked("age", (long) instance.age())
+            .putUnchecked("active", instance.active())
             .build();
+    }
+
+    @Override
+    public void appendJson(User instance, StringBuilder _sb, JqMapper mapper) {
+        _sb.append('{');
+        _sb.append("\"name\":");
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, instance.name());
+        _sb.append(',');
+        _sb.append("\"age\":");
+        _sb.append(instance.age());
+        _sb.append(',');
+        _sb.append("\"active\":");
+        _sb.append(instance.active());
+        _sb.append('}');
+    }
+
+    @Override
+    public void appendJsonBytes(User instance, io.hyperfoil.tools.jjq.value.BytOutput _out, JqMapper mapper) {
+        _out.writeByte('{');
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, "name");
+        _out.writeByte(':');
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, instance.name());
+        _out.writeByte(',');
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, "age");
+        _out.writeByte(':');
+        _out.writeLong(instance.age());
+        _out.writeByte(',');
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, "active");
+        _out.writeByte(':');
+        if (instance.active()) _out.writeTrue(); else _out.writeFalse();
+        _out.writeByte('}');
     }
 
     @Override
@@ -127,6 +159,13 @@ Key properties:
 - **Direct constructor call** — `new User(a, b, c)` instead of `MethodHandle.invokeWithArguments(Object[])`
 - **Direct accessor calls** — `instance.name()` instead of `MethodHandle.invoke(instance)`
 - **Inlined type conversions** — `.asString(null)` instead of `TypeConverter.toJava()` dispatch chain
+- **Direct-to-JSON serialization** — `appendJson` writes fields straight to the output
+  buffer, bypassing the `JqObject`/`JqString` tree entirely
+- **Direct-to-bytes serialization** — `appendJsonBytes` writes UTF-8 bytes straight to
+  a `BytOutput` buffer, bypassing both the tree and the `StringBuilder`
+- **Null-safe by construction** — boxed and reference-type fields emit
+  `acc == null ? JqNull.NULL : ...` ternaries, so generated output is byte-identical
+  to reflection-based mapping for every input including nulls
 - **No intermediate objects** — no `Object[]`, no `FieldMapping`, no `Optional` from `tryGet()`
 
 ## Compile-Time Validation
@@ -180,36 +219,46 @@ Generated mappings are native-image friendly by default:
 
 ## Performance
 
-Benchmarked against reflection-based jjq-mapper and Jackson `treeToValue` on pre-parsed
-JqValue/JsonNode (JMH, 2 forks, 5 iterations):
+Benchmarked against reflection-based jjq-mapper and Jackson 3 on pre-parsed
+JqValue/JsonNode (JMH, 2-3 forks, 5 iterations, JDK 25.0.2 Temurin, as of 2026-09-12):
 
 ### Deserialization (pre-parsed tree to record)
 
 | Implementation | Simple (5 fields) | Nested (record + sub) |
 |---|---|---|
-| **Generated** | **22 ns, 56 B** | **32 ns, 80 B** |
-| Reflection | 128 ns, 360 B | 215 ns, 624 B |
-| Jackson | 127 ns, 416 B | 199 ns, 560 B |
+| **Generated** | **20 ns, 40 B** | **25 ns, 48 B** |
+| Reflection | 39 ns, 72 B | 51 ns, 112 B |
+| Jackson 3 | 227 ns, 656 B | 364 ns, 600 B |
 
-The generated mapper is **5.8x faster** than Jackson with **7.4x less allocation** for
-simple records, and **6.2x faster** with **7x less allocation** for nested records.
+The generated mapper is **11x faster** than Jackson 3 with **16x less allocation** for
+simple records, and **15x faster** with **12x less allocation** for nested records.
+Even reflection-based mapping is 5-7x faster than Jackson 3.
 
 ### Serialization (record to JSON string)
 
 | Implementation | Simple (5 fields) | Nested (record + sub) |
 |---|---|---|
-| **Generated** | **181 ns, 376 B** | **216 ns, 528 B** |
-| Reflection | 216 ns, 400 B | 256 ns, 528 B |
+| **Generated** | **92 ns, 120 B** | **150 ns, 344 B** |
+| Reflection | 224 ns, 328 B | 264 ns, 440 B |
+
+### Serialization (record to JSON bytes)
+
+| Implementation | Simple (5 fields) | Nested (record + sub) |
+|---|---|---|
+| **Generated** | **179 ns, 184 B** | **192 ns, 320 B** |
+| Reflection | 242 ns, 392 B | 257 ns, 416 B |
+| Jackson 3 | 189 ns, 656 B | 164 ns, 600 B |
 
 ### Where the Speed Comes From
 
-For a 5-field record, the **22 ns** breaks down to ~4.4 ns per field — very close to
+For a 5-field record, the **20 ns** breaks down to ~4 ns per field — very close to
 the irreducible minimum of 3 ns for `JqObject.get()`. The reflection-based path adds
-~100 ns of overhead from:
-- `MethodHandle.invokeWithArguments(Object[])` for constructor (~20 ns)
-- `Object[]` allocation for constructor args (~15 ns)
-- `TypeConverter` enum switch dispatch per field (~25 ns total)
-- `FieldMapping` / `ClassMapping` indirection (~10 ns)
+~20 ns of overhead from:
+- Pre-cached `asSpreader` constructor handle invocation
+- `Object[]` allocation for constructor args (partially escape-analyzed)
+- `TypeConverter` enum switch dispatch per field
+- `FieldMapping` / `ClassMapping` indirection
 
 The generated code eliminates all of these, leaving only the jq field extraction
-and the record construction.
+and the record construction. On the serialization side, `appendJson`/`appendJsonBytes`
+skip the intermediate `JqValue` tree (no `Builder`, `JqObject`, or `JqString` allocation).

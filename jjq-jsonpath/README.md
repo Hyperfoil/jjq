@@ -56,6 +56,11 @@ String jq = JsonpathToJq.convert("$.a.b.c", Mode.STRICT);
 // Array collection (jsonb_path_query_array equivalent)
 String jq = JsonpathToJq.convertArray("$.items[*].name");
 // "[.items[]?.name]"
+
+// Tokenizing parser entry point (used internally by convert/compile;
+// call directly when the mode prefix is embedded in the expression)
+String jq2 = JsonpathToJq.convertTokenized("strict $.a.b", Mode.LAX);
+// mode prefix wins: strict semantics
 ```
 
 ## Modes

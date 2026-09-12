@@ -62,6 +62,9 @@ public JqValue data;
 1. `JqValues.serializeToByteOutput(value)` — serializes directly into a pre-sized `byte[]` buffer (no `Arrays.copyOf`)
 2. `PreparedStatement.setBinaryStream(index, stream, length)` — wraps the buffer in `ByteArrayInputStream` (no copy). PostgreSQL's JDBC driver stores the stream reference and reads lazily during execute.
 
+Note: `serializeToByteOutput` returns `SerializedBytes(data, length)` where `data`
+may be oversized — always use `length`, never `data.length`, when writing.
+
 **Read path:**
 - `ResultSet.getBytes()` → `JqValues.parse(byte[])` — SWAR-optimized byte parser with field name interning
 

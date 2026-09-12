@@ -115,6 +115,39 @@ JqValues.serializeTo(data, outputStream);
 
 For documents parsed from `byte[]`, deferred string values are copied as raw bytes without constructing Java Strings or re-encoding UTF-8. This makes the `parse(byte[])` -> `serializeToBytes()` round-trip optimal for pass-through workloads like database persistence and message queues.
 
+### Reusable serialization buffers
+
+Both serialization paths reuse thread-local buffers. For tight loops, acquire the
+buffer directly to avoid per-call setup:
+
+```java
+// String path — reuse the thread-local StringBuilder
+StringBuilder sb = JqValues.acquireSerializerBuffer();
+data.appendTo(sb);
+String json = JqValues.releaseSerializerBuffer(sb);
+
+// Byte path — reuse the thread-local BytOutput (public growable byte buffer)
+BytOutput out = JqValues.acquireByteBuffer();
+data.appendToBytes(out);
+byte[] bytes = JqValues.releaseByteBuffer(out);
+
+// Zero-copy stream write — no intermediate array
+BytOutput out2 = JqValues.acquireByteBuffer();
+data.appendToBytes(out2);
+JqValues.writeByteBuffer(out2, outputStream);
+```
+
+### Parse variants
+
+```java
+JqValues.parse(jsonString);              // String input (delegates to byte[] path)
+JqValues.parse(bytes);                   // byte[] input (fastest)
+JqValues.parse(bytes, offset, length);   // byte[] slice
+JqValues.parse(inputStream);             // InputStream (throws IOException)
+JqValues.parseStrict(jsonString);        // Rejects trailing content (for fromjson)
+JqValues.parseAll(jsonString);           // JSONL / multi-document streams
+```
+
 ### Navigate and extract values
 
 For repeated queries, **always use `JqProgram.compile()`** -- it compiles once and executes in nanoseconds:
@@ -181,6 +214,17 @@ JqObject config = (JqObject) data.getField("config");
 config.forEach((key, val) -> System.out.println(key + "=" + val));
 for (String key : config.keys()) { /* ... */ }
 for (var entry : config.entries()) { /* ... */ }
+
+// Indexed access — O(1) for array-backed objects, no Iterator allocation
+int n = config.size();
+for (int i = 0; i < n; i++) {
+    String key = config.keyAt(i);
+    JqValue val = config.valueAt(i);
+}
+
+// Optional-based lookup — distinguishes absent keys from explicit nulls
+Optional<JqValue> maybe = config.tryGet("user");  // empty if absent
+Optional<JqValue> present = config.tryGet("nick"); // of(JqNull.NULL) if {"nick": null}
 ```
 
 ### Parse from InputStream
@@ -262,6 +306,17 @@ JqObject result = JqObject.builder()
     .put("score", 95.5)
     .put("active", true)
     .put("data", someJqValue)   // null is treated as JqNull.NULL
+    .build();
+
+// Pre-sized builder avoids array growth for known field counts
+JqObject sized = JqObject.builder(8).put("a", 1).build();
+
+// putUnchecked skips the duplicate-key scan when keys are unique by
+// construction (also coerces null to JqNull.NULL)
+JqObject fast = JqObject.builder(3)
+    .putUnchecked("a", 1L)
+    .putUnchecked("b", "x")
+    .putUnchecked("c", true)
     .build();
 
 // Array builder
