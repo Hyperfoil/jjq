@@ -15,7 +15,7 @@
         <connection>scm:git:git://github.com/Hyperfoil/jjq.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/Hyperfoil/jjq.git</developerConnection>
         <url>https://github.com/Hyperfoil/jjq</url>
-        <tag>0.1.2</tag>
+        <tag>0.1.11</tag>
     </scm>
 
     <licenses>
@@ -270,6 +270,11 @@
                                 <goals>
                                     <goal>sign</goal>
                                 </goals>
+                                <configuration>
+                                    <!-- Passphrase comes from MAVEN_GPG_PASSPHRASE env in CI;
+                                         without this gpg blocks waiting on an agent. -->
+                                    <useAgent>false</useAgent>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>
