@@ -151,10 +151,37 @@ class JsonpathToJqTest {
         }
 
         @Test void filterAddsIterator() {
-            // Filter on non-array path should add []?
-            String result = JsonpathToJq.convert("$.data ?(@.active == true)", JsonpathToJq.Mode.STRICT);
-            assertTrue(result.contains("[]?"), "Should add []? before select: " + result);
+            // Filter on non-array path adds []? in LAX mode (auto-wrap semantics)
+            String result = JsonpathToJq.convert("$.data ?(@.active == true)", JsonpathToJq.Mode.LAX);
+            assertTrue(result.contains("[]?"), "Should add []? before select in lax: " + result);
             assertTrue(result.contains("select("), result);
+        }
+
+        @Test void strictFilterDoesNotAutoWrap() {
+            // STRICT mode must not iterate object values (jjq#81)
+            String json = "{\"data\":{\"active\":true}}";
+            String jq = JsonpathToJq.convertArray("$.data ?(@.active == true)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[{\"active\":true}]", result.toJsonString(),
+                    "Should test the object itself, jq: " + jq);
+        }
+
+        @Test void bareNotBindsToSingleOperand() {
+            // ! binds tighter than && (jjq#81)
+            String json = "[{\"a\":true,\"b\":false},{\"a\":false,\"b\":true}]";
+            String jq = JsonpathToJq.convertArray("$[*] ?(!@.a && @.b)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[{\"a\":false,\"b\":true}]", result.toJsonString(),
+                    "Should negate only @.a, jq: " + jq);
+        }
+
+        @Test void parenthesizedNot() {
+            // Explicit parens already work — regression guard (jjq#81)
+            String json = "[{\"a\":true,\"b\":false},{\"a\":false,\"b\":true}]";
+            String jq = JsonpathToJq.convertArray("$[*] ?(!(@.a) && @.b)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[{\"a\":false,\"b\":true}]", result.toJsonString(),
+                    "Should negate only (@.a), jq: " + jq);
         }
 
         @Test void filterDoesNotDuplicateIterator() {
@@ -612,6 +639,95 @@ class JsonpathToJqTest {
             JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
             assertEquals("[30]", result.toJsonString(),
                     "$.data[2 to 2] should return single element, jq: " + jq);
+        }
+
+        @Test void rangeToLastMinusOne() {
+            // [1 to last-1] on len-5 is indices 1,2,3 (jjq#81: was [1:-2], missing 3)
+            String jq = JsonpathToJq.convert("$.data[1 to last-1]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[20,30,40]", result.toJsonString(),
+                    "$.data[1 to last-1] should return elements 1-3, jq: " + jq);
+        }
+
+        @Test void rangeToLast() {
+            String jq = JsonpathToJq.convert("$.data[2 to last]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[30,40,50]", result.toJsonString(),
+                    "$.data[2 to last] should return tail, jq: " + jq);
+        }
+
+        @Test void lastToLast() {
+            // [last to last] is a single-element range (jjq#81)
+            String jq = JsonpathToJq.convertArray("$.data[last to last]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[[50]]", result.toJsonString(),
+                    "$.data[last to last] should return last element slice, jq: " + jq);
+        }
+
+        @Test void lastToLargeIndex() {
+            // [last to 5] on len-5: lower=4, clamped tail (jjq#81)
+            String jq = JsonpathToJq.convertArray("$.data[last to 5]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[[50]]", result.toJsonString(),
+                    "$.data[last to 5] should clamp to tail, jq: " + jq);
+        }
+
+        @Test void unionIndexes() {
+            String jq = JsonpathToJq.convertArray("$.data[4,0,2]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(ARRAY_JSON));
+            assertEquals("[50,10,30]", result.toJsonString(),
+                    "Union should preserve arm order, jq: " + jq);
+        }
+
+        @Test void unionWithWildcard() {
+            // $[*] arms iterate everything, duplicates kept (jjq#81)
+            String json = "[10,20]";
+            String jq = JsonpathToJq.convertArray("$[0,*]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[10,10,20]", result.toJsonString(),
+                    "Union with wildcard should include arm results, jq: " + jq);
+        }
+
+        @Test void unionWithDecimalTruncation() {
+            // Decimal index truncates toward zero like PostgreSQL (jjq#81)
+            String json = "[10,20,30]";
+            String jq = JsonpathToJq.convertArray("$[0,1.9]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[10,20]", result.toJsonString(),
+                    "Union decimal arm should truncate, jq: " + jq);
+        }
+
+        @Test void unionWithStringKey() {
+            // String arms emit quoted access (jjq#81)
+            String jq = JsonpathToJq.convert("$.a[0,\"b\"]", JsonpathToJq.Mode.STRICT);
+            assertTrue(jq.contains(".[\"b\"]"),
+                    "Union string arm should use bracket notation, jq: " + jq);
+        }
+
+        @Test void unspacedLastMinusOne() {
+            // Unspaced last-N splits like the spaced form (jjq#81)
+            String json = "[10,20,30,40,50]";
+            String jq = JsonpathToJq.convertArray("$[last-1]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[40]", result.toJsonString(),
+                    "$[last-1] should return second-to-last, jq: " + jq);
+        }
+
+        @Test void unspacedLastToLast() {
+            String json = "[10,20,30,40,50]";
+            String jq = JsonpathToJq.convertArray("$[last-1 to last]", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[[40,50]]", result.toJsonString(),
+                    "$[last-1 to last] should return tail slice, jq: " + jq);
+        }
+
+        @Test void dotContextLastKeptWhole() {
+            // $.last-3 in dot context is key "last-3", not arithmetic (jjq#81)
+            String json = "{\"last-3\":99}";
+            String jq = JsonpathToJq.convert("$.last-3", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("99", result.toJsonString(),
+                    "$.last-3 should read key, jq: " + jq);
         }
     }
 

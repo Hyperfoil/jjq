@@ -33,10 +33,39 @@ public final class JsonpathTranslator {
     private final StringBuilder jq;
 
     public JsonpathTranslator(List<JsonpathToken> tokens, JsonpathToJq.Mode mode) {
-        this.tokens = tokens;
+        // Copy: splitLastOffset() inserts synthetic tokens during translation
+        this.tokens = new java.util.ArrayList<>(tokens);
         this.mode = mode;
         this.pos = 0;
         this.jq = new StringBuilder();
+    }
+
+    /** Matches an unspaced last-offset identifier: last-N with digits. */
+    private static final java.util.regex.Pattern LAST_OFFSET =
+            java.util.regex.Pattern.compile("last-(\\d+)");
+
+    /**
+     * Split an IDENT("last-N") token into KW_LAST, MINUS, INTEGER(N) in place,
+     * so downstream logic sees the canonical spaced form. The lexer keeps
+     * {@code last-N} whole (it can be a key in dot context: $.last-3), so this
+     * split applies only where an index offset is grammatically expected.
+     * Callers must have verified the peek matches LAST_OFFSET first.
+     */
+    private void splitLastOffset() {
+        JsonpathToken tok = advance(); // consume IDENT("last-N")
+        java.util.regex.Matcher m = LAST_OFFSET.matcher(tok.value());
+        m.matches(); // guaranteed by caller
+        int tokPos = tok.position();
+        tokens.add(pos, new JsonpathToken(INTEGER, m.group(1), tokPos));
+        tokens.add(pos, new JsonpathToken(MINUS, tokPos));
+        tokens.add(pos, new JsonpathToken(KW_LAST, "last", tokPos));
+        // peek() is now KW_LAST; existing logic applies unchanged
+    }
+
+    /** True if the peeked token is an unspaced last-offset IDENT. */
+    private boolean peekLastOffset() {
+        JsonpathToken tok = peek();
+        return tok.is(IDENT) && LAST_OFFSET.matcher(tok.value()).matches();
     }
 
     /** Translate the token stream to a jq expression string. */
@@ -256,6 +285,37 @@ public final class JsonpathTranslator {
         return sb.toString();
     }
 
+    /**
+     * Escape only double quotes for jq string embedding, preserving backslashes
+     * verbatim. Used for regex patterns without the quote flag: PostgreSQL ARE
+     * constructs (e.g. \b = backspace) must reach the regex engine exactly as
+     * the lexer value holds them, with jq string decoding doing the rest.
+     */
+    private static String escapeJqQuotesOnly(String value) {
+        if (value.indexOf('"') < 0) return value;
+        return value.replace("\"", "\\\"");
+    }
+
+    /**
+     * Quote a literal string for use as a regex: escape every regex
+     * metacharacter so the pattern matches only itself. Implements the
+     * PostgreSQL like_regex "q" flag, which jq has no equivalent for.
+     */
+    private static String quoteRegex(String literal) {
+        StringBuilder sb = new StringBuilder(literal.length() * 2);
+        for (int i = 0; i < literal.length(); i++) {
+            char c = literal.charAt(i);
+            if (c == '\\' || c == '.' || c == '^' || c == '$' || c == '*'
+                    || c == '+' || c == '?' || c == '(' || c == ')'
+                    || c == '[' || c == ']' || c == '{' || c == '}'
+                    || c == '|') {
+                sb.append('\\');
+            }
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
     // ========================================================================
     //  Bracket access: [N], [*], [N to M], [last], [last-N], [N,M,...]
     // ========================================================================
@@ -291,6 +351,13 @@ public final class JsonpathTranslator {
         }
 
         if (first.is(KW_LAST)) {
+            translateBracketLast();
+            return;
+        }
+
+        if (first.is(IDENT) && LAST_OFFSET.matcher(first.value()).matches()) {
+            // Unspaced `last-N`: normalize to KW_LAST, MINUS, INTEGER
+            splitLastOffset();
             translateBracketLast();
             return;
         }
@@ -348,15 +415,49 @@ public final class JsonpathTranslator {
         }
 
         if (peek().is(KW_TO)) {
-            // [last to ???] — unusual but handle it
             advance(); // consume TO
-            // This would mean "from last to ..." which doesn't make much sense
-            // but let's handle [last to last] → [-1:]
+            if (peekLastOffset()) {
+                // Unspaced `to last-N`: normalize to KW_LAST, MINUS, INTEGER
+                splitLastOffset();
+            }
             if (peek().is(KW_LAST)) {
                 advance();
-                expect(RBRACKET);
-                jq.append("[-1:]");
+                if (peek().is(MINUS)) {
+                    // [last to last - N]: descending for N >= 1 → empty result set.
+                    // jq `empty` produces zero outputs, matching PG exactly
+                    // (in both bare and convertArray contexts).
+                    advance(); // consume MINUS
+                    JsonpathToken n = expect(INTEGER);
+                    int offset = Integer.parseInt(n.value());
+                    expect(RBRACKET);
+                    if (offset == 0) {
+                        // [last to last - 0] == [last to last]
+                        jq.append("[-1:]");
+                    } else {
+                        jq.append("empty");
+                    }
+                } else {
+                    // [last to last] → [-1:]
+                    expect(RBRACKET);
+                    jq.append("[-1:]");
+                }
+                return;
             }
+            if (peek().is(INTEGER)) {
+                // [last to M]: lower bound is last (len-1), upper is M.
+                // jq clamps and empties naturally: [-1:M+1] yields the
+                // clamped tail when len <= M+1, [] when descending.
+                JsonpathToken to = expect(INTEGER);
+                int toVal = Integer.parseInt(to.value());
+                expect(RBRACKET);
+                jq.append("[-1:").append(toVal + 1).append("]");
+                return;
+            }
+            // [last to <unexpected>] — consume to RBRACKET to avoid
+            // dangling tokens corrupting the rest of the expression
+            while (!peek().is(RBRACKET) && !peek().is(EOF)) advance();
+            if (peek().is(RBRACKET)) advance();
+            jq.append("empty");
             return;
         }
 
@@ -387,16 +488,26 @@ public final class JsonpathTranslator {
             // Range: [N to M] or [N to last]
             advance(); // consume TO
 
+            if (peekLastOffset()) {
+                // Unspaced `to last-N`: normalize to KW_LAST, MINUS, INTEGER
+                splitLastOffset();
+            }
             if (peek().is(KW_LAST)) {
                 advance(); // consume LAST
 
                 if (peek().is(MINUS)) {
-                    // [N to last - M] → [N:-(M+1)]
+                    // [N to last - M] → [N:-M] (PostgreSQL end is inclusive;
+                    // jq end is exclusive, and last-M is index len-1-M == -M).
+                    // M == 0 means through the end: [N:].
                     advance();
                     JsonpathToken m = expect(INTEGER);
                     int offset = Integer.parseInt(m.value());
                     expect(RBRACKET);
-                    jq.append("[").append(firstVal).append(":").append(-(offset + 1)).append("]");
+                    if (offset == 0) {
+                        jq.append("[").append(firstVal).append(":]");
+                    } else {
+                        jq.append("[").append(firstVal).append(":").append(-offset).append("]");
+                    }
                 } else {
                     // [N to last] → [N:]
                     expect(RBRACKET);
@@ -428,7 +539,23 @@ public final class JsonpathTranslator {
                     int nextVal = Integer.parseInt(advance().value());
                     if (negNext) nextVal = -nextVal;
                     jq.append(", .[").append(nextVal).append("]");
+                } else if (peek().is(DECIMAL)) {
+                    // Decimal index: PostgreSQL truncates toward zero
+                    double d = Double.parseDouble(advance().value());
+                    int nextVal = (int) d;
+                    if (negNext) nextVal = -nextVal;
+                    jq.append(", .[").append(nextVal).append("]");
+                } else if (peek().is(STRING)) {
+                    // String key arm: $["a",0] style member
+                    jq.append(", .[\"");
+                    appendJqEscaped(advance().value());
+                    jq.append("\"]");
+                } else if (peek().is(STAR)) {
+                    // Wildcard arm: $[0,*] iterates everything (duplicates kept)
+                    advance();
+                    jq.append(", .[]?");
                 }
+                // Anything else: skip the arm (documented limitation)
             }
             jq.append(")");
             if (peek().is(RBRACKET)) advance();
@@ -650,11 +777,19 @@ public final class JsonpathTranslator {
         advance(); // consume LPAREN
 
         // If the path before the filter doesn't end with []? (array iteration),
-        // add []? to iterate elements before filtering.
-        // This matches PostgreSQL behavior: $.data ?(@.active) iterates data's elements.
+        // decide how the filter input reaches select().
+        // Lax mode auto-wraps: iterate unconditionally (proven behavior).
+        // Strict mode is type-directed: iterate actual arrays, test anything
+        // else directly. Unconditional []? iterates object values in strict
+        // mode (testing e.g. `true` instead of `{"active":true}`); no marker
+        // tests the value itself.
         String currentJq = jq.toString();
         if (!currentJq.endsWith("[]?") && !currentJq.endsWith("[]")) {
-            jq.append("[]?");
+            if (mode == JsonpathToJq.Mode.LAX) {
+                jq.append("[]?");
+            } else {
+                jq.append(" | (if type == \"array\" then .[] else . end)");
+            }
         }
 
         jq.append(" | select(");
@@ -664,59 +799,91 @@ public final class JsonpathTranslator {
         if (peek().is(RPAREN)) advance(); // consume RPAREN
     }
 
+    /** Translate @ plus one access step: @.field, @["key"], @[idx], @.*, or bare @. */
+    private void translateCurrentAccess() {
+        advance(); // consume @
+        if (peek().is(DOT)) {
+            advance(); // consume DOT
+            if (peek().is(IDENT)) {
+                String name = advance().value();
+                if (isBareJqIdentifier(name)) {
+                    jq.append(".").append(name);
+                } else {
+                    jq.append(".[\"");
+                    appendJqEscaped(name);
+                    jq.append("\"]");
+                }
+            } else if (peek().is(STRING)) {
+                jq.append(".[\"");
+                appendJqEscaped(advance().value());
+                jq.append("\"]");
+            } else if (peek().is(STAR)) {
+                // @.* — wildcard on the current item
+                advance();
+                jq.append(".[]?");
+            }
+        } else if (peek().is(LBRACKET)) {
+            jq.append(".");
+            // Don't consume — let translateBracket handle it
+            translateBracket();
+        } else {
+            jq.append(".");
+        }
+    }
+
+    /**
+     * Translate exactly one operand for prefix ! — an @-access, a balanced
+     * parenthesized expression, an exists() call, or a literal. Unlike the
+     * filter body loop, this stops after one operand so ! binds tightly
+     * (PostgreSQL precedence), instead of swallowing the rest of the body.
+     */
+    private void translateNegatedOperand() {
+        if (peek().is(LPAREN)) {
+            advance(); // consume (
+            jq.append("(");
+            translateFilterBody(); // nesting handled recursively; stops at matching paren
+            jq.append(")");
+            if (peek().is(RPAREN)) advance(); // consume )
+        } else if (peek().is(CURRENT)) {
+            translateCurrentAccess();
+        } else if (peek().is(KW_EXISTS)) {
+            translateExists();
+        } else if (peek().is(INTEGER) || peek().is(DECIMAL)) {
+            jq.append(advance().value());
+        } else if (peek().is(STRING)) {
+            jq.append("\"").append(escapeJq(advance().value())).append("\"");
+        } else if (peek().is(TRUE)) {
+            advance();
+            jq.append("true");
+        } else if (peek().is(FALSE)) {
+            advance();
+            jq.append("false");
+        } else if (peek().is(NULL)) {
+            advance();
+            jq.append("null");
+        } else {
+            // Unexpected token (including RPAREN on malformed input like ?(!))
+            // — skip one token to avoid stalling, negate false
+            if (!peek().is(EOF)) advance();
+            jq.append("false");
+        }
+    }
+
     /** Translate the body of a filter expression. Handles @, &&, ||, exists, like_regex, etc. */
     private void translateFilterBody() {
         while (!peek().is(RPAREN) && !peek().is(EOF)) {
             JsonpathToken token = peek();
             switch (token.type()) {
-                case CURRENT -> {
-                    advance(); // consume @
-                    if (peek().is(DOT)) {
-                        advance(); // consume DOT
-                        if (peek().is(IDENT)) {
-                            String name = advance().value();
-                            if (isBareJqIdentifier(name)) {
-                                jq.append(".").append(name);
-                            } else {
-                                jq.append(".[\"");
-                                appendJqEscaped(name);
-                                jq.append("\"]");
-                            }
-                        } else if (peek().is(STRING)) {
-                            jq.append(".[\"");
-                            appendJqEscaped(advance().value());
-                            jq.append("\"]");
-                        } else if (peek().is(STAR)) {
-                            // @.* — wildcard on the current item
-                            advance();
-                            jq.append(".[]?");
-                        }
-                    } else if (peek().is(LBRACKET)) {
-                        jq.append(".");
-                        // Don't consume — let translateBracket handle it
-                        translateBracket();
-                    } else {
-                        jq.append(".");
-                    }
-                }
+                case CURRENT -> translateCurrentAccess();
                 case AND -> { advance(); jq.append(" and "); }
                 case OR -> { advance(); jq.append(" or "); }
                 case NOT -> {
+                    // PostgreSQL ! is prefix and binds to one operand: !(expr).
+                    // jq 'not' is postfix: (expr | not).
                     advance();
-                    // PostgreSQL ! is prefix: !(expr). jq 'not' is postfix: (expr | not).
-                    // If followed by (, translate the parenthesized expression then append | not
-                    if (peek().is(LPAREN)) {
-                        advance(); // consume (
-                        jq.append("(");
-                        translateFilterBody();
-                        jq.append(" | not)");
-                        if (peek().is(RPAREN)) advance(); // consume )
-                    } else {
-                        // Bare ! — approximate as postfix not on next expression
-                        jq.append("(");
-                        translateFilterBody(); // will consume the next expression
-                        jq.append(" | not)");
-                    }
+                    jq.append("(");
+                    translateNegatedOperand();
+                    jq.append(" | not)");
                 }
                 case EQ -> { advance(); jq.append(" == "); }
                 case NEQ, LTGT -> { advance(); jq.append(" != "); }
@@ -839,10 +1006,26 @@ public final class JsonpathTranslator {
         }
 
         // Wrap in type guard: (subject | type == "string" and test("pattern"))
-        // The subject was already emitted — we need to pipe into test
-        jq.append(" | type == \"string\" and test(\"").append(escapeJq(pattern.value())).append("\"");
-        if (flags != null && !flags.isEmpty()) {
-            jq.append("; \"").append(escapeJq(flags)).append("\"");
+        // The subject was already emitted — we need to pipe into test.
+        // Flag "q" quotes the whole pattern (literal match): regex-escape it
+        // and strip q (jq has no quote flag). Without q the pattern is a
+        // PostgreSQL ARE regex; embed it with quotes-only escaping so ARE
+        // constructs like \b (backspace in ARE, word boundary in jq/Oniguruma)
+        // survive via jq string decoding, exactly as the lexer value holds them.
+        String regexSource = pattern.value();
+        String outFlags = flags != null ? flags : "";
+        if (outFlags.indexOf('q') >= 0) {
+            // Quoted pattern: regex-escape first, then jq-escape for embedding
+            regexSource = escapeJq(quoteRegex(regexSource));
+            outFlags = outFlags.replace("q", "");
+        } else {
+            // Raw ARE pattern: escape only quotes so backslash constructs
+            // reach jq decoding exactly as the lexer value holds them
+            regexSource = escapeJqQuotesOnly(regexSource);
+        }
+        jq.append(" | type == \"string\" and test(\"").append(regexSource).append("\"");
+        if (!outFlags.isEmpty()) {
+            jq.append("; \"").append(escapeJq(outFlags)).append("\"");
         }
         jq.append(")");
     }
