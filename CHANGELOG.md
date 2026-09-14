@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.1.12] - 2026-09-14
+
+62 commits since 0.1.11. Headline: generated data binding is 11-15x faster
+than Jackson 3 on deserialization with 16x less allocation, and direct
+serialization paths (`appendJson`/`appendJsonBytes`) bypass the `JqValue`
+tree entirely.
+
+### Data binding (jjq-mapper, jjq-mapper-processor)
+
+- Generated `appendJson` writes fields straight to the output buffer:
+  3-field record 177 -> 92 ns/op (-48%), 360 -> 120 B/op (-67%)
+- Generated `appendJsonBytes` writes UTF-8 straight to a byte buffer:
+  3-field record 218 -> 179 ns/op (-18%), 424 -> 184 B/op (-57%)
+- Nested records recurse into generated emitters instead of building inner
+  trees: nested String 145 -> 85 ns/op (-41%), nested bytes 192 -> 173 ns/op
+- Pre-cached `asSpreader` constructor handle eliminates ~200 B/call of JDK
+  `MethodHandle` machinery: reflection deserialization 93 -> 37 ns/op (-60%)
+- Positional-first field matching and indexed `JqObject` access
+  (`keyAt`/`valueAt`): reflection deserialization down another 14-21%
+- `putUnchecked` builder path, `get()`-first mapping cache, interned field
+  names, hoisted `resolveKind` in generated list conversion
+- New modules: `jjq-yaml` (parse/emit/query YAML via SnakeYAML),
+  `jjq-mapper-jackson` and `jjq-mapper-jsonb` annotation bridges,
+  `AnnotationBridge` SPI
+- New annotations: `@JqInclude`, `@JqNaming`, `@JqConverter` + `ValueConverter`
+- POJO support (`@JqMapped` classes with no-arg constructor + accessors)
+- Correctness: `char`/`Character` support everywhere, `Optional` scalar
+  types, null-safe generated code for all boxed/reference fields
+- New public core APIs: `JqObject.keyAt`/`valueAt`/`putUnchecked` overloads,
+  `BytOutput` (public), `JqValues` buffer management and `appendJson*` helpers
+
+### Parser
+
+- Char-path parser gained schema cache and per-depth scratch buffers
+  (allocation parity with the byte path on large documents)
+- `parse(String)` always delegates to the byte path: 14MB production
+  document 46.6 -> 20.2 ms/op (-57%)
+- Multiplicative hash mixing in `JqObject` hash index
+
+### SQL/JSON path converter (jjq-jsonpath, h5m#322, jjq#80, jjq#81)
+
+- Backslash escapes in keys (`$.result.cpu\-masters` -> `.["cpu-masters"]`)
+- Filter field fixes (hyphen, string escaping, `@.*`), filter semantics
+  (single-operand `!`, type-directed strict input), slice/union fixes
+  (off-by-one, `last` handling, non-integer arms), literal `replace`,
+  `exists()` extensions, `appendJson`-aware `like_regex` flag handling
+- Conformance 123 -> 127 passing of 558 (zero regressions by skip-set diff)
+
+### Build and docs
+
+- Horreum-style release automation: `release.yml` workflow publishing to
+  Maven Central via `maven-release-plugin` (validated with dry run)
+- Full README overhaul: fixed contradictions, documented all new APIs,
+  refreshed every benchmark table, new `jjq-fastjson2` README
+- Javadoc warnings eliminated on the public API surface
+- `JqMappedMessageBodyReader`/`Writer` for Jakarta REST use the direct paths
+
 ## [Unreleased] - 0.1.3
 
 ### Performance
