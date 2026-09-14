@@ -244,9 +244,16 @@ public final class JsonpathTranslator {
      * in identifiers, escapes in quoted strings).
      */
     private void appendJqEscaped(String name) {
-        StringBuilder sb = new StringBuilder(name.length() + 2);
-        io.hyperfoil.tools.jjq.value.JqString.escapeJson(name, sb);
-        jq.append(sb);
+        jq.append(escapeJq(name));
+    }
+
+    /**
+     * Return the jq-escaped form of a string for use inside double quotes.
+     */
+    private static String escapeJq(String value) {
+        StringBuilder sb = new StringBuilder(value.length() + 2);
+        io.hyperfoil.tools.jjq.value.JqString.escapeJson(value, sb);
+        return sb.toString();
     }
 
     // ========================================================================
@@ -667,9 +674,22 @@ public final class JsonpathTranslator {
                     if (peek().is(DOT)) {
                         advance(); // consume DOT
                         if (peek().is(IDENT)) {
-                            jq.append(".").append(advance().value());
+                            String name = advance().value();
+                            if (isBareJqIdentifier(name)) {
+                                jq.append(".").append(name);
+                            } else {
+                                jq.append(".[\"");
+                                appendJqEscaped(name);
+                                jq.append("\"]");
+                            }
                         } else if (peek().is(STRING)) {
-                            jq.append(".[\"").append(advance().value()).append("\"]");
+                            jq.append(".[\"");
+                            appendJqEscaped(advance().value());
+                            jq.append("\"]");
+                        } else if (peek().is(STAR)) {
+                            // @.* — wildcard on the current item
+                            advance();
+                            jq.append(".[]?");
                         }
                     } else if (peek().is(LBRACKET)) {
                         jq.append(".");
@@ -710,7 +730,7 @@ public final class JsonpathTranslator {
                 case SLASH -> { advance(); jq.append(" / "); }
                 case PERCENT -> { advance(); jq.append(" % "); }
                 case INTEGER, DECIMAL -> { advance(); jq.append(token.value()); }
-                case STRING -> { advance(); jq.append("\"").append(token.value()).append("\""); }
+                case STRING -> { advance(); jq.append("\"").append(escapeJq(token.value())).append("\""); }
                 case TRUE -> { advance(); jq.append("true"); }
                 case FALSE -> { advance(); jq.append("false"); }
                 case NULL -> { advance(); jq.append("null"); }
@@ -738,13 +758,17 @@ public final class JsonpathTranslator {
                     advance();
                     if (peek().is(IDENT)) {
                         String name = advance().value();
-                        if (name.contains("-")) {
-                            jq.append(".[\"").append(name).append("\"]");
-                        } else {
+                        if (isBareJqIdentifier(name)) {
                             jq.append(".").append(name);
+                        } else {
+                            jq.append(".[\"");
+                            appendJqEscaped(name);
+                            jq.append("\"]");
                         }
                     } else if (peek().is(STRING)) {
-                        jq.append(".[\"").append(advance().value()).append("\"]");
+                        jq.append(".[\"");
+                        appendJqEscaped(advance().value());
+                        jq.append("\"]");
                     }
                 }
                 case IDENT -> {
@@ -752,7 +776,9 @@ public final class JsonpathTranslator {
                     jq.append(advance().value());
                 }
                 case ROOT -> {
-                    // $ inside filter — root reference
+                    // $ inside filter — root reference. jq has no root access
+                    // inside select; emit as-is (jq reports an error) rather
+                    // than silently substituting the current item.
                     advance();
                     jq.append("$");
                 }
@@ -814,9 +840,9 @@ public final class JsonpathTranslator {
 
         // Wrap in type guard: (subject | type == "string" and test("pattern"))
         // The subject was already emitted — we need to pipe into test
-        jq.append(" | type == \"string\" and test(\"").append(pattern.value()).append("\"");
+        jq.append(" | type == \"string\" and test(\"").append(escapeJq(pattern.value())).append("\"");
         if (flags != null && !flags.isEmpty()) {
-            jq.append("; \"").append(flags).append("\"");
+            jq.append("; \"").append(escapeJq(flags)).append("\"");
         }
         jq.append(")");
     }
@@ -826,7 +852,7 @@ public final class JsonpathTranslator {
         advance(); // consume KW_STARTS
         if (peek().is(KW_WITH)) advance(); // consume KW_WITH
         JsonpathToken prefix = expect(STRING);
-        jq.append(" | startswith(\"").append(prefix.value()).append("\")");
+        jq.append(" | startswith(\"").append(escapeJq(prefix.value())).append("\")");
     }
 
     /**

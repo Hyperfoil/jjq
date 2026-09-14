@@ -187,6 +187,33 @@ class JsonpathToJqTest {
             String result = JsonpathToJq.convert("$.results[*] ?(@.\"special-field\" == \"x\")", JsonpathToJq.Mode.STRICT);
             assertTrue(result.contains("[\"special-field\"]"), "Should convert @.\"x\" to .[\"x\"]: " + result);
         }
+
+        @Test void hyphenatedFieldInFilter() {
+            // @.a-b must be field access, not subtraction (jjq#81)
+            String json = "[{\"a-b\":1},{\"a-b\":2},{\"c\":3}]";
+            String jq = JsonpathToJq.convertArray("$[*] ?(@.a-b > 1)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[{\"a-b\":2}]", result.toJsonString(),
+                    "Should compare hyphenated field, jq: " + jq);
+        }
+
+        @Test void quotedStringWithQuoteInFilter() {
+            // String literal containing a quote must stay valid jq (jjq#81)
+            String json = "[\"x\\\"y\",\"z\"]";
+            String jq = JsonpathToJq.convertArray("$[*] ?(@ == \"x\\\"y\")", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[\"x\\\"y\"]", result.toJsonString(),
+                    "Should match quoted string, jq: " + jq);
+        }
+
+        @Test void wildcardCurrentItem() {
+            // @.* iterates the current item's values (jjq#81)
+            String json = "[{\"a\":1},{\"b\":2}]";
+            String jq = JsonpathToJq.convertArray("$[*] ?(@.* > 1)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[{\"b\":2}]", result.toJsonString(),
+                    "Should test current-item values, jq: " + jq);
+        }
     }
 
     // ========================================================================
