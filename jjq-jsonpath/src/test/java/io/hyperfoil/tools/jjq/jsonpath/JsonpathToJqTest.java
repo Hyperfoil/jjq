@@ -101,6 +101,66 @@ class JsonpathToJqTest {
                     JsonpathToJq.Mode.STRICT);
             assertNotNull(program);
         }
+
+        @Test void replaceIsLiteral() {
+            // PG replace() is literal, not regex: "." must not match any char (jjq#81)
+            String json = "{\"a\":\"a.b\"}";
+            String jq = JsonpathToJq.convert("$.a.replace(\".\", \"-\")", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("\"a-b\"", result.toJsonString(),
+                    "Dot should match literally, jq: " + jq);
+        }
+
+        @Test void ltrimWithQuoteChar() {
+            // A quote in the char set must not break out of the jq string (jjq#81)
+            String json = "{\"a\":\"\\\"\\\"hello\"}";
+            String jq = JsonpathToJq.convert("$.a.ltrim(\"\\\"\")", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("\"hello\"", result.toJsonString(),
+                    "Should trim quotes, jq: " + jq);
+        }
+
+        @Test void splitPartZeroIsEmpty() {
+            // PG split_part returns "" for field 0 (jjq#81)
+            String json = "{\"a\":\"x,y\"}";
+            String jq = JsonpathToJq.convert("$.a.split_part(\",\", 0)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("\"\"", result.toJsonString(),
+                    "Field 0 should be empty string, jq: " + jq);
+        }
+
+        @Test void splitPartOutOfRangeIsEmpty() {
+            // PG split_part returns "" past the end, not null (jjq#81)
+            String json = "{\"a\":\"x,y\"}";
+            String jq = JsonpathToJq.convert("$.a.split_part(\",\", 5)", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("\"\"", result.toJsonString(),
+                    "Out-of-range field should be empty string, jq: " + jq);
+        }
+
+        @Test void unknownMethodFailsLoudly() {
+            // Unknown methods must error explicitly, not emit garbage (jjq#81)
+            assertThrows(IllegalArgumentException.class, () ->
+                    JsonpathToJq.convert("$.a.frobnicate(1)", JsonpathToJq.Mode.STRICT));
+        }
+
+        @Test void rootWildcardHasDot() {
+            // $.* must access root values, not construct an array (jjq#81)
+            String json = "{\"a\":1,\"b\":2}";
+            String jq = JsonpathToJq.convertArray("$.*", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[1,2]", result.toJsonString(),
+                    "$.* should iterate root, jq: " + jq);
+        }
+
+        @Test void numericDotAccess() {
+            // $.0 means index 0 (.0 is invalid jq) (jjq#81)
+            String json = "{\"a\":[10,20]}";
+            String jq = JsonpathToJq.convert("$.a.0", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("10", result.toJsonString(),
+                    "$.a.0 should index, jq: " + jq);
+        }
     }
 
     // ========================================================================
@@ -496,7 +556,8 @@ class JsonpathToJqTest {
         }
 
         @Test void numericFieldName() {
-            assertStrict("$.results.0.value", ".results.0.value");
+            // .0 is invalid jq — numeric segments use brackets (jjq#81)
+            assertStrict("$.results.0.value", ".results.[0].value");
         }
 
         @Test void underscoreFieldName() {
@@ -953,6 +1014,48 @@ class JsonpathToJqTest {
             String resultStr = result.toJsonString();
             assertTrue(resultStr.contains("\"name\":\"A\""), "Should include A (has meta.tag), jq: " + jq);
             assertFalse(resultStr.contains("\"name\":\"B\""), "Should not include B (no meta), jq: " + jq);
+        }
+
+        @Test void existsArrayIndex() {
+            // exists(@[0]) is true even for explicit nulls (jjq#81)
+            String json = "{\"items\":[[null],[1]]}";
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (exists(@[0]))", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[[null],[1]]", result.toJsonString(),
+                    "Both arrays have index 0, jq: " + jq);
+        }
+
+        @Test void existsWildcard() {
+            // exists(@.*) is true when the item has any values (jjq#81)
+            String json = "{\"items\":[{\"a\":1},{},{\"b\":null}]}";
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (exists(@.*))", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("[{\"a\":1},{\"b\":null}]", result.toJsonString(),
+                    "Non-empty objects exist, empty does not, jq: " + jq);
+        }
+
+        @Test void existsRootPath() {
+            // exists($.a.b) walks from root with key checks (jjq#81).
+            // Tested where current == root so $ is meaningful.
+            String jq = JsonpathToJq.convertArray("$ ? (exists($.a.b))", JsonpathToJq.Mode.STRICT);
+            JqValue present = JqProgram.compile(jq)
+                    .apply(JqValues.parse("{\"a\":{\"b\":null}}"));
+            assertEquals("[{\"a\":{\"b\":null}}]", present.toJsonString(),
+                    "Explicit null counts as existing, jq: " + jq);
+            JqValue absent = JqProgram.compile(jq)
+                    .apply(JqValues.parse("{\"a\":{}}"));
+            assertEquals("[]", absent.toJsonString(),
+                    "Missing key counts as absent, jq: " + jq);
+        }
+
+        @Test void existsHyphenatedNested() {
+            // Hyphenated keys in nested exists paths need brackets (jjq#81)
+            String json = "{\"items\":[{\"my-meta\":{\"my-tag\":\"x\"}},{\"other\":1}]}";
+            String jq = JsonpathToJq.convertArray("$.items[*] ? (exists(@.my-meta.my-tag))", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            String resultStr = result.toJsonString();
+            assertTrue(resultStr.contains("my-tag"), "Should find hyphenated nested key, jq: " + jq);
+            assertFalse(resultStr.contains("other"), "Should exclude missing key, jq: " + jq);
         }
 
         // ---- PostgreSQL 17 numeric cast methods ----

@@ -120,6 +120,12 @@ public final class JsonpathTranslator {
             // But if the next token is LBRACKET, we need the root dot
             if (!peek().is(DOT) && !peek().is(STAR)) {
                 jq.append(".");
+            } else if (peek().is(STAR)) {
+                // $* — the STAR step emits []? without a dot
+                jq.append(".");
+            } else if (peek().is(DOT) && peekAt(1) != null && peekAt(1).is(STAR)) {
+                // $.* — same: DOT+STAR emits []? without a dot
+                jq.append(".");
             }
         } else if (peek().is(EOF)) {
             jq.append(".");
@@ -223,6 +229,11 @@ public final class JsonpathTranslator {
                     // Collect method arguments (if any) before consuming RPAREN
                     var methodArgs = consumeMethodArgs();
                     translateMethod(name, methodArgs);
+                } else if (peek().is(LPAREN)) {
+                    // Unknown method — fail loudly instead of emitting
+                    // garbage that fails later with a confusing error
+                    throw new IllegalArgumentException(
+                            "Unknown jsonpath method: ." + name + "()");
                 } else if (isBareJqIdentifier(name)) {
                     jq.append(".").append(name);
                 } else {
@@ -242,8 +253,9 @@ public final class JsonpathTranslator {
                 jq.append("\"]");
             }
             case INTEGER -> {
-                // .0, .1, etc. — numeric field name (array index via dot notation)
-                jq.append(".").append(advance().value());
+                // .0, .1, etc. — numeric field name means array index (.0 is
+                // invalid jq; .[0] works for both arrays and objects)
+                jq.append(".[").append(advance().value()).append("]");
             }
             default -> {
                 // Just a dot — unusual but possible
@@ -644,9 +656,12 @@ public final class JsonpathTranslator {
                 if (args.size() >= 2) {
                     // decimal(precision, scale) — round to 'scale' decimal places
                     // jq: tonumber * 10^scale | round / 10^scale
-                    String scale = args.get(1);
-                    int s = Integer.parseInt(scale);
-                    if (s >= 0) {
+                    int s = parseMethodInt(methodName, args.get(1));
+                    if (Math.abs((long) s) > 18) {
+                        // Beyond long precision — jq doubles can't represent this;
+                        // fall back to plain conversion rather than overflowing pow10
+                        jq.append(" | tonumber");
+                    } else if (s >= 0) {
                         jq.append(" | tonumber * ").append(pow10(s)).append(" | round / ").append(pow10(s));
                     } else {
                         // Negative scale: round to nearest 10^|s|
@@ -675,8 +690,10 @@ public final class JsonpathTranslator {
                     // ltrim() — trim leading whitespace
                     jq.append(" | sub(\"^\\\\s+\"; \"\")");
                 } else {
-                    // ltrim("chars") — remove leading characters in the set
-                    String chars = escapeRegexChars(args.get(0));
+                    // ltrim("chars") — remove leading characters in the set.
+                    // Regex-escape first (char class), then jq-escape for
+                    // embedding (a quote in chars would otherwise break out).
+                    String chars = escapeJqString(escapeRegexChars(args.get(0)));
                     jq.append(" | sub(\"^[").append(chars).append("]+\"; \"\")");
                 }
             }
@@ -684,7 +701,7 @@ public final class JsonpathTranslator {
                 if (args.isEmpty()) {
                     jq.append(" | sub(\"\\\\s+$\"; \"\")");
                 } else {
-                    String chars = escapeRegexChars(args.get(0));
+                    String chars = escapeJqString(escapeRegexChars(args.get(0)));
                     jq.append(" | sub(\"[").append(chars).append("]+$\"; \"\")");
                 }
             }
@@ -692,14 +709,16 @@ public final class JsonpathTranslator {
                 if (args.isEmpty()) {
                     jq.append(" | sub(\"^\\\\s+\"; \"\") | sub(\"\\\\s+$\"; \"\")");
                 } else {
-                    String chars = escapeRegexChars(args.get(0));
+                    String chars = escapeJqString(escapeRegexChars(args.get(0)));
                     jq.append(" | sub(\"^[").append(chars).append("]+\"; \"\") | sub(\"[")
                       .append(chars).append("]+$\"; \"\")");
                 }
             }
             case "replace" -> {
                 if (args.size() >= 2) {
-                    jq.append(" | gsub(\"").append(escapeJqString(args.get(0)))
+                    // PostgreSQL replace is literal, jq gsub is regex:
+                    // quote the pattern so metacharacters match themselves
+                    jq.append(" | gsub(\"").append(escapeJqString(quoteRegex(args.get(0))))
                       .append("\"; \"").append(escapeJqString(args.get(1))).append("\")");
                 }
             }
@@ -710,13 +729,17 @@ public final class JsonpathTranslator {
             case "split_part" -> {
                 if (args.size() >= 2) {
                     String sep = escapeJqString(args.get(0));
-                    int idx = Integer.parseInt(args.get(1));
-                    if (idx > 0) {
-                        // PostgreSQL split_part is 1-based
-                        jq.append(" | split(\"").append(sep).append("\")[").append(idx - 1).append("]");
+                    int idx = parseMethodInt(methodName, args.get(1));
+                    if (idx == 0) {
+                        // PostgreSQL returns "" for field 0
+                        jq.append(" | \"\"");
+                    } else if (idx > 0) {
+                        // PostgreSQL split_part is 1-based; // "" covers
+                        // out-of-range (jq null) where PG returns ""
+                        jq.append(" | split(\"").append(sep).append("\")[").append(idx - 1).append("] // \"\"");
                     } else {
                         // Negative index: count from end
-                        jq.append(" | split(\"").append(sep).append("\")[").append(idx).append("]");
+                        jq.append(" | split(\"").append(sep).append("\")[").append(idx).append("] // \"\"");
                     }
                 }
             }
@@ -727,6 +750,19 @@ public final class JsonpathTranslator {
     /** Escape a string for use inside a jq string literal (inside double quotes). */
     private static String escapeJqString(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * Parse an integer method argument, throwing a clean error for dynamic
+     * values (e.g. $var) instead of leaking NumberFormatException.
+     */
+    private static int parseMethodInt(String methodName, String arg) {
+        try {
+            return Integer.parseInt(arg);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Method ." + methodName + "() requires an integer literal argument, got: " + arg);
+        }
     }
 
     /** Escape characters for use inside a regex character class [...]. */
@@ -972,23 +1008,98 @@ public final class JsonpathTranslator {
                     String field = advance().value();
                     // Check if there are more dots (nested path)
                     if (peek().is(DOT)) {
-                        // exists(@.a.b.c) → (try .a.b.c // null) != null
-                        StringBuilder path = new StringBuilder(".").append(field);
+                        // exists(@.a.b.c) — walk with existence checks so
+                        // explicit nulls count as existing but missing keys don't
+                        StringBuilder path = new StringBuilder();
+                        appendExistsSegment(path, field);
                         while (peek().is(DOT)) {
                             advance();
                             if (peek().is(IDENT)) {
-                                path.append(".").append(advance().value());
+                                appendExistsSegment(path, advance().value());
+                            } else {
+                                break;
                             }
                         }
-                        jq.append("((try ").append(path).append(" // null) != null)");
+                        jq.append("((try .").append(path).append(" // null) != null)");
                     } else {
                         // exists(@.field) → has("field")
-                        jq.append("has(\"").append(field).append("\")");
+                        jq.append("has(\"").append(escapeJq(field)).append("\")");
+                    }
+                } else if (peek().is(STAR)) {
+                    // exists(@.*) — any values present
+                    advance();
+                    jq.append("(length > 0)");
+                }
+            } else if (peek().is(LBRACKET)) {
+                advance(); // consume LBRACKET
+                if (peek().is(INTEGER)) {
+                    // exists(@[N]) → has(N) (true even for explicit nulls)
+                    jq.append("has(").append(advance().value()).append(")");
+                    if (peek().is(RBRACKET)) advance();
+                }
+                // Anything else: leave unhandled (contributes nothing,
+                // downstream select() fails loudly like before)
+            }
+        } else if (peek().is(ROOT)) {
+            // exists($.a.b.c) — walk from root with key-existence checks:
+            // ((try OBJ catch {}) | has("LAST")) is true for explicit nulls
+            // (has sees the key) and false for missing keys or type errors.
+            advance(); // consume $
+            var segments = new java.util.ArrayList<String>();
+            var indexFlags = new java.util.ArrayList<Boolean>();
+            while (true) {
+                if (peek().is(DOT)) {
+                    advance();
+                    if (peek().is(IDENT) || peek().is(STRING)) {
+                        segments.add(advance().value());
+                        indexFlags.add(false);
+                        continue;
+                    }
+                    break;
+                }
+                if (peek().is(LBRACKET)) {
+                    advance();
+                    if (peek().is(INTEGER) && peekAt(1) != null && peekAt(1).is(RBRACKET)) {
+                        segments.add(advance().value());
+                        indexFlags.add(true);
+                        advance(); // consume RBRACKET
+                        continue;
+                    }
+                    break;
+                }
+                break;
+            }
+            if (!segments.isEmpty()) {
+                StringBuilder obj = new StringBuilder();
+                for (int i = 0; i < segments.size() - 1; i++) {
+                    if (indexFlags.get(i)) {
+                        obj.append('[').append(segments.get(i)).append(']');
+                    } else {
+                        appendExistsSegment(obj, segments.get(i));
                     }
                 }
+                jq.append("((try .").append(obj).append(" catch {}) | has(");
+                String lastKey = segments.get(segments.size() - 1);
+                if (indexFlags.get(indexFlags.size() - 1)) {
+                    jq.append(lastKey);
+                } else {
+                    jq.append("\"").append(escapeJq(lastKey)).append("\"");
+                }
+                jq.append("))");
             }
+            // No segments (bare $): contributes nothing, as before
         }
         if (peek().is(RPAREN)) advance();
+    }
+
+    /** Append one exists-path segment with bracket notation when needed. */
+    private void appendExistsSegment(StringBuilder path, String name) {
+        if (isBareJqIdentifier(name)) {
+            if (path.length() > 0) path.append('.');
+            path.append(name);
+        } else {
+            path.append("[\"").append(escapeJq(name)).append("\"]");
+        }
     }
 
     /** subject like_regex "pattern" [flag "flags"] */
