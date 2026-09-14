@@ -34,7 +34,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-mapper-jsonb` | Bridges JSON-B annotations (`@JsonbProperty`, `@JsonbTransient`, `@JsonbNillable`) into jjq-mapper |
 | `jjq-yaml` | YAML parsing into `JqValue` trees via SnakeYAML — enables jq queries over YAML documents |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
-| `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 123/558 conformance |
+| `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 127/558 conformance |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests + 525 upstream jq tests (96.0% passing) |
 | `jjq-benchmark` | JMH benchmarks vs Jackson 3.2.2: parsing, serialization, mapper, allocation profiling |
