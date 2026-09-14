@@ -194,18 +194,23 @@ public final class JsonpathTranslator {
                     // Collect method arguments (if any) before consuming RPAREN
                     var methodArgs = consumeMethodArgs();
                     translateMethod(name, methodArgs);
-                } else if (name.contains("-")) {
-                    // Hyphenated field name → bracket notation
-                    jq.append(".[\"").append(name).append("\"]");
-                } else {
+                } else if (isBareJqIdentifier(name)) {
                     jq.append(".").append(name);
+                } else {
+                    // Key needs quoting (hyphen, dot, space, leading digit,
+                    // or backslash-escaped chars from the lexer) → bracket notation
+                    jq.append(".[\"");
+                    appendJqEscaped(name);
+                    jq.append("\"]");
                 }
             }
             case STRING -> {
                 // ."quoted field" → .["quoted field"]
                 String fieldName = next.value();
                 advance();
-                jq.append(".[\"").append(fieldName).append("\"]");
+                jq.append(".[\"");
+                appendJqEscaped(fieldName);
+                jq.append("\"]");
             }
             case INTEGER -> {
                 // .0, .1, etc. — numeric field name (array index via dot notation)
@@ -215,6 +220,33 @@ public final class JsonpathTranslator {
                 // Just a dot — unusual but possible
             }
         }
+    }
+
+    /**
+     * True if the key is valid as a bare jq identifier (.name).
+     * Anything else (hyphen, dot, space, leading digit, quote, backslash)
+     * requires bracket notation (.["..."]).
+     */
+    private static boolean isBareJqIdentifier(String name) {
+        if (name.isEmpty()) return false;
+        char first = name.charAt(0);
+        if (!Character.isLetter(first) && first != '_') return false;
+        for (int i = 1; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (!Character.isLetterOrDigit(c) && c != '_') return false;
+        }
+        return true;
+    }
+
+    /**
+     * Append a key name jq-escaped for use inside a double-quoted string.
+     * Needed because lexer values arrive unescaped (e.g. backslash escapes
+     * in identifiers, escapes in quoted strings).
+     */
+    private void appendJqEscaped(String name) {
+        StringBuilder sb = new StringBuilder(name.length() + 2);
+        io.hyperfoil.tools.jjq.value.JqString.escapeJson(name, sb);
+        jq.append(sb);
     }
 
     // ========================================================================

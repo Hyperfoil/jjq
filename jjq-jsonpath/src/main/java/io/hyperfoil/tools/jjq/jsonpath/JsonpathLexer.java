@@ -268,31 +268,50 @@ public final class JsonpathLexer {
 
     /** Identifier or keyword. Identifiers can contain hyphens in jsonpath. */
     private JsonpathToken lexIdentOrKeyword(int startPos) {
-        int identStart = pos;
         // First char: letter or underscore
         pos++;
-        // Subsequent chars: letter, digit, underscore, hyphen
-        while (pos < input.length() && isIdentPart(input.charAt(pos))) pos++;
+        // Subsequent chars: letter, digit, underscore, hyphen — plus backslash
+        // escapes (\X contributes literal X, e.g. cpu\-masters is one identifier).
+        // Unescaping changes the length, so build the value explicitly.
+        StringBuilder word = new StringBuilder();
+        word.append(input.charAt(startPos));
+        boolean escaped = false;
+        while (pos < input.length()) {
+            char c = input.charAt(pos);
+            if (c == '\\' && pos + 1 < input.length()) {
+                word.append(input.charAt(pos + 1));
+                pos += 2;
+                escaped = true;
+            } else if (isIdentPart(c)) {
+                word.append(c);
+                pos++;
+            } else {
+                break;
+            }
+        }
 
-        String word = input.substring(identStart, pos);
+        String wordStr = word.toString();
 
         // Check for two-word keyword "like_regex"
         // (it's stored as a single keyword with underscore)
 
+        // An escaped identifier is always a key name, never a keyword
+        if (escaped) return new JsonpathToken(IDENT, wordStr, startPos);
+
         // Check bracket-context keywords first
         if (bracketDepth > 0) {
-            JsonpathTokenType kwType = BRACKET_KEYWORDS.get(word);
-            if (kwType != null) return new JsonpathToken(kwType, word, startPos);
+            JsonpathTokenType kwType = BRACKET_KEYWORDS.get(wordStr);
+            if (kwType != null) return new JsonpathToken(kwType, wordStr, startPos);
         }
 
         // Check global keywords
-        JsonpathTokenType kwType = GLOBAL_KEYWORDS.get(word);
-        if (kwType != null) return new JsonpathToken(kwType, word, startPos);
+        JsonpathTokenType kwType = GLOBAL_KEYWORDS.get(wordStr);
+        if (kwType != null) return new JsonpathToken(kwType, wordStr, startPos);
 
         // Check for * or ** after identifier — handle "**" as DOUBLESTAR
         // Actually ** appears as .$STAR$STAR — handled by the caller
 
-        return new JsonpathToken(IDENT, word, startPos);
+        return new JsonpathToken(IDENT, wordStr, startPos);
     }
 
     // ========================================================================

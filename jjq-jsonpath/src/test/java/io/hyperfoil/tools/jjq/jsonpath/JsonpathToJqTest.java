@@ -706,6 +706,48 @@ class JsonpathToJqTest {
                     "Should access nested hyphenated field, jq: " + jq);
         }
 
+        // ---- backslash-escaped keys (h5m#322 / jjq#80) ----
+
+        @Test void escapedHyphenInKey() {
+            // SQL jsonpath \- is an escaped hyphen; the key is cpu-masters
+            String json = "{\"result\":{\"cpu-masters\":8}}";
+            String jq = JsonpathToJq.convert("$.result.cpu\\-masters", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("8", result.toJsonString(),
+                    "Should access escaped-hyphen key, jq: " + jq);
+        }
+
+        @Test void escapedHyphenInKeyLax() {
+            String json = "{\"result\":{\"cpu-masters\":8}}";
+            String jq = JsonpathToJq.convert("$.result.cpu\\-masters", JsonpathToJq.Mode.LAX);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("8", result.toJsonString(),
+                    "Should access escaped-hyphen key in lax mode, jq: " + jq);
+        }
+
+        @Test void escapedDotInKey() {
+            // An escaped dot is part of the key, not a path separator
+            String json = "{\"a.b\":42}";
+            String jq = JsonpathToJq.convert("$.a\\.b", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("42", result.toJsonString(),
+                    "Should access dotted key as single field, jq: " + jq);
+        }
+
+        @Test void escapedBackslashInKey() {
+            String json = "{\"a\\\\b\":7}";
+            String jq = JsonpathToJq.convert("$.a\\\\b", JsonpathToJq.Mode.STRICT);
+            JqValue result = JqProgram.compile(jq).apply(JqValues.parse(json));
+            assertEquals("7", result.toJsonString(),
+                    "Should access backslash key, jq: " + jq);
+        }
+
+        @Test void plainIdentifierUnchanged() {
+            // No escapes, no special chars — output must stay dot notation
+            assertStrict("$.result", ".result");
+            assertStrict("$.result.cpu", ".result.cpu");
+        }
+
         // ---- recursive descent with depth ----
 
         @Test void recursiveDescentWithDepth() {
