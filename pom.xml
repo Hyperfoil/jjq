@@ -12,8 +12,8 @@
     <url>https://github.com/Hyperfoil/jjq</url>
 
     <scm>
-        <connection>scm:git:git://github.com/Hyperfoil/jjq.git</connection>
-        <developerConnection>scm:git:ssh://git@github.com/Hyperfoil/jjq.git</developerConnection>
+        <connection>scm:git:https://github.com/Hyperfoil/jjq.git</connection>
+        <developerConnection>scm:git:https://github.com/Hyperfoil/jjq.git</developerConnection>
         <url>https://github.com/Hyperfoil/jjq</url>
         <tag>0.1.11</tag>
     </scm>
