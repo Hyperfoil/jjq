@@ -13,6 +13,13 @@
 name: Perform Release
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (e.g. 0.1.12). If unspecified, derived from POM version by stripping -SNAPSHOT.'
+        required: false
+      next_version:
+        description: 'Next development version (e.g. 0.1.13-SNAPSHOT). If unspecified, patch-bumps the release version.'
+        required: false
 permissions:
   contents: write
 jobs:
@@ -23,11 +30,14 @@ jobs:
       ENVIRONMENT: CI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # persist-credentials (default true) lets release:prepare push
           # the version-bump commits and tags back to main.
+          # fetch-depth: 0 gives full history for tag listing in release notes
+          # and reliable maven-release-plugin operation.
           ref: main
+          fetch-depth: 0
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
         with:
@@ -36,7 +46,7 @@ jobs:
       - name: List keys
         run: gpg -K
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: 25
@@ -51,11 +61,35 @@ jobs:
         run: |
           git config --global user.email "rhappservicesperf@gmail.com"
           git config --global user.name "rh-appservices-perf"
+      - name: Determine versions
+        id: versions
+        run: |
+          POM_VERSION=$(mvn org.apache.maven.plugins:maven-help-plugin:3.4.0:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "POM version: $POM_VERSION"
+
+          if [ -n "${{ github.event.inputs.release_version }}" ]; then
+            CUR_VER="${{ github.event.inputs.release_version }}"
+          else
+            CUR_VER=$(echo ${POM_VERSION} | awk -F '-' '{ print $1}' | awk -F'.' '{print $1+0"."$2+0"."$3+0}' | sed s/[.]$//)
+            if [ "$CUR_VER" = "$POM_VERSION" ]; then
+              echo "::error::POM version '$POM_VERSION' has no -SNAPSHOT suffix and no release version was specified."
+              exit 1
+            fi
+          fi
+
+          if [ -n "${{ github.event.inputs.next_version }}" ]; then
+            NEXT_VER="${{ github.event.inputs.next_version }}"
+          else
+            NEXT_VER=$(echo ${CUR_VER} | awk -F'.' '{print $1+0"."$2+0"."$3+1"-SNAPSHOT"}' | sed s/[.]$//)
+          fi
+
+          echo "Releasing $CUR_VER, next development version $NEXT_VER"
+          echo "release_version=$CUR_VER" >> "$GITHUB_OUTPUT"
+          echo "next_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
       - name: Release to Maven Central
         run: |
-          PROJECT_VERSION=$(mvn org.apache.maven.plugins:maven-help-plugin:3.4.0:evaluate -Dexpression=project.version -q -DforceStdout)
-          CUR_VER=$(echo ${PROJECT_VERSION} | awk -F '-' '{ print $1}' | awk -F'.' '{print $1+0"."$2+0"."$3+0}' | sed s/[.]$//)
-          NEXT_VER=$(echo ${PROJECT_VERSION} | awk -F '-' '{ print $1}' | awk -F'.' '{print $1+0"."$2+0"."$3+1"-SNAPSHOT"}' | sed s/[.]$//)
+          CUR_VER="${{ steps.versions.outputs.release_version }}"
+          NEXT_VER="${{ steps.versions.outputs.next_version }}"
           echo "Releasing $CUR_VER, next development version $NEXT_VER"
           mvn -B -ntp -DskipTests clean javadoc:javadoc install
           mvn -B -ntp -Darguments=-DskipTests -Dtag=$CUR_VER release:prepare release:perform -Prelease -DreleaseVersion=$CUR_VER -DdevelopmentVersion=$NEXT_VER -Dresume=false
@@ -65,3 +99,63 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.SIGN_GPG_PASSPHRASE }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_VERSION="${{ steps.versions.outputs.release_version }}"
+          git fetch --tags
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${RELEASE_VERSION}$" | head -1)
+          echo "Previous tag: $PREV_TAG"
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${RELEASE_VERSION}"
+          else
+            RANGE="${RELEASE_VERSION}"
+          fi
+
+          NOTES_FILE=$(mktemp)
+          echo "## What's New in ${RELEASE_VERSION}" >> "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+
+          # Collect issues closed by commits in this release
+          ISSUES=$(git log "$RANGE" --oneline \
+            | grep -oP '#\d+' | sort -t'#' -k2 -n -u | tr -d '#' || true)
+
+          if [ -n "$ISSUES" ]; then
+            echo "### Issues" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+            for issue in $ISSUES; do
+              TITLE=$(gh issue view "$issue" --json title -q '.title' 2>/dev/null || echo "")
+              STATE=$(gh issue view "$issue" --json state -q '.state' 2>/dev/null || echo "")
+              if [ -n "$TITLE" ]; then
+                if [ "$STATE" = "CLOSED" ]; then
+                  echo "- ~~#${issue}~~ ${TITLE}" >> "$NOTES_FILE"
+                else
+                  echo "- #${issue} ${TITLE}" >> "$NOTES_FILE"
+                fi
+              fi
+            done
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          # Categorize commits
+          echo "### Changes" >> "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          git log "$RANGE" --oneline --no-merges \
+            | grep -v "Release \|Next version \|Bump " \
+            | sed 's/^[0-9a-f]* /- /' >> "$NOTES_FILE" || true
+          echo "" >> "$NOTES_FILE"
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${RELEASE_VERSION}" >> "$NOTES_FILE"
+          fi
+
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.versions.outputs.release_version }}" \
+            --title "Release ${{ steps.versions.outputs.release_version }}" \
+            --notes-file "${{ steps.notes.outputs.notes_file }}"
