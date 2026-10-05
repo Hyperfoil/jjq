@@ -2,8 +2,9 @@
 # Modeled on Horreum's release.yml, minus the Docker/Quay steps (libraries only).
 #
 # Required repository secrets (Settings -> Secrets and variables -> Actions):
-#   CENTRAL_PORTAL_USERNAME / CENTRAL_PORTAL_PASSWORD
-#       Central Portal credentials for the io.hyperfoil.tools namespace.
+#   MAVEN_USERNAME / MAVEN_PASSWORD
+#       Central Portal user token for the io.hyperfoil.tools namespace
+#       (central.sonatype.com -> Account -> Generate User Token).
 #   SIGN_GPG_PRIVATE_KEY / SIGN_GPG_PASSPHRASE
 #       GPG key used to sign artifacts (Central requires signatures).
 #
@@ -86,6 +87,21 @@ jobs:
           echo "Releasing $CUR_VER, next development version $NEXT_VER"
           echo "release_version=$CUR_VER" >> "$GITHUB_OUTPUT"
           echo "next_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
+      - name: Validate Central credentials
+        run: |
+          # Fails fast before release:prepare pushes version-bump commits.
+          # /status without a deployment id never returns 401 when auth is good.
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$MAVEN_USERNAME:$MAVEN_PASSWORD" \
+            "https://central.sonatype.com/api/v1/publisher/status")
+          if [ "$CODE" = "401" ]; then
+            echo "::error::Central Portal credentials rejected (401). Check MAVEN_USERNAME/MAVEN_PASSWORD secrets."
+            exit 1
+          fi
+          echo "Central auth check passed (HTTP $CODE)"
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
       - name: Release to Maven Central
         run: |
           CUR_VER="${{ steps.versions.outputs.release_version }}"
@@ -94,8 +110,8 @@ jobs:
           mvn -B -ntp -DskipTests clean javadoc:javadoc install
           mvn -B -ntp -Darguments=-DskipTests -Dtag=$CUR_VER release:prepare release:perform -Prelease -DreleaseVersion=$CUR_VER -DdevelopmentVersion=$NEXT_VER -Dresume=false
         env:
-          MAVEN_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.SIGN_GPG_PASSPHRASE }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
