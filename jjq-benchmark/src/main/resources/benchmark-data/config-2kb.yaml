@@ -1,0 +1,76 @@
+# isx-shaped benchmark fixture (~2KB): tools, accounts, env, skills
+name: fixture-image
+base: ubuntu-24.04
+arch: x86_64
+tools:
+  maven-3:
+    version: "3.9.9"
+    params:
+      memory: 8g
+      plugins: "true"
+  idea-backend:
+    token: tpt-fixture
+    endpoint: https://proxy.example.com/v1
+  claude-code:
+    type: claude
+    model: opus-4-5
+    params:
+      memory: 16g
+      timeout: 120
+  quarkus-cli:
+    version: "3.27.0"
+    params:
+      native: "true"
+      memory: 4g
+accounts:
+  - name: primary
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: null
+  - name: secondary
+    type: oauth
+    strategy: APPEND
+    separator: ":"
+    value: s3cr3t
+  - name: tertiary
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: another-secret-value
+  - name: quaternary
+    type: oauth
+    strategy: PREPEND
+    separator: ";"
+    value: yet-another-secret
+env:
+  - export FOO=bar
+  - name: PATH
+    value: /usr/bin
+    strategy: prepend
+  - name: JAVA_HOME
+    value: /usr/lib/jvm/java-25
+    strategy: set
+skills:
+  repo: https://github.com/example/skills
+  list:
+    - security-review
+    - code-review
+    - performance-check
+    - docs-review
+downloads:
+  - url: https://example.com/tool.tar.gz
+    sha256: abc123
+    retries: 3
+    enabled: true
+  - url: https://example.com/other.zip
+    sha256: def456
+    retries: 5
+    enabled: false
+defaults: &defs
+  retries: 3
+  timeout: 30
+  enabled: true
+extra:
+  <<: *defs
+  timeout: 60

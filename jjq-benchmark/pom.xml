@@ -36,6 +36,15 @@
         </dependency>
         <dependency>
             <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-yaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+            <version>3.2.2</version>
+        </dependency>
+        <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
             <artifactId>jjq-mapper-processor</artifactId>
             <scope>provided</scope>
         </dependency>

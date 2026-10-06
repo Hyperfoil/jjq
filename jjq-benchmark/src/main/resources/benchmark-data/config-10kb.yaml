@@ -1,0 +1,682 @@
+name: scaled
+base: ubuntu-24.04
+accounts:
+  - name: user-0
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-0
+
+  - name: user-1
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-1
+
+  - name: user-2
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-2
+
+  - name: user-3
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-3
+
+  - name: user-4
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-4
+
+  - name: user-5
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-5
+
+  - name: user-6
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-6
+
+  - name: user-7
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-7
+
+  - name: user-8
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-8
+
+  - name: user-9
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-9
+
+  - name: user-10
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-10
+
+  - name: user-11
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-11
+
+  - name: user-12
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-12
+
+  - name: user-13
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-13
+
+  - name: user-14
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-14
+
+  - name: user-15
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-15
+
+  - name: user-16
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-16
+
+  - name: user-17
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-17
+
+  - name: user-18
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-18
+
+  - name: user-19
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-19
+
+  - name: user-20
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-20
+
+  - name: user-21
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-21
+
+  - name: user-22
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-22
+
+  - name: user-23
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-23
+
+  - name: user-24
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-24
+
+  - name: user-25
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-25
+
+  - name: user-26
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-26
+
+  - name: user-27
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-27
+
+  - name: user-28
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-28
+
+  - name: user-29
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-29
+
+  - name: user-30
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-30
+
+  - name: user-31
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-31
+
+  - name: user-32
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-32
+
+  - name: user-33
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-33
+
+  - name: user-34
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-34
+
+  - name: user-35
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-35
+
+  - name: user-36
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-36
+
+  - name: user-37
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-37
+
+  - name: user-38
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-38
+
+  - name: user-39
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-39
+
+  - name: user-40
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-40
+
+  - name: user-41
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-41
+
+  - name: user-42
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-42
+
+  - name: user-43
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-43
+
+  - name: user-44
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-44
+
+  - name: user-45
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-45
+
+  - name: user-46
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-46
+
+  - name: user-47
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-47
+
+  - name: user-48
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-48
+
+  - name: user-49
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-49
+
+  - name: user-50
+    type: api-key
+    strategy: SET
+    separator: " "
+    value: secret-value-50
+
+tools:
+  tool-0:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-1:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-2:
+    version: "1.2.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-3:
+    version: "1.3.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-4:
+    version: "1.4.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-5:
+    version: "1.5.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-6:
+    version: "1.6.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-7:
+    version: "1.7.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-8:
+    version: "1.8.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-9:
+    version: "1.9.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-10:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-11:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-12:
+    version: "1.2.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-13:
+    version: "1.3.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-14:
+    version: "1.4.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-15:
+    version: "1.5.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-16:
+    version: "1.6.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-17:
+    version: "1.7.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-18:
+    version: "1.8.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-19:
+    version: "1.9.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-20:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-21:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-22:
+    version: "1.2.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-23:
+    version: "1.3.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-24:
+    version: "1.4.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-25:
+    version: "1.5.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-26:
+    version: "1.6.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-27:
+    version: "1.7.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-28:
+    version: "1.8.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-29:
+    version: "1.9.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-30:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-31:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-32:
+    version: "1.2.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-33:
+    version: "1.3.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-34:
+    version: "1.4.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-35:
+    version: "1.5.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-36:
+    version: "1.6.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-37:
+    version: "1.7.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-38:
+    version: "1.8.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-39:
+    version: "1.9.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-40:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-41:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-42:
+    version: "1.2.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-43:
+    version: "1.3.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-44:
+    version: "1.4.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-45:
+    version: "1.5.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-46:
+    version: "1.6.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-47:
+    version: "1.7.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-48:
+    version: "1.8.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-49:
+    version: "1.9.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-50:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-51:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-52:
+    version: "1.2.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-53:
+    version: "1.3.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-54:
+    version: "1.4.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-55:
+    version: "1.5.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-56:
+    version: "1.6.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-57:
+    version: "1.7.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-58:
+    version: "1.8.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-59:
+    version: "1.9.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-60:
+    version: "1.0.0"
+    params:
+      memory: 8g
+      enabled: true
+
+  tool-61:
+    version: "1.1.0"
+    params:
+      memory: 8g
+      enabled: true
+

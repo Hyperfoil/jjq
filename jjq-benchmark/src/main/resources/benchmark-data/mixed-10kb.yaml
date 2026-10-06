@@ -1,0 +1,727 @@
+items:
+- name: item-0
+  image: registry.example.com/app:0
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-1
+  image: registry.example.com/app:1
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-2
+  image: registry.example.com/app:2
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-3
+  image: registry.example.com/app:3
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-4
+  image: registry.example.com/app:4
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-5
+  image: registry.example.com/app:5
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-6
+  image: registry.example.com/app:6
+  replicas: 2
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-7
+  image: registry.example.com/app:7
+  replicas: 3
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-8
+  image: registry.example.com/app:8
+  replicas: 4
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-9
+  image: registry.example.com/app:9
+  replicas: 5
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-10
+  image: registry.example.com/app:10
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-11
+  image: registry.example.com/app:11
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-12
+  image: registry.example.com/app:12
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-13
+  image: registry.example.com/app:13
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-14
+  image: registry.example.com/app:14
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-15
+  image: registry.example.com/app:15
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-16
+  image: registry.example.com/app:16
+  replicas: 2
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-17
+  image: registry.example.com/app:17
+  replicas: 3
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-18
+  image: registry.example.com/app:18
+  replicas: 4
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-19
+  image: registry.example.com/app:19
+  replicas: 5
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-20
+  image: registry.example.com/app:20
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-21
+  image: registry.example.com/app:21
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-22
+  image: registry.example.com/app:22
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-23
+  image: registry.example.com/app:23
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-24
+  image: registry.example.com/app:24
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-25
+  image: registry.example.com/app:25
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-26
+  image: registry.example.com/app:26
+  replicas: 2
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-27
+  image: registry.example.com/app:27
+  replicas: 3
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-28
+  image: registry.example.com/app:28
+  replicas: 4
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-29
+  image: registry.example.com/app:29
+  replicas: 5
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-30
+  image: registry.example.com/app:30
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-31
+  image: registry.example.com/app:31
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-32
+  image: registry.example.com/app:32
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-33
+  image: registry.example.com/app:33
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-34
+  image: registry.example.com/app:34
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-35
+  image: registry.example.com/app:35
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-36
+  image: registry.example.com/app:36
+  replicas: 2
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-37
+  image: registry.example.com/app:37
+  replicas: 3
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-38
+  image: registry.example.com/app:38
+  replicas: 4
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-39
+  image: registry.example.com/app:39
+  replicas: 5
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-40
+  image: registry.example.com/app:40
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-41
+  image: registry.example.com/app:41
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-42
+  image: registry.example.com/app:42
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-43
+  image: registry.example.com/app:43
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-44
+  image: registry.example.com/app:44
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-45
+  image: registry.example.com/app:45
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-46
+  image: registry.example.com/app:46
+  replicas: 2
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-47
+  image: registry.example.com/app:47
+  replicas: 3
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-48
+  image: registry.example.com/app:48
+  replicas: 4
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-49
+  image: registry.example.com/app:49
+  replicas: 5
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-50
+  image: registry.example.com/app:0
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-51
+  image: registry.example.com/app:1
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-52
+  image: registry.example.com/app:2
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-53
+  image: registry.example.com/app:3
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-54
+  image: registry.example.com/app:4
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-55
+  image: registry.example.com/app:5
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-56
+  image: registry.example.com/app:6
+  replicas: 2
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-57
+  image: registry.example.com/app:7
+  replicas: 3
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-58
+  image: registry.example.com/app:8
+  replicas: 4
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-59
+  image: registry.example.com/app:9
+  replicas: 5
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-60
+  image: registry.example.com/app:10
+  replicas: 1
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-61
+  image: registry.example.com/app:11
+  replicas: 2
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-62
+  image: registry.example.com/app:12
+  replicas: 3
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-63
+  image: registry.example.com/app:13
+  replicas: 4
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-64
+  image: registry.example.com/app:14
+  replicas: 5
+  enabled: false
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
+- name: item-65
+  image: registry.example.com/app:15
+  replicas: 1
+  enabled: true
+  ports:
+    - 8080
+    - 8443
+  labels:
+    app: demo
+    tier: backend
+
