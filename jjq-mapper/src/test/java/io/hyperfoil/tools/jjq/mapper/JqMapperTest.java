@@ -9,6 +9,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -445,6 +446,66 @@ class JqMapperTest {
         JqMapperException e = assertThrows(JqMapperException.class,
                 () -> mapper.fromJqValue(JqValues.parse("{\"name\":\"x\"}"), NoDefaultConstructor.class));
         assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+    }
+
+    // ---- Any-setter / any-getter (issue #87) ----
+
+    static class ExtrasPojo {
+        private String name;
+        @JqIgnore
+        private String internal;
+        private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+        public ExtrasPojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getInternal() { return internal; }
+        public void setInternal(String internal) { this.internal = internal; }
+
+        @JqAnySetter
+        public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+        @JqAnyGetter
+        public Map<String, JqValue> getExtras() { return extras; }
+    }
+
+    @Test
+    void anySetter_capturesUnknownKeys() {
+        JqValue json = JqValues.parse("""
+                {"name":"t","testProxyTool":{"token":"tpt-fixture"},"count":3}""");
+        ExtrasPojo p = mapper.fromJqValue(json, ExtrasPojo.class);
+        assertEquals("t", p.getName());
+        assertEquals(2, p.getExtras().size());
+        assertEquals("tpt-fixture", p.getExtras().get("testProxyTool").getField("token").stringValue());
+        assertEquals(3L, p.getExtras().get("count").longValue());
+    }
+
+    @Test
+    void anySetter_skipsKnownAndIgnoredKeys() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"internal\":\"x\"}");
+        ExtrasPojo p = mapper.fromJqValue(json, ExtrasPojo.class);
+        assertEquals("t", p.getName());
+        // @JqIgnore fields are never bound...
+        assertNull(p.getInternal());
+        // ...nor forwarded to extras
+        assertTrue(p.getExtras().isEmpty());
+    }
+
+    @Test
+    void anySetter_forwardsExplicitNull() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":null}");
+        ExtrasPojo p = mapper.fromJqValue(json, ExtrasPojo.class);
+        assertTrue(p.getExtras().get("mystery").isNull());
+    }
+
+    @Test
+    void anyGetter_roundTrip() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"testProxyTool\":{\"token\":\"tpt-fixture\"}}");
+        ExtrasPojo p = mapper.fromJqValue(json, ExtrasPojo.class);
+        JqValue out = mapper.toJqValue(p);
+        assertEquals("t", out.getField("name").stringValue());
+        assertEquals("tpt-fixture", out.getField("testProxyTool").getField("token").stringValue());
     }
 
     // ---- Convenience methods ----

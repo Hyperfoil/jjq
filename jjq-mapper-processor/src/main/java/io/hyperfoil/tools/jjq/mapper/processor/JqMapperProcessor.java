@@ -1,6 +1,8 @@
 package io.hyperfoil.tools.jjq.mapper.processor;
 
 import io.hyperfoil.tools.jjq.JqProgram;
+import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
+import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
 import io.hyperfoil.tools.jjq.mapper.JqConverter;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
@@ -141,7 +143,8 @@ public class JqMapperProcessor extends AbstractProcessor {
         String qualifiedMappingName = packageName.isEmpty() ? mappingClassName : packageName + "." + mappingClassName;
 
         String source = MappingCodeGenerator.generate(
-                packageName, recordSourceName, recordQualifiedName, mappingClassName, components);
+                packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
+                resolveAnyInfo(recordType));
 
         // Write the generated source file
         try {
@@ -255,7 +258,8 @@ public class JqMapperProcessor extends AbstractProcessor {
         String qualifiedMappingName = packageName.isEmpty() ? mappingClassName : packageName + "." + mappingClassName;
 
         String source = MappingCodeGenerator.generateForClass(
-                packageName, classSourceName, classQualifiedName, mappingClassName, properties);
+                packageName, classSourceName, classQualifiedName, mappingClassName, properties,
+                resolveAnyInfo(classType));
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -311,6 +315,68 @@ public class JqMapperProcessor extends AbstractProcessor {
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
                         String converterClass, boolean nestedRecord) {}
+
+    /**
+     * Any-setter/any-getter methods discovered on a mapped type (issue #87).
+     * Null names mean absent. {@code setterTakesJqValue} selects the value
+     * conversion (raw {@code JqValue} vs {@code toJavaObject()}).
+     */
+    record AnyInfo(String setterName, boolean setterTakesJqValue, String getterName) {
+        static final AnyInfo NONE = new AnyInfo(null, false, null);
+
+        boolean hasSetter() { return setterName != null; }
+        boolean hasGetter() { return getterName != null; }
+    }
+
+    /**
+     * Discover {@code @JqAnySetter}/{@code @JqAnyGetter} methods on a mapped type.
+     * Reports compile errors for malformed signatures (mirrors the runtime validation).
+     *
+     * @return the discovered methods, or {@link AnyInfo#NONE} when neither is present
+     */
+    private AnyInfo resolveAnyInfo(TypeElement type) {
+        String setterName = null;
+        boolean setterTakesJqValue = false;
+        String getterName = null;
+        for (Element enclosed : type.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            var method = (javax.lang.model.element.ExecutableElement) enclosed;
+            if (enclosed.getAnnotation(JqAnySetter.class) != null) {
+                var params = method.getParameters();
+                if (!method.getModifiers().contains(Modifier.STATIC)
+                        && params.size() == 2
+                        && params.get(0).asType().toString().equals("java.lang.String")
+                        && (params.get(1).asType().toString().equals("io.hyperfoil.tools.jjq.value.JqValue")
+                            || params.get(1).asType().toString().equals("java.lang.Object"))
+                        && method.getReturnType().toString().equals("void")) {
+                    setterName = method.getSimpleName().toString();
+                    setterTakesJqValue = params.get(1).asType().toString()
+                            .equals("io.hyperfoil.tools.jjq.value.JqValue");
+                } else {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "Any-setter must be a non-static void (String, JqValue|Object) method",
+                            enclosed);
+                    return AnyInfo.NONE;
+                }
+            }
+            if (enclosed.getAnnotation(JqAnyGetter.class) != null) {
+                String rt = method.getReturnType().toString();
+                if (!method.getModifiers().contains(Modifier.STATIC)
+                        && method.getParameters().isEmpty()
+                        && (rt.startsWith("java.util.Map")
+                            || rt.equals("io.hyperfoil.tools.jjq.value.JqObject"))) {
+                    getterName = method.getSimpleName().toString();
+                } else {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "Any-getter must be a non-static no-arg method returning Map<String, ?> or JqObject",
+                            enclosed);
+                    return AnyInfo.NONE;
+                }
+            }
+        }
+        if (setterName == null && getterName == null) return AnyInfo.NONE;
+        return new AnyInfo(setterName, setterTakesJqValue, getterName);
+    }
 
     /**
      * True if the type is a record. Only records recurse into

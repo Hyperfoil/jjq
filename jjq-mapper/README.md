@@ -295,6 +295,27 @@ Shape failures throw `ShapeMismatchException` (a `JqMapperException`), which exp
 }
 ```
 
+### Unknown keys: `@JqAnySetter` / `@JqAnyGetter`
+
+Unknown keys are captured instead of dropped (Jackson `@JsonAnySetter`/`@JsonAnyGetter` parity) — required for forward compatibility and lossless round-trips:
+
+```java
+class Config {
+    private String name;
+    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+
+    @JqAnySetter
+    public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+    @JqAnyGetter
+    public Map<String, JqValue> getExtras() { return extras; }
+}
+```
+
+The setter takes `(String, JqValue)` (exact, lossless) or `(String, Object)` (converted); the getter returns `Map<String, ?>` (converted on emit, `null` as JSON null) or `JqObject` (used directly). Known and `@JqIgnore`d keys never reach the setter. Generated mappings support the native annotations; the Jackson bridge honors `@JsonAnySetter`/`@JsonAnyGetter` on the reflection path (field-form stays unsupported).
+
 ### `TypeConverter` — extension point for custom handling
 
 `TypeConverter` is the public conversion engine behind field mapping. The target

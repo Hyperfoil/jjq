@@ -46,16 +46,29 @@ final class ClassMapping<T> implements Mapping<T> {
     // Non-null only when all fields use direct field names (no @JqField, no @JqIgnore).
     private final Map<String, Integer> nameToIndex;
     private final boolean useForEachFastPath;
+    // Unknown-key capture / extra-field emission (null when no any-setter/getter present).
+    // Gated checks keep the zero-cost profile for classes without them.
+    private final AnyHandlers anyHandlers;
+
+    /**
+     * Cached any-setter/any-getter handles plus the known-field names used to
+     * recognize unknown keys. Null when the class declares neither.
+     */
+    private record AnyHandlers(MethodHandle setter, boolean setterTakesJqValue,
+                               MethodHandle getter, boolean getterReturnsMap,
+                               java.util.Set<String> knownNames) {}
 
     private ClassMapping(Class<T> type, FieldMapping[] fields, MethodHandle constructor,
                          MethodHandle spreadConstructor,
-                         Map<String, Integer> nameToIndex, boolean useForEachFastPath) {
+                         Map<String, Integer> nameToIndex, boolean useForEachFastPath,
+                         AnyHandlers anyHandlers) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
         this.spreadConstructor = spreadConstructor;
         this.nameToIndex = nameToIndex;
         this.useForEachFastPath = useForEachFastPath;
+        this.anyHandlers = anyHandlers;
     }
 
     /**
@@ -191,7 +204,8 @@ final class ClassMapping<T> implements Mapping<T> {
         }
 
         return new ClassMapping<>(type, fields, ctor, spread,
-                canUseFastPath ? nameMap : null, canUseFastPath);
+                canUseFastPath ? nameMap : null, canUseFastPath,
+                resolveAnyHandlers(type, fields, lookup, bridges));
     }
 
     /**
@@ -361,7 +375,8 @@ final class ClassMapping<T> implements Mapping<T> {
         }
 
         return new ClassMapping<>(type, fields, ctor, null,
-                canUseFastPath ? nameMap : null, canUseFastPath);
+                canUseFastPath ? nameMap : null, canUseFastPath,
+                resolveAnyHandlers(type, fields, lookup, bridges));
     }
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. */
@@ -423,11 +438,14 @@ final class ClassMapping<T> implements Mapping<T> {
         if (useForEachFastPath && value instanceof JqObject obj && obj.size() == fields.length) {
             Object[] args = forEachExtract(obj, mapper);
             if (args != null) {
+                T created;
                 try {
-                    return (T) spreadConstructor.invoke(args);
+                    created = (T) spreadConstructor.invoke(args);
                 } catch (Throwable e) {
                     throw new JqMapperException("Failed to construct " + type.getName(), e);
                 }
+                applyAnySetter(created, obj);
+                return created;
             }
             // Fall through to per-field extraction if names didn't match
         }
@@ -443,11 +461,14 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw e.prependPath(field.jsonName());
             }
         }
+        T created;
         try {
-            return (T) spreadConstructor.invoke(args);
+            created = (T) spreadConstructor.invoke(args);
         } catch (Throwable e) {
             throw new JqMapperException("Failed to construct " + type.getName(), e);
         }
+        applyAnySetter(created, value);
+        return created;
     }
 
     /** True when every mapped field uses a direct name lookup (no @JqField programs). */
@@ -456,6 +477,148 @@ final class ClassMapping<T> implements Mapping<T> {
             if (!field.isIgnored() && field.usesProgram()) return false;
         }
         return true;
+    }
+
+    /**
+     * Discover any-setter/any-getter methods (native annotations first, then bridges)
+     * and unreflect them. Returns null when neither is present.
+     */
+    private static AnyHandlers resolveAnyHandlers(Class<?> type, FieldMapping[] fields,
+                                                  MethodHandles.Lookup lookup,
+                                                  List<AnnotationBridge> bridges) {
+        Method setterMethod = null;
+        for (Method m : type.getMethods()) {
+            if (m.isAnnotationPresent(JqAnySetter.class)) {
+                validateAnySetter(m, type);
+                setterMethod = m;
+                break;
+            }
+        }
+        if (setterMethod == null) {
+            for (AnnotationBridge bridge : bridges) {
+                Method m = bridge.resolveAnySetter(type);
+                if (m != null) {
+                    validateAnySetter(m, type);
+                    setterMethod = m;
+                    break;
+                }
+            }
+        }
+        Method getterMethod = null;
+        for (Method m : type.getMethods()) {
+            if (m.isAnnotationPresent(JqAnyGetter.class)) {
+                validateAnyGetter(m, type);
+                getterMethod = m;
+                break;
+            }
+        }
+        if (getterMethod == null) {
+            for (AnnotationBridge bridge : bridges) {
+                Method m = bridge.resolveAnyGetter(type);
+                if (m != null) {
+                    validateAnyGetter(m, type);
+                    getterMethod = m;
+                    break;
+                }
+            }
+        }
+        if (setterMethod == null && getterMethod == null) return null;
+        MethodHandle setter = null;
+        boolean setterTakesJqValue = false;
+        java.util.Set<String> knownNames = null;
+        if (setterMethod != null) {
+            try {
+                setter = lookup.unreflect(setterMethod);
+            } catch (IllegalAccessException e) {
+                throw new JqMapperException("Cannot access any-setter " + setterMethod.getName()
+                        + " on " + type.getName(), e);
+            }
+            setterTakesJqValue = setterMethod.getParameterTypes()[1] == JqValue.class;
+            // Known names: every direct-mapped key, including ignored ones (ignored
+            // keys are skipped entirely, never forwarded — Jackson parity).
+            // @JqField program fields are excluded: their jsonName is not a lookup key.
+            knownNames = new java.util.HashSet<>();
+            for (FieldMapping field : fields) {
+                if (!field.usesProgram()) knownNames.add(field.jsonName());
+            }
+        }
+        MethodHandle getter = null;
+        boolean getterReturnsMap = false;
+        if (getterMethod != null) {
+            try {
+                getter = lookup.unreflect(getterMethod);
+            } catch (IllegalAccessException e) {
+                throw new JqMapperException("Cannot access any-getter " + getterMethod.getName()
+                        + " on " + type.getName(), e);
+            }
+            getterReturnsMap = Map.class.isAssignableFrom(getterMethod.getReturnType());
+        }
+        return new AnyHandlers(setter, setterTakesJqValue, getter, getterReturnsMap, knownNames);
+    }
+
+    /** Fail fast on malformed any-setter signatures (checked once at introspection). */
+    private static void validateAnySetter(Method m, Class<?> type) {
+        Class<?>[] params = m.getParameterTypes();
+        if (Modifier.isStatic(m.getModifiers()) || params.length != 2 || params[0] != String.class
+                || (params[1] != JqValue.class && params[1] != Object.class)
+                || m.getReturnType() != void.class) {
+            throw new JqMapperException("Any-setter must be a non-static void (String, JqValue|Object) method: "
+                    + type.getName() + "#" + m.getName());
+        }
+    }
+
+    /** Fail fast on malformed any-getter signatures (checked once at introspection). */
+    private static void validateAnyGetter(Method m, Class<?> type) {
+        if (Modifier.isStatic(m.getModifiers()) || m.getParameterCount() != 0) {
+            throw new JqMapperException("Any-getter must be a non-static no-arg method: "
+                    + type.getName() + "#" + m.getName());
+        }
+        Class<?> rt = m.getReturnType();
+        if (!Map.class.isAssignableFrom(rt) && !JqObject.class.isAssignableFrom(rt)) {
+            throw new JqMapperException("Any-getter must return Map<String, ?> or JqObject: "
+                    + type.getName() + "#" + m.getName());
+        }
+    }
+
+    /** Forward unknown input keys to the any-setter. No-op without one (zero-cost gate). */
+    @SuppressWarnings("unchecked")
+    private void applyAnySetter(T instance, JqValue value) {
+        if (anyHandlers == null || anyHandlers.setter() == null || !(value instanceof JqObject obj)) return;
+        for (int i = 0; i < obj.size(); i++) {
+            String key = obj.keyAt(i);
+            if (anyHandlers.knownNames().contains(key)) continue;
+            JqValue v = obj.valueAt(i);
+            try {
+                if (anyHandlers.setterTakesJqValue()) {
+                    anyHandlers.setter().invoke(instance, key, v);
+                } else {
+                    anyHandlers.setter().invoke(instance, key, v.toJavaObject());
+                }
+            } catch (Throwable e) {
+                throw new JqMapperException("Failed to apply any-setter for key '" + key
+                        + "' on " + type.getName(), e);
+            }
+        }
+    }
+
+    /** Emit any-getter entries after mapped fields. No-op without one (zero-cost gate). */
+    private void emitAnyGetter(JqObject.Builder builder, T instance, JqMapper mapper) {
+        if (anyHandlers == null || anyHandlers.getter() == null) return;
+        Object extras;
+        try {
+            extras = anyHandlers.getter().invoke(instance);
+        } catch (Throwable e) {
+            throw new JqMapperException("Failed to apply any-getter on " + type.getName(), e);
+        }
+        if (extras instanceof JqObject jo) {
+            jo.forEach(builder::put);
+        } else if (extras instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                // toJqValue passes JqValue through and maps null to JqNull
+                builder.put(String.valueOf(entry.getKey()),
+                        TypeConverter.toJqValue(entry.getValue(), mapper));
+            }
+        }
     }
 
     /** POJO deserialization: no-arg constructor + setter calls. */
@@ -488,6 +651,7 @@ final class ClassMapping<T> implements Mapping<T> {
             }
             field.writeValue(instance, converted);
         }
+        applyAnySetter(instance, value);
         return instance;
     }
 
@@ -504,6 +668,8 @@ final class ClassMapping<T> implements Mapping<T> {
             // putUnchecked: mapper jsonNames are unique per class by construction
             builder.putUnchecked(field.jsonName(), field.toJqValue(value, mapper));
         }
+        // Extra catch-all entries after mapped fields (extras win on collision)
+        emitAnyGetter(builder, instance, mapper);
         return builder.build();
     }
 

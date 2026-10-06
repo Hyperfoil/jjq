@@ -14,7 +14,8 @@ final class MappingCodeGenerator {
      * Generate the complete Java source for a _JqMapping class.
      */
     static String generate(String packageName, String recordSimpleName, String recordQualifiedName,
-                           String mappingClassName, List<JqMapperProcessor.ComponentInfo> components) {
+                           String mappingClassName, List<JqMapperProcessor.ComponentInfo> components,
+                           JqMapperProcessor.AnyInfo anyInfo) {
         var sb = new StringBuilder(1024);
 
         // Package declaration
@@ -73,17 +74,23 @@ final class MappingCodeGenerator {
         }
         sb.append("\n");
 
+        // Known-field set for unknown-key forwarding (issue #87)
+        if (anyInfo.hasSetter()) {
+            generateAnyKnownSet(sb, knownJsonNamesRecord(components));
+        }
+        sb.append("\n");
+
         // fromJqValue method
-        generateFromJqValue(sb, recordSimpleName, components);
+        generateFromJqValue(sb, recordSimpleName, components, anyInfo);
 
         // toJqValue method
-        generateToJqValue(sb, recordSimpleName, components);
+        generateToJqValue(sb, recordSimpleName, components, anyInfo);
 
         // appendJson method — direct-to-JSON, bypasses JqValue tree
-        generateAppendJson(sb, recordSimpleName, components);
+        generateAppendJson(sb, recordSimpleName, components, anyInfo);
 
         // appendJsonBytes method — direct-to-bytes, bypasses JqValue tree
-        generateAppendJsonBytes(sb, recordSimpleName, components);
+        generateAppendJsonBytes(sb, recordSimpleName, components, anyInfo);
 
         // type() method
         sb.append("    @Override\n");
@@ -119,7 +126,8 @@ final class MappingCodeGenerator {
     }
 
     private static void generateFromJqValue(StringBuilder sb, String recordSimpleName,
-                                             List<JqMapperProcessor.ComponentInfo> components) {
+                                             List<JqMapperProcessor.ComponentInfo> components,
+                                             JqMapperProcessor.AnyInfo anyInfo) {
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
 
@@ -138,7 +146,12 @@ final class MappingCodeGenerator {
             sb.append("        }\n");
         }
 
-        sb.append("        return new ").append(recordSimpleName).append("(\n");
+        if (anyInfo.hasSetter()) {
+            sb.append("        ").append(recordSimpleName).append(" instance = new ")
+              .append(recordSimpleName).append("(\n");
+        } else {
+            sb.append("        return new ").append(recordSimpleName).append("(\n");
+        }
 
         for (int i = 0; i < components.size(); i++) {
             var comp = components.get(i);
@@ -154,7 +167,13 @@ final class MappingCodeGenerator {
             sb.append("\n");
         }
 
-        sb.append("        );\n");
+        if (anyInfo.hasSetter()) {
+            sb.append("        );\n");
+            generateAnySetterForward(sb, "instance", anyInfo);
+            sb.append("        return instance;\n");
+        } else {
+            sb.append("        );\n");
+        }
         sb.append("    }\n\n");
     }
 
@@ -286,7 +305,8 @@ final class MappingCodeGenerator {
     }
 
     private static void generateToJqValue(StringBuilder sb, String recordSimpleName,
-                                            List<JqMapperProcessor.ComponentInfo> components) {
+                                            List<JqMapperProcessor.ComponentInfo> components,
+                                            JqMapperProcessor.AnyInfo anyInfo) {
         int activeCount = (int) components.stream().filter(c -> !c.ignored()).count();
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
@@ -294,7 +314,7 @@ final class MappingCodeGenerator {
         sb.append("    @Override\n");
         sb.append("    public JqValue toJqValue(").append(recordSimpleName).append(" instance, JqMapper mapper) {\n");
 
-        if (!hasInclusion) {
+        if (!hasInclusion && !anyInfo.hasGetter()) {
             // Fast path: no inclusion filtering, keys unique — use putUnchecked
             sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
             for (var comp : components) {
@@ -304,6 +324,18 @@ final class MappingCodeGenerator {
                 sb.append(")\n");
             }
             sb.append("            .build();\n");
+        } else if (!hasInclusion) {
+            // Fast path with any-getter extras appended afterwards (issue #87)
+            sb.append("        var _b = JqObject.builder(").append(activeCount).append(")\n");
+            for (var comp : components) {
+                if (comp.ignored()) continue;
+                sb.append("            .putUnchecked(\"").append(comp.jsonName()).append("\", ");
+                generateSerializationValue(sb, comp);
+                sb.append(")\n");
+            }
+            sb.append("            ;\n");
+            sb.append("        putExtras(_b, instance.").append(anyInfo.getterName()).append("(), mapper);\n");
+            sb.append("        return _b.build();\n");
         } else {
             // Inclusion filtering: conditional puts, keys still unique — use putUnchecked
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(");\n");
@@ -317,6 +349,9 @@ final class MappingCodeGenerator {
                 } else {
                     generateInclusionCheck(sb, comp, accessor);
                 }
+            }
+            if (anyInfo.hasGetter()) {
+                sb.append("        putExtras(_b, instance.").append(anyInfo.getterName()).append("(), mapper);\n");
             }
             sb.append("        return _b.build();\n");
         }
@@ -431,13 +466,21 @@ final class MappingCodeGenerator {
      * that bypasses intermediate JqValue tree construction.
      */
     private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
-                                            List<JqMapperProcessor.ComponentInfo> components) {
+                                             List<JqMapperProcessor.ComponentInfo> components,
+                                             JqMapperProcessor.AnyInfo anyInfo) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public void appendJson(").append(recordSimpleName)
           .append(" instance, StringBuilder _sb, JqMapper mapper) {\n");
+        if (anyInfo.hasGetter()) {
+            // Any-getter extras need tree materialization — fall back (issue #87).
+            // Emitting only the fallback: body after return would be unreachable code.
+            sb.append("        toJqValue(instance, mapper).appendTo(_sb);\n");
+            sb.append("    }\n\n");
+            return;
+        }
         sb.append("        _sb.append('{');\n");
 
         if (!hasInclusion) {
@@ -564,13 +607,21 @@ final class MappingCodeGenerator {
      * that bypasses intermediate JqValue tree construction.
      */
     private static void generateAppendJsonBytes(StringBuilder sb, String recordSimpleName,
-                                                List<JqMapperProcessor.ComponentInfo> components) {
+                                                     List<JqMapperProcessor.ComponentInfo> components,
+                                                     JqMapperProcessor.AnyInfo anyInfo) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public void appendJsonBytes(").append(recordSimpleName)
           .append(" instance, io.hyperfoil.tools.jjq.value.BytOutput _out, JqMapper mapper) {\n");
+        if (anyInfo.hasGetter()) {
+            // Any-getter extras need tree materialization — fall back (issue #87).
+            // Emitting only the fallback: body after return would be unreachable code.
+            sb.append("        toJqValue(instance, mapper).appendToBytes(_out);\n");
+            sb.append("    }\n\n");
+            return;
+        }
         sb.append("        _out.writeByte('{');\n");
 
         if (!hasInclusion) {
@@ -692,6 +743,62 @@ final class MappingCodeGenerator {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
     }
 
+    /** Known JSON names for records: every non-@JqField key, including ignored ones. */
+    private static java.util.List<String> knownJsonNamesRecord(
+            List<JqMapperProcessor.ComponentInfo> components) {
+        var names = new java.util.ArrayList<String>();
+        for (var comp : components) {
+            if (!comp.hasJqField()) names.add(comp.jsonName());
+        }
+        return names;
+    }
+
+    /** Known JSON names for POJOs: every non-@JqField key, including ignored ones. */
+    private static java.util.List<String> knownJsonNamesPojo(
+            List<JqMapperProcessor.PropertyInfo> properties) {
+        var names = new java.util.ArrayList<String>();
+        for (var prop : properties) {
+            if (!prop.hasJqField()) names.add(prop.jsonName());
+        }
+        return names;
+    }
+
+    /**
+     * Emit the known-field-name set backing unknown-key forwarding (issue #87).
+     * Mirrors the runtime rule: every non-program key, including ignored ones
+     * (ignored keys are skipped entirely, never forwarded).
+     */
+    private static void generateAnyKnownSet(StringBuilder sb, java.util.List<String> knownNames) {
+        sb.append("    private static final java.util.Set<String> _ANY_KNOWN = java.util.Set.of(");
+        for (int i = 0; i < knownNames.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append("\"").append(escapeJava(knownNames.get(i))).append("\"");
+        }
+        sb.append(");\n");
+    }
+
+    /** Read expression for an any-getter: always a no-arg method call. */
+    private static String anyGetterReadExpr(JqMapperProcessor.AnyInfo anyInfo) {
+        return "instance." + anyInfo.getterName() + "()";
+    }
+
+    /** Emit the unknown-key forward loop into generated fromJqValue. */
+    private static void generateAnySetterForward(StringBuilder sb, String target,
+                                                 JqMapperProcessor.AnyInfo anyInfo) {
+        sb.append("        if (input instanceof JqObject _uobj) {\n");
+        sb.append("            for (int _ui = 0; _ui < _uobj.size(); _ui++) {\n");
+        sb.append("                String _uk = _uobj.keyAt(_ui);\n");
+        sb.append("                if (!_ANY_KNOWN.contains(_uk)) ").append(target).append(".")
+          .append(anyInfo.setterName()).append("(_uk, ");
+        if (anyInfo.setterTakesJqValue()) {
+            sb.append("_uobj.valueAt(_ui));\n");
+        } else {
+            sb.append("_uobj.valueAt(_ui).toJavaObject());\n");
+        }
+        sb.append("            }\n");
+        sb.append("        }\n");
+    }
+
     /** Return the Java default value literal for a type name. */
     private static String defaultLiteral(String typeName) {
         return switch (typeName) {
@@ -723,7 +830,8 @@ final class MappingCodeGenerator {
      * and getter calls for serialization.
      */
     static String generateForClass(String packageName, String classSimpleName, String classQualifiedName,
-                                    String mappingClassName, List<JqMapperProcessor.PropertyInfo> properties) {
+                                    String mappingClassName, List<JqMapperProcessor.PropertyInfo> properties,
+                                    JqMapperProcessor.AnyInfo anyInfo) {
         var sb = new StringBuilder(1024);
 
         if (!packageName.isEmpty()) {
@@ -754,6 +862,9 @@ final class MappingCodeGenerator {
                   .append(escapeJava(prop.jqExpr()))
                   .append("\");\n");
             }
+        }
+        if (anyInfo.hasSetter()) {
+            generateAnyKnownSet(sb, knownJsonNamesPojo(properties));
         }
         sb.append("\n");
 
@@ -798,6 +909,9 @@ final class MappingCodeGenerator {
             }
         }
 
+        if (anyInfo.hasSetter()) {
+            generateAnySetterForward(sb, "instance", anyInfo);
+        }
         sb.append("        return instance;\n");
         sb.append("    }\n\n");
 
@@ -809,7 +923,7 @@ final class MappingCodeGenerator {
         sb.append("    @Override\n");
         sb.append("    public JqValue toJqValue(").append(classSimpleName).append(" instance, JqMapper mapper) {\n");
 
-        if (!hasInclusion) {
+        if (!hasInclusion && !anyInfo.hasGetter()) {
             // Fast path: no inclusion filtering
             sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
             for (var prop : properties) {
@@ -821,6 +935,20 @@ final class MappingCodeGenerator {
                 sb.append(")\n");
             }
             sb.append("            .build();\n");
+        } else if (!hasInclusion) {
+            // Fast path with any-getter extras appended afterwards (issue #87)
+            sb.append("        var _b = JqObject.builder(").append(activeCount).append(")\n");
+            for (var prop : properties) {
+                if (prop.ignored()) continue;
+                String readExpr = resolvePojoReadExpr(prop);
+                if (readExpr == null) continue;
+                sb.append("            .putUnchecked(\"").append(prop.jsonName()).append("\", ");
+                generateSerializationValueForPojo(sb, prop, readExpr);
+                sb.append(")\n");
+            }
+            sb.append("            ;\n");
+            sb.append("        putExtras(_b, ").append(anyGetterReadExpr(anyInfo)).append(", mapper);\n");
+            sb.append("        return _b.build();\n");
         } else {
             // Inclusion filtering: keys unique — use putUnchecked
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(");\n");
@@ -836,16 +964,19 @@ final class MappingCodeGenerator {
                     generatePojoInclusionCheck(sb, prop, readExpr);
                 }
             }
+            if (anyInfo.hasGetter()) {
+                sb.append("        putExtras(_b, ").append(anyGetterReadExpr(anyInfo)).append(", mapper);\n");
+            }
             sb.append("        return _b.build();\n");
         }
 
         sb.append("    }\n\n");
 
         // appendJson — direct-to-JSON, bypasses JqValue tree
-        generateAppendJsonForPojo(sb, classSimpleName, properties);
+        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo);
 
         // appendJsonBytes — direct-to-bytes, bypasses JqValue tree
-        generateAppendJsonBytesForPojo(sb, classSimpleName, properties);
+        generateAppendJsonBytesForPojo(sb, classSimpleName, properties, anyInfo);
 
         // type()
         sb.append("    @Override\n");
@@ -861,13 +992,21 @@ final class MappingCodeGenerator {
      * Generate appendJson for POJOs — same pattern as records but uses getter/field access.
      */
     private static void generateAppendJsonForPojo(StringBuilder sb, String classSimpleName,
-                                                   List<JqMapperProcessor.PropertyInfo> properties) {
+                                                    List<JqMapperProcessor.PropertyInfo> properties,
+                                                    JqMapperProcessor.AnyInfo anyInfo) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public void appendJson(").append(classSimpleName)
           .append(" instance, StringBuilder _sb, JqMapper mapper) {\n");
+        if (anyInfo.hasGetter()) {
+            // Any-getter extras need tree materialization — fall back (issue #87).
+            // Emitting only the fallback: body after return would be unreachable code.
+            sb.append("        toJqValue(instance, mapper).appendTo(_sb);\n");
+            sb.append("    }\n\n");
+            return;
+        }
         sb.append("        _sb.append('{');\n");
 
         if (!hasInclusion) {
@@ -905,13 +1044,21 @@ final class MappingCodeGenerator {
      * Generate appendJsonBytes for POJOs — same pattern as records but uses getter/field access.
      */
     private static void generateAppendJsonBytesForPojo(StringBuilder sb, String classSimpleName,
-                                                        List<JqMapperProcessor.PropertyInfo> properties) {
+                                                         List<JqMapperProcessor.PropertyInfo> properties,
+                                                         JqMapperProcessor.AnyInfo anyInfo) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public void appendJsonBytes(").append(classSimpleName)
           .append(" instance, io.hyperfoil.tools.jjq.value.BytOutput _out, JqMapper mapper) {\n");
+        if (anyInfo.hasGetter()) {
+            // Any-getter extras need tree materialization — fall back (issue #87).
+            // Emitting only the fallback: body after return would be unreachable code.
+            sb.append("        toJqValue(instance, mapper).appendToBytes(_out);\n");
+            sb.append("    }\n\n");
+            return;
+        }
         sb.append("        _out.writeByte('{');\n");
 
         if (!hasInclusion) {

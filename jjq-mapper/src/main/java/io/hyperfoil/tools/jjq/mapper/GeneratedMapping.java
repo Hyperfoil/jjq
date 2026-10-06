@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.mapper;
 
+import io.hyperfoil.tools.jjq.value.JqObject;
 import io.hyperfoil.tools.jjq.value.JqValue;
 
 /**
@@ -78,6 +79,29 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     protected static JqValue requireScalar(JqValue value, JqValue.Type expectedType, String expected) {
         if (value != null && value.isContainer()) throw TypeConverter.mismatch(expectedType, expected, value);
         return value;
+    }
+
+    /**
+     * Emit any-getter extras into a builder after mapped fields (generated-code
+     * counterpart of the reflection path). {@code JqObject} entries are used
+     * directly; {@code Map} values are converted ({@code null} becomes JSON
+     * null); anything else is ignored. Entries overwrite mapped fields on
+     * collision.
+     *
+     * @param builder the builder holding the mapped fields
+     * @param extras  the any-getter result (may be null)
+     * @param mapper  the mapper for value conversion
+     */
+    protected static void putExtras(JqObject.Builder builder, Object extras, JqMapper mapper) {
+        if (extras instanceof JqObject jo) {
+            jo.forEach(builder::put);
+        } else if (extras instanceof java.util.Map<?, ?> map) {
+            for (java.util.Map.Entry<?, ?> entry : map.entrySet()) {
+                // toJqValue passes JqValue through and maps null to JqNull
+                builder.put(String.valueOf(entry.getKey()),
+                        TypeConverter.toJqValue(entry.getValue(), mapper));
+            }
+        }
     }
 
     /**

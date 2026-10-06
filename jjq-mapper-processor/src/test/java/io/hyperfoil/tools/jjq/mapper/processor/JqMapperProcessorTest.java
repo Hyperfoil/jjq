@@ -285,6 +285,49 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_anySetterRoundTrip() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
+                import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                @JqMapped
+                public class ExtrasPojo {
+                    public String name;
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    public ExtrasPojo() {}
+
+                    @JqAnySetter
+                    public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+                    @JqAnyGetter
+                    public Map<String, JqValue> getExtras() { return extras; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.ExtrasPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+        Object extras = pojoClass.getMethod("getExtras").invoke(p);
+        assertEquals(1L, ((JqValue) ((java.util.Map<?, ?>) extras).get("mystery")).getField("a").longValue());
+
+        // Round-trip through toJson (uses the appendJson fallback with any-getter)
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"testProxyTool\"") || out.contains("\"mystery\""), out);
+        Object p2 = mapper.fromJqValue(JqValues.parse(out), pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p2));
+    }
+
+    @Test
     void generatedMapping_shapeMismatchHasPath() throws Exception {
         String toolSource = """
                 package test;

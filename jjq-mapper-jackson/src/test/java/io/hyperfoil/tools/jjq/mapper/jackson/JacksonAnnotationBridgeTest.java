@@ -127,4 +127,42 @@ class JacksonAnnotationBridgeTest {
         RenamedRecord restored = mapper.fromJqValue(json, RenamedRecord.class);
         assertEquals(original, restored);
     }
+
+    // ---- @JsonAnySetter / @JsonAnyGetter (issue #87) ----
+
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    static class JacksonExtrasPojo {
+        private String name;
+        private final java.util.Map<String, Object> extras = new java.util.LinkedHashMap<>();
+
+        public JacksonExtrasPojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+
+        @com.fasterxml.jackson.annotation.JsonAnySetter
+        public void setExtra(String key, Object value) { extras.put(key, value); }
+
+        @com.fasterxml.jackson.annotation.JsonAnyGetter
+        public java.util.Map<String, Object> getExtras() { return extras; }
+    }
+
+    @Test
+    void jsonAnySetter_capturesUnknownKeys() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"testProxyTool\":{\"token\":\"tpt-fixture\"}}");
+        JacksonExtrasPojo p = mapper.fromJqValue(json, JacksonExtrasPojo.class);
+        assertEquals("t", p.getName());
+        assertEquals(1, p.getExtras().size());
+        assertTrue(p.getExtras().get("testProxyTool") instanceof java.util.Map, p.getExtras().toString());
+    }
+
+    @Test
+    void jsonAnyGetter_roundTrip() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"testProxyTool\":{\"token\":\"tpt-fixture\"}}");
+        JacksonExtrasPojo p = mapper.fromJqValue(json, JacksonExtrasPojo.class);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"name\":\"t\""), out);
+        assertTrue(out.contains("\"testProxyTool\""), out);
+        assertTrue(out.contains("\"tpt-fixture\""), out);
+    }
 }

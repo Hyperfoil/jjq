@@ -1,5 +1,7 @@
 package io.hyperfoil.tools.jjq.mapper.jackson;
 
+import com.fasterxml.jackson.annotation.JsonAnyGetter;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -22,6 +24,8 @@ import java.util.Set;
  *   <li>{@code @JsonIgnore} → field exclusion</li>
  *   <li>{@code @JsonIgnoreProperties({"a","b"})} → class-level field exclusion</li>
  *   <li>{@code @JsonInclude(NON_NULL)} → inclusion strategy</li>
+ *   <li>{@code @JsonAnySetter} (method form) → unknown-key capture</li>
+ *   <li>{@code @JsonAnyGetter} (method form) → extra-field emission</li>
  * </ul>
  *
  * <p>Register via ServiceLoader (automatic when on classpath) or explicitly:</p>
@@ -92,6 +96,28 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
     public JqNaming.Strategy resolveNaming(Class<?> type) {
         // Jackson's @JsonNaming uses a PropertyNamingStrategy class, not an enum.
         // Mapping it would require importing jackson-databind. For now, return null.
+        return null;
+    }
+
+    @Override
+    public java.lang.reflect.Method resolveAnySetter(Class<?> type) {
+        for (java.lang.reflect.Method m : type.getMethods()) {
+            if (m.isAnnotationPresent(JsonAnySetter.class)
+                    && m.getParameterCount() == 2
+                    && m.getParameterTypes()[0] == String.class) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public java.lang.reflect.Method resolveAnyGetter(Class<?> type) {
+        for (java.lang.reflect.Method m : type.getMethods()) {
+            if (m.isAnnotationPresent(JsonAnyGetter.class) && m.getParameterCount() == 0) {
+                return m;
+            }
+        }
         return null;
     }
 

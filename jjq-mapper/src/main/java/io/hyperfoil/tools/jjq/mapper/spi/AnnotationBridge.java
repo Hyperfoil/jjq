@@ -75,4 +75,34 @@ public interface AnnotationBridge {
      * @return the naming strategy, or {@code null} if no annotation is present
      */
     JqNaming.Strategy resolveNaming(Class<?> type);
+
+    /**
+     * Resolve an any-setter method (unknown-key capture, Jackson's
+     * {@code @JsonAnySetter} equivalent) declared on the class.
+     *
+     * <p>The default implementation returns {@code null} (not supported);
+     * bridges override it when their annotations are present. Native
+     * {@link io.hyperfoil.tools.jjq.mapper.JqAnySetter} is always checked first.</p>
+     *
+     * @param type the class to inspect
+     * @return the annotated method, or {@code null} if not present
+     */
+    default java.lang.reflect.Method resolveAnySetter(Class<?> type) {
+        return null;
+    }
+
+    /**
+     * Resolve an any-getter method (extra-field emission, Jackson's
+     * {@code @JsonAnyGetter} equivalent) declared on the class.
+     *
+     * <p>The default implementation returns {@code null} (not supported);
+     * bridges override it when their annotations are present. Native
+     * {@link io.hyperfoil.tools.jjq.mapper.JqAnyGetter} is always checked first.</p>
+     *
+     * @param type the class to inspect
+     * @return the annotated method, or {@code null} if not present
+     */
+    default java.lang.reflect.Method resolveAnyGetter(Class<?> type) {
+        return null;
+    }
 }
