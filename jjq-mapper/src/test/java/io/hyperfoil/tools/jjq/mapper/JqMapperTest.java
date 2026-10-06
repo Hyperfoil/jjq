@@ -287,6 +287,86 @@ class JqMapperTest {
         assertNull(r.email());
     }
 
+    // ---- Shape mismatches (issue #84) ----
+
+    record WithPackages(String name, List<String> packages) {}
+
+    @Test
+    void fromJqValue_scalarForListThrows() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"packages\":\"git\"}");
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(json, WithPackages.class));
+        assertTrue(e.getMessage().contains("packages"), e.getMessage());
+    }
+
+    @Test
+    void fromJqValue_objectForListThrows() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"packages\":{\"a\":1}}");
+        assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(json, WithPackages.class));
+    }
+
+    record WithMeta(String name, Map<String, Integer> meta) {}
+
+    @Test
+    void fromJqValue_scalarForMapThrows() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"meta\":42}");
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(json, WithMeta.class));
+        assertTrue(e.getMessage().contains("meta"), e.getMessage());
+    }
+
+    record Tool(String name) {}
+    record Bundle(String id, List<Tool> tools) {}
+
+    @Test
+    void fromJqValue_scalarElementThrowsWithPath() {
+        JqValue json = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(json, Bundle.class));
+        String msg = e.getMessage();
+        assertTrue(msg.contains("tools"), msg);
+        assertTrue(msg.contains("[1]"), msg);
+    }
+
+    static class PlainTool {
+        private String name;
+
+        public PlainTool() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+    }
+
+    record PlainBundle(String id, List<PlainTool> tools) {}
+
+    @Test
+    void fromJqValue_plainPojoElements() {
+        // Object elements bind structurally even without @JqMapped
+        JqValue json = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"}]}");
+        PlainBundle b = mapper.fromJqValue(json, PlainBundle.class);
+        assertEquals("ok", b.tools().get(0).getName());
+        // Scalar elements fail fast with a path instead of corrupting the list
+        JqValue bad = JqValues.parse("{\"id\":\"b\",\"tools\":[\"oops\"]}");
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(bad, PlainBundle.class));
+        assertTrue(e.getMessage().contains("tools"), e.getMessage());
+    }
+
+    @Test
+    void fromJqValue_scalarForPojoThrows() {
+        JqValue json = JqValues.parse("\"hi\"");
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(json, SimplePojo.class));
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(json, SimpleRecord.class));
+    }
+
+    @Test
+    void fromJqValue_nullInputLenient() {
+        SimpleRecord r = mapper.fromJqValue(JqNull.NULL, SimpleRecord.class);
+        assertNull(r.name());
+        assertEquals(0, r.age());
+    }
+
     // ---- Convenience methods ----
 
     @Test

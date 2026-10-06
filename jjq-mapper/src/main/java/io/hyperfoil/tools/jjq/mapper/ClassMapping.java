@@ -411,6 +411,13 @@ final class ClassMapping<T> implements Mapping<T> {
             return fromJqValuePojo(value, mapper);
         }
 
+        // Records and @JqMapped POJOs bind from objects (null stays lenient).
+        // Scalar/array documents with only direct field lookups are shape mismatches;
+        // @JqField programs may legitimately extract from any shape, so those stay lenient.
+        if (value != null && !(value instanceof JqNull) && !(value instanceof JqObject) && allDirectFields()) {
+            throw TypeConverter.mismatch("object for " + type.getSimpleName(), value);
+        }
+
         // Record path: positional constructor
         // Fast path: single-pass iteration over the object's entries.
         if (useForEachFastPath && value instanceof JqObject obj && obj.size() == fields.length) {
@@ -429,8 +436,12 @@ final class ClassMapping<T> implements Mapping<T> {
         Object[] args = new Object[fields.length];
         for (int i = 0; i < fields.length; i++) {
             FieldMapping field = fields[i];
-            JqValue extracted = field.extract(value);
-            args[field.constructorIndex()] = field.convert(extracted, mapper);
+            try {
+                JqValue extracted = field.extract(value);
+                args[field.constructorIndex()] = field.convert(extracted, mapper);
+            } catch (JqMapperException e) {
+                throw e.prependPath(field.jsonName());
+            }
         }
         try {
             return (T) spreadConstructor.invoke(args);
@@ -439,9 +450,22 @@ final class ClassMapping<T> implements Mapping<T> {
         }
     }
 
+    /** True when every mapped field uses a direct name lookup (no @JqField programs). */
+    private boolean allDirectFields() {
+        for (FieldMapping field : fields) {
+            if (!field.isIgnored() && field.usesProgram()) return false;
+        }
+        return true;
+    }
+
     /** POJO deserialization: no-arg constructor + setter calls. */
     @SuppressWarnings("unchecked")
     private T fromJqValuePojo(JqValue value, JqMapper mapper) {
+        // Scalar/array documents with only direct field lookups are shape mismatches
+        // (same rule as the record path above; @JqField programs stay lenient).
+        if (value != null && !(value instanceof JqNull) && !(value instanceof JqObject) && allDirectFields()) {
+            throw TypeConverter.mismatch("object for " + type.getSimpleName(), value);
+        }
         T instance;
         try {
             instance = (T) constructor.invoke();
@@ -454,9 +478,14 @@ final class ClassMapping<T> implements Mapping<T> {
             // (Jackson-compatible). Only direct field lookups can prove absence;
             // @JqField program expressions keep write-always semantics.
             // Explicit nulls are still written. has() is null-safe (false for non-objects).
-            if (!field.usesProgram() && !value.has(field.jsonName())) continue;
+            if (value != null && !field.usesProgram() && !value.has(field.jsonName())) continue;
             JqValue extracted = field.extract(value);
-            Object converted = field.convert(extracted, mapper);
+            Object converted;
+            try {
+                converted = field.convert(extracted, mapper);
+            } catch (JqMapperException e) {
+                throw e.prependPath(field.jsonName());
+            }
             field.writeValue(instance, converted);
         }
         return instance;
@@ -502,9 +531,18 @@ final class ClassMapping<T> implements Mapping<T> {
                 if (mapped == null) return null; // unknown key — fall back to standard path
                 idx = mapped;
             }
-            args[idx] = fields[idx].convert(obj.valueAt(i), mapper);
+            args[idx] = convertIndexed(fields[idx], obj.valueAt(i), mapper);
         }
         return args;
+    }
+
+    /** Convert one fast-path value, attributing failures to the matched field. */
+    private static Object convertIndexed(FieldMapping field, JqValue extracted, JqMapper mapper) {
+        try {
+            return field.convert(extracted, mapper);
+        } catch (JqMapperException e) {
+            throw e.prependPath(field.jsonName());
+        }
     }
 
     /** Consult bridges for a field name override. Returns null if no bridge provides one. */

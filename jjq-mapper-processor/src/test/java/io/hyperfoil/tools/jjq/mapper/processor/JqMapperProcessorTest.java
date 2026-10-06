@@ -259,6 +259,55 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_shapeMismatchHasPath() throws Exception {
+        String toolSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Tool(String name) {}
+                """;
+        String bundleSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+
+                @JqMapped
+                public record Bundle(String id, List<Tool> tools) {}
+                """;
+
+        // Compile both records in one round so each sees the other
+        java.net.URLClassLoader loader = compileSources(
+                new String[]{"test.Tool", "test.Bundle"},
+                new String[]{toolSource, bundleSource});
+        Class<?> bundleClass = Class.forName("test.Bundle", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        // Scalar element fails fast with the element path, not a corrupt list
+        JqValue bad = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(bad, bundleClass));
+        String msg = e.getMessage();
+        assertTrue(msg.contains("tools"), msg);
+        assertTrue(msg.contains("[1]"), msg);
+
+        // Scalar for the list itself fails with the field path
+        JqValue scalarList = JqValues.parse("{\"id\":\"b\",\"tools\":\"oops\"}");
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e2 = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(scalarList, bundleClass));
+        assertTrue(e2.getMessage().contains("tools"), e2.getMessage());
+
+        // Well-shaped input still binds
+        JqValue good = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"}]}");
+        Object b = mapper.fromJqValue(good, bundleClass);
+        assertEquals("b", bundleClass.getMethod("id").invoke(b));
+    }
+
+    @Test
     void generatedMapping_appendJson() throws Exception {
         String source = """
                 package test;

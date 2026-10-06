@@ -276,6 +276,17 @@ for `ServiceLoader` discovery.
 | `JqValue` | any | Passthrough — no conversion |
 | Nested record/POJO | object | Recursive field mapping |
 
+### Shape mismatches
+
+Structural mismatches fail fast with a `$`-rooted path (Jackson `MismatchedInputException` parity):
+
+```java
+mapper.fromJqValue(JqValues.parse("{\"packages\":\"git\"}"), Config.class);
+// JqMapperException: Cannot bind String "git" to List<String> at '$.packages'
+```
+
+Non-array → `List`, non-object → `Map`/record/POJO, and wrong collection element types all throw at bind time instead of silently coercing. `null`/absent values stay lenient (`null`, empty collections, field initializers). Custom `@JqConverter`s bypass this checking entirely, which is also how genuinely polymorphic shapes (string-or-map, list-or-object) should be modeled.
+
 ### `TypeConverter` — extension point for custom handling
 
 `TypeConverter` is the public conversion engine behind field mapping. The target

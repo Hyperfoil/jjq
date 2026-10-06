@@ -98,12 +98,17 @@ final class MappingCodeGenerator {
             sb.append("\n");
             sb.append("    @SuppressWarnings(\"unchecked\")\n");
             sb.append("    private static <E> java.util.List<E> _toList(JqValue value, JqMapper mapper, Class<E> elementType) {\n");
-            sb.append("        if (value == null || value instanceof JqNull || !(value instanceof JqArray arr)) return java.util.List.of();\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqArray arr = requireArray(value, \"List<\" + elementType.getSimpleName() + \">\");\n");
+            sb.append("        if (arr == null) return java.util.List.of();\n");
             sb.append("        var kind = io.hyperfoil.tools.jjq.mapper.TypeConverter.resolveKind(elementType, elementType);\n");
             sb.append("        var list = new java.util.ArrayList<E>(arr.size());\n");
-            sb.append("        for (JqValue elem : arr) {\n");
-            sb.append("            list.add((E) io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(\n");
-            sb.append("                elem, kind, elementType, elementType, mapper));\n");
+            sb.append("        for (int _i = 0; _i < arr.size(); _i++) {\n");
+            sb.append("            try {\n");
+            sb.append("                list.add((E) io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(\n");
+            sb.append("                    arr.get(_i), kind, elementType, elementType, mapper));\n");
+            sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+            sb.append("                throw _e.prependPath(_i);\n");
+            sb.append("            }\n");
             sb.append("        }\n");
             sb.append("        return list;\n");
             sb.append("    }\n");
@@ -117,6 +122,22 @@ final class MappingCodeGenerator {
                                              List<JqMapperProcessor.ComponentInfo> components) {
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
+
+        // Hoist fallible conversions (containers, nested types, custom converters)
+        // into locals with path tracking. Scalar extractions cannot fail and stay inline.
+        for (int i = 0; i < components.size(); i++) {
+            var comp = components.get(i);
+            if (comp.ignored() || !isFallibleExtraction(comp)) continue;
+            sb.append("        ").append(comp.typeName()).append(" _c").append(i).append(";\n");
+            sb.append("        try {\n");
+            sb.append("            _c").append(i).append(" = ");
+            generateExtraction(sb, comp);
+            sb.append(";\n");
+            sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+            sb.append("            throw _e.prependPath(\"").append(escapeJava(comp.jsonName())).append("\");\n");
+            sb.append("        }\n");
+        }
+
         sb.append("        return new ").append(recordSimpleName).append("(\n");
 
         for (int i = 0; i < components.size(); i++) {
@@ -124,6 +145,8 @@ final class MappingCodeGenerator {
             sb.append("            ");
             if (comp.ignored()) {
                 sb.append(defaultLiteral(comp.typeName()));
+            } else if (isFallibleExtraction(comp)) {
+                sb.append("_c").append(i);
             } else {
                 generateExtraction(sb, comp);
             }
@@ -133,6 +156,32 @@ final class MappingCodeGenerator {
 
         sb.append("        );\n");
         sb.append("    }\n\n");
+    }
+
+    /**
+     * True when a component's extraction can throw {@code JqMapperException}
+     * (shape mismatches in containers/nested types, custom converters).
+     * Scalar and JqValue-passthrough extractions only produce defaults.
+     */
+    private static boolean isFallibleExtraction(JqMapperProcessor.ComponentInfo comp) {
+        if (comp.converterClass() != null) return true;
+        String typeName = comp.typeName();
+        if (typeName.startsWith("java.util.List<") || typeName.startsWith("java.util.Map<")
+                || typeName.startsWith("java.util.Optional<")) return true;
+        // Nested record/enum/POJO (generateExtraction's mapper-delegate branches)
+        return typeName.contains(".") && !typeName.startsWith("java.");
+    }
+
+    /**
+     * True when a POJO property's extraction can throw {@code JqMapperException}.
+     * Mirrors {@link #isFallibleExtraction} for {@code PropertyInfo} (generated
+     * POJO deserialization does not emit custom-converter calls).
+     */
+    private static boolean isFalliblePojoExtraction(JqMapperProcessor.PropertyInfo prop) {
+        String typeName = prop.typeName();
+        if (typeName.startsWith("java.util.List<") || typeName.startsWith("java.util.Map<")
+                || typeName.startsWith("java.util.Optional<")) return true;
+        return typeName.contains(".") && !typeName.startsWith("java.");
     }
 
     private static void generateExtraction(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
@@ -220,7 +269,18 @@ final class MappingCodeGenerator {
                 sb.append(apply).append(" instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
             case "java.math.BigDecimal", "BigDecimal" ->
                 sb.append(apply).append(" instanceof JqNumber _n ? _n.decimalValue() : null");
-            default -> sb.append(apply).append(".toJavaObject()");
+            default -> {
+                // Nested record/enum/POJO: bind structurally (fail-fast on shape
+                // mismatch, mirroring the reflection path). JqValue passthrough
+                // and java.* types keep the lenient toJavaObject conversion.
+                if (typeName.contains(".") && !typeName.startsWith("java.")
+                        && !typeName.equals("JqValue")
+                        && !typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeName).append(".class)");
+                } else {
+                    sb.append(apply).append(".toJavaObject()");
+                }
+            }
         }
     }
 
@@ -720,6 +780,15 @@ final class MappingCodeGenerator {
             if (prop.hasJqField()) {
                 // Custom @JqField expression: absence is unprovable, write always
                 sb.append("        ").append(statement).append("\n");
+            } else if (isFalliblePojoExtraction(prop)) {
+                // Fallible conversion: track the field in the failure path (issue #84)
+                sb.append("        if (input.has(\"").append(escapeJava(prop.jsonName())).append("\")) {\n");
+                sb.append("            try {\n");
+                sb.append("                ").append(statement).append("\n");
+                sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+                sb.append("                throw _e.prependPath(\"").append(escapeJava(prop.jsonName())).append("\");\n");
+                sb.append("            }\n");
+                sb.append("        }\n");
             } else {
                 // Absent keys leave field initializers in place (issue #82).
                 // Explicit nulls still take the write path. has() is null-safe.

@@ -63,4 +63,20 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
      * @return the mapped record class
      */
     public abstract Class<T> type();
+
+    /**
+     * Require an array value for list conversion. Returns {@code null} for
+     * null inputs (callers map those to empty lists); throws a shape-mismatch
+     * error for any other non-array shape.
+     *
+     * @param value  the value to check (may be null)
+     * @param target human-readable target description for the error, e.g. {@code List<Tool>}
+     * @return the value as a {@code JqArray}, or {@code null} for null inputs
+     * @throws JqMapperException if the value is a non-array shape
+     */
+    protected static io.hyperfoil.tools.jjq.value.JqArray requireArray(JqValue value, String target) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        if (value instanceof io.hyperfoil.tools.jjq.value.JqArray arr) return arr;
+        throw TypeConverter.mismatch("array for " + target, value);
+    }
 }

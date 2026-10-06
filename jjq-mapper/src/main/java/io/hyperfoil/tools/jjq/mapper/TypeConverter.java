@@ -129,25 +129,39 @@ public final class TypeConverter {
                 yield value instanceof JqNumber n ? n.decimalValue() : BigDecimal.ZERO;
             }
             case LIST -> {
-                if (value == null || value instanceof JqNull || !(value instanceof JqArray arr)) yield List.of();
+                if (value == null || value instanceof JqNull) yield List.of();
+                if (!(value instanceof JqArray arr)) {
+                    throw mismatch("array for " + listTarget(targetType, genericType), value);
+                }
                 Type elementType = extractTypeArgument(genericType, 0);
                 Class<?> elementClass = rawClass(elementType);
                 Kind innerKind = resolveKind(elementClass, elementType);
                 var list = new ArrayList<>(arr.size());
-                for (JqValue elem : arr) {
-                    list.add(convert(elem, innerKind, elementClass, elementType, mapper));
+                for (int i = 0; i < arr.size(); i++) {
+                    try {
+                        list.add(convert(arr.get(i), innerKind, elementClass, elementType, mapper));
+                    } catch (JqMapperException e) {
+                        throw e.prependPath(i);
+                    }
                 }
                 yield list;
             }
             case MAP -> {
-                if (value == null || value instanceof JqNull || !(value instanceof JqObject obj)) yield Map.of();
+                if (value == null || value instanceof JqNull) yield Map.of();
+                if (!(value instanceof JqObject obj)) {
+                    throw mismatch("object for " + mapTarget(targetType, genericType), value);
+                }
                 Type valueType = extractTypeArgument(genericType, 1);
                 Class<?> valueClass = rawClass(valueType);
                 Kind innerKind = resolveKind(valueClass, valueType);
                 int n = obj.size();
                 var map = new LinkedHashMap<String, Object>(n * 4 / 3 + 1);
                 for (int i = 0; i < n; i++) {
-                    map.put(obj.keyAt(i), convert(obj.valueAt(i), innerKind, valueClass, valueType, mapper));
+                    try {
+                        map.put(obj.keyAt(i), convert(obj.valueAt(i), innerKind, valueClass, valueType, mapper));
+                    } catch (JqMapperException e) {
+                        throw e.prependPath(obj.keyAt(i));
+                    }
                 }
                 yield map;
             }
@@ -158,6 +172,9 @@ public final class TypeConverter {
             }
             case RECORD -> {
                 if (value == null || value instanceof JqNull) yield null;
+                if (!(value instanceof JqObject)) {
+                    throw mismatch("object for " + targetType.getSimpleName(), value);
+                }
                 yield mapper.fromJqValue(value, targetType);
             }
             case DEFAULT -> toJava(value, targetType, genericType, mapper);
@@ -181,7 +198,70 @@ public final class TypeConverter {
         }
         // True fallback — unknown type
         if (value == null || value instanceof JqNull) return defaultValue(targetType);
+        if (targetType == Object.class) return value.toJavaObject();
+        if (value instanceof JqObject) {
+            // Structural bind for plain POJOs (Jackson parity). Still fails loudly
+            // for unsuitable classes (no no-arg constructor, JDK internals, ...).
+            if (isPojoLike(targetType)) return mapper.fromJqValue(value, targetType);
+            return value.toJavaObject();
+        }
+        if (isPojoLike(targetType)) {
+            throw mismatch("object for " + targetType.getSimpleName(), value);
+        }
         return value.toJavaObject();
+    }
+
+    /**
+     * True for concrete POJO-like classes: not an interface, array, enum, or
+     * abstract class, and not a type with dedicated conversion semantics
+     * (Object, collections, maps, scalars, JqValue, Optional).
+     */
+    private static boolean isPojoLike(Class<?> targetType) {
+        if (targetType.isInterface() || targetType.isArray() || targetType.isEnum()
+                || targetType.isPrimitive() || targetType == Object.class) return false;
+        if (java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())) return false;
+        if (JqValue.class.isAssignableFrom(targetType)) return false;
+        if (java.util.Collection.class.isAssignableFrom(targetType)
+                || java.util.Map.class.isAssignableFrom(targetType)) return false;
+        if (targetType == java.util.Optional.class) return false;
+        if (Number.class.isAssignableFrom(targetType) || targetType == Boolean.class
+                || targetType == Character.class || targetType == String.class) return false;
+        return true;
+    }
+
+    /**
+     * Build a shape-mismatch error: what was found vs what was expected.
+     * The failure path is prepended while unwinding through nested structures.
+     */
+    static JqMapperException mismatch(String expected, JqValue actual) {
+        return new JqMapperException("Cannot bind " + describe(actual) + " to " + expected);
+    }
+
+    /** Short human-readable description of a JqValue (strings truncated). */
+    private static String describe(JqValue value) {
+        if (value == null || value instanceof JqNull) return "null";
+        if (value instanceof JqString s) {
+            String text = s.stringValue();
+            if (text.length() > 40) text = text.substring(0, 37) + "...";
+            return "String \"" + text + "\"";
+        }
+        if (value instanceof JqNumber) return "number";
+        if (value instanceof JqBoolean) return "boolean";
+        if (value instanceof JqArray) return "array";
+        if (value instanceof JqObject) return "object";
+        return value.getClass().getSimpleName();
+    }
+
+    /** Target description for List mismatches, e.g. {@code List<ToolRef>}. */
+    private static String listTarget(Class<?> targetType, Type genericType) {
+        Type elementType = extractTypeArgument(genericType, 0);
+        return "List<" + rawClass(elementType).getSimpleName() + ">";
+    }
+
+    /** Target description for Map mismatches, e.g. {@code Map<String, Integer>}. */
+    private static String mapTarget(Class<?> targetType, Type genericType) {
+        Type valueType = extractTypeArgument(genericType, 1);
+        return "Map<String, " + rawClass(valueType).getSimpleName() + ">";
     }
 
     /**
