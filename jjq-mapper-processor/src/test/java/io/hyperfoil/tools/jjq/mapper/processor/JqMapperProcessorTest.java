@@ -417,6 +417,39 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_autoDetectNoneReadsField() throws Exception {
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAutoDetect;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+                        getterVisibility = JsonAutoDetect.Visibility.NONE,
+                        isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+                public class FieldsOnly {
+                    public boolean useVertex;
+
+                    public FieldsOnly() {}
+
+                    public boolean isUseVertex() {
+                        throw new AssertionError("derived getter must not be bound");
+                    }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.FieldsOnly", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"useVertex\":true}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals(true, pojoClass.getField("useVertex").get(p));
+        // Ser reads the stored field directly (no throw)
+        assertTrue(mapper.toJqValue(p).toJsonString().contains("\"useVertex\":true"));
+    }
+
+    @Test
     void generatedMapping_shapeMismatchHasPath() throws Exception {
         String toolSource = """
                 package test;

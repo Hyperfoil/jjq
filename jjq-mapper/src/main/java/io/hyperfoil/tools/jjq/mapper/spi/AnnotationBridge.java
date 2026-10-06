@@ -147,6 +147,34 @@ public interface AnnotationBridge {
     }
 
     /**
+     * Whether {@code getX()} getters are bound as property readers for the class
+     * (Jackson's {@code @JsonAutoDetect(getterVisibility)} equivalent).
+     * When false, field reads fall back to direct field access.
+     *
+     * <p>The default implementation returns {@code true} (bind getters).</p>
+     *
+     * @param type the class to inspect
+     * @return {@code false} to suppress {@code getX()} binding
+     */
+    default boolean includeGetters(Class<?> type) {
+        return true;
+    }
+
+    /**
+     * Whether {@code isX()} getters are bound as property readers for the class
+     * (Jackson's {@code @JsonAutoDetect(isGetterVisibility)} equivalent).
+     * When false, field reads fall back to direct field access.
+     *
+     * <p>The default implementation returns {@code true} (bind getters).</p>
+     *
+     * @param type the class to inspect
+     * @return {@code false} to suppress {@code isX()} binding
+     */
+    default boolean includeIsGetters(Class<?> type) {
+        return true;
+    }
+
+    /**
      * Resolve a {@code @JsonCreator}-equivalent single-argument factory
      * (static method or constructor) for deserializing a scalar into the type.
      * Only delegating mode (exactly one argument) is supported; property-based

@@ -279,6 +279,14 @@ final class ClassMapping<T> implements Mapping<T> {
         Method[] anyMethods = resolveAnyMethods(type, bridges);
         Method anyGetter = anyMethods[1];
 
+        // Getter visibility per class (issue #89): any bridge may suppress getX/isX
+        // binding, falling back to direct field reads below
+        boolean useGetters = true, useIsGetters = true;
+        for (AnnotationBridge bridge : bridges) {
+            if (useGetters && !bridge.includeGetters(type)) useGetters = false;
+            if (useIsGetters && !bridge.includeIsGetters(type)) useIsGetters = false;
+        }
+
         // Discover fields (declared only, skip static/synthetic/transient)
         var fieldMappings = new ArrayList<FieldMapping>();
         for (Field field : type.getDeclaredFields()) {
@@ -345,7 +353,7 @@ final class ClassMapping<T> implements Mapping<T> {
 
             // Try getter/setter methods
             if (getter == null) {
-                getter = findGetter(type, name, fieldType, lookup);
+                getter = findGetter(type, name, fieldType, lookup, useGetters, useIsGetters);
             }
             if (setter == null && !Modifier.isFinal(mods)) {
                 setter = findSetter(type, name, fieldType, lookup);
@@ -430,14 +438,22 @@ final class ClassMapping<T> implements Mapping<T> {
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. */
     private static MethodHandle findGetter(Class<?> type, String fieldName, Class<?> fieldType,
-                                            MethodHandles.Lookup lookup) {
-        Method m = findGetterMethod(type, fieldName, fieldType);
-        if (m == null) return null;
-        try {
-            return lookup.unreflect(m);
-        } catch (IllegalAccessException ignored) {
-            return null;
+                                            MethodHandles.Lookup lookup,
+                                            boolean useGet, boolean useIs) {
+        String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+        java.util.List<String> candidates = new java.util.ArrayList<>(2);
+        if (useGet) candidates.add("get" + capitalized);
+        if (useIs && (fieldType == boolean.class || fieldType == Boolean.class)) {
+            candidates.add("is" + capitalized);
         }
+        for (String methodName : candidates) {
+            try {
+                return lookup.unreflect(type.getMethod(methodName));
+            } catch (NoSuchMethodException | IllegalAccessException ignored) {
+                // try next candidate
+            }
+        }
+        return null;
     }
 
     /** Find a setter method: setFieldName(Type). */

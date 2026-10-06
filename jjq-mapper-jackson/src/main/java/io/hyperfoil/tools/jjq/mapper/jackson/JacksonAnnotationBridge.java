@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.mapper.jackson;
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -103,12 +104,55 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public boolean skipOnSerialize(AnnotatedElement element) {
-        return resolveAccess(element) == JsonProperty.Access.WRITE_ONLY;
+        if (resolveAccess(element) == JsonProperty.Access.WRITE_ONLY) return true;
+        // @JsonIgnore on the getter suppresses serialization only (Jackson split semantics)
+        return hasAccessorIgnore(element, true);
     }
 
     @Override
     public boolean skipOnDeserialize(AnnotatedElement element) {
-        return resolveAccess(element) == JsonProperty.Access.READ_ONLY;
+        if (resolveAccess(element) == JsonProperty.Access.READ_ONLY) return true;
+        // @JsonIgnore on the setter suppresses deserialization only (Jackson split semantics)
+        return hasAccessorIgnore(element, false);
+    }
+
+    @Override
+    public boolean includeGetters(Class<?> type) {
+        JsonAutoDetect autoDetect = type.getAnnotation(JsonAutoDetect.class);
+        return autoDetect == null
+                || autoDetect.getterVisibility() != JsonAutoDetect.Visibility.NONE;
+    }
+
+    @Override
+    public boolean includeIsGetters(Class<?> type) {
+        JsonAutoDetect autoDetect = type.getAnnotation(JsonAutoDetect.class);
+        return autoDetect == null
+                || autoDetect.isGetterVisibility() != JsonAutoDetect.Visibility.NONE;
+    }
+
+    /**
+     * Check a conventional accessor (getX/isX for reads, setX for writes) for
+     * an explicit {@code @JsonIgnore}. Field-level handling is unchanged.
+     */
+    private static boolean hasAccessorIgnore(AnnotatedElement element, boolean getter) {
+        Class<?> declaring = getDeclaringClass(element);
+        String fieldName = getFieldName(element);
+        if (declaring == null || fieldName == null) return false;
+        String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+        for (java.lang.reflect.Method m : declaring.getMethods()) {
+            boolean match;
+            if (getter) {
+                match = (m.getName().equals("get" + capitalized) || m.getName().equals("is" + capitalized))
+                        && m.getParameterCount() == 0;
+            } else {
+                match = m.getName().equals("set" + capitalized) && m.getParameterCount() == 1;
+            }
+            if (match) {
+                JsonIgnore ignore = m.getAnnotation(JsonIgnore.class);
+                if (ignore != null) return ignore.value();
+            }
+        }
+        return false;
     }
 
     /** Read Jackson's @JsonProperty(access) for a field (RECORD_COMPONENT resolves to its field). */

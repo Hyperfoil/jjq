@@ -182,13 +182,18 @@ public class JqMapperProcessor extends AbstractProcessor {
         // Any-setter/getter first: any-getter-backed properties are suppressed (issue #88.1)
         AnyInfo pojoAnyInfo = resolveAnyInfo(classType);
 
+        // Getter visibility per class (issue #89): AutoDetect NONE suppresses getX/isX
+        boolean[] noGetters = jacksonGetterSuppression(classType);
+
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();
-        // Collect method names for getter/setter resolution
+        // Collect method names for getter/setter resolution (+ Elements for annotation reads)
         var methods = new java.util.HashSet<String>();
+        var methodElements = new java.util.HashMap<String, Element>();
         for (Element enclosed : classType.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.METHOD) {
                 methods.add(enclosed.getSimpleName().toString());
+                methodElements.putIfAbsent(enclosed.getSimpleName().toString(), enclosed);
             }
         }
 
@@ -221,13 +226,15 @@ public class JqMapperProcessor extends AbstractProcessor {
             boolean isFinal = field.getModifiers().contains(Modifier.FINAL);
             String capitalized = Character.toUpperCase(name.charAt(0)) + name.substring(1);
 
-            // Getter: public field, getX(), isX() for boolean
+            // Getter: public field, getX(), isX() for boolean.
+            // AutoDetect NONE suppresses getX/isX binding (issue #89) -> setAccessible fallback
             String getterName;
             if (isPublic) {
                 getterName = null; // direct field access
-            } else if (methods.contains("get" + capitalized)) {
+            } else if (!noGetters[0] && methods.contains("get" + capitalized)) {
                 getterName = "get" + capitalized;
-            } else if ((typeName.equals("boolean") || typeName.equals("java.lang.Boolean"))
+            } else if (!noGetters[1]
+                       && (typeName.equals("boolean") || typeName.equals("java.lang.Boolean"))
                        && methods.contains("is" + capitalized)) {
                 getterName = "is" + capitalized;
             } else {
@@ -258,10 +265,14 @@ public class JqMapperProcessor extends AbstractProcessor {
                 ignored = true;
             }
             String fieldAccess = resolveJacksonAccess(field, classType);
+            boolean skipSer = "WRITE_ONLY".equals(fieldAccess)
+                    || hasJacksonJsonIgnore(methodElements.get(getterName));
+            boolean skipDeser = "READ_ONLY".equals(fieldAccess)
+                    || hasJacksonJsonIgnore(methodElements.get(setterName));
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
-                    "WRITE_ONLY".equals(fieldAccess), "READ_ONLY".equals(fieldAccess)));
+                    skipSer, skipDeser));
         }
 
         // Generate the mapping class
@@ -353,6 +364,46 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
         }
         return null;
+    }
+
+    /**
+     * Stringly-typed Jackson {@code @JsonAutoDetect} getter suppression (no Jackson dep).
+     * Returns {@code {suppressGet, suppressIs}} for getter/isGetter visibility NONE.
+     */
+    private static boolean[] jacksonGetterSuppression(TypeElement type) {
+        boolean[] result = {false, false};
+        for (var mirror : type.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonAutoDetect")) {
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    String member = entry.getKey().getSimpleName().toString();
+                    String value = entry.getValue().getValue().toString();
+                    if (member.equals("getterVisibility") && value.equals("NONE")) result[0] = true;
+                    if (member.equals("isGetterVisibility") && value.equals("NONE")) result[1] = true;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Stringly-typed Jackson {@code @JsonIgnore} presence (no Jackson dep).
+     * Respects explicit {@code value = false} (means NOT ignored).
+     */
+    private static boolean hasJacksonJsonIgnore(javax.lang.model.element.Element e) {
+        if (e == null) return false;
+        for (var mirror : e.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonIgnore")) {
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("value")) {
+                        return Boolean.parseBoolean(entry.getValue().getValue().toString());
+                    }
+                }
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Resolve class-level @JqNaming, defaulting to IDENTITY. */

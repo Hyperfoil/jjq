@@ -330,8 +330,12 @@ The any-getter method itself is never emitted as a bean property (Jackson parity
 | `@JsonAnySetter` / `@JsonAnyGetter` (method form) | Unknown-key capture / extras emission (reflection path) |
 | `@JsonValue` | Enum wire form on ser |
 | `@JsonCreator` (single-arg, delegating) | Enum/factory deser from scalar |
+| `@JsonAutoDetect(getterVisibility/isGetterVisibility = NONE)` | Suppress `getX`/`isX` binding; fields read directly (records immune: canonical accessors only) |
+| `@JsonIgnore` on a getter / setter method | Ser-only / deser-only suppression (field-level stays both directions) |
 
 Directional access and `@JsonValue`/`@JsonCreator` work identically through generated mappings (the processor reads Jackson annotations stringly-typed — no Jackson dependency on the processor). Property-based `@JsonCreator` is out of scope.
+
+Generated-mapping limitations (private fields need a readable accessor — generated code emits no reflection): a private field with no bound getter (including `@JsonAutoDetect`-suppressed ones) is dropped from generated *serialization*, matching the pre-existing accessor-less behavior. The reflection path reads such fields via `setAccessible` instead. `@JsonIgnore` on accessor methods is honored on the reflection path only.
 
 ### `TypeConverter` — extension point for custom handling
 

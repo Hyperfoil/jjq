@@ -288,4 +288,95 @@ class JacksonAnnotationBridgeTest {
         assertFalse(out.contains("secret"), out);
         assertTrue(out.contains("\"name\":\"t\""), out);
     }
+
+    // ---- @JsonAutoDetect getter visibility NONE (issue #89) ----
+
+    @com.fasterxml.jackson.annotation.JsonAutoDetect(
+            fieldVisibility = com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.ANY,
+            getterVisibility = com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.NONE,
+            isGetterVisibility = com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.NONE)
+    static class FieldsOnlyPojo {
+        private boolean useVertex;
+
+        public FieldsOnlyPojo() {}
+
+        public void setUseVertex(boolean useVertex) { this.useVertex = useVertex; }
+
+        // Derived accessor: must never be called by the mapper (would recurse via account())
+        public boolean isUseVertex() {
+            throw new AssertionError("derived getter must not be bound with getterVisibility NONE");
+        }
+    }
+
+    @Test
+    void autoDetectNone_bindsFieldNotGetter() {
+        FieldsOnlyPojo p = mapper.fromJqValue(
+                JqValues.parse("{\"useVertex\":true}"), FieldsOnlyPojo.class);
+        // Deser goes through the setter (no recursion, no throw)
+        // Ser reads the stored field directly (no throw)
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"useVertex\":true"), out);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonAutoDetect(
+            getterVisibility = com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.NONE)
+    static class GetSuppressedPojo {
+        private String name;
+        private boolean active;
+
+        public GetSuppressedPojo() {}
+
+        public String getName() { throw new AssertionError("getName must not be bound"); }
+        public void setName(String name) { this.name = name; }
+        public boolean isActive() { return active; }
+        public void setActive(boolean active) { this.active = active; }
+    }
+
+    @Test
+    void autoDetectNone_getterOnlyIsGetterStillApplies() {
+        // getterVisibility NONE suppresses getX but leaves isX active
+        GetSuppressedPojo p = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"active\":true}"), GetSuppressedPojo.class);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"active\":true"), out);
+    }
+
+    // ---- @JsonIgnore on accessor methods (issue #89) ----
+
+    static class AccessorIgnorePojo {
+        private String name;
+        private String secret;
+        private String token;
+
+        public AccessorIgnorePojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public String getSecret() { return secret; }
+        public void setSecret(String secret) { this.secret = secret; }
+        public String getToken() { return token; }
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public void setToken(String token) { this.token = token; }
+    }
+
+    @Test
+    void jsonIgnoreOnGetter_skipsSerBindsDeser() {
+        AccessorIgnorePojo p = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"secret\":\"s\",\"token\":\"k\"}"), AccessorIgnorePojo.class);
+        assertEquals("s", p.getSecret());
+        String out = mapper.toJqValue(p).toJsonString();
+        assertFalse(out.contains("secret"), out);
+        assertTrue(out.contains("\"name\":\"t\""), out);
+    }
+
+    @Test
+    void jsonIgnoreOnSetter_skipsDeserEmitsSer() {
+        AccessorIgnorePojo p = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"token\":\"k\"}"), AccessorIgnorePojo.class);
+        assertNull(p.getToken());
+        p.setToken("k");
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"token\":\"k\""), out);
+    }
 }
