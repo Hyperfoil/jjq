@@ -405,6 +405,48 @@ class JqMapperTest {
                 mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"active\":[true]}"), WithFlag.class));
     }
 
+    // ---- Structured shape info (issue #86) ----
+
+    @Test
+    void shapeMismatchExposesExpectedActual() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"packages\":\"git\"}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, WithPackages.class));
+        assertEquals(JqValue.Type.ARRAY, e.expected());
+        assertEquals(JqValue.Type.STRING, e.actual());
+        assertEquals("$.packages", e.path());
+        // Human message unchanged (no regex needed, but still human-readable)
+        assertTrue(e.getMessage().contains("Cannot bind"), e.getMessage());
+    }
+
+    @Test
+    void shapeMismatchElementHasFullPath() {
+        JqValue json = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, Bundle.class));
+        assertEquals(JqValue.Type.OBJECT, e.expected());
+        assertEquals(JqValue.Type.STRING, e.actual());
+        assertEquals("$.tools[1]", e.path());
+    }
+
+    @Test
+    void shapeMismatchContainerForScalar() {
+        JqValue json = JqValues.parse("{\"type\":[\"kvm\"]}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, WithType.class));
+        assertEquals(JqValue.Type.STRING, e.expected());
+        assertEquals(JqValue.Type.ARRAY, e.actual());
+        assertEquals("$.type", e.path());
+    }
+
+    @Test
+    void nonMismatchErrorsAreNotShapeMismatch() {
+        // Constructor failures stay plain JqMapperException (no structured shapes)
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"name\":\"x\"}"), NoDefaultConstructor.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+    }
+
     // ---- Convenience methods ----
 
     @Test

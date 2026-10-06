@@ -198,25 +198,25 @@ final class MappingCodeGenerator {
 
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append("asStringChecked(").append(apply).append(")");
-            case "int" -> sb.append("(int) requireScalar(").append(apply).append(", \"int\").asLong(0)");
-            case "java.lang.Integer" -> sb.append("(int) requireScalar(").append(apply).append(", \"int\").asLong(0)");
-            case "long" -> sb.append("requireScalar(").append(apply).append(", \"long\").asLong(0)");
-            case "java.lang.Long" -> sb.append("requireScalar(").append(apply).append(", \"long\").asLong(0)");
-            case "double" -> sb.append("requireScalar(").append(apply).append(", \"double\").asDouble(0.0)");
-            case "java.lang.Double" -> sb.append("requireScalar(").append(apply).append(", \"double\").asDouble(0.0)");
-            case "float" -> sb.append("(float) requireScalar(").append(apply).append(", \"float\").asDouble(0.0)");
-            case "java.lang.Float" -> sb.append("(float) requireScalar(").append(apply).append(", \"float\").asDouble(0.0)");
-            case "boolean" -> sb.append("requireScalar(").append(apply).append(", \"boolean\").asBoolean(false)");
-            case "java.lang.Boolean" -> sb.append("requireScalar(").append(apply).append(", \"boolean\").asBoolean(false)");
-            case "short" -> sb.append("(short) requireScalar(").append(apply).append(", \"short\").asLong(0)");
-            case "java.lang.Short" -> sb.append("(short) requireScalar(").append(apply).append(", \"short\").asLong(0)");
-            case "byte" -> sb.append("(byte) requireScalar(").append(apply).append(", \"byte\").asLong(0)");
-            case "java.lang.Byte" -> sb.append("(byte) requireScalar(").append(apply).append(", \"byte\").asLong(0)");
+            case "int" -> sb.append("(int) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\").asLong(0)");
+            case "java.lang.Integer" -> sb.append("(int) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\").asLong(0)");
+            case "long" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\").asLong(0)");
+            case "java.lang.Long" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\").asLong(0)");
+            case "double" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\").asDouble(0.0)");
+            case "java.lang.Double" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\").asDouble(0.0)");
+            case "float" -> sb.append("(float) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\").asDouble(0.0)");
+            case "java.lang.Float" -> sb.append("(float) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\").asDouble(0.0)");
+            case "boolean" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)");
+            case "java.lang.Boolean" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)");
+            case "short" -> sb.append("(short) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\").asLong(0)");
+            case "java.lang.Short" -> sb.append("(short) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\").asLong(0)");
+            case "byte" -> sb.append("(byte) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\").asLong(0)");
+            case "java.lang.Byte" -> sb.append("(byte) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\").asLong(0)");
             case "char", "java.lang.Character" -> {
-                sb.append("requireScalar(").append(apply).append(", \"char\") instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
+                sb.append("requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\") instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
             }
             case "java.math.BigDecimal" -> {
-                sb.append("requireScalar(").append(apply).append(", \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null");
+                sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null");
             }
             default -> {
                 String typeName = comp.typeName();
@@ -259,17 +259,17 @@ final class MappingCodeGenerator {
     private static void generateScalarConversion(StringBuilder sb, String typeName, String apply) {
         switch (typeName) {
             case "java.lang.String", "String" -> sb.append("asStringChecked(").append(apply).append(")");
-            case "java.lang.Integer", "Integer", "int" -> sb.append("(int) requireScalar(").append(apply).append(", \"int\").asLong(0)");
-            case "java.lang.Long", "Long", "long" -> sb.append("requireScalar(").append(apply).append(", \"long\").asLong(0)");
-            case "java.lang.Double", "Double", "double" -> sb.append("requireScalar(").append(apply).append(", \"double\").asDouble(0.0)");
-            case "java.lang.Float", "Float", "float" -> sb.append("(float) requireScalar(").append(apply).append(", \"float\").asDouble(0.0)");
-            case "java.lang.Boolean", "Boolean", "boolean" -> sb.append("requireScalar(").append(apply).append(", \"boolean\").asBoolean(false)");
-            case "java.lang.Short", "Short", "short" -> sb.append("(short) requireScalar(").append(apply).append(", \"short\").asLong(0)");
-            case "java.lang.Byte", "Byte", "byte" -> sb.append("(byte) requireScalar(").append(apply).append(", \"byte\").asLong(0)");
+            case "java.lang.Integer", "Integer", "int" -> sb.append("(int) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\").asLong(0)");
+            case "java.lang.Long", "Long", "long" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\").asLong(0)");
+            case "java.lang.Double", "Double", "double" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\").asDouble(0.0)");
+            case "java.lang.Float", "Float", "float" -> sb.append("(float) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\").asDouble(0.0)");
+            case "java.lang.Boolean", "Boolean", "boolean" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)");
+            case "java.lang.Short", "Short", "short" -> sb.append("(short) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\").asLong(0)");
+            case "java.lang.Byte", "Byte", "byte" -> sb.append("(byte) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\").asLong(0)");
             case "java.lang.Character", "Character", "char" ->
-                sb.append("requireScalar(").append(apply).append(", \"char\") instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
+                sb.append("requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\") instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'");
             case "java.math.BigDecimal", "BigDecimal" ->
-                sb.append("requireScalar(").append(apply).append(", \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null");
+                sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null");
             default -> {
                 // Nested record/enum/POJO: bind structurally (fail-fast on shape
                 // mismatch, mirroring the reflection path). JqValue passthrough
@@ -1098,16 +1098,16 @@ final class MappingCodeGenerator {
     private static String buildExtraction(String typeName, String apply) {
         return switch (typeName) {
             case "java.lang.String" -> "asStringChecked(" + apply + ")";
-            case "int", "java.lang.Integer" -> "(int) requireScalar(" + apply + ", \"int\").asLong(0)";
-            case "long", "java.lang.Long" -> "requireScalar(" + apply + ", \"long\").asLong(0)";
-            case "double", "java.lang.Double" -> "requireScalar(" + apply + ", \"double\").asDouble(0.0)";
-            case "float", "java.lang.Float" -> "(float) requireScalar(" + apply + ", \"float\").asDouble(0.0)";
-            case "boolean", "java.lang.Boolean" -> "requireScalar(" + apply + ", \"boolean\").asBoolean(false)";
-            case "short", "java.lang.Short" -> "(short) requireScalar(" + apply + ", \"short\").asLong(0)";
-            case "byte", "java.lang.Byte" -> "(byte) requireScalar(" + apply + ", \"byte\").asLong(0)";
+            case "int", "java.lang.Integer" -> "(int) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\").asLong(0)";
+            case "long", "java.lang.Long" -> "requireScalar(" + apply + ", JqValue.Type.NUMBER, \"long\").asLong(0)";
+            case "double", "java.lang.Double" -> "requireScalar(" + apply + ", JqValue.Type.NUMBER, \"double\").asDouble(0.0)";
+            case "float", "java.lang.Float" -> "(float) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"float\").asDouble(0.0)";
+            case "boolean", "java.lang.Boolean" -> "requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)";
+            case "short", "java.lang.Short" -> "(short) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\").asLong(0)";
+            case "byte", "java.lang.Byte" -> "(byte) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\").asLong(0)";
             case "char", "java.lang.Character" ->
-                "requireScalar(" + apply + ", \"char\") instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'";
-            case "java.math.BigDecimal" -> "requireScalar(" + apply + ", \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null";
+                "requireScalar(" + apply + ", JqValue.Type.STRING, \"char\") instanceof JqString _s && !_s.stringValue().isEmpty() ? _s.stringValue().charAt(0) : '\\0'";
+            case "java.math.BigDecimal" -> "requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null";
             default -> {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {

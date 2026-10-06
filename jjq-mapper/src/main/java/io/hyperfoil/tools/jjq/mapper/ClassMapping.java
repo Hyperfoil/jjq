@@ -415,7 +415,7 @@ final class ClassMapping<T> implements Mapping<T> {
         // Scalar/array documents with only direct field lookups are shape mismatches;
         // @JqField programs may legitimately extract from any shape, so those stay lenient.
         if (value != null && !(value instanceof JqNull) && !(value instanceof JqObject) && allDirectFields()) {
-            throw TypeConverter.mismatch("object for " + type.getSimpleName(), value);
+            throw TypeConverter.mismatch(JqValue.Type.OBJECT, "object for " + type.getSimpleName(), value);
         }
 
         // Record path: positional constructor
@@ -464,7 +464,7 @@ final class ClassMapping<T> implements Mapping<T> {
         // Scalar/array documents with only direct field lookups are shape mismatches
         // (same rule as the record path above; @JqField programs stay lenient).
         if (value != null && !(value instanceof JqNull) && !(value instanceof JqObject) && allDirectFields()) {
-            throw TypeConverter.mismatch("object for " + type.getSimpleName(), value);
+            throw TypeConverter.mismatch(JqValue.Type.OBJECT, "object for " + type.getSimpleName(), value);
         }
         T instance;
         try {

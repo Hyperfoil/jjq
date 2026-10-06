@@ -319,6 +319,12 @@ class JqMapperProcessorTest {
         String msg = e.getMessage();
         assertTrue(msg.contains("tools"), msg);
         assertTrue(msg.contains("[1]"), msg);
+        assertTrue(e instanceof io.hyperfoil.tools.jjq.mapper.ShapeMismatchException);
+        io.hyperfoil.tools.jjq.mapper.ShapeMismatchException se =
+                (io.hyperfoil.tools.jjq.mapper.ShapeMismatchException) e;
+        assertEquals(JqValue.Type.OBJECT, se.expected());
+        assertEquals(JqValue.Type.STRING, se.actual());
+        assertEquals("$.tools[1]", se.path());
 
         // Scalar for the list itself fails with the field path
         JqValue scalarList = JqValues.parse("{\"id\":\"b\",\"tools\":\"oops\"}");

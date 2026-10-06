@@ -111,51 +111,51 @@ public final class TypeConverter {
             case JQ_VALUE -> (value == null || value instanceof JqNull) ? defaultValue(targetType) : value;
             case STRING -> {
                 if (value == null || value instanceof JqNull) yield null;
-                if (value.isContainer()) throw mismatch("String", value);
+                if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "String", value);
                 yield value instanceof JqString s ? s.stringValue() : value.toJsonString();
             }
             case INT -> {
-                if (value != null && value.isContainer()) throw mismatch("int", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "int", value);
                 yield value instanceof JqNumber n ? n.intValue() : 0;
             }
             case LONG -> {
-                if (value != null && value.isContainer()) throw mismatch("long", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "long", value);
                 yield value instanceof JqNumber n ? n.longValue() : 0L;
             }
             case DOUBLE -> {
-                if (value != null && value.isContainer()) throw mismatch("double", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "double", value);
                 yield value instanceof JqNumber n ? n.doubleValue() : 0.0;
             }
             case FLOAT -> {
-                if (value != null && value.isContainer()) throw mismatch("float", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "float", value);
                 yield value instanceof JqNumber n ? (float) n.doubleValue() : 0.0f;
             }
             case BOOLEAN -> {
-                if (value != null && value.isContainer()) throw mismatch("boolean", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.BOOLEAN, "boolean", value);
                 yield value instanceof JqBoolean b ? b.booleanValue() : (value != null && value.isTruthy());
             }
             case SHORT -> {
-                if (value != null && value.isContainer()) throw mismatch("short", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "short", value);
                 yield value instanceof JqNumber n ? (short) n.intValue() : (short) 0;
             }
             case BYTE -> {
-                if (value != null && value.isContainer()) throw mismatch("byte", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "byte", value);
                 yield value instanceof JqNumber n ? (byte) n.intValue() : (byte) 0;
             }
             case CHAR -> {
-                if (value != null && value.isContainer()) throw mismatch("char", value);
+                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.STRING, "char", value);
                 if (value instanceof JqString s && !s.stringValue().isEmpty()) yield s.stringValue().charAt(0);
                 yield '\0';
             }
             case BIG_DECIMAL -> {
                 if (value == null || value instanceof JqNull) yield null;
-                if (value.isContainer()) throw mismatch("BigDecimal", value);
+                if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "BigDecimal", value);
                 yield value instanceof JqNumber n ? n.decimalValue() : BigDecimal.ZERO;
             }
             case LIST -> {
                 if (value == null || value instanceof JqNull) yield List.of();
                 if (!(value instanceof JqArray arr)) {
-                    throw mismatch("array for " + listTarget(targetType, genericType), value);
+                    throw mismatch(JqValue.Type.ARRAY, "array for " + listTarget(targetType, genericType), value);
                 }
                 Type elementType = extractTypeArgument(genericType, 0);
                 Class<?> elementClass = rawClass(elementType);
@@ -173,7 +173,7 @@ public final class TypeConverter {
             case MAP -> {
                 if (value == null || value instanceof JqNull) yield Map.of();
                 if (!(value instanceof JqObject obj)) {
-                    throw mismatch("object for " + mapTarget(targetType, genericType), value);
+                    throw mismatch(JqValue.Type.OBJECT, "object for " + mapTarget(targetType, genericType), value);
                 }
                 Type valueType = extractTypeArgument(genericType, 1);
                 Class<?> valueClass = rawClass(valueType);
@@ -192,13 +192,13 @@ public final class TypeConverter {
             case ENUM -> {
                 if (value == null || value instanceof JqNull) yield null;
                 if (value instanceof JqString s) yield Enum.valueOf((Class<? extends Enum>) targetType, s.stringValue());
-                if (value.isContainer()) throw mismatch(targetType.getSimpleName(), value);
+                if (value.isContainer()) throw mismatch(JqValue.Type.STRING, targetType.getSimpleName(), value);
                 yield null;
             }
             case RECORD -> {
                 if (value == null || value instanceof JqNull) yield null;
                 if (!(value instanceof JqObject)) {
-                    throw mismatch("object for " + targetType.getSimpleName(), value);
+                    throw mismatch(JqValue.Type.OBJECT, "object for " + targetType.getSimpleName(), value);
                 }
                 yield mapper.fromJqValue(value, targetType);
             }
@@ -231,7 +231,7 @@ public final class TypeConverter {
             return value.toJavaObject();
         }
         if (isPojoLike(targetType)) {
-            throw mismatch("object for " + targetType.getSimpleName(), value);
+            throw mismatch(JqValue.Type.OBJECT, "object for " + targetType.getSimpleName(), value);
         }
         return value.toJavaObject();
     }
@@ -258,8 +258,10 @@ public final class TypeConverter {
      * Build a shape-mismatch error: what was found vs what was expected.
      * The failure path is prepended while unwinding through nested structures.
      */
-    static JqMapperException mismatch(String expected, JqValue actual) {
-        return new JqMapperException("Cannot bind " + describe(actual) + " to " + expected);
+    static ShapeMismatchException mismatch(JqValue.Type expectedType, String expected, JqValue actual) {
+        return new ShapeMismatchException(expectedType,
+                actual == null ? JqValue.Type.NULL : actual.type(),
+                "Cannot bind " + describe(actual) + " to " + expected);
     }
 
     /** Short human-readable description of a JqValue (strings truncated). */

@@ -287,6 +287,14 @@ mapper.fromJqValue(JqValues.parse("{\"packages\":\"git\"}"), Config.class);
 
 Non-array → `List`, non-object → `Map`/record/POJO, and wrong collection element types all throw at bind time instead of silently coercing. The reverse direction throws too: array/object input to any scalar (`String`, numbers, `boolean`, `char`, `BigDecimal`, enums) fails, while scalar-to-scalar coercion stays lenient (`42` → `"42"`). `null`/absent values stay lenient (`null`, empty collections, field initializers). Custom `@JqConverter`s bypass this checking entirely, which is also how genuinely polymorphic shapes (string-or-map, list-or-object) should be modeled.
 
+Shape failures throw `ShapeMismatchException` (a `JqMapperException`), which exposes `expected()`/`actual()` as `JqValue.Type` plus the `$`-rooted `path()` — no message parsing needed:
+
+```java
+} catch (ShapeMismatchException e) {
+    // e.expected() == ARRAY, e.actual() == STRING, e.path() == "$.packages"
+}
+```
+
 ### `TypeConverter` — extension point for custom handling
 
 `TypeConverter` is the public conversion engine behind field mapping. The target

@@ -75,8 +75,8 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
      * @return the value unchanged
      * @throws JqMapperException if the value is an array or object
      */
-    protected static JqValue requireScalar(JqValue value, String expected) {
-        if (value != null && value.isContainer()) throw TypeConverter.mismatch(expected, value);
+    protected static JqValue requireScalar(JqValue value, JqValue.Type expectedType, String expected) {
+        if (value != null && value.isContainer()) throw TypeConverter.mismatch(expectedType, expected, value);
         return value;
     }
 
@@ -92,7 +92,7 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     protected static String asStringChecked(JqValue value) {
         if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
         if (value instanceof io.hyperfoil.tools.jjq.value.JqString s) return s.stringValue();
-        if (value.isContainer()) throw TypeConverter.mismatch("String", value);
+        if (value.isContainer()) throw TypeConverter.mismatch(JqValue.Type.STRING, "String", value);
         return value.toJsonString();
     }
 
@@ -109,6 +109,6 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     protected static io.hyperfoil.tools.jjq.value.JqArray requireArray(JqValue value, String target) {
         if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
         if (value instanceof io.hyperfoil.tools.jjq.value.JqArray arr) return arr;
-        throw TypeConverter.mismatch("array for " + target, value);
+        throw TypeConverter.mismatch(JqValue.Type.ARRAY, "array for " + target, value);
     }
 }
