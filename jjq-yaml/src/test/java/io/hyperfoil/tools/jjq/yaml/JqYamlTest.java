@@ -340,4 +340,57 @@ class JqYamlTest {
         assertEquals(2, config.replicas().size());
         assertEquals("replica1.example.com", config.replicas().get(0));
     }
+
+    // ---- Duplicate key detection (issue #83) ----
+
+    @Test
+    void duplicateKeysLenientByDefault() {
+        JqValue result = JqYaml.parse("name: a\nname: b\n");
+        assertEquals("b", result.getField("name").stringValue());
+    }
+
+    @Test
+    void duplicateKeysStrictThrows() {
+        JqYamlException e = assertThrows(JqYamlException.class, () ->
+                JqYaml.parse("name: a\nname: b\n", YamlOptions.STRICT));
+        assertTrue(e.getMessage().contains("name"));
+        assertEquals("name", e.key());
+    }
+
+    @Test
+    void duplicateKeysStrictNested() {
+        JqYamlException e = assertThrows(JqYamlException.class, () ->
+                JqYaml.parse("server:\n  host: a\n  host: b\n", YamlOptions.STRICT));
+        assertEquals("host", e.key());
+    }
+
+    @Test
+    void duplicateKeysStrictMergeKeyAllowed() {
+        JqValue result = JqYaml.parse("""
+                base: &b
+                  x: 1
+                derived:
+                  <<: *b
+                  y: 2
+                """, YamlOptions.STRICT);
+        assertEquals(1L, result.getField("derived").getField("x").longValue());
+        assertEquals(2L, result.getField("derived").getField("y").longValue());
+    }
+
+    @Test
+    void duplicateKeysStrictParseAll() {
+        assertThrows(JqYamlException.class, () ->
+                JqYaml.parseAll("a: 1\na: 2\n", YamlOptions.STRICT));
+        List<JqValue> docs = JqYaml.parseAll("a: 1\n---\nb: 2\n", YamlOptions.STRICT);
+        assertEquals(2, docs.size());
+    }
+
+    @Test
+    void duplicateKeysStrictFromYaml() {
+        var mapper = io.hyperfoil.tools.jjq.mapper.JqMapper.create();
+        assertThrows(JqYamlException.class, () ->
+                JqYaml.fromYaml("host: a\nhost: b\n", mapper, ServerConfig.class, YamlOptions.STRICT));
+        ServerConfig config = JqYaml.fromYaml("host: a\nport: 1\n", mapper, ServerConfig.class, YamlOptions.STRICT);
+        assertEquals("a", config.host());
+    }
 }

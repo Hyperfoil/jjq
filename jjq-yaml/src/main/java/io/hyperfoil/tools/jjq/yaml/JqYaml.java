@@ -57,16 +57,40 @@ public final class JqYaml {
     }
 
     /**
+     * Parse a single YAML document with explicit options.
+     *
+     * @param yaml    the YAML string to parse
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqValue parse(String yaml, YamlOptions options) {
+        return parse(new StringReader(yaml), options);
+    }
+
+    /**
      * Parse a single YAML document from an InputStream.
      *
      * @param in the InputStream to read YAML from
      * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
      */
     public static JqValue parse(InputStream in) {
+        return parse(in, YamlOptions.LENIENT);
+    }
+
+    /**
+     * Parse a single YAML document from an InputStream with explicit options.
+     *
+     * @param in      the InputStream to read YAML from
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqValue parse(InputStream in, YamlOptions options) {
         Yaml snakeYaml = new Yaml();
         Node root = snakeYaml.compose(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8));
         if (root == null) return JqNull.NULL;
-        return convertNode(root);
+        return convertNode(root, options);
     }
 
     /**
@@ -76,10 +100,22 @@ public final class JqYaml {
      * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
      */
     public static JqValue parse(Reader reader) {
+        return parse(reader, YamlOptions.LENIENT);
+    }
+
+    /**
+     * Parse a single YAML document from a Reader with explicit options.
+     *
+     * @param reader  the Reader to read YAML from
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqValue parse(Reader reader, YamlOptions options) {
         Yaml snakeYaml = new Yaml();
         Node root = snakeYaml.compose(reader);
         if (root == null) return JqNull.NULL;
-        return convertNode(root);
+        return convertNode(root, options);
     }
 
     /**
@@ -94,6 +130,18 @@ public final class JqYaml {
     }
 
     /**
+     * Parse all YAML documents from a multi-document stream with explicit options.
+     *
+     * @param yaml    the YAML string containing one or more documents
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return list of parsed JqValues (empty list for empty input)
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static List<JqValue> parseAll(String yaml, YamlOptions options) {
+        return parseAll(new StringReader(yaml), options);
+    }
+
+    /**
      * Parse all YAML documents from an InputStream.
      *
      * @param in the InputStream to read YAML from
@@ -103,11 +151,27 @@ public final class JqYaml {
         return parseAll(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    /**
+     * Parse all YAML documents from an InputStream with explicit options.
+     *
+     * @param in      the InputStream to read YAML from
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return list of parsed JqValues (empty list for empty input)
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static List<JqValue> parseAll(InputStream in, YamlOptions options) {
+        return parseAll(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8), options);
+    }
+
     private static List<JqValue> parseAll(Reader reader) {
+        return parseAll(reader, YamlOptions.LENIENT);
+    }
+
+    private static List<JqValue> parseAll(Reader reader, YamlOptions options) {
         Yaml snakeYaml = new Yaml();
         var results = new ArrayList<JqValue>();
         for (Node node : snakeYaml.composeAll(reader)) {
-            results.add(convertNode(node));
+            results.add(convertNode(node, options));
         }
         return results;
     }
@@ -125,6 +189,19 @@ public final class JqYaml {
     }
 
     /**
+     * Parse all YAML documents from a multi-document stream as a {@link JqArray},
+     * with explicit options.
+     *
+     * @param yaml    the YAML string containing one or more documents
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return a JqArray containing one element per document
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqArray parseAllAsArray(String yaml, YamlOptions options) {
+        return JqArray.ofTrusted(parseAll(yaml, options));
+    }
+
+    /**
      * Parse all YAML documents from an InputStream as a {@link JqArray}.
      *
      * @param in the InputStream to read YAML from
@@ -132,6 +209,19 @@ public final class JqYaml {
      */
     public static JqArray parseAllAsArray(InputStream in) {
         return JqArray.ofTrusted(parseAll(in));
+    }
+
+    /**
+     * Parse all YAML documents from an InputStream as a {@link JqArray},
+     * with explicit options.
+     *
+     * @param in      the InputStream to read YAML from
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @return a JqArray containing one element per document
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqArray parseAllAsArray(InputStream in, YamlOptions options) {
+        return JqArray.ofTrusted(parseAll(in, options));
     }
 
     /**
@@ -196,7 +286,23 @@ public final class JqYaml {
      * @return a new instance populated from the YAML
      */
     public static <T> T fromYaml(String yaml, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, Class<T> type) {
-        return mapper.fromJqValue(parse(yaml), type);
+        return fromYaml(yaml, mapper, type, YamlOptions.LENIENT);
+    }
+
+    /**
+     * Parse YAML and map to a Java record or POJO, with explicit options.
+     *
+     * @param yaml    the YAML string to parse
+     * @param mapper  the JqMapper to use for deserialization
+     * @param type    the target class
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param <T>     the target type
+     * @return a new instance populated from the YAML
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static <T> T fromYaml(String yaml, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, Class<T> type,
+                                 YamlOptions options) {
+        return mapper.fromJqValue(parse(yaml, options), type);
     }
 
     /**
@@ -209,7 +315,23 @@ public final class JqYaml {
      * @return a new instance populated from the YAML
      */
     public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, Class<T> type) {
-        return mapper.fromJqValue(parse(in), type);
+        return fromYaml(in, mapper, type, YamlOptions.LENIENT);
+    }
+
+    /**
+     * Parse YAML from an InputStream and map to a Java record or POJO, with explicit options.
+     *
+     * @param in      the InputStream to read YAML from
+     * @param mapper  the JqMapper to use for deserialization
+     * @param type    the target class
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param <T>     the target type
+     * @return a new instance populated from the YAML
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, Class<T> type,
+                                 YamlOptions options) {
+        return mapper.fromJqValue(parse(in, options), type);
     }
 
     /**
@@ -227,7 +349,23 @@ public final class JqYaml {
      * @return the deserialized value
      */
     public static <T> T fromYaml(String yaml, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type) {
-        return mapper.fromJqValue(parse(yaml), type);
+        return fromYaml(yaml, mapper, type, YamlOptions.LENIENT);
+    }
+
+    /**
+     * Parse YAML and map using a generic type, with explicit options.
+     *
+     * @param yaml    the YAML string to parse
+     * @param mapper  the JqMapper to use for deserialization
+     * @param type    the target generic type
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param <T>     the target type
+     * @return the deserialized value
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static <T> T fromYaml(String yaml, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type,
+                                 YamlOptions options) {
+        return mapper.fromJqValue(parse(yaml, options), type);
     }
 
     /**
@@ -240,26 +378,47 @@ public final class JqYaml {
      * @return the deserialized value
      */
     public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type) {
-        return mapper.fromJqValue(parse(in), type);
+        return fromYaml(in, mapper, type, YamlOptions.LENIENT);
+    }
+
+    /**
+     * Parse YAML from an InputStream and map using a generic type, with explicit options.
+     *
+     * @param in      the InputStream to read YAML from
+     * @param mapper  the JqMapper to use for deserialization
+     * @param type    the target generic type
+     * @param options parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param <T>     the target type
+     * @return the deserialized value
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type,
+                                 YamlOptions options) {
+        return mapper.fromJqValue(parse(in, options), type);
     }
 
     // ========================================================================
     //  SnakeYAML Node → JqValue conversion
     // ========================================================================
 
-    private static JqValue convertNode(Node node) {
+    private static JqValue convertNode(Node node, YamlOptions options) {
         return switch (node) {
-            case MappingNode m -> convertMapping(m);
-            case SequenceNode s -> convertSequence(s);
+            case MappingNode m -> convertMapping(m, options);
+            case SequenceNode s -> convertSequence(s, options);
             case ScalarNode sc -> convertScalar(sc);
             default -> JqNull.NULL;
         };
     }
 
-    private static JqObject convertMapping(MappingNode mapping) {
+    private static JqObject convertMapping(MappingNode mapping, YamlOptions options) {
         List<NodeTuple> tuples = mapping.getValue();
         // First pass: collect merge keys (<<) to flatten
         var builder = JqObject.builder(tuples.size());
+        // SnakeYAML 2.x no longer enforces LoaderOptions allowDuplicateKeys
+        // (verified: DuplicateKeyException is unreferenced dead code), so strict
+        // detection is done here. Only explicit keys participate: duplicates
+        // across << merges are legal YAML (explicit keys override merged ones).
+        java.util.Set<String> seen = options.allowDuplicateKeys() ? null : new java.util.HashSet<>();
         for (NodeTuple tuple : tuples) {
             String key = ((ScalarNode) tuple.getKeyNode()).getValue();
             if ("<<".equals(key)) {
@@ -268,7 +427,7 @@ public final class JqYaml {
                 if (mergeValue instanceof MappingNode mergeMapping) {
                     for (NodeTuple merged : mergeMapping.getValue()) {
                         String mergedKey = ((ScalarNode) merged.getKeyNode()).getValue();
-                        builder.put(mergedKey, convertNode(merged.getValueNode()));
+                        builder.put(mergedKey, convertNode(merged.getValueNode(), options));
                     }
                 } else if (mergeValue instanceof SequenceNode mergeSeq) {
                     // << can reference a list of mappings
@@ -276,23 +435,28 @@ public final class JqYaml {
                         if (item instanceof MappingNode itemMapping) {
                             for (NodeTuple merged : itemMapping.getValue()) {
                                 String mergedKey = ((ScalarNode) merged.getKeyNode()).getValue();
-                                builder.put(mergedKey, convertNode(merged.getValueNode()));
+                                builder.put(mergedKey, convertNode(merged.getValueNode(), options));
                             }
                         }
                     }
                 }
             } else {
-                builder.put(key, convertNode(tuple.getValueNode()));
+                if (seen != null && !seen.add(key)) {
+                    // SnakeYAML Mark lines are 0-based; report 1-based
+                    int line = tuple.getKeyNode().getStartMark().getLine() + 1;
+                    throw new JqYamlException(key, line);
+                }
+                builder.put(key, convertNode(tuple.getValueNode(), options));
             }
         }
         return (JqObject) builder.build();
     }
 
-    private static JqArray convertSequence(SequenceNode sequence) {
+    private static JqArray convertSequence(SequenceNode sequence, YamlOptions options) {
         List<Node> children = sequence.getValue();
         JqValue[] elements = new JqValue[children.size()];
         for (int i = 0; i < elements.length; i++) {
-            elements[i] = convertNode(children.get(i));
+            elements[i] = convertNode(children.get(i), options);
         }
         return JqArray.of(elements);
     }
