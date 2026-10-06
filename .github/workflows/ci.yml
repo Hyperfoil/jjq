@@ -7,6 +7,37 @@ on:
     branches: [ main ]
 
 jobs:
+  versions:
+    name: Module versions aligned
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check all module parents match root version
+        run: |
+          python3 - <<'EOF'
+          import subprocess
+          import xml.dom.minidom as x
+          root = x.parse('pom.xml').getElementsByTagName('project')[0]
+          root_ver = next(n.firstChild.data for n in root.childNodes if n.nodeName == 'version')
+          # include profile-gated modules: the release plugin only rewrites the
+          # active reactor, so these drift silently (see 0.1.12 -> 0.1.13 skew)
+          out = subprocess.run(['git', 'ls-files', '*/pom.xml'],
+                               capture_output=True, text=True, check=True)
+          bad = []
+          for f in out.stdout.split():
+              proj = x.parse(f).getElementsByTagName('project')[0]
+              par = proj.getElementsByTagName('parent')
+              if par:
+                  pver = par[0].getElementsByTagName('version')[0].firstChild.data
+                  if pver != root_ver:
+                      bad.append(f'{f}: parent={pver} root={root_ver}')
+          if bad:
+              print('Version drift detected:')
+              print('\n'.join(bad))
+              raise SystemExit(1)
+          print(f'All module parents match root {root_ver}')
+          EOF
+
   build:
     runs-on: ubuntu-latest
     strategy:

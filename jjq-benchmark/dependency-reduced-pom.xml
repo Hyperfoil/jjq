@@ -3,7 +3,7 @@
   <parent>
     <artifactId>jjq-parent</artifactId>
     <groupId>io.hyperfoil.tools</groupId>
-    <version>0.1.12-SNAPSHOT</version>
+    <version>0.1.13-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>jjq-benchmark</artifactId>
@@ -63,7 +63,7 @@
     <dependency>
       <groupId>io.hyperfoil.tools</groupId>
       <artifactId>jjq-mapper-processor</artifactId>
-      <version>0.1.12-SNAPSHOT</version>
+      <version>0.1.13-SNAPSHOT</version>
       <scope>provided</scope>
     </dependency>
     <dependency>

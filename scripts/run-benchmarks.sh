@@ -13,7 +13,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-BENCHMARK_JAR="$PROJECT_DIR/jjq-benchmark/target/jjq-benchmark-0.1.4-SNAPSHOT.jar"
+# Derive the benchmark jar name from the root pom version (do not hardcode:
+# profile-gated modules drifted out of sync with releases before).
+PROJECT_VERSION="$(grep -m1 '<version>' "$PROJECT_DIR/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
+BENCHMARK_JAR="$PROJECT_DIR/jjq-benchmark/target/jjq-benchmark-${PROJECT_VERSION}.jar"
 RESULTS_DIR="$PROJECT_DIR/benchmark-results"
 
 # Default settings (use annotation defaults: 5 warmup, 5 measurement, 3 forks)
@@ -44,7 +47,7 @@ done
 if [[ ! -f "$BENCHMARK_JAR" ]]; then
     echo "Building benchmark jar..."
     cd "$PROJECT_DIR"
-    mvn package -pl jjq-core,jjq-jackson,jjq-benchmark -q -DskipTests
+    mvn package -Pbenchmark -pl jjq-benchmark -am -q -DskipTests
 fi
 
 # Create results directory
