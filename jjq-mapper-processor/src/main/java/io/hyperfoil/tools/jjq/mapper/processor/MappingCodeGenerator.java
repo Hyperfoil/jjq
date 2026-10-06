@@ -706,14 +706,26 @@ final class MappingCodeGenerator {
             String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
             String writeExpr = buildExtraction(prop.typeName(), apply);
 
+            String statement;
             if (prop.isPublicField() && prop.setterName() == null) {
                 // Direct public field write
-                sb.append("        instance.").append(prop.name()).append(" = ").append(writeExpr).append(";\n");
+                statement = "instance." + prop.name() + " = " + writeExpr + ";";
             } else if (prop.setterName() != null) {
                 // Setter method
-                sb.append("        instance.").append(prop.setterName()).append("(").append(writeExpr).append(");\n");
+                statement = "instance." + prop.setterName() + "(" + writeExpr + ");";
+            } else {
+                // No setter and not public — skip (read-only at runtime via setAccessible)
+                continue;
             }
-            // else: no setter and not public — skip (read-only at runtime via setAccessible)
+            if (prop.hasJqField()) {
+                // Custom @JqField expression: absence is unprovable, write always
+                sb.append("        ").append(statement).append("\n");
+            } else {
+                // Absent keys leave field initializers in place (issue #82).
+                // Explicit nulls still take the write path. has() is null-safe.
+                sb.append("        if (input.has(\"").append(escapeJava(prop.jsonName())).append("\")) ")
+                        .append(statement).append("\n");
+            }
         }
 
         sb.append("        return instance;\n");

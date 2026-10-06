@@ -227,6 +227,38 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_pojoAbsentKeysKeepDefaults() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class DefaultedPojo {
+                    public String strategy = "SET";
+                    public int retries = 3;
+
+                    public DefaultedPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.DefaultedPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        // Absent keys keep field initializers
+        JqValue partial = JqValues.parse("{}");
+        Object p = mapper.fromJqValue(partial, pojoClass);
+        assertEquals("SET", pojoClass.getField("strategy").get(p));
+        assertEquals(3, pojoClass.getField("retries").get(p));
+
+        // Explicit null still writes null; present values still written
+        JqValue withNull = JqValues.parse("{\"strategy\":null,\"retries\":7}");
+        Object p2 = mapper.fromJqValue(withNull, pojoClass);
+        assertNull(pojoClass.getField("strategy").get(p2));
+        assertEquals(7, pojoClass.getField("retries").get(p2));
+    }
+
+    @Test
     void generatedMapping_appendJson() throws Exception {
         String source = """
                 package test;

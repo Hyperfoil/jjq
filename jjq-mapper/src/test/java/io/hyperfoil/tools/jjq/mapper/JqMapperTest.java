@@ -639,6 +639,41 @@ class JqMapperTest {
         assertEquals(original.isActive(), restored.isActive());
     }
 
+    // ---- POJO field initializers (issue #82) ----
+
+    static class DefaultedPojo {
+        private String strategy = "SET";
+        private String separator = " ";
+        private int retries = 3;
+
+        public DefaultedPojo() {}
+
+        public String getStrategy() { return strategy; }
+        public void setStrategy(String strategy) { this.strategy = strategy; }
+        public String getSeparator() { return separator; }
+        public void setSeparator(String separator) { this.separator = separator; }
+        public int getRetries() { return retries; }
+        public void setRetries(int retries) { this.retries = retries; }
+    }
+
+    @Test
+    void fromJqValue_pojoAbsentKeysKeepDefaults() {
+        JqValue json = JqValues.parse("{\"strategy\":\"APPEND\"}");
+        DefaultedPojo p = mapper.fromJqValue(json, DefaultedPojo.class);
+        assertEquals("APPEND", p.getStrategy());
+        assertEquals(" ", p.getSeparator());
+        assertEquals(3, p.getRetries());
+    }
+
+    @Test
+    void fromJqValue_pojoExplicitNullOverwritesDefault() {
+        JqValue json = JqValues.parse("{\"strategy\":null}");
+        DefaultedPojo p = mapper.fromJqValue(json, DefaultedPojo.class);
+        assertNull(p.getStrategy());
+        assertEquals(" ", p.getSeparator());
+        assertEquals(3, p.getRetries());
+    }
+
     // ---- POJO with public fields ----
 
     static class PublicFieldPojo {

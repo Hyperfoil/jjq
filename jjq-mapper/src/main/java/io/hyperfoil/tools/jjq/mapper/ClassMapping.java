@@ -450,6 +450,11 @@ final class ClassMapping<T> implements Mapping<T> {
         }
         for (FieldMapping field : fields) {
             if (field.isIgnored() || !field.hasSetter()) continue;
+            // Absent keys leave field initializers / constructor defaults in place
+            // (Jackson-compatible). Only direct field lookups can prove absence;
+            // @JqField program expressions keep write-always semantics.
+            // Explicit nulls are still written. has() is null-safe (false for non-objects).
+            if (!field.usesProgram() && !value.has(field.jsonName())) continue;
             JqValue extracted = field.extract(value);
             Object converted = field.convert(extracted, mapper);
             field.writeValue(instance, converted);
