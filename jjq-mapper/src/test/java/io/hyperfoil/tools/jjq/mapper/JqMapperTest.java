@@ -367,6 +367,44 @@ class JqMapperTest {
         assertEquals(0, r.age());
     }
 
+    // ---- Array/object to scalar (issue #85) ----
+
+    record WithType(String type) {}
+
+    @Test
+    void fromJqValue_arrayForStringThrows() {
+        JqValue json = JqValues.parse("{\"type\":[\"kvm\"]}");
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(json, WithType.class));
+        assertTrue(e.getMessage().contains("type"), e.getMessage());
+    }
+
+    @Test
+    void fromJqValue_objectForStringThrows() {
+        JqValue json = JqValues.parse("{\"type\":{\"kind\":\"kvm\"}}");
+        assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(json, WithType.class));
+    }
+
+    @Test
+    void fromJqValue_scalarToStringCoerces() {
+        assertEquals("42", mapper.fromJqValue(JqValues.parse("{\"type\":42}"), WithType.class).type());
+        assertEquals("true", mapper.fromJqValue(JqValues.parse("{\"type\":true}"), WithType.class).type());
+    }
+
+    record WithCount(String name, int count) {}
+    record WithFlag(String name, boolean active) {}
+
+    @Test
+    void fromJqValue_containerForNumbersThrows() {
+        assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"count\":[1]}"), WithCount.class));
+        assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"count\":{\"n\":1}}"), WithCount.class));
+        assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"active\":[true]}"), WithFlag.class));
+    }
+
     // ---- Convenience methods ----
 
     @Test

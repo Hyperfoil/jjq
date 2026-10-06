@@ -111,21 +111,45 @@ public final class TypeConverter {
             case JQ_VALUE -> (value == null || value instanceof JqNull) ? defaultValue(targetType) : value;
             case STRING -> {
                 if (value == null || value instanceof JqNull) yield null;
+                if (value.isContainer()) throw mismatch("String", value);
                 yield value instanceof JqString s ? s.stringValue() : value.toJsonString();
             }
-            case INT -> value instanceof JqNumber n ? n.intValue() : 0;
-            case LONG -> value instanceof JqNumber n ? n.longValue() : 0L;
-            case DOUBLE -> value instanceof JqNumber n ? n.doubleValue() : 0.0;
-            case FLOAT -> value instanceof JqNumber n ? (float) n.doubleValue() : 0.0f;
-            case BOOLEAN -> value instanceof JqBoolean b ? b.booleanValue() : (value != null && value.isTruthy());
-            case SHORT -> value instanceof JqNumber n ? (short) n.intValue() : (short) 0;
-            case BYTE -> value instanceof JqNumber n ? (byte) n.intValue() : (byte) 0;
+            case INT -> {
+                if (value != null && value.isContainer()) throw mismatch("int", value);
+                yield value instanceof JqNumber n ? n.intValue() : 0;
+            }
+            case LONG -> {
+                if (value != null && value.isContainer()) throw mismatch("long", value);
+                yield value instanceof JqNumber n ? n.longValue() : 0L;
+            }
+            case DOUBLE -> {
+                if (value != null && value.isContainer()) throw mismatch("double", value);
+                yield value instanceof JqNumber n ? n.doubleValue() : 0.0;
+            }
+            case FLOAT -> {
+                if (value != null && value.isContainer()) throw mismatch("float", value);
+                yield value instanceof JqNumber n ? (float) n.doubleValue() : 0.0f;
+            }
+            case BOOLEAN -> {
+                if (value != null && value.isContainer()) throw mismatch("boolean", value);
+                yield value instanceof JqBoolean b ? b.booleanValue() : (value != null && value.isTruthy());
+            }
+            case SHORT -> {
+                if (value != null && value.isContainer()) throw mismatch("short", value);
+                yield value instanceof JqNumber n ? (short) n.intValue() : (short) 0;
+            }
+            case BYTE -> {
+                if (value != null && value.isContainer()) throw mismatch("byte", value);
+                yield value instanceof JqNumber n ? (byte) n.intValue() : (byte) 0;
+            }
             case CHAR -> {
+                if (value != null && value.isContainer()) throw mismatch("char", value);
                 if (value instanceof JqString s && !s.stringValue().isEmpty()) yield s.stringValue().charAt(0);
                 yield '\0';
             }
             case BIG_DECIMAL -> {
                 if (value == null || value instanceof JqNull) yield null;
+                if (value.isContainer()) throw mismatch("BigDecimal", value);
                 yield value instanceof JqNumber n ? n.decimalValue() : BigDecimal.ZERO;
             }
             case LIST -> {
@@ -168,6 +192,7 @@ public final class TypeConverter {
             case ENUM -> {
                 if (value == null || value instanceof JqNull) yield null;
                 if (value instanceof JqString s) yield Enum.valueOf((Class<? extends Enum>) targetType, s.stringValue());
+                if (value.isContainer()) throw mismatch(targetType.getSimpleName(), value);
                 yield null;
             }
             case RECORD -> {

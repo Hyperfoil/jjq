@@ -259,6 +259,32 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_arrayForStringHasPath() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record WithType(String type) {}
+                """;
+
+        Class<?> cls = compileAndLoad("test.WithType", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue bad = JqValues.parse("{\"type\":[\"kvm\"]}");
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(bad, cls));
+        assertTrue(e.getMessage().contains("type"), e.getMessage());
+
+        // Scalar coercion still works in generated code
+        JqValue num = JqValues.parse("{\"type\":42}");
+        Object ok = mapper.fromJqValue(num, cls);
+        assertEquals("42", cls.getMethod("type").invoke(ok));
+    }
+
+    @Test
     void generatedMapping_shapeMismatchHasPath() throws Exception {
         String toolSource = """
                 package test;

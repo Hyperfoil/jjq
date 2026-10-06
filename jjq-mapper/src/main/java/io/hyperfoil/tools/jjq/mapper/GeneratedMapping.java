@@ -65,6 +65,38 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     public abstract Class<T> type();
 
     /**
+     * Require a scalar (non-container) value for scalar conversion. Returns the
+     * value unchanged for nulls and scalars (downstream {@code asX} accessors
+     * keep their lenient defaults); throws a shape-mismatch error for arrays
+     * and objects.
+     *
+     * @param value    the extracted value (never null from {@code JqProgram.apply})
+     * @param expected human-readable target description for the error, e.g. {@code String}
+     * @return the value unchanged
+     * @throws JqMapperException if the value is an array or object
+     */
+    protected static JqValue requireScalar(JqValue value, String expected) {
+        if (value != null && value.isContainer()) throw TypeConverter.mismatch(expected, value);
+        return value;
+    }
+
+    /**
+     * Lenient string coercion mirroring {@code TypeConverter} {@code STRING} semantics:
+     * nulls stay null, strings unwrap, other scalars render as JSON text,
+     * arrays and objects fail fast.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced string, or null for null inputs
+     * @throws JqMapperException if the value is an array or object
+     */
+    protected static String asStringChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        if (value instanceof io.hyperfoil.tools.jjq.value.JqString s) return s.stringValue();
+        if (value.isContainer()) throw TypeConverter.mismatch("String", value);
+        return value.toJsonString();
+    }
+
+    /**
      * Require an array value for list conversion. Returns {@code null} for
      * null inputs (callers map those to empty lists); throws a shape-mismatch
      * error for any other non-array shape.

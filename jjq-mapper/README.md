@@ -285,7 +285,7 @@ mapper.fromJqValue(JqValues.parse("{\"packages\":\"git\"}"), Config.class);
 // JqMapperException: Cannot bind String "git" to List<String> at '$.packages'
 ```
 
-Non-array → `List`, non-object → `Map`/record/POJO, and wrong collection element types all throw at bind time instead of silently coercing. `null`/absent values stay lenient (`null`, empty collections, field initializers). Custom `@JqConverter`s bypass this checking entirely, which is also how genuinely polymorphic shapes (string-or-map, list-or-object) should be modeled.
+Non-array → `List`, non-object → `Map`/record/POJO, and wrong collection element types all throw at bind time instead of silently coercing. The reverse direction throws too: array/object input to any scalar (`String`, numbers, `boolean`, `char`, `BigDecimal`, enums) fails, while scalar-to-scalar coercion stays lenient (`42` → `"42"`). `null`/absent values stay lenient (`null`, empty collections, field initializers). Custom `@JqConverter`s bypass this checking entirely, which is also how genuinely polymorphic shapes (string-or-map, list-or-object) should be modeled.
 
 ### `TypeConverter` — extension point for custom handling
 
