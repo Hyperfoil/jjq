@@ -112,6 +112,11 @@ final class ClassMapping<T> implements Mapping<T> {
             }
         }
 
+        // Any-setter/getter methods first: any-getter-backed properties are
+        // suppressed entirely (issue #88.1, Jackson parity)
+        Method[] anyMethods = resolveAnyMethods(type, bridges);
+        Method anyGetter = anyMethods[1];
+
         for (int i = 0; i < components.length; i++) {
             RecordComponent rc = components[i];
             String name = rc.getName();
@@ -126,6 +131,8 @@ final class ClassMapping<T> implements Mapping<T> {
                     if (bridge.isIgnored(rc)) { ignored = true; break; }
                 }
             }
+            // Any-getter-backed components are suppressed entirely (issue #88.1)
+            if (!ignored && isAnyGetterBacked(name, rc.getAccessor(), anyGetter)) ignored = true;
 
             // Apply naming strategy to get the JSON name
             String jsonName = namingStrategy.transform(name);
@@ -175,8 +182,15 @@ final class ClassMapping<T> implements Mapping<T> {
             // Resolve @JqConverter
             ValueConverter<?> converter = resolveConverter(rc.getAnnotation(JqConverter.class));
 
+            // Directional exclusion (e.g. Jackson WRITE_ONLY/READ_ONLY via bridges)
+            boolean skipSer = false, skipDeser = false;
+            for (AnnotationBridge bridge : bridges) {
+                if (!skipSer && bridge.skipOnSerialize(rc)) skipSer = true;
+                if (!skipDeser && bridge.skipOnDeserialize(rc)) skipDeser = true;
+            }
+
             fields[i] = new FieldMapping(name, jsonName, directFieldName, program, fieldType, genericType,
-                    getter, null, i, ignored, inclusion, converter);
+                    getter, null, i, ignored, inclusion, converter, skipSer, skipDeser);
         }
 
         // Find and cache the canonical constructor + pre-cached spreader
@@ -196,7 +210,7 @@ final class ClassMapping<T> implements Mapping<T> {
         boolean canUseFastPath = true;
         Map<String, Integer> nameMap = new HashMap<>(fields.length);
         for (int i = 0; i < fields.length; i++) {
-            if (fields[i].isIgnored() || fields[i].usesProgram()) {
+            if (fields[i].isIgnored() || fields[i].usesProgram() || fields[i].skipDeserialize()) {
                 canUseFastPath = false;
                 break;
             }
@@ -205,7 +219,7 @@ final class ClassMapping<T> implements Mapping<T> {
 
         return new ClassMapping<>(type, fields, ctor, spread,
                 canUseFastPath ? nameMap : null, canUseFastPath,
-                resolveAnyHandlers(type, fields, lookup, bridges));
+                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup));
     }
 
     /**
@@ -260,6 +274,11 @@ final class ClassMapping<T> implements Mapping<T> {
             }
         }
 
+        // Any-setter/getter methods first: any-getter-backed properties are
+        // suppressed entirely (issue #88.1, Jackson parity)
+        Method[] anyMethods = resolveAnyMethods(type, bridges);
+        Method anyGetter = anyMethods[1];
+
         // Discover fields (declared only, skip static/synthetic/transient)
         var fieldMappings = new ArrayList<FieldMapping>();
         for (Field field : type.getDeclaredFields()) {
@@ -279,6 +298,13 @@ final class ClassMapping<T> implements Mapping<T> {
                 for (AnnotationBridge bridge : bridges) {
                     if (bridge.isIgnored(field)) { ignored = true; break; }
                 }
+            }
+            // Any-getter-backed properties are suppressed entirely (issue #88.1).
+            // Public fields use direct access (no getter method): the implied
+            // property-name rule covers them; method getters match by identity.
+            if (!ignored && anyGetter != null) {
+                Method gm = Modifier.isPublic(mods) ? null : findGetterMethod(type, name, fieldType);
+                if (isAnyGetterBacked(name, gm, anyGetter)) ignored = true;
             }
             String directFieldName;
             JqProgram program;
@@ -357,8 +383,15 @@ final class ClassMapping<T> implements Mapping<T> {
             // Resolve @JqConverter
             ValueConverter<?> converter = resolveConverter(field.getAnnotation(JqConverter.class));
 
+            // Directional exclusion (e.g. Jackson WRITE_ONLY/READ_ONLY via bridges)
+            boolean skipSer = false, skipDeser = false;
+            for (AnnotationBridge bridge : bridges) {
+                if (!skipSer && bridge.skipOnSerialize(field)) skipSer = true;
+                if (!skipDeser && bridge.skipOnDeserialize(field)) skipDeser = true;
+            }
+
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
-                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter));
+                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser));
         }
 
         FieldMapping[] fields = fieldMappings.toArray(new FieldMapping[0]);
@@ -367,7 +400,7 @@ final class ClassMapping<T> implements Mapping<T> {
         boolean canUseFastPath = true;
         Map<String, Integer> nameMap = new HashMap<>(fields.length);
         for (int i = 0; i < fields.length; i++) {
-            if (fields[i].isIgnored() || fields[i].usesProgram()) {
+            if (fields[i].isIgnored() || fields[i].usesProgram() || fields[i].skipDeserialize()) {
                 canUseFastPath = false;
                 break;
             }
@@ -376,25 +409,35 @@ final class ClassMapping<T> implements Mapping<T> {
 
         return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath,
-                resolveAnyHandlers(type, fields, lookup, bridges));
+                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup));
     }
 
-    /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. */
-    private static MethodHandle findGetter(Class<?> type, String fieldName, Class<?> fieldType,
-                                            MethodHandles.Lookup lookup) {
+    /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. Returns the Method (unreflect at site). */
+    private static Method findGetterMethod(Class<?> type, String fieldName, Class<?> fieldType) {
         String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
         String[] candidates = (fieldType == boolean.class || fieldType == Boolean.class)
                 ? new String[]{"get" + capitalized, "is" + capitalized}
                 : new String[]{"get" + capitalized};
         for (String methodName : candidates) {
             try {
-                Method m = type.getMethod(methodName);
-                return lookup.unreflect(m);
-            } catch (NoSuchMethodException | IllegalAccessException ignored) {
+                return type.getMethod(methodName);
+            } catch (NoSuchMethodException ignored) {
                 // try next candidate
             }
         }
         return null;
+    }
+
+    /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. */
+    private static MethodHandle findGetter(Class<?> type, String fieldName, Class<?> fieldType,
+                                            MethodHandles.Lookup lookup) {
+        Method m = findGetterMethod(type, fieldName, fieldType);
+        if (m == null) return null;
+        try {
+            return lookup.unreflect(m);
+        } catch (IllegalAccessException ignored) {
+            return null;
+        }
     }
 
     /** Find a setter method: setFieldName(Type). */
@@ -483,9 +526,11 @@ final class ClassMapping<T> implements Mapping<T> {
      * Discover any-setter/any-getter methods (native annotations first, then bridges)
      * and unreflect them. Returns null when neither is present.
      */
-    private static AnyHandlers resolveAnyHandlers(Class<?> type, FieldMapping[] fields,
-                                                  MethodHandles.Lookup lookup,
-                                                  List<AnnotationBridge> bridges) {
+    /**
+     * Discover any-setter/any-getter methods (native annotations first, then bridges).
+     * Returns {@code {setter, getter}} with nulls for absent methods.
+     */
+    private static Method[] resolveAnyMethods(Class<?> type, List<AnnotationBridge> bridges) {
         Method setterMethod = null;
         for (Method m : type.getMethods()) {
             if (m.isAnnotationPresent(JqAnySetter.class)) {
@@ -522,6 +567,36 @@ final class ClassMapping<T> implements Mapping<T> {
                 }
             }
         }
+        return new Method[]{setterMethod, getterMethod};
+    }
+
+    /**
+     * True when a property is backed by the any-getter method (issue #88.1):
+     * the resolved getter is the any-getter itself, or the field name matches
+     * the any-getter's implied property (covers direct field access, which has
+     * no getter method). Such properties are suppressed entirely (Jackson parity).
+     */
+    private static boolean isAnyGetterBacked(String fieldName, Method getterMethod, Method anyGetter) {
+        if (anyGetter == null) return false;
+        if (getterMethod != null && getterMethod.equals(anyGetter)) return true;
+        return fieldName.equals(anyGetterPropertyName(anyGetter.getName()));
+    }
+
+    /** Implied property name of an any-getter: strip get/is prefix, decapitalize. Null when no prefix. */
+    private static String anyGetterPropertyName(String methodName) {
+        String stripped = null;
+        if (methodName.startsWith("get") && methodName.length() > 3) {
+            stripped = methodName.substring(3);
+        } else if (methodName.startsWith("is") && methodName.length() > 2) {
+            stripped = methodName.substring(2);
+        }
+        if (stripped == null || stripped.isEmpty()) return null;
+        return Character.toLowerCase(stripped.charAt(0)) + stripped.substring(1);
+    }
+
+    private static AnyHandlers resolveAnyHandlers(Class<?> type, FieldMapping[] fields,
+                                                  Method setterMethod, Method getterMethod,
+                                                  MethodHandles.Lookup lookup) {
         if (setterMethod == null && getterMethod == null) return null;
         MethodHandle setter = null;
         boolean setterTakesJqValue = false;
@@ -636,7 +711,7 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Failed to construct " + type.getName(), e);
         }
         for (FieldMapping field : fields) {
-            if (field.isIgnored() || !field.hasSetter()) continue;
+            if (field.isIgnored() || field.skipDeserialize() || !field.hasSetter()) continue;
             // Absent keys leave field initializers / constructor defaults in place
             // (Jackson-compatible). Only direct field lookups can prove absence;
             // @JqField program expressions keep write-always semantics.
@@ -662,7 +737,7 @@ final class ClassMapping<T> implements Mapping<T> {
     public JqValue toJqValue(T instance, JqMapper mapper) {
         var builder = JqObject.builder(fields.length);
         for (FieldMapping field : fields) {
-            if (field.isIgnored()) continue;
+            if (field.isIgnored() || field.skipSerialize()) continue;
             Object value = field.readValue(instance);
             if (!field.shouldInclude(value)) continue;
             // putUnchecked: mapper jsonNames are unique per class by construction

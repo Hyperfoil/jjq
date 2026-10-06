@@ -38,6 +38,8 @@ final class FieldMapping {
     private final MethodHandle setter;    // writes the field value on an instance (POJO deserialization), null for records
     private final int constructorIndex;   // index in the canonical constructor parameter list (-1 for POJOs)
     private final boolean ignored;        // true if @JqIgnore is present
+    private final boolean skipSerialize;  // true if excluded from serialization (WRITE_ONLY)
+    private final boolean skipDeserialize; // true if excluded from deserialization (READ_ONLY)
     private final JqInclude.Include inclusion; // serialization inclusion strategy
     private final TypeConverter.Kind conversionKind; // pre-resolved conversion strategy
     private final ValueConverter<?> customConverter; // custom converter (from @JqConverter), null if none
@@ -46,14 +48,15 @@ final class FieldMapping {
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
-        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null);
+        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null, false, false);
     }
 
     /** Full constructor with all options. */
     FieldMapping(String name, String jsonName, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, MethodHandle setter, int constructorIndex,
-                 boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter) {
+                 boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter,
+                 boolean skipSerialize, boolean skipDeserialize) {
         this.name = name;
         this.jsonName = jsonName.intern();
         this.directFieldName = directFieldName != null ? directFieldName.intern() : null;
@@ -64,15 +67,17 @@ final class FieldMapping {
         this.setter = setter;
         this.constructorIndex = constructorIndex;
         this.ignored = ignored;
+        this.skipSerialize = skipSerialize;
+        this.skipDeserialize = skipDeserialize;
         this.inclusion = inclusion;
         this.customConverter = customConverter;
         this.conversionKind = ignored ? TypeConverter.Kind.DEFAULT
                                      : TypeConverter.resolveKind(type, genericType);
     }
 
-    /** Extract the field value from a JqValue. */
+    /** Extract the field value from a JqValue (deserialization only). */
     JqValue extract(JqValue input) {
-        if (ignored) return null;
+        if (ignored || skipDeserialize) return null;
         if (directFieldName != null) {
             // Direct field access — bypass JqProgram entirely
             if (input instanceof JqObject obj) return obj.get(directFieldName);
@@ -147,6 +152,8 @@ final class FieldMapping {
 
     boolean hasCustomConverter() { return customConverter != null; }
     boolean hasSetter() { return setter != null; }
+    boolean skipSerialize() { return skipSerialize; }
+    boolean skipDeserialize() { return skipDeserialize; }
     JqInclude.Include inclusion() { return inclusion; }
     String name() { return name; }
     /** The JSON key name for serialization (may differ from name() due to @JqNaming). */

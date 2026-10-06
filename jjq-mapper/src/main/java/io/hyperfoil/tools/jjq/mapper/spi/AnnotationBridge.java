@@ -105,4 +105,60 @@ public interface AnnotationBridge {
     default java.lang.reflect.Method resolveAnyGetter(Class<?> type) {
         return null;
     }
+
+    /**
+     * Resolve a {@code @JsonValue}-equivalent zero-arg accessor used as the
+     * serialized form of an enum (or other scalar type).
+     *
+     * <p>The default implementation returns {@code null} (not supported);
+     * bridges override it when their annotations are present.</p>
+     *
+     * @param type the class to inspect
+     * @return the annotated method, or {@code null} if not present
+     */
+    default java.lang.reflect.Method resolveJsonValueAccessor(Class<?> type) {
+        return null;
+    }
+
+    /**
+     * Whether this element is excluded from serialization
+     * (Jackson's {@code @JsonProperty(access = WRITE_ONLY)} equivalent).
+     *
+     * <p>The default implementation returns {@code false} (no exclusion).</p>
+     *
+     * @param element the field or record component to inspect
+     * @return {@code true} if the element must not be serialized
+     */
+    default boolean skipOnSerialize(AnnotatedElement element) {
+        return false;
+    }
+
+    /**
+     * Whether this element is excluded from deserialization
+     * (Jackson's {@code @JsonProperty(access = READ_ONLY)} equivalent).
+     *
+     * <p>The default implementation returns {@code false} (no exclusion).</p>
+     *
+     * @param element the field or record component to inspect
+     * @return {@code true} if the element must not be deserialized
+     */
+    default boolean skipOnDeserialize(AnnotatedElement element) {
+        return false;
+    }
+
+    /**
+     * Resolve a {@code @JsonCreator}-equivalent single-argument factory
+     * (static method or constructor) for deserializing a scalar into the type.
+     * Only delegating mode (exactly one argument) is supported; property-based
+     * creators are out of scope.
+     *
+     * <p>The default implementation returns {@code null} (not supported);
+     * bridges override it when their annotations are present.</p>
+     *
+     * @param type the class to inspect
+     * @return the annotated factory, or {@code null} if not present
+     */
+    default java.lang.reflect.Executable resolveJsonCreator(Class<?> type) {
+        return null;
+    }
 }

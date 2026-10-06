@@ -2,6 +2,9 @@ package io.hyperfoil.tools.jjq.mapper;
 
 import io.hyperfoil.tools.jjq.value.*;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
@@ -191,6 +194,10 @@ public final class TypeConverter {
             }
             case ENUM -> {
                 if (value == null || value instanceof JqNull) yield null;
+                java.util.Optional<EnumHandlers> handlers = mapper.enumHandlers(targetType);
+                if (handlers.isPresent() && handlers.get().creator() != null) {
+                    yield invokeCreator(handlers.get(), value, targetType, mapper);
+                }
                 if (value instanceof JqString s) yield Enum.valueOf((Class<? extends Enum>) targetType, s.stringValue());
                 if (value.isContainer()) throw mismatch(JqValue.Type.STRING, targetType.getSimpleName(), value);
                 yield null;
@@ -325,6 +332,8 @@ public final class TypeConverter {
             return builder.build();
         }
         if (value.getClass().isEnum()) {
+            JqValue wire = enumWireValue(value, mapper);
+            if (wire != null) return wire;
             return JqString.of(((Enum<?>) value).name());
         }
         if (value.getClass().isRecord()) {
@@ -333,7 +342,21 @@ public final class TypeConverter {
         if (value.getClass().isAnnotationPresent(JqMapped.class)) {
             return mapper.toJqValue(value);
         }
+        if (isPojoLike(value.getClass()) && !isJdkClass(value.getClass())) {
+            // Plain POJOs bind structurally, mirroring the deserialization
+            // direction (issue #88.3). JDK types keep the lenient fallback below.
+            return mapper.toJqValue(value);
+        }
         return JqValues.fromJavaObject(value);
+    }
+
+    /**
+     * True for JDK platform classes, which keep lenient conversion instead of
+     * structural binding (their internals are not meaningful bean properties).
+     */
+    private static boolean isJdkClass(Class<?> type) {
+        String name = type.getName();
+        return name.startsWith("java.") || name.startsWith("jdk.") || name.startsWith("sun.");
     }
 
     /** Return the Java default value for a type. */
@@ -364,5 +387,115 @@ public final class TypeConverter {
         if (type instanceof Class<?> c) return c;
         if (type instanceof ParameterizedType pt) return (Class<?>) pt.getRawType();
         return Object.class;
+    }
+
+    /**
+     * Cached {@code @JsonValue}/{@code @JsonCreator}-equivalent handlers for an enum class.
+     * Null members mean absent. Resolved once per (mapper, class) via
+     * {@link JqMapper#enumHandlers(Class)}; discovery failures throw at first use.
+     *
+     * @param valueAccessor zero-arg instance method whose result is the wire form (may be null)
+     * @param creator       single-arg static factory or constructor (may be null)
+     * @param creatorArgClass raw creator parameter class (null when no creator)
+     * @param creatorArgType  generic creator parameter type (null when no creator)
+     */
+    record EnumHandlers(Method valueAccessor, Executable creator,
+                        Class<?> creatorArgClass, Type creatorArgType) {}
+
+    /**
+     * Resolve enum handlers from the mapper's bridges (native annotations are
+     * always consulted first — currently no native equivalent exists, so this
+     * is bridge-driven). Malformed signatures fail fast.
+     *
+     * @return the handlers, or empty when the class declares neither
+     */
+    static java.util.Optional<EnumHandlers> resolveEnumHandlers(
+            Class<?> type, List<io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge> bridges) {
+        Method accessor = null;
+        Executable creator = null;
+        for (io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge bridge : bridges) {
+            if (accessor == null) {
+                Method m = bridge.resolveJsonValueAccessor(type);
+                if (m != null) {
+                    validateValueAccessor(m, type);
+                    accessor = m;
+                }
+            }
+            if (creator == null) {
+                Executable e = bridge.resolveJsonCreator(type);
+                if (e != null) {
+                    validateCreator(e, type);
+                    creator = e;
+                }
+            }
+            if (accessor != null && creator != null) break;
+        }
+        if (accessor == null && creator == null) return java.util.Optional.empty();
+        Class<?> argClass = null;
+        Type argType = null;
+        if (creator != null) {
+            argType = creator.getGenericParameterTypes()[0];
+            argClass = rawClass(argType);
+        }
+        return java.util.Optional.of(new EnumHandlers(accessor, creator, argClass, argType));
+    }
+
+    /** Fail fast on malformed value-accessor signatures (checked once per class). */
+    private static void validateValueAccessor(Method m, Class<?> type) {
+        if (java.lang.reflect.Modifier.isStatic(m.getModifiers()) || m.getParameterCount() != 0) {
+            throw new JqMapperException("@JsonValue accessor must be a non-static no-arg method: "
+                    + type.getName() + "#" + m.getName());
+        }
+        try {
+            m.setAccessible(true);
+        } catch (SecurityException se) {
+            throw new JqMapperException("Cannot access @JsonValue accessor on " + type.getName(), se);
+        }
+    }
+
+    /** Fail fast on malformed creator signatures (checked once per class). */
+    private static void validateCreator(Executable e, Class<?> type) {
+        if (e.getParameterCount() != 1
+                || (e instanceof Method m && !java.lang.reflect.Modifier.isStatic(m.getModifiers()))) {
+            throw new JqMapperException("@JsonCreator must be a single-arg static factory or constructor: "
+                    + type.getName() + "#" + e.getName());
+        }
+        try {
+            e.setAccessible(true);
+        } catch (SecurityException se) {
+            throw new JqMapperException("Cannot access @JsonCreator on " + type.getName(), se);
+        }
+    }
+
+    /** Invoke a creator factory with a converted scalar argument. Failures are fail-fast. */
+    private static Object invokeCreator(EnumHandlers handlers, JqValue value,
+                                        Class<?> targetType, JqMapper mapper) {
+        Kind argKind = resolveKind(handlers.creatorArgClass(), handlers.creatorArgType());
+        Object arg = convert(value, argKind, handlers.creatorArgClass(), handlers.creatorArgType(), mapper);
+        try {
+            if (handlers.creator() instanceof Constructor<?> c) return c.newInstance(arg);
+            return ((Method) handlers.creator()).invoke(null, arg);
+        } catch (ReflectiveOperationException | IllegalArgumentException e) {
+            throw new JqMapperException("Failed to invoke @JsonCreator for " + targetType.getName(), e);
+        }
+    }
+
+    /**
+     * Compute an enum's wire form via its value accessor, converted to JSON.
+     * Returns null when no accessor is present (caller falls back to {@code name()}).
+     * A self-returning accessor (returns the enum itself) also falls back, avoiding recursion.
+     */
+    private static JqValue enumWireValue(Object enumValue, JqMapper mapper) {
+        java.util.Optional<EnumHandlers> handlers = mapper.enumHandlers(enumValue.getClass());
+        if (handlers.isEmpty() || handlers.get().valueAccessor() == null) return null;
+        final Object result;
+        try {
+            result = handlers.get().valueAccessor().invoke(enumValue);
+        } catch (ReflectiveOperationException e) {
+            throw new JqMapperException("Failed to invoke @JsonValue accessor on "
+                    + enumValue.getClass().getName(), e);
+        }
+        if (result == null || result == enumValue) return null;
+        return toJqValue(result, mapper);
     }
 }

@@ -508,6 +508,54 @@ class JqMapperTest {
         assertEquals("tpt-fixture", out.getField("testProxyTool").getField("token").stringValue());
     }
 
+    @Test
+    void anyGetter_backingFieldNotEmitted() {
+        // The any-getter method must not ALSO be emitted as a bean property (issue #88.1)
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"testProxyTool\":{\"token\":\"tpt-fixture\"}}");
+        ExtrasPojo p = mapper.fromJqValue(json, ExtrasPojo.class);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    // ---- Nested plain POJOs (issue #88.3) ----
+
+    static class NestedPlain {
+        private String url;
+
+        public NestedPlain() {}
+
+        public String getUrl() { return url; }
+        public void setUrl(String url) { this.url = url; }
+    }
+
+    record WithNestedPojo(String name, NestedPlain nested) {}
+
+    @Test
+    void toJqValue_nestedPlainPojoMapped() {
+        WithNestedPojo original = new WithNestedPojo("t", new NestedPlain());
+        original.nested().setUrl("https://example.com");
+        JqValue out = mapper.toJqValue(original);
+        assertEquals("https://example.com", out.getField("nested").getField("url").stringValue());
+    }
+
+    @Test
+    void roundTrip_nestedPlainPojo() {
+        WithNestedPojo original = new WithNestedPojo("t", new NestedPlain());
+        original.nested().setUrl("https://example.com");
+        WithNestedPojo restored = mapper.fromJqValue(mapper.toJqValue(original), WithNestedPojo.class);
+        assertEquals("t", restored.name());
+        assertEquals("https://example.com", restored.nested().getUrl());
+    }
+
+    @Test
+    void toJqValue_jdkTypesStillStringified() {
+        // JDK types keep the lenient toString fallback on the nested path (no behavior change)
+        record WithDate(String name, java.util.Date when) {}
+        WithDate original = new WithDate("t", new java.util.Date(0));
+        JqValue out = mapper.toJqValue(original);
+        assertTrue(out.getField("when").isString(), out.getField("when").getClass().getSimpleName());
+    }
+
     // ---- Convenience methods ----
 
     @Test

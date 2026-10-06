@@ -323,8 +323,97 @@ class JqMapperProcessorTest {
         // Round-trip through toJson (uses the appendJson fallback with any-getter)
         String out = mapper.toJson(p);
         assertTrue(out.contains("\"testProxyTool\"") || out.contains("\"mystery\""), out);
+        // No double emission: the any-getter backing field is not a bean property (issue #88.1)
+        assertFalse(out.contains("\"extras\""), out);
         Object p2 = mapper.fromJqValue(JqValues.parse(out), pojoClass);
         assertEquals("t", pojoClass.getField("name").get(p2));
+    }
+
+    @Test
+    void generatedMapping_jsonValueEnum() throws Exception {
+        // Proves the generated path honors @JsonValue/@JsonCreator via the
+        // runtime TypeConverter (no codegen support needed)
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonCreator;
+                import com.fasterxml.jackson.annotation.JsonValue;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record WithAuth(String name, AuthType auth) {
+                    public enum AuthType {
+                        API_KEY, OAUTH;
+
+                        @JsonValue
+                        public String toWire() {
+                            return name().toLowerCase().replace('_', '-');
+                        }
+
+                        @JsonCreator
+                        public static AuthType fromWire(String wire) {
+                            for (AuthType t : values()) {
+                                if (t.toWire().equals(wire)) return t;
+                            }
+                            throw new IllegalArgumentException("unknown: " + wire);
+                        }
+                    }
+                }
+                """;
+
+        Class<?> cls = compileAndLoad("test.WithAuth", source);
+        Class<?> authType = Class.forName("test.WithAuth$AuthType", true, cls.getClassLoader());
+        // NOTE: generated mapping wins only with the processor; the Jackson bridge
+        // must be registered explicitly here (no ServiceLoader in this configuration)
+        JqMapper mapper = JqMapper.builder()
+                .bridge(new io.hyperfoil.tools.jjq.mapper.jackson.JacksonAnnotationBridge())
+                .build();
+
+        Object apiKey = Enum.valueOf((Class<Enum>) authType, "API_KEY");
+        Object instance = cls.getDeclaredConstructor(String.class, authType).newInstance("t", apiKey);
+        assertEquals("api-key", mapper.toJqValue(instance).getField("auth").stringValue());
+
+        JqValue back = JqValues.parse("{\"name\":\"t\",\"auth\":\"api-key\"}");
+        Object restored = mapper.fromJqValue(back, cls);
+        assertEquals(apiKey, cls.getMethod("auth").invoke(restored));
+    }
+
+    @Test
+    void generatedMapping_accessWriteOnlyReadOnly() throws Exception {
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonProperty;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class AccessPojo {
+                    public String name;
+                    @JsonProperty(value = "secret", access = JsonProperty.Access.WRITE_ONLY)
+                    public String secret;
+                    @JsonProperty(value = "id", access = JsonProperty.Access.READ_ONLY)
+                    public String id;
+
+                    public AccessPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.AccessPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        // WRITE_ONLY bound on deser, READ_ONLY left default
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"secret\":\"s\",\"id\":\"1\"}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+        assertEquals("s", pojoClass.getField("secret").get(p));
+        assertNull(pojoClass.getField("id").get(p));
+
+        // WRITE_ONLY skipped on ser; READ_ONLY (null here) still emitted as key
+        Object p2 = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getField("id").set(p2, "1");
+        String out = mapper.toJqValue(p2).toJsonString();
+        assertFalse(out.contains("secret"), out);
+        assertTrue(out.contains("\"id\":\"1\""), out);
     }
 
     @Test

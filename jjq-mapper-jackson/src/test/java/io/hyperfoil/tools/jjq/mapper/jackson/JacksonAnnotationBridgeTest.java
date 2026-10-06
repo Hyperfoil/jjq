@@ -165,4 +165,127 @@ class JacksonAnnotationBridgeTest {
         assertTrue(out.contains("\"testProxyTool\""), out);
         assertTrue(out.contains("\"tpt-fixture\""), out);
     }
+
+    @Test
+    void jsonAnyGetter_backingMapNotEmitted() {
+        // The any-getter must not ALSO be emitted as a bean property (issue #88.1)
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"testProxyTool\":{\"token\":\"tpt-fixture\"}}");
+        JacksonExtrasPojo p = mapper.fromJqValue(json, JacksonExtrasPojo.class);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    // ---- @JsonValue / @JsonCreator (issue #88.4) ----
+
+    enum AuthType {
+        API_KEY, OAUTH;
+
+        @com.fasterxml.jackson.annotation.JsonValue
+        public String toWire() {
+            return name().toLowerCase().replace('_', '-');
+        }
+
+        @com.fasterxml.jackson.annotation.JsonCreator
+        public static AuthType fromWire(String wire) {
+            for (AuthType t : values()) {
+                if (t.toWire().equals(wire)) return t;
+            }
+            throw new IllegalArgumentException("unknown auth type: " + wire);
+        }
+    }
+
+    record WithAuth(String name, AuthType auth) {}
+
+    @Test
+    void jsonValue_serializesWireForm() {
+        JqValue out = mapper.toJqValue(new WithAuth("t", AuthType.API_KEY));
+        assertEquals("api-key", out.getField("auth").stringValue());
+    }
+
+    @Test
+    void jsonCreator_deserializesWireForm() {
+        WithAuth r = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"auth\":\"api-key\"}"), WithAuth.class);
+        assertEquals(AuthType.API_KEY, r.auth());
+    }
+
+    @Test
+    void jsonCreator_unknownValueFailsFast() {
+        assertThrows(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"auth\":\"nope\"}"), WithAuth.class));
+    }
+
+    @Test
+    void plainEnum_unchanged() {
+        // Enums without annotations keep name() behavior both directions
+        record WithPlain(String name, PlainKind kind) {}
+        JqValue out = mapper.toJqValue(new WithPlain("t", PlainKind.FOO));
+        assertEquals("FOO", out.getField("kind").stringValue());
+        WithPlain r = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"kind\":\"FOO\"}"), WithPlain.class);
+        assertEquals(PlainKind.FOO, r.kind());
+    }
+
+    enum PlainKind {
+        FOO, BAR
+    }
+
+    // ---- @JsonProperty(access = ...) (issue #88.2) ----
+
+    static class AccessPojo {
+        private String name;
+        @com.fasterxml.jackson.annotation.JsonProperty(value = "secret", access = com.fasterxml.jackson.annotation.JsonProperty.Access.WRITE_ONLY)
+        private String secret;
+        @com.fasterxml.jackson.annotation.JsonProperty(value = "id", access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+        private String id;
+
+        public AccessPojo() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getSecret() { return secret; }
+        public void setSecret(String secret) { this.secret = secret; }
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+    }
+
+    @Test
+    void writeOnly_boundOnDeserSkippedOnSer() {
+        AccessPojo p = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"secret\":\"s3cr3t\",\"id\":\"42\"}"), AccessPojo.class);
+        assertEquals("t", p.getName());
+        assertEquals("s3cr3t", p.getSecret());
+        // READ_ONLY is not bound on deser
+        assertNull(p.getId());
+
+        String out = mapper.toJqValue(p).toJsonString();
+        // WRITE_ONLY is not emitted on ser...
+        assertFalse(out.contains("s3cr3t"), out);
+        assertFalse(out.contains("\"secret\""), out);
+        // ...while READ_ONLY is emitted
+        assertTrue(out.contains("\"name\":\"t\""), out);
+    }
+
+    @Test
+    void readOnly_emittedWithValue() {
+        AccessPojo p = new AccessPojo();
+        p.setName("t");
+        p.setId("42");
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"id\":\"42\""), out);
+    }
+
+    record AccessRecord(String name,
+                        @com.fasterxml.jackson.annotation.JsonProperty(value = "secret",
+                                access = com.fasterxml.jackson.annotation.JsonProperty.Access.WRITE_ONLY)
+                        String secret) {}
+
+    @Test
+    void access_recordComponents() {
+        AccessRecord r = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"secret\":\"s\"}"), AccessRecord.class);
+        assertEquals("t", r.name());
+        assertEquals("s", r.secret());
+        String out = mapper.toJqValue(r).toJsonString();
+        assertFalse(out.contains("secret"), out);
+        assertTrue(out.contains("\"name\":\"t\""), out);
+    }
 }

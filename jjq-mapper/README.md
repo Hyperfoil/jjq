@@ -316,6 +316,23 @@ class Config {
 
 The setter takes `(String, JqValue)` (exact, lossless) or `(String, Object)` (converted); the getter returns `Map<String, ?>` (converted on emit, `null` as JSON null) or `JqObject` (used directly). Known and `@JqIgnore`d keys never reach the setter. Generated mappings support the native annotations; the Jackson bridge honors `@JsonAnySetter`/`@JsonAnyGetter` on the reflection path (field-form stays unsupported).
 
+The any-getter method itself is never emitted as a bean property (Jackson parity) — only the flattened entries appear.
+
+### Jackson annotation support (`jjq-mapper-jackson` bridge)
+
+| Jackson | jjq behavior |
+|---|---|
+| `@JsonProperty("name")` | Field rename (records + POJOs, reflection path) |
+| `@JsonIgnore`, `@JsonIgnoreProperties` | Exclusion both directions |
+| `@JsonInclude(...)` | ALWAYS/NON_NULL/NON_EMPTY/NON_DEFAULT mapping |
+| `@JsonProperty(access = WRITE_ONLY)` | Bound on deser, skipped on ser (records + POJOs, reflection + generated) |
+| `@JsonProperty(access = READ_ONLY)` | Skipped on deser (default kept), emitted on ser |
+| `@JsonAnySetter` / `@JsonAnyGetter` (method form) | Unknown-key capture / extras emission (reflection path) |
+| `@JsonValue` | Enum wire form on ser |
+| `@JsonCreator` (single-arg, delegating) | Enum/factory deser from scalar |
+
+Directional access and `@JsonValue`/`@JsonCreator` work identically through generated mappings (the processor reads Jackson annotations stringly-typed — no Jackson dependency on the processor). Property-based `@JsonCreator` is out of scope.
+
 ### `TypeConverter` — extension point for custom handling
 
 `TypeConverter` is the public conversion engine behind field mapping. The target

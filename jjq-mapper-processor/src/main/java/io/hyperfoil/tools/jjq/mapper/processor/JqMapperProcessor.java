@@ -89,6 +89,9 @@ public class JqMapperProcessor extends AbstractProcessor {
         String classInclusion = resolveClassInclusion(recordType);
         JqNaming.Strategy namingStrategy = resolveNamingStrategy(recordType);
 
+        // Any-setter/getter first: any-getter-backed components are suppressed (issue #88.1)
+        AnyInfo recordAnyInfo = resolveAnyInfo(recordType);
+
         // Collect record component metadata
         List<ComponentInfo> components = new ArrayList<>();
         for (Element enclosed : recordType.getEnclosedElements()) {
@@ -96,6 +99,11 @@ public class JqMapperProcessor extends AbstractProcessor {
                 String name = rc.getSimpleName().toString();
                 String typeName = rc.asType().toString();
                 boolean ignored = rc.getAnnotation(JqIgnore.class) != null;
+                if (!ignored && recordAnyInfo.hasGetter()
+                        && (name.equals(recordAnyInfo.getterName())
+                            || name.equals(anyGetterPropertyName(recordAnyInfo.getterName())))) {
+                    ignored = true;
+                }
 
                 // Apply naming strategy for default expression
                 String jsonName = namingStrategy.transform(name);
@@ -121,8 +129,10 @@ public class JqMapperProcessor extends AbstractProcessor {
                 JqConverter jqConverter = rc.getAnnotation(JqConverter.class);
                 String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
 
+                String rcAccess = resolveJacksonAccess(rc, recordType);
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
-                        isRecordType(rc.asType())));
+                        isRecordType(rc.asType()),
+                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess)));
             }
         }
 
@@ -144,7 +154,7 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         String source = MappingCodeGenerator.generate(
                 packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
-                resolveAnyInfo(recordType));
+                recordAnyInfo);
 
         // Write the generated source file
         try {
@@ -168,6 +178,9 @@ public class JqMapperProcessor extends AbstractProcessor {
         // Resolve class-level @JqInclude and @JqNaming
         String classInclusion = resolveClassInclusion(classType);
         JqNaming.Strategy namingStrategy = resolveNamingStrategy(classType);
+
+        // Any-setter/getter first: any-getter-backed properties are suppressed (issue #88.1)
+        AnyInfo pojoAnyInfo = resolveAnyInfo(classType);
 
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();
@@ -239,9 +252,16 @@ public class JqMapperProcessor extends AbstractProcessor {
             JqConverter jqConverter = field.getAnnotation(JqConverter.class);
             String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
 
+            if (!ignored && pojoAnyInfo.hasGetter()
+                    && ((getterName != null && getterName.equals(pojoAnyInfo.getterName()))
+                        || name.equals(anyGetterPropertyName(pojoAnyInfo.getterName())))) {
+                ignored = true;
+            }
+            String fieldAccess = resolveJacksonAccess(field, classType);
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
-                    isRecordType(field.asType())));
+                    isRecordType(field.asType()),
+                    "WRITE_ONLY".equals(fieldAccess), "READ_ONLY".equals(fieldAccess)));
         }
 
         // Generate the mapping class
@@ -259,7 +279,7 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         String source = MappingCodeGenerator.generateForClass(
                 packageName, classSourceName, classQualifiedName, mappingClassName, properties,
-                resolveAnyInfo(classType));
+                pojoAnyInfo);
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -301,6 +321,40 @@ public class JqMapperProcessor extends AbstractProcessor {
         return classInclude != null ? classInclude.value().name() : "ALWAYS";
     }
 
+    /**
+     * Read Jackson's {@code @JsonProperty(access)} without a Jackson dependency
+     * (stringly-typed annotation mirrors). For record components, Jackson annotations
+     * land on the field — fall back to the same-named field's mirrors.
+     *
+     * @return the access enum constant name ({@code WRITE_ONLY}/{@code READ_ONLY}/...), or null
+     */
+    private String resolveJacksonAccess(Element element, TypeElement enclosing) {
+        String access = jacksonAccessFromMirrors(element.getAnnotationMirrors());
+        if (access != null || !(element instanceof RecordComponentElement)) return access;
+        for (Element e : enclosing.getEnclosedElements()) {
+            if (e.getKind() == ElementKind.FIELD && e.getSimpleName().contentEquals(element.getSimpleName())) {
+                access = jacksonAccessFromMirrors(e.getAnnotationMirrors());
+                if (access != null) return access;
+            }
+        }
+        return null;
+    }
+
+    /** Extract the {@code access} value from a {@code @JsonProperty} mirror, if present. */
+    private static String jacksonAccessFromMirrors(
+            java.util.List<? extends javax.lang.model.element.AnnotationMirror> mirrors) {
+        for (javax.lang.model.element.AnnotationMirror m : mirrors) {
+            if (m.getAnnotationType().toString().equals("com.fasterxml.jackson.annotation.JsonProperty")) {
+                for (var entry : m.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("access")) {
+                        return entry.getValue().getValue().toString();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     /** Resolve class-level @JqNaming, defaulting to IDENTITY. */
     private JqNaming.Strategy resolveNamingStrategy(TypeElement type) {
         JqNaming naming = type.getAnnotation(JqNaming.class);
@@ -309,12 +363,14 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
-                         String inclusion, String converterClass, boolean nestedRecord) {}
+                         String inclusion, String converterClass, boolean nestedRecord,
+                         boolean skipSerialize, boolean skipDeserialize) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
-                        String converterClass, boolean nestedRecord) {}
+                        String converterClass, boolean nestedRecord,
+                        boolean skipSerialize, boolean skipDeserialize) {}
 
     /**
      * Any-setter/any-getter methods discovered on a mapped type (issue #87).
@@ -326,6 +382,21 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         boolean hasSetter() { return setterName != null; }
         boolean hasGetter() { return getterName != null; }
+    }
+
+    /**
+     * Implied property name of an any-getter method: strip get/is prefix, decapitalize.
+     * Null when the name carries no prefix (caller falls back to exact-name match).
+     */
+    static String anyGetterPropertyName(String methodName) {
+        String stripped = null;
+        if (methodName.startsWith("get") && methodName.length() > 3) {
+            stripped = methodName.substring(3);
+        } else if (methodName.startsWith("is") && methodName.length() > 2) {
+            stripped = methodName.substring(2);
+        }
+        if (stripped == null || stripped.isEmpty()) return null;
+        return Character.toLowerCase(stripped.charAt(0)) + stripped.substring(1);
     }
 
     /**

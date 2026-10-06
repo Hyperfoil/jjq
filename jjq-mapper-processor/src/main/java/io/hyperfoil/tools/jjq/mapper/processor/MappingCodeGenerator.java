@@ -135,7 +135,7 @@ final class MappingCodeGenerator {
         // into locals with path tracking. Scalar extractions cannot fail and stay inline.
         for (int i = 0; i < components.size(); i++) {
             var comp = components.get(i);
-            if (comp.ignored() || !isFallibleExtraction(comp)) continue;
+            if (comp.ignored() || comp.skipDeserialize() || !isFallibleExtraction(comp)) continue;
             sb.append("        ").append(comp.typeName()).append(" _c").append(i).append(";\n");
             sb.append("        try {\n");
             sb.append("            _c").append(i).append(" = ");
@@ -156,7 +156,7 @@ final class MappingCodeGenerator {
         for (int i = 0; i < components.size(); i++) {
             var comp = components.get(i);
             sb.append("            ");
-            if (comp.ignored()) {
+            if (comp.ignored() || comp.skipDeserialize()) {
                 sb.append(defaultLiteral(comp.typeName()));
             } else if (isFallibleExtraction(comp)) {
                 sb.append("_c").append(i);
@@ -318,7 +318,7 @@ final class MappingCodeGenerator {
             // Fast path: no inclusion filtering, keys unique — use putUnchecked
             sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 sb.append("            .putUnchecked(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(")\n");
@@ -328,7 +328,7 @@ final class MappingCodeGenerator {
             // Fast path with any-getter extras appended afterwards (issue #87)
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(")\n");
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 sb.append("            .putUnchecked(\"").append(comp.jsonName()).append("\", ");
                 generateSerializationValue(sb, comp);
                 sb.append(")\n");
@@ -340,7 +340,7 @@ final class MappingCodeGenerator {
             // Inclusion filtering: conditional puts, keys still unique — use putUnchecked
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(");\n");
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        _b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
@@ -487,7 +487,7 @@ final class MappingCodeGenerator {
             // No inclusion filtering — all fields always present, known separator positions
             boolean first = true;
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 if (!first) sb.append("        _sb.append(',');\n");
                 appendJsonField(sb, comp);
                 first = false;
@@ -496,7 +496,7 @@ final class MappingCodeGenerator {
             // Inclusion filtering — need a separator flag
             sb.append("        boolean _sep = false;\n");
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
@@ -627,7 +627,7 @@ final class MappingCodeGenerator {
         if (!hasInclusion) {
             boolean first = true;
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 if (!first) sb.append("        _out.writeByte(',');\n");
                 appendJsonBytesField(sb, comp);
                 first = false;
@@ -635,7 +635,7 @@ final class MappingCodeGenerator {
         } else {
             sb.append("        boolean _sep = false;\n");
             for (var comp : components) {
-                if (comp.ignored()) continue;
+                if (comp.ignored() || comp.skipSerialize()) continue;
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
@@ -874,7 +874,7 @@ final class MappingCodeGenerator {
         sb.append("        ").append(classSimpleName).append(" instance = new ").append(classSimpleName).append("();\n");
 
         for (var prop : properties) {
-            if (prop.ignored()) continue;
+            if (prop.ignored() || prop.skipDeserialize()) continue;
             String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
             String writeExpr = buildExtraction(prop.typeName(), apply);
 
@@ -927,7 +927,7 @@ final class MappingCodeGenerator {
             // Fast path: no inclusion filtering
             sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 sb.append("            .putUnchecked(\"").append(prop.jsonName()).append("\", ");
@@ -939,7 +939,7 @@ final class MappingCodeGenerator {
             // Fast path with any-getter extras appended afterwards (issue #87)
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(")\n");
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 sb.append("            .putUnchecked(\"").append(prop.jsonName()).append("\", ");
@@ -953,7 +953,7 @@ final class MappingCodeGenerator {
             // Inclusion filtering: keys unique — use putUnchecked
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(");\n");
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {
@@ -1012,7 +1012,7 @@ final class MappingCodeGenerator {
         if (!hasInclusion) {
             boolean first = true;
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if (!first) sb.append("        _sb.append(',');\n");
@@ -1023,7 +1023,7 @@ final class MappingCodeGenerator {
         } else {
             sb.append("        boolean _sep = false;\n");
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {
@@ -1064,7 +1064,7 @@ final class MappingCodeGenerator {
         if (!hasInclusion) {
             boolean first = true;
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if (!first) sb.append("        _out.writeByte(',');\n");
@@ -1076,7 +1076,7 @@ final class MappingCodeGenerator {
         } else {
             sb.append("        boolean _sep = false;\n");
             for (var prop : properties) {
-                if (prop.ignored()) continue;
+                if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {

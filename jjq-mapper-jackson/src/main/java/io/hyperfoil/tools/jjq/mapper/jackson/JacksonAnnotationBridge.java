@@ -2,10 +2,12 @@ package io.hyperfoil.tools.jjq.mapper.jackson;
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonValue;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
@@ -100,6 +102,24 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
     }
 
     @Override
+    public boolean skipOnSerialize(AnnotatedElement element) {
+        return resolveAccess(element) == JsonProperty.Access.WRITE_ONLY;
+    }
+
+    @Override
+    public boolean skipOnDeserialize(AnnotatedElement element) {
+        return resolveAccess(element) == JsonProperty.Access.READ_ONLY;
+    }
+
+    /** Read Jackson's @JsonProperty(access) for a field (RECORD_COMPONENT resolves to its field). */
+    private static JsonProperty.Access resolveAccess(AnnotatedElement element) {
+        AnnotatedElement effective = resolveToField(element);
+        JsonProperty prop = effective.getAnnotation(JsonProperty.class);
+        if (prop == null) return JsonProperty.Access.AUTO;
+        return prop.access();
+    }
+
+    @Override
     public java.lang.reflect.Method resolveAnySetter(Class<?> type) {
         for (java.lang.reflect.Method m : type.getMethods()) {
             if (m.isAnnotationPresent(JsonAnySetter.class)
@@ -116,6 +136,39 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
         for (java.lang.reflect.Method m : type.getMethods()) {
             if (m.isAnnotationPresent(JsonAnyGetter.class) && m.getParameterCount() == 0) {
                 return m;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public java.lang.reflect.Method resolveJsonValueAccessor(Class<?> type) {
+        for (java.lang.reflect.Method m : type.getMethods()) {
+            JsonValue ann = m.getAnnotation(JsonValue.class);
+            if (ann != null && ann.value() && m.getParameterCount() == 0
+                    && !java.lang.reflect.Modifier.isStatic(m.getModifiers())) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public java.lang.reflect.Executable resolveJsonCreator(Class<?> type) {
+        // Delegating mode only (exactly one argument); property-based creators are out of scope.
+        for (java.lang.reflect.Method m : type.getMethods()) {
+            JsonCreator ann = m.getAnnotation(JsonCreator.class);
+            if (ann != null && ann.mode() != JsonCreator.Mode.PROPERTIES
+                    && java.lang.reflect.Modifier.isStatic(m.getModifiers())
+                    && m.getParameterCount() == 1) {
+                return m;
+            }
+        }
+        for (java.lang.reflect.Constructor<?> c : type.getDeclaredConstructors()) {
+            JsonCreator ann = c.getAnnotation(JsonCreator.class);
+            if (ann != null && ann.mode() != JsonCreator.Mode.PROPERTIES
+                    && c.getParameterCount() == 1) {
+                return c;
             }
         }
         return null;

@@ -9,6 +9,7 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -69,9 +70,33 @@ public final class JqMapper {
 
     private final ConcurrentHashMap<Class<?>, Mapping<?>> cache = new ConcurrentHashMap<>();
     private final List<AnnotationBridge> bridges;
+    // Resolved @JsonValue/@JsonCreator handlers per enum class (empty = none present).
+    private final ConcurrentHashMap<Class<?>, Optional<TypeConverter.EnumHandlers>> enumHandlers =
+            new ConcurrentHashMap<>();
 
     private JqMapper(List<AnnotationBridge> bridges) {
         this.bridges = bridges;
+    }
+
+    /**
+     * The registered annotation bridges (jjq-native annotations are always
+     * consulted first; bridges apply in registration order).
+     *
+     * @return the bridges for this mapper
+     */
+    List<AnnotationBridge> bridges() {
+        return bridges;
+    }
+
+    /**
+     * Cached {@code @JsonValue}/{@code @JsonCreator} handlers for an enum class.
+     * Empty when the class declares neither.
+     *
+     * @param type the enum class
+     * @return the resolved handlers, or empty
+     */
+    Optional<TypeConverter.EnumHandlers> enumHandlers(Class<?> type) {
+        return enumHandlers.computeIfAbsent(type, t -> TypeConverter.resolveEnumHandlers(t, bridges));
     }
 
     /**
@@ -190,6 +215,14 @@ public final class JqMapper {
      * @throws JqMapperException if mapping fails (type not a record, conversion error, etc.)
      */
     public <T> T fromJqValue(JqValue value, Class<T> type) {
+        if (type.isEnum()) {
+            // Enums have no mapping (no no-arg constructor): convert directly so
+            // @JsonCreator creators and name-based binding work from any caller,
+            // including generated code (issue #88.4).
+            @SuppressWarnings("unchecked")
+            T result = (T) TypeConverter.convert(value, TypeConverter.Kind.ENUM, type, type, this);
+            return result;
+        }
         return getMapping(type).fromJqValue(value, this);
     }
 
@@ -283,6 +316,11 @@ public final class JqMapper {
     @SuppressWarnings("unchecked")
     public JqValue toJqValue(Object value) {
         if (value == null) return io.hyperfoil.tools.jjq.value.JqNull.NULL;
+        if (value.getClass().isEnum()) {
+            // Enums have no mapping: convert directly so @JsonValue accessors
+            // apply from any caller (issue #88.4).
+            return TypeConverter.toJqValue(value, this);
+        }
         Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
         return mapping.toJqValue(value, this);
     }
