@@ -44,6 +44,11 @@
             <version>3.2.2</version>
         </dependency>
         <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
+        </dependency>
+        <dependency>
             <groupId>io.hyperfoil.tools</groupId>
             <artifactId>jjq-mapper-processor</artifactId>
             <scope>provided</scope>

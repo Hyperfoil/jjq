@@ -1101,6 +1101,14 @@ final class YamlParser {
             // splitKeyValue scans right after).
             int mle = lineEnd(pos);
             if (isMarkerAt(contentStart(d, pos, mle), mle)) break;
+            // Byte-range fast path for plain keys (jjq#96, no key substring).
+            int cs2 = contentStart(d, pos, mle);
+            byte c0 = d[cs2];
+            if (c0 != '?' && c0 != '!' && c0 != '&' && c0 != '*' && c0 != '\''
+                    && c0 != '"' && c0 != '{' && c0 != '[' && c0 != ':'
+                    && parseBlockMapEntryFast(builder, seen, cs2, mle, indent)) {
+                continue;
+            }
             String rawRest = readLine();
             String rawLine = stripLine(rawRest);
             if (rawLine.isEmpty()) continue;
@@ -1283,6 +1291,153 @@ final class YamlParser {
             }
         }
         return parseInlineSeq(rest, indent, dashCol, commented);
+    }
+
+    /**
+     * Offset of a ` #`-style comment opener in [s, e), or e. Byte mirror of
+     * {@link #stripComment(String)} (quote- and escape-aware, no allocation).
+     */
+    private static int commentStart(byte[] d, int s, int e) {
+        boolean sq = false, dq = false, esc = false;
+        for (int i = s; i < e; i++) {
+            byte c = d[i];
+            if (esc) esc = false;
+            else if (c == '\\' && dq) esc = true;
+            else if (c == '\'' && !dq) sq = !sq;
+            else if (c == '"' && !sq) dq = !dq;
+            else if (c == '#' && !sq && !dq && i > s
+                    && (d[i - 1] == ' ' || d[i - 1] == '\t')) {
+                return i;
+            }
+        }
+        return e;
+    }
+
+    /** True when a trailing odd-backslash + tab gap needs the String path (DE56). */
+    private static boolean hasTrailingGap(byte[] d, int s, int e) {
+        int ge = e;
+        while (ge > s && (d[ge - 1] == ' ' || d[ge - 1] == '\t')) ge--;
+        int bs = 0;
+        while (bs < ge - s && d[ge - 1 - bs] == '\\') bs++;
+        if (bs % 2 == 0) return false;
+        for (int k = ge; k < e; k++) {
+            if (d[k] == '\t') return true;
+        }
+        return false;
+    }
+
+    /**
+     * Fast path for plain `key: value` map lines on byte ranges (jjq#96): the
+     * key interns from the source range (no key substring), the value takes
+     * one substring, and no line String materializes. Returns false (caller
+     * runs the String path) for quoted/tagged/anchor/flow/explicit/colon
+     * lines, gap-tailed values, and missing separators — all with identical
+     * errors. Fully consumes the line on success.
+     */
+    private boolean parseBlockMapEntryFast(JqObject.Builder builder, Set<String> seen,
+            int cs, int le, int indent) {
+        int ce = commentStart(d, cs, le);
+        int i = findMappingColon(cs, ce);
+        if (i < 0) {
+            // Same error as splitKeyValue (which reports line-1 post-readLine;
+            // nothing is consumed yet here, so plain `line`).
+            throw new YamlParseException("expected ':' in mapping entry", line);
+        }
+        int ks = cs, ke = i;
+        while (ke > ks && (d[ke - 1] == ' ' || d[ke - 1] == '\t')) ke--;
+        if (ke <= ks) return false;
+        int vs = i + 1, ve = ce;
+        while (vs < ve && (d[vs] == ' ' || d[vs] == '\t')) vs++;
+        while (ve > vs && (d[ve - 1] == ' ' || d[ve - 1] == '\t')) ve--;
+        if (hasTrailingGap(d, vs, ve)) return false;
+        String key = JqValues.internFieldName(d, ks, ke);
+        boolean commented = ce < le;
+        // Consume the entry line BEFORE parsing the value (nested parsing
+        // reports absolute lines, mirroring readLine).
+        pos = le;
+        if (pos < end) {
+            if (d[pos] == '\r' && pos + 1 < end && d[pos + 1] == '\n') pos++;
+            pos++;
+            line++;
+        }
+        if ("<<".equals(key)) {
+            applyMerge(builder, new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8),
+                    indent);
+        } else {
+            if (seen != null && !seen.add(key)) {
+                throw new JqYamlException(key, line - 1);
+            }
+            JqValue deferred = tryDeferPlainString(vs, ve, indent);
+            builder.put(key, deferred != null ? deferred
+                    : parseMapValue(new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8),
+                            indent, commented));
+        }
+        return true;
+    }
+
+    /**
+     * A plain single-line value that needs no processing decodes lazily from
+     * the source range (jjq#96): no value substring, no conversion scans.
+     * Deferral is conservative — anything ambiguous falls through (null return)
+     * to the materializing path with identical results:
+     * <ul>
+     *   <li>first byte must be an ASCII letter outside bool initials
+     *       ({@code t,f,y,n,o} case-insensitive go the converting route),
+     *       {@code _}, {@code $}, or non-ASCII (never a keyword/number);</li>
+     *   <li>a top-level {@code : } still rejects (ZCZ6 parity);</li>
+     *   <li>single-quoted doubling and backslash escapes never reach here
+     *       (only plain values qualify — the deferred path cannot unescape
+     *       YAML doubling).</li>
+     * </ul>
+     */
+    private JqValue tryDeferPlainString(int vs, int ve, int indent) {
+        if (vs >= ve) return null;
+        byte c0 = d[vs];
+        if (c0 >= 0x80 || c0 == '_' || c0 == '$') {
+            // Cannot be a keyword, number, or indicator: defer.
+        } else if ((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z')) {
+            switch (c0 | 0x20) {
+                case 't', 'f', 'y', 'n', 'o':
+                    return null;
+                default:
+                    break;
+            }
+        } else {
+            return null;
+        }
+        // A top-level separator inside still rejects (never silently kept).
+        boolean hasColon = false;
+        for (int k = vs; k < ve; k++) {
+            if (d[k] == ':') {
+                hasColon = true;
+                break;
+            }
+        }
+        if (hasColon && findMappingColon(vs, ve) >= 0) return null;
+        // A value that continues on following lines cannot defer (folding
+        // would join them): only single-line values qualify.
+        if (valueContinues(indent)) return null;
+        return JqString.deferredBytes(d, vs, ve, false);
+    }
+
+    /**
+     * True when a plain value at {@code indent} would fold following lines
+     * (same rules as the materializing path, read-only): a deeper plain line,
+     * paragraph or direct. Sequence lines never continue map values.
+     */
+    private boolean valueContinues(int indent) {
+        int saved = pos;
+        int savedLine = line;
+        try {
+            if (!skipBlankAndComments()) return false;
+            int li = peekIndent();
+            if (li <= indent) return false;
+            int le = lineEnd(pos);
+            return classifyLine(pos, le) == LINE_PLAIN;
+        } finally {
+            pos = saved;
+            line = savedLine;
+        }
     }
 
     /** Split a `key: value` line at the first top-level `: ` (flow-aware). */
