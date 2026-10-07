@@ -3306,8 +3306,20 @@ class JqValueTest {
     }
 
     @Test
+    void internedJsonKeyComputedLazily() {
+        // Parse-only must not precompute serialization forms; first serialize
+        // computes them, later serializes reuse them identically.
+        String key = "lazyk" + System.nanoTime();
+        JqValue doc = JqValues.parse("{\"" + key + "\":1}");
+        String first = doc.toJsonString();
+        String second = doc.toJsonString();
+        assertEquals(first, second);
+        assertTrue(first.contains("\"" + key + "\""));
+        assertEquals("\"" + key + "\":", JqValues.internedJsonKey(JqValues.internFieldName(key)));
+    }
+
+    @Test
     void deferredBytesPublic() {
-        // Public since #96: parsers other than JSON can defer value decoding.
         // Contract: caller retains `source` while the JqString is reachable.
         byte[] src = "xxhello worldyy".getBytes(StandardCharsets.UTF_8);
         JqString s = JqString.deferredBytes(src, 2, 13, false);

@@ -42,8 +42,54 @@ public final class JqValues {
      * Stored as a single reference in the intern table — atomic writes prevent
      * torn reads under concurrent parsing (see issue #50).
      */
-    private record InternSlot(String key, String jsonKey, byte[] jsonKeyBytes,
-                              byte[] keyBytes, int hash, int q1, int q2, int q3, int qlen) {}
+    /**
+     * All interned data for a single field name slot. Key identity fields are
+     * final (safe publication via the table's atomic reference stores, issue
+     * #50); the JSON serialization forms are computed lazily on first
+     * {@link #internedJsonKey} use so parse-only workloads never pay for them.
+     * Duplicate lazy computation under races is benign (identical content).
+     */
+    private static final class InternSlot {
+        final String key;
+        final byte[] keyBytes;
+        final int hash;
+        final int q1;
+        final int q2;
+        final int q3;
+        final int qlen;
+        volatile String jsonKey;
+        volatile byte[] jsonKeyBytes;
+
+        InternSlot(String key, byte[] keyBytes, int hash, int q1, int q2, int q3, int qlen) {
+            this.key = key;
+            this.keyBytes = keyBytes;
+            this.hash = hash;
+            this.q1 = q1;
+            this.q2 = q2;
+            this.q3 = q3;
+            this.qlen = qlen;
+        }
+    }
+
+    /** Lazily computed {@code ""key":"} form (see class note above). */
+    private static String jsonKeyOf(InternSlot slot) {
+        String j = slot.jsonKey;
+        if (j == null) {
+            j = buildJsonKey(slot.key);
+            slot.jsonKey = j;
+        }
+        return j;
+    }
+
+    /** Lazily computed UTF-8 bytes of {@link #jsonKeyOf}. */
+    private static byte[] jsonKeyBytesOf(InternSlot slot) {
+        byte[] b = slot.jsonKeyBytes;
+        if (b == null) {
+            b = jsonKeyOf(slot).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            slot.jsonKeyBytes = b;
+        }
+        return b;
+    }
 
     private static final InternSlot[] INTERN_SLOTS = new InternSlot[INTERN_TABLE_SIZE];
 
@@ -128,13 +174,11 @@ public final class JqValues {
 
     private static InternSlot createInternSlot(String name, int hash) {
         byte[] keyBytes = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        String jsonKey = buildJsonKey(name);
-        byte[] jsonKeyBytes = jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         int qlen = keyBytes.length;
         int q1 = qlen >= 4 ? SwarUtil.loadInt(keyBytes, 0) : SwarUtil.packPartialQuad(keyBytes, 0, qlen);
         int q2 = qlen >= 8 ? SwarUtil.loadInt(keyBytes, 4) : (qlen > 4 ? SwarUtil.packPartialQuad(keyBytes, 4, qlen - 4) : 0);
         int q3 = qlen >= 12 ? SwarUtil.loadInt(keyBytes, 8) : (qlen > 8 ? SwarUtil.packPartialQuad(keyBytes, 8, qlen - 8) : 0);
-        return new InternSlot(name, jsonKey, jsonKeyBytes, keyBytes, hash, q1, q2, q3, qlen);
+        return new InternSlot(name, keyBytes, hash, q1, q2, q3, qlen);
     }
 
     /**
@@ -152,7 +196,7 @@ public final class JqValues {
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
             InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
-            if (cached != null && cached.key == key) return cached.jsonKey;
+            if (cached != null && cached.key == key) return jsonKeyOf(cached);
         }
         // L2 lookup
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
@@ -161,7 +205,7 @@ public final class JqValues {
             if (slot == null) break;
             if (slot.key == key) {
                 l1[mix(hash) & L1_MASK] = slot; // promote to L1
-                return slot.jsonKey;
+                return jsonKeyOf(slot);
             }
         }
         return null;
@@ -177,7 +221,7 @@ public final class JqValues {
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
             InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
-            if (cached != null && cached.key == key) return cached.jsonKeyBytes;
+            if (cached != null && cached.key == key) return jsonKeyBytesOf(cached);
         }
         // L2 lookup
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
@@ -186,7 +230,7 @@ public final class JqValues {
             if (slot == null) break;
             if (slot.key == key) {
                 l1[mix(hash) & L1_MASK] = slot; // promote to L1
-                return slot.jsonKeyBytes;
+                return jsonKeyBytesOf(slot);
             }
         }
         return null;
@@ -2125,9 +2169,7 @@ public final class JqValues {
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
         result.hashCode(); // force JDK to cache hashCode
         int storeSlot = firstEmpty >= 0 ? firstEmpty : (mix(hash) & INTERN_MASK);
-        String jsonKey = buildJsonKey(result);
-        InternSlot newSlot = new InternSlot(result, jsonKey,
-                jsonKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        InternSlot newSlot = new InternSlot(result,
                 java.util.Arrays.copyOfRange(data, start, end),
                 hash, q1, q2, q3, keyLen);
         INTERN_SLOTS[storeSlot] = newSlot;
