@@ -421,6 +421,16 @@ final class YamlParser {
             if (c0 == '?' && (p + 1 >= e || d[p + 1] == ' ' || d[p + 1] == '\t')) return LINE_EXPLICIT;
             if (isMarkerAt(p, e)) return LINE_MARKER;
         }
+        // Fast path: no colon means no mapping (single vectorizable scan);
+        // the quote-aware scan runs only when a colon exists.
+        boolean hasColon = false;
+        for (int i = s; i < e; i++) {
+            if (d[i] == ':') {
+                hasColon = true;
+                break;
+            }
+        }
+        if (!hasColon) return LINE_PLAIN;
         return findMappingColon(s, e) >= 0 ? LINE_MAP : LINE_PLAIN;
     }
 
@@ -496,6 +506,16 @@ final class YamlParser {
      * A `#` without preceding space/tab is content (e.g. `a#b`).
      */
     private static String stripComment(String line) {
+        // Fast path: quoteless lines skip quote tracking (intrinsic scans).
+        if (line.indexOf('\'') < 0 && line.indexOf('"') < 0) {
+            int idx = line.indexOf('#');
+            while (idx > 0) {
+                char p = line.charAt(idx - 1);
+                if (p == ' ' || p == '\t') return line.substring(0, idx).stripTrailing();
+                idx = line.indexOf('#', idx + 1);
+            }
+            return line;
+        }
         boolean sq = false, dq = false, esc = false;
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
@@ -903,7 +923,8 @@ final class YamlParser {
             if (!indentClean(ind)) {
                 throw new YamlParseException("tabs are not allowed for indentation", line);
             }
-            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) break;
+            int sle = lineEnd(pos);
+            if (isMarkerAt(contentStart(d, pos, sle), sle)) break;
             if (ind > indent || !isSeqEntry()) {
                 // In value position a non-entry line ends the sequence for the
                 // outer block (suite 57H4/AZ63/RLU9/S9E8 parity); at statement
@@ -1069,7 +1090,10 @@ final class YamlParser {
                 throw new YamlParseException("expected mapping key, found sequence entry", line);
             }
             pos += ind;
-            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) break;
+            // Marker check only (a full classify would rescan the line that
+            // splitKeyValue scans right after).
+            int mle = lineEnd(pos);
+            if (isMarkerAt(contentStart(d, pos, mle), mle)) break;
             String rawRest = readLine();
             String rawLine = stripLine(rawRest);
             if (rawLine.isEmpty()) continue;
@@ -1119,7 +1143,8 @@ final class YamlParser {
                 throw new YamlParseException("unexpected indentation in mapping", line);
             }
             pos += li;
-            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) {
+            int mle2 = lineEnd(pos);
+            if (isMarkerAt(contentStart(d, pos, mle2), mle2)) {
                 pos = saved;
                 line = savedLine;
                 break;
@@ -1188,6 +1213,13 @@ final class YamlParser {
      * Quoted keys never reach here (handled above).
      */
     private String resolveKeyPrefixes(String key) {
+        // Fast path: ordinary keys intern directly (single comparison).
+        if (!key.isEmpty()) {
+            char c0 = key.charAt(0);
+            if (c0 != '!' && c0 != '&' && c0 != '*') {
+                return internKey(key);
+            }
+        }
         String t = key;
         String anchorName = null;
         for (;;) {
@@ -1375,6 +1407,8 @@ final class YamlParser {
 
     /** True when the line carries a trailing ` #comment` (outside quotes). */
     private static boolean hasTrailingComment(String line) {
+        // Fast path: most lines hold no '#' at all (single intrinsic scan).
+        if (line.indexOf('#') < 0) return false;
         boolean sq = false, dq = false, esc = false;
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
@@ -2711,8 +2745,9 @@ final class YamlParser {
         }
         // A top-level `: ` inside a single-line plain value is a nested mapping
         // (suite ZCZ6: `a: b: c: d`); quoted/flow values never reach here.
-        // Tagged values are exempt (the tag disambiguates).
-        if (tag == null && findMappingColon(value) >= 0) {
+        // Tagged values are exempt (the tag disambiguates). The indexOf gate
+        // keeps colon-less values (the common case) on a single intrinsic scan.
+        if (tag == null && value.indexOf(':') >= 0 && findMappingColon(value) >= 0) {
             throw new YamlParseException("nested mapping in single-line value", line);
         }
         // Untagged or unknown-tag auto-detect
