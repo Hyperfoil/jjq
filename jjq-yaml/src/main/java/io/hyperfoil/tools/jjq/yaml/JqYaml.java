@@ -65,7 +65,8 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static JqValue parse(String yaml, YamlOptions options) {
-        return parse(new StringReader(yaml), options);
+        byte[] bytes = yaml.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return YamlParser.parse(bytes, 0, bytes.length, options);
     }
 
     /**
@@ -87,10 +88,12 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static JqValue parse(InputStream in, YamlOptions options) {
-        Yaml snakeYaml = new Yaml();
-        Node root = snakeYaml.compose(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8));
-        if (root == null) return JqNull.NULL;
-        return convertNode(root, options);
+        try {
+            byte[] bytes = in.readAllBytes();
+            return YamlParser.parse(bytes, 0, bytes.length, options);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
     /**
@@ -112,10 +115,15 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static JqValue parse(Reader reader, YamlOptions options) {
-        Yaml snakeYaml = new Yaml();
-        Node root = snakeYaml.compose(reader);
-        if (root == null) return JqNull.NULL;
-        return convertNode(root, options);
+        try {
+            StringBuilder sb = new StringBuilder();
+            char[] buf = new char[8192];
+            int n;
+            while ((n = reader.read(buf)) != -1) sb.append(buf, 0, n);
+            return parse(sb.toString(), options);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
     /**
@@ -138,7 +146,8 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static List<JqValue> parseAll(String yaml, YamlOptions options) {
-        return parseAll(new StringReader(yaml), options);
+        byte[] bytes = yaml.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return YamlParser.parseAll(bytes, 0, bytes.length, options);
     }
 
     /**
@@ -160,7 +169,12 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static List<JqValue> parseAll(InputStream in, YamlOptions options) {
-        return parseAll(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8), options);
+        try {
+            byte[] bytes = in.readAllBytes();
+            return YamlParser.parseAll(bytes, 0, bytes.length, options);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
     private static List<JqValue> parseAll(Reader reader) {
@@ -168,12 +182,15 @@ public final class JqYaml {
     }
 
     private static List<JqValue> parseAll(Reader reader, YamlOptions options) {
-        Yaml snakeYaml = new Yaml();
-        var results = new ArrayList<JqValue>();
-        for (Node node : snakeYaml.composeAll(reader)) {
-            results.add(convertNode(node, options));
+        try {
+            StringBuilder sb = new StringBuilder();
+            char[] buf = new char[8192];
+            int n;
+            while ((n = reader.read(buf)) != -1) sb.append(buf, 0, n);
+            return parseAll(sb.toString(), options);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
         }
-        return results;
     }
 
     /**

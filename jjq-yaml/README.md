@@ -53,7 +53,10 @@ List<JqValue> names = JqProgram.compile(".[].metadata.name").applyAll((JqValue) 
 
 ## Features
 
-- **YAML anchors and aliases** — resolved transparently by SnakeYAML
+- **Native byte-based parser** — YAML text straight to `JqValue` with no intermediate
+  node tree (field-name interning, direct number parsing); SnakeYAML is used
+  only for YAML *emission* until it is dropped entirely
+- **YAML anchors and aliases** — resolved transparently (including `<<` merge keys)
 - **Merge keys (`<<`)** — flattened into the parent mapping
 - **Flow and block styles** — both supported (`{a: 1}` and `a: 1`)
 - **Round-trip to JSON** — parse YAML, then `toJsonString()` for JSON output
@@ -145,4 +148,7 @@ String json = config.toJsonString();
 
 ## Dependencies
 
-Uses [SnakeYAML](https://bitbucket.org/snakeyaml/snakeyaml/) for YAML parsing (see `${snakeyaml.version}` in the root `pom.xml`). SnakeYAML is already bundled by Quarkus and Spring Boot — adding this module typically introduces no new transitive dependencies.
+Parsing is dependency-free (hand-rolled `byte[]` parser in this module).
+[SnakeYAML](https://bitbucket.org/snakeyaml/snakeyaml/) (see `${snakeyaml.version}`
+in the root `pom.xml`) is retained for YAML *emission* (`toYaml`) only, until
+the native emitter lands and the dependency is dropped entirely.
