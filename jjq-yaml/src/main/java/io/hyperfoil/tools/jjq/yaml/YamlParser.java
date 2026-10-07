@@ -590,9 +590,6 @@ final class YamlParser {
             }
             int le = lineEnd(pos);
             int kind = classifyLine(pos, le);
-            if (kind == LINE_EXPLICIT) {
-                throw new YamlParseException("explicit '? ' mapping keys are not supported", line);
-            }
             if (kind == LINE_SEQ) {
                 // A `- ` the spaces-only entry check rejected is tab-indented.
                 throw new YamlParseException("tabs are not allowed for indentation", line);
@@ -623,7 +620,7 @@ final class YamlParser {
                 line = lineSaved;
                 return JqNull.NULL;
             }
-            if (kind == LINE_MAP) {
+            if (kind == LINE_MAP || kind == LINE_EXPLICIT) {
                 if (!indClean) {
                     throw new YamlParseException("tabs are not allowed for indentation", line);
                 }
@@ -1016,8 +1013,9 @@ final class YamlParser {
         if (inlineMapStart(rest)) {
             return parseInlineMap(rest, dashCol, indent, commented);
         }
-        // `- - a` nested sequence: the inner dash sits at our content column
-        if (rest.equals("-") || rest.startsWith("- ")) {
+        // `- - a` nested sequence: the inner dash sits at our content column.
+        // Tab separation counts too (suite A2M4: `-` TAB `c` nests).
+        if (rest.equals("-") || rest.startsWith("- ") || rest.startsWith("-\t")) {
             return parseInlineSeq(rest.substring(1).stripLeading(), indent, dashCol, commented);
         }
         return parseValueText(rest, indent, false, commented, foldSeqIndent);
@@ -1057,10 +1055,19 @@ final class YamlParser {
             while (p < end && d[p] == ' ') p++;
             pos = p + 1;
             if (pos < end && (d[pos] == ' ' || d[pos] == '\t')) {
-                while (pos < end && (d[pos] == ' ' || d[pos] == '\t')) pos++;
+                boolean tabSeparated = false;
+                while (pos < end && (d[pos] == ' ' || d[pos] == '\t')) {
+                    if (d[pos] == '\t') tabSeparated = true;
+                    pos++;
+                }
                 int col = pos - lineStart;
                 String rawNext = readLine();
                 String next = stripLine(rawNext);
+                if (tabSeparated && (next.equals("-") || next.startsWith("- ")
+                        || next.startsWith("-\t"))) {
+                    throw new YamlParseException("tabs cannot separate nested sequence entries",
+                            line - 1);
+                }
                 elems.add(parseSeqItemContent(next, indent, col, hasTrailingComment(rawNext), dashCol));
             } else {
                 advanceLinePastEol();
@@ -1097,8 +1104,12 @@ final class YamlParser {
             String rawRest = readLine();
             String rawLine = stripLine(rawRest);
             if (rawLine.isEmpty()) continue;
-            if (rawLine.equals("?") || rawLine.startsWith("? ")) {
-                throw new YamlParseException("explicit '? ' mapping keys are not supported", line);
+            if (rawLine.equals("?") || rawLine.startsWith("? ") || rawLine.startsWith("?\t")) {
+                parseExplicitEntry(builder, seen, rawLine, rawRest, indent);
+                continue;
+            }
+            if (rawLine.equals(":") || rawLine.startsWith(": ")) {
+                throw new YamlParseException("':' without '?' explicit key", line);
             }
             MapEntry entry = splitKeyValue(rawLine);
             String key = unquoteKey(entry.key());
@@ -1177,6 +1188,101 @@ final class YamlParser {
             return parseInlineValue(inline, keyCol, true, true);
         }
         return parseMapValue(inline, parentIndent, commented);
+    }
+
+    /**
+     * Parse an explicit `? key` entry (suite #97: 2XXW/35KP/5WE3/X8DW/S9E8 and
+     * siblings). The key fragment folds like a value and must resolve to a
+     * string (block scalars unfolded, tags/anchors honored); anything else is
+     * a complex key. A following `:` line at the same indent (blank and
+     * comment lines skipped) supplies the value, else null.
+     */
+    private void parseExplicitEntry(JqObject.Builder builder, Set<String> seen, String rawLine,
+            String rawRest, int indent) {
+        String keyFirst = rawLine.length() == 1 ? "" : rawLine.substring(1).strip();
+        // A `- ` entry cannot be an explicit key (suite Y79Y/007).
+        if (keyFirst.equals("-") || keyFirst.startsWith("- ") || keyFirst.startsWith("-\t")) {
+            throw new YamlParseException("complex mapping keys are not supported", line - 1);
+        }
+        JqValue keyNode = keyFirst.isEmpty() ? JqString.of("")
+                : parseValueText(keyFirst, indent, true, hasTrailingComment(rawRest),
+                        Integer.MAX_VALUE);
+        if (!keyNode.isString()) {
+            throw new YamlParseException("complex mapping keys are not supported", line - 1);
+        }
+        String key = keyNode.stringValue();
+        String vtext = null;
+        boolean hasValue = false;
+        boolean commentedValue = false;
+        boolean valueIsSeq = false;
+        int valueDashCol = 0;
+        int saved = pos;
+        int savedLine = line;
+        if (skipBlankAndComments() && peekIndent() == indent) {
+            int lineStart = pos;
+            int p = lineStart + indent;
+            if (p < end && d[p] == ':'
+                    && (p + 1 >= end || d[p + 1] == ' ' || d[p + 1] == '\t'
+                        || d[p + 1] == '\n' || d[p + 1] == '\r')) {
+                pos = p + 1;
+                while (pos < end && (d[pos] == ' ' || d[pos] == '\t')) pos++;
+                if (pos < end && d[pos] == '-' && (pos + 1 >= end || d[pos + 1] == ' '
+                        || d[pos + 1] == '\t' || d[pos + 1] == '\n' || d[pos + 1] == '\r')) {
+                    // An explicit value opening with `- ` is a block sequence
+                    // (probe: `? k` + `: - one` nests, while implicit
+                    // `key: - a` throws in SnakeYAML — deliberate asymmetry).
+                    valueDashCol = pos - lineStart;
+                    valueIsSeq = true;
+                }
+                String vraw = readLine();
+                vtext = stripLine(vraw);
+                commentedValue = hasTrailingComment(vraw);
+                hasValue = true;
+            } else {
+                pos = saved;
+                line = savedLine;
+            }
+        } else {
+            pos = saved;
+            line = savedLine;
+        }
+        if ("<<".equals(key)) {
+            if (hasValue) {
+                applyMerge(builder, vtext, indent);
+            }
+            return;
+        }
+        if (seen != null && !seen.add(key)) {
+            throw new JqYamlException(key, line - 1);
+        }
+        JqValue value;
+        if (!hasValue) {
+            value = JqNull.NULL;
+        } else if (valueIsSeq) {
+            value = parseExplicitSeqValue(vtext, indent, valueDashCol, commentedValue);
+        } else {
+            value = parseMapValue(vtext, indent, commentedValue);
+        }
+        builder.put(key, value);
+    }
+
+    /**
+     * An explicit `: - ...` value: first item inline, following `- ` lines at
+     * the dash column continue (suite 5WE3/A2M4 parity). A tab between the
+     * value dash and a nested dash is illegal separation (Y79Y/004 parity).
+     */
+    private JqValue parseExplicitSeqValue(String vtext, int indent, int dashCol, boolean commented) {
+        String rest;
+        if (vtext.length() == 1) {
+            rest = "";
+        } else {
+            char sep = vtext.charAt(1);
+            rest = vtext.substring(1).stripLeading();
+            if (sep == '\t' && (rest.equals("-") || rest.startsWith("- ") || rest.startsWith("-\t"))) {
+                throw new YamlParseException("tabs cannot separate nested sequence entries", line - 1);
+            }
+        }
+        return parseInlineSeq(rest, indent, dashCol, commented);
     }
 
     /** Split a `key: value` line at the first top-level `: ` (flow-aware). */

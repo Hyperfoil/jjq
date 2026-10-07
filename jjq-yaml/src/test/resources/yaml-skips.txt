@@ -3,26 +3,18 @@
 # for triage (house rule: build stays green, regressions caught when fixed).
 # Lines starting with # and blank lines are ignored.
 2JQS: no in.json oracle to conform to
-2XXW: explicit ? keys unsupported (documented limitation, #93)
-35KP: explicit ? keys unsupported (documented limitation, #93)
 4ABK: no in.json oracle to conform to
 4FJ6: no in.json oracle to conform to
-5WE3: explicit ? keys unsupported (documented limitation, #93)
 6BFJ: no in.json oracle to conform to
 6M2F: no in.json oracle to conform to
 6PBE: no in.json oracle to conform to
-7W2P: explicit ? keys unsupported (documented limitation, #93)
 9C9N: flow dedent leniency (SnakeYAML agrees; suite pedantry, #93)
 9MMW: no in.json oracle to conform to
-A2M4: explicit ? keys unsupported (documented limitation, #93)
 CFD4: no in.json oracle to conform to
 DFF7: no in.json oracle to conform to
 FH7J: no in.json oracle to conform to
 FRK4: no in.json oracle to conform to
-GH63: explicit ? keys unsupported (documented limitation, #93)
-JTV5: explicit ? keys unsupported (documented limitation, #93)
 KK5P: no in.json oracle to conform to
-L94M: explicit ? keys unsupported (documented limitation, #93)
 LX3P: no in.json oracle to conform to
 M2N8/00: no in.json oracle to conform to
 M2N8/01: no in.json oracle to conform to
@@ -31,10 +23,8 @@ NHX8: no in.json oracle to conform to
 NKF9: no in.json oracle to conform to
 PW8X: no in.json oracle to conform to
 Q9WF: no in.json oracle to conform to
-RR7F: explicit ? keys unsupported (documented limitation, #93)
 RZP5: no in.json oracle to conform to
 S3PD: no in.json oracle to conform to
-S9E8: explicit ? keys unsupported (documented limitation, #93)
 SBG9: no in.json oracle to conform to
 SM9W/01: no in.json oracle to conform to
 U9NS: YAML 1.1 sexagesimal int not coerced to string (1.2 core schema, #93)
@@ -42,6 +32,4 @@ UKK6/00: no in.json oracle to conform to
 UKK6/02: no in.json oracle to conform to
 V9D5: no in.json oracle to conform to
 X38W: no in.json oracle to conform to
-X8DW: explicit ? keys unsupported (documented limitation, #93)
 XW4D: no in.json oracle to conform to
-ZWK4: explicit ? keys unsupported (documented limitation, #93)
