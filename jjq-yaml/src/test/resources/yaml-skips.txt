@@ -12,6 +12,7 @@
 6M2F: no in.json oracle to conform to
 6PBE: no in.json oracle to conform to
 7W2P: explicit ? keys unsupported (documented limitation, #93)
+9C9N: flow dedent leniency (SnakeYAML agrees; suite pedantry, #93)
 9MMW: no in.json oracle to conform to
 A2M4: explicit ? keys unsupported (documented limitation, #93)
 CFD4: no in.json oracle to conform to
