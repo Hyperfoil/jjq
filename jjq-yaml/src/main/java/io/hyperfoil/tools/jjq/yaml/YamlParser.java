@@ -768,7 +768,7 @@ final class YamlParser {
             applyMerge(builder, first.value(), parentIndent);
         } else {
             if (seen != null) seen.add(key);
-            builder.put(key, parseMapValue(first.value(), parentIndent, firstCommented));
+            builder.put(key, parseInlineMapValue(first.value(), keyCol, parentIndent, firstCommented));
         }
         for (;;) {
             int saved = pos;
@@ -801,9 +801,22 @@ final class YamlParser {
             if (seen != null && !seen.add(k)) {
                 throw new JqYamlException(k, line - 1);
             }
-            builder.put(k, parseMapValue(entry.value(), parentIndent, hasTrailingComment(rawRest2)));
+            builder.put(k, parseInlineMapValue(entry.value(), keyCol, parentIndent,
+                    hasTrailingComment(rawRest2)));
         }
         return builder.build();
+    }
+
+    /**
+     * A value inside an inline (`- key: ...`) mapping. Block scalar headers use
+     * the key column as their indent base (explicit `|2` counts from the keys,
+     * suite 4WA9 parity); everything else uses the outer indent.
+     */
+    private JqValue parseInlineMapValue(String inline, int keyCol, int parentIndent, boolean commented) {
+        if (!inline.isEmpty() && isBlockScalarHeader(inline)) {
+            return parseInlineValue(inline, keyCol, true);
+        }
+        return parseMapValue(inline, parentIndent, commented);
     }
 
     /** Split a `key: value` line at the first top-level `: ` (flow-aware). */
@@ -821,15 +834,74 @@ final class YamlParser {
 
     private record MapEntry(String key, String value) {}
 
-    /** Strip quotes from a mapping key (single/double), else intern as-is. */
+    /** Strip quotes from a mapping key (single/double), else resolve prefixes. */
     private String unquoteKey(String key) {
-        if (key.length() >= 2) {
-            char q = key.charAt(0);
-            if ((q == '\'' || q == '"') && key.charAt(key.length() - 1) == q) {
-                return unquoteScalar(key.substring(1, key.length() - 1), q);
+        String t = key.strip();
+        if (t.length() >= 2) {
+            char q = t.charAt(0);
+            if ((q == '\'' || q == '"') && t.charAt(t.length() - 1) == q) {
+                return unquoteScalar(t.substring(1, t.length() - 1), q);
             }
         }
-        return internKey(key);
+        return resolveKeyPrefixes(t);
+    }
+
+    /**
+     * Strip leading tag (`!...`) and anchor (`&name`) prefixes from a mapping key.
+     * Anchors on keys register the final key string (suite 7BMT/ZH7C/E76Z parity);
+     * alias keys (`*name`) resolve to the anchored scalar (suite 26DV parity).
+     * Quoted keys never reach here (handled above).
+     */
+    private String resolveKeyPrefixes(String key) {
+        String t = key;
+        String anchorName = null;
+        for (;;) {
+            if (t.startsWith("!")) {
+                int sp = indexOfWs(t);
+                if (sp < 0) return internKey(t);
+                t = t.substring(sp).strip();
+            } else if (t.startsWith("&")) {
+                int sp = indexOfWs(t);
+                if (sp < 0) return internKey(t);
+                anchorName = t.substring(1, sp);
+                t = t.substring(sp).strip();
+            } else if (t.startsWith("*")) {
+                int sp = indexOfWs(t);
+                String alias = sp < 0 ? t.substring(1) : t.substring(1, sp);
+                JqValue v = anchors.get(alias);
+                if (v != null && v.isString()) {
+                    String rest = sp < 0 ? "" : t.substring(sp).strip();
+                    if (rest.isEmpty()) {
+                        return internKey(v.stringValue());
+                    }
+                }
+                return internKey(t);
+            } else {
+                break;
+            }
+        }
+        // Bare remainder, possibly quoted (`&a6 'key6'`): unquote if needed
+        String resolved = t;
+        if (t.length() >= 2) {
+            char q = t.charAt(0);
+            if ((q == '\'' || q == '"') && t.charAt(t.length() - 1) == q) {
+                resolved = unquoteScalar(t.substring(1, t.length() - 1), q);
+            }
+        }
+        String interned = internKey(resolved);
+        if (anchorName != null) {
+            anchors.put(anchorName, JqString.of(resolved));
+        }
+        return interned;
+    }
+
+    /** Index of first space/tab, or -1. */
+    private static int indexOfWs(String t) {
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c == ' ' || c == '\t') return i;
+        }
+        return -1;
     }
 
     /** Intern a mapping key through the shared table (reference equality downstream). */
@@ -1008,6 +1080,7 @@ final class YamlParser {
         String continued = quote == '"' ? stripContinuation(first) : null;
         StringBuilder sb = new StringBuilder(continued != null ? continued : first);
         boolean prevContinued = continued != null;
+        boolean prevBreak = false;
         for (;;) {
             if (pos >= end) {
                 throw new YamlParseException("unterminated quoted scalar", line);
@@ -1020,12 +1093,16 @@ final class YamlParser {
             continued = quote == '"' ? stripContinuation(content) : null;
             if (continued != null) {
                 sb.append(continued);
+                prevBreak = false;
             } else if (content.isEmpty()) {
                 sb.append('\n');
-            } else if (prevContinued) {
+                prevBreak = true;
+            } else if (prevContinued || prevBreak) {
                 sb.append(content);
+                prevBreak = false;
             } else {
                 sb.append(' ').append(content);
+                prevBreak = false;
             }
             prevContinued = continued != null;
             String joined = sb.toString();
@@ -1227,6 +1304,7 @@ final class YamlParser {
         }
         var content = new ArrayList<String>();
         var blanks = new HashSet<Integer>();
+        var keepLines = new HashSet<Integer>();
         int contentIndent = -1;
         // Content must exceed the enclosing indent (doc-root passes -1, so
         // column-0 content is accepted there); explicit digits pin it exactly
@@ -1264,16 +1342,55 @@ final class YamlParser {
             String rawLine = readLine();
             if (blank) {
                 blanks.add(content.size());
-                content.add("");
+                // Store raw; the remainder past the (possibly not yet known)
+                // content indent is significant (suite L24T/R4YG parity).
+                // Stripped in post-processing below.
+                content.add(rawLine);
             } else {
                 // rawLine holds leading spaces (pos was at line start):
                 // strip exactly contentIndent of them (extra indent is significant)
                 content.add(rawLine.length() > contentIndent
                         ? rawLine.substring(contentIndent) : "");
+                // In folded scalars, more-indented lines break folding and are
+                // kept with line breaks (suite 6VJK/7T8X/F6MC parity).
+                if (style == '>' && li > contentIndent) {
+                    keepLines.add(content.size() - 1);
+                }
             }
         }
         if (contentIndent < 0) {
+            // No content lines at all: indent from the first blank line's
+            // leading spaces (tabs stop the scan, suite Y79Y/001 parity),
+            // so whitespace-only lines keep their remainder; JEF9's
+            // spaces-only blanks strip to empty. Rendering below + chomping
+            // decide what survives (JEF9/K858 parity).
+            String firstRaw = content.isEmpty() ? "" : content.get(0);
+            int li = 0;
+            while (li < firstRaw.length() && firstRaw.charAt(li) == ' ') li++;
+            contentIndent = li;
+        }
+        if (content.isEmpty()) {
             return JqString.of("");
+        }
+        // Strip the content indent from the stored raw blank lines
+        for (int b : blanks) {
+            String raw = content.get(b);
+            content.set(b, raw.length() > contentIndent ? raw.substring(contentIndent) : "");
+        }
+        if (chomp != '+') {
+            // Trailing blanks with empty remainders are dropped (suite K858
+            // clip + `foo: |` + `  x` + `  ` probe parity); non-empty ones
+            // survive chomping (L24T/Y79Y parity).
+            while (!content.isEmpty()) {
+                int last = content.size() - 1;
+                if (!blanks.contains(last) || !content.get(last).isEmpty()) break;
+                content.remove(last);
+                blanks.remove(last);
+                keepLines.remove(last);
+            }
+            if (content.isEmpty()) {
+                return JqString.of("");
+            }
         }
         StringBuilder sb = new StringBuilder();
         if (style == '|') {
@@ -1281,16 +1398,85 @@ final class YamlParser {
                 sb.append(content.get(k)).append('\n');
             }
         } else {
-            // Folded: line breaks become spaces, blank lines become newlines
-            boolean prevBlank = true;
+            // Folded (suite 6VJK/7T8X/F6MC/MJS9/R4YG + probes): every line is
+            // emitted; the separator folds to a space only between two plain
+            // lines, otherwise a break. A middle blank run whose remainders are
+            // all empty and which touches no keep line on either side collapses
+            // to a single forced break (7T8X `line\nnext` parity); all other
+            // blank runs are preserved line by line (with remainders, R4YG).
+            // Build runs of content/blank lines first.
+            var runBlank = new ArrayList<Boolean>();
+            var runStart = new ArrayList<Integer>();
             for (int k = 0; k < content.size(); k++) {
-                if (blanks.contains(k)) {
-                    sb.append('\n');
-                    prevBlank = true;
+                boolean b = blanks.contains(k);
+                if (k == 0 || b != runBlank.get(runBlank.size() - 1)) {
+                    runBlank.add(b);
+                    runStart.add(k);
+                }
+            }
+            runStart.add(content.size());
+            int runs = runBlank.size();
+            boolean[] collapse = new boolean[runs];
+            int[] empties = new int[runs];
+            for (int r = 0; r < runs; r++) {
+                if (!runBlank.get(r)) continue;
+                int len = runStart.get(r + 1) - runStart.get(r);
+                if (r == 0 || r == runs - 1) {
+                    // Leading/trailing runs: every blank is an empty line.
+                    empties[r] = len;
+                    continue;
+                }
+                boolean allEmpty = true;
+                for (int k = runStart.get(r); k < runStart.get(r + 1); k++) {
+                    if (!content.get(k).isEmpty()) {
+                        allEmpty = false;
+                        break;
+                    }
+                }
+                if (!allEmpty) {
+                    // Non-empty remainders are always preserved (R4YG probe).
+                    empties[r] = len;
+                    continue;
+                }
+                // Empty-remainder middle runs (probes + suite): a lone blank
+                // with no keep neighbor collapses to just the break;
+                // multi-blank runs keep n-1 empties; keep-adjacency adds one.
+                int prevLine = runStart.get(r) - 1;
+                int nextLine = runStart.get(r + 1);
+                boolean keepAdj = keepLines.contains(prevLine) || keepLines.contains(nextLine);
+                if (len == 1 && !keepAdj) {
+                    collapse[r] = true;
                 } else {
-                    if (!prevBlank) sb.append(' ');
+                    empties[r] = len - 1 + (keepAdj ? 1 : 0);
+                }
+            }
+            boolean needSep = false;
+            boolean prevNormal = false;
+            for (int r = 0; r < runs; r++) {
+                if (collapse[r]) {
+                    sb.append('\n');
+                    needSep = false;
+                    prevNormal = false;
+                    continue;
+                }
+                if (runBlank.get(r)) {
+                    for (int j = 0; j < empties[r]; j++) {
+                        int k = runStart.get(r) + j;
+                        if (needSep) sb.append('\n');
+                        sb.append(content.get(k));
+                        needSep = true;
+                        prevNormal = false;
+                    }
+                    continue;
+                }
+                for (int k = runStart.get(r); k < runStart.get(r + 1); k++) {
+                    boolean keep = keepLines.contains(k);
+                    if (needSep) {
+                        sb.append(prevNormal && !keep ? ' ' : '\n');
+                    }
                     sb.append(content.get(k));
-                    prevBlank = false;
+                    needSep = true;
+                    prevNormal = !keep;
                 }
             }
             sb.append('\n');
@@ -1338,6 +1524,12 @@ final class YamlParser {
             if (ch != ',') {
                 throw new YamlParseException("expected ',' or '}' in flow mapping", line);
             }
+            // Trailing comma before close is legal (suite 5KJE/UDR7 parity)
+            c.skipWs();
+            if (c.peek() == '}') {
+                c.next();
+                break;
+            }
         }
         return builder.build();
     }
@@ -1368,6 +1560,12 @@ final class YamlParser {
             if (ch == ']') break;
             if (ch != ',') {
                 throw new YamlParseException("expected ',' or ']' in flow sequence", line);
+            }
+            // Trailing comma before close is legal (suite 5KJE/UDR7 parity)
+            c.skipWs();
+            if (c.peek() == ']') {
+                c.next();
+                break;
             }
         }
         return JqArray.of(elems.toArray(new JqValue[0]));
@@ -1408,7 +1606,7 @@ final class YamlParser {
                 char q = next();
                 return internKey(quoted(q));
             }
-            return internKey(plain());
+            return resolveKeyPrefixes(plain());
         }
 
         String quoted(char q) {
@@ -1574,6 +1772,12 @@ final class YamlParser {
                 if (ch != ',') {
                     throw new YamlParseException("expected ',' or '}' in flow mapping", line);
                 }
+                // Trailing comma before close is legal (suite 5KJE/UDR7 parity)
+                skipWs();
+                if (peek() == '}') {
+                    next();
+                    break;
+                }
             }
             return builder.build();
         }
@@ -1593,6 +1797,12 @@ final class YamlParser {
                 if (ch == ']') break;
                 if (ch != ',') {
                     throw new YamlParseException("expected ',' or ']' in flow sequence", line);
+                }
+                // Trailing comma before close is legal (suite 5KJE/UDR7 parity)
+                skipWs();
+                if (peek() == ']') {
+                    next();
+                    break;
                 }
             }
             return JqArray.of(elems.toArray(new JqValue[0]));
@@ -1686,7 +1896,13 @@ final class YamlParser {
      */
     private JqValue convertScalar(String value, String tag) {
         if (tag != null) {
-            switch (normalizeTag(tag)) {
+            String norm = normalizeTag(tag);
+            // Bare `!` is the non-specific tag: plain scalars resolve as strings
+            // (suite S4JQ; SnakeYAML-load resolves to int here, suite oracle wins).
+            if (norm.isEmpty()) {
+                return JqString.of(value);
+            }
+            switch (norm) {
                 case "null" -> {
                     return JqNull.NULL;
                 }

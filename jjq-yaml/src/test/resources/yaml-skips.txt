@@ -2,7 +2,6 @@
 # Consulted first by YamlConformanceTest; unlisted failures abort as skips
 # for triage (house rule: build stays green, regressions caught when fixed).
 # Lines starting with # and blank lines are ignored.
-26DV: anchor/alias as mapping key unresolved (follow-up, #93)
 2AUY: indentation strictness difference (follow-up, #93)
 2JQS: no in.json oracle to conform to
 2SXE: anchor/alias as mapping key unresolved (follow-up, #93)
@@ -13,27 +12,16 @@
 4FJ6: no in.json oracle to conform to
 4JVG: stricter than suite here [anchor] (leniency review, #93)
 4RWC: indentation strictness difference (follow-up, #93)
-4WA9: block folded/literal whitespace (follow-up, #93)
 57H4: indentation strictness difference (follow-up, #93)
 5C5M: flow edge cases (follow-up, #93)
-5GBF: block folded/literal whitespace (follow-up, #93)
-5KJE: flow trailing comma yields extra null (follow-up, #93)
 5LLU: stricter than suite here [folded] (leniency review, #93)
 5WE3: explicit ? keys unsupported (documented limitation, #93)
 62EZ: stricter than suite here [flow] (leniency review, #93)
 6BCT: indentation strictness difference (follow-up, #93)
 6BFJ: no in.json oracle to conform to
 6CA3: tab tolerance edge (follow-up, #93)
-6FWR: block folded/literal whitespace (follow-up, #93)
 6M2F: no in.json oracle to conform to
 6PBE: no in.json oracle to conform to
-6VJK: block folded/literal whitespace (follow-up, #93)
-6WPF: block folded/literal whitespace (follow-up, #93)
-74H7: tag prefix not stripped (follow-up, #93)
-7A4E: block folded/literal whitespace (follow-up, #93)
-7BMT: anchor/alias as mapping key unresolved (follow-up, #93)
-7FWL: value mismatch (follow-up, #93)
-7T8X: block folded/literal whitespace (follow-up, #93)
 7W2P: explicit ? keys unsupported (documented limitation, #93)
 7ZZ5: indentation strictness difference (follow-up, #93)
 87E4: flow edge cases (follow-up, #93)
@@ -50,7 +38,6 @@
 9MAG: stricter than suite here [flow] (leniency review, #93)
 9MMA: stricter than suite here [directive] (leniency review, #93)
 9MMW: no in.json oracle to conform to
-9TFX: block folded/literal whitespace (follow-up, #93)
 9YRD: document splitting edge (follow-up, #93)
 A2M4: explicit ? keys unsupported (documented limitation, #93)
 AB8U: indentation strictness difference (follow-up, #93)
@@ -68,33 +55,23 @@ DE56/03: value mismatch (follow-up, #93)
 DFF7: no in.json oracle to conform to
 DK95/00: tab tolerance edge (follow-up, #93)
 DK95/01: stricter than suite here [indent] (leniency review, #93)
-DWX9: block folded/literal whitespace (follow-up, #93)
-E76Z: anchor forward-ref or alias-as-key (follow-up, #93)
 EB22: stricter than suite here [directive] (leniency review, #93)
 EX5H: document splitting edge (follow-up, #93)
 F2C7: indentation strictness difference (follow-up, #93)
-F6MC: block folded/literal whitespace (follow-up, #93)
 FH7J: no in.json oracle to conform to
 FRK4: no in.json oracle to conform to
 G5U8: stricter than suite here [flow] (leniency review, #93)
 GH63: explicit ? keys unsupported (documented limitation, #93)
-H2RW: block folded/literal whitespace (follow-up, #93)
 H7TQ: stricter than suite here [directive] (leniency review, #93)
 HMQ5: anchor forward-ref or alias-as-key (follow-up, #93)
 HRE5: stricter than suite here [error] (leniency review, #93)
 HS5T: indentation strictness difference (follow-up, #93)
-JEF9/00: block folded/literal whitespace (follow-up, #93)
-JEF9/01: block folded/literal whitespace (follow-up, #93)
-JEF9/02: block folded/literal whitespace (follow-up, #93)
 JHB9: indentation strictness difference (follow-up, #93)
 JKF3: stricter than suite here [indent] (leniency review, #93)
 JTV5: explicit ? keys unsupported (documented limitation, #93)
 JY7Z: stricter than suite here [error] (leniency review, #93)
-K858: block folded/literal whitespace (follow-up, #93)
 KK5P: no in.json oracle to conform to
 KS4U: stricter than suite here [flow] (leniency review, #93)
-L24T/00: block folded/literal whitespace (follow-up, #93)
-L24T/01: block folded/literal whitespace (follow-up, #93)
 L94M: explicit ? keys unsupported (documented limitation, #93)
 L9U5: flow edge cases (follow-up, #93)
 LE5A: value mismatch (follow-up, #93)
@@ -105,15 +82,12 @@ M2N8/00: no in.json oracle to conform to
 M2N8/01: no in.json oracle to conform to
 M5C3: indentation strictness difference (follow-up, #93)
 M5DY: no in.json oracle to conform to
-MJS9: block folded/literal whitespace (follow-up, #93)
 MUS6/00: stricter than suite here [directive] (leniency review, #93)
 MUS6/01: stricter than suite here [directive] (leniency review, #93)
-NAT4: block folded/literal whitespace (follow-up, #93)
 NB6Z: indentation strictness difference (follow-up, #93)
 NHX8: no in.json oracle to conform to
 NKF9: no in.json oracle to conform to
 P2EQ: stricter than suite here [flow] (leniency review, #93)
-PRH3: block folded/literal whitespace (follow-up, #93)
 PW8X: no in.json oracle to conform to
 Q4CL: stricter than suite here [error] (leniency review, #93)
 Q5MG: tab tolerance edge (follow-up, #93)
@@ -121,13 +95,11 @@ Q9WF: no in.json oracle to conform to
 QB6E: stricter than suite here [indent] (leniency review, #93)
 QF4Y: flow edge cases (follow-up, #93)
 QLJ7: stricter than suite here [directive] (leniency review, #93)
-R4YG: block folded/literal whitespace (follow-up, #93)
 RLU9: indentation strictness difference (follow-up, #93)
 RR7F: explicit ? keys unsupported (documented limitation, #93)
 RZP5: no in.json oracle to conform to
 S3PD: no in.json oracle to conform to
 S4GJ: stricter than suite here [folded] (leniency review, #93)
-S4JQ: quoted vs plain scalar type coercion (follow-up, #93)
 S98Z: stricter than suite here [comment] (leniency review, #93)
 S9E8: indentation strictness difference (follow-up, #93)
 SBG9: no in.json oracle to conform to
@@ -138,13 +110,9 @@ SR86: stricter than suite here [alias] (leniency review, #93)
 SU5Z: stricter than suite here [comment] (leniency review, #93)
 SU74: stricter than suite here [alias] (leniency review, #93)
 SY6V: stricter than suite here [anchor] (leniency review, #93)
-T26H: block folded/literal whitespace (follow-up, #93)
-T4YY: block folded/literal whitespace (follow-up, #93)
-TL85: block folded/literal whitespace (follow-up, #93)
 U3XV: indentation strictness difference (follow-up, #93)
 U99R: stricter than suite here [tag] (leniency review, #93)
 U9NS: YAML 1.1 sexagesimal int not coerced to string (1.2 core schema, #93)
-UDR7: flow trailing comma yields extra null (follow-up, #93)
 UGM3: document splitting edge (follow-up, #93)
 UKK6/00: no in.json oracle to conform to
 UKK6/02: no in.json oracle to conform to
@@ -157,15 +125,12 @@ WZ62: flow edge cases (follow-up, #93)
 X38W: no in.json oracle to conform to
 X4QW: stricter than suite here [comment] (leniency review, #93)
 X8DW: explicit ? keys unsupported (documented limitation, #93)
-XV9V: block folded/literal whitespace (follow-up, #93)
 XW4D: no in.json oracle to conform to
 Y79Y/000: stricter than suite here [whitespace] (leniency review, #93)
-Y79Y/001: block folded/literal whitespace (follow-up, #93)
 Y79Y/003: stricter than suite here [whitespace] (leniency review, #93)
 Y79Y/004: stricter than suite here [whitespace] (leniency review, #93)
 Y79Y/005: stricter than suite here [whitespace] (leniency review, #93)
 YJV2: stricter than suite here [flow] (leniency review, #93)
 ZCZ6: stricter than suite here [error] (leniency review, #93)
-ZH7C: anchor/alias as mapping key unresolved (follow-up, #93)
 ZL4Z: stricter than suite here [error] (leniency review, #93)
 ZWK4: explicit ? keys unsupported (documented limitation, #93)

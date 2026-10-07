@@ -117,7 +117,11 @@ class YamlDifferentialTest {
                 "a: {x: [1, {y: two}]}\n",
                 "top: {a: 1,\n  b: 2}\n",
                 "top: [1,\n  2]\n",
-                "a: {x: 1} # trailing\n"
+                "a: {x: 1} # trailing\n",
+                // Trailing commas are legal (suite 5KJE/UDR7)
+                "a: [one, two, ]\n",
+                "sequence: [ one, two, ]\nmapping: { sky: blue, sea: green }\n",
+                "a: {x: 1, }\n"
         );
     }
 
@@ -131,7 +135,9 @@ class YamlDifferentialTest {
                 "a: |2\n  indented\n",
                 "a: |\n",
                 "a: |\n  first\n\n  second\n",
-                "a: |\n  keep  spaces  \n"
+                "a: |\n  keep  spaces  \n",
+                // Explicit indent under an inline (`- key:`) map counts from keys (suite 4WA9)
+                "- aaa: |2\n    xxx\n  bbb: |\n    xxx\n"
         );
     }
 
@@ -162,7 +168,10 @@ class YamlDifferentialTest {
     static Stream<String> tagCases() {
         return Stream.of(
                 "a: !!str 123\nb: !!int 42\nc: !!float 1.5\nd: !!bool yes\ne: !!null ~\n",
-                "a: !!str true\n"
+                "a: !!str true\n",
+                // Tagged keys strip to the bare key (suite 74H7)
+                "!!str a: b\nc: 42\n",
+                "top1: &node1\n  &k1 key1: one\n"
         );
     }
 
