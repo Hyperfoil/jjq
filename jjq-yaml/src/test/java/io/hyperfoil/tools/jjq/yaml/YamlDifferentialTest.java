@@ -179,16 +179,31 @@ class YamlDifferentialTest {
                 "\n\n",
                 "---\n",
                 "--- just text\n",
+                "--- just text\nmore text\n",
                 "--- {a: 1}\n",
+                // NOTE: `--- >` + column-0 content is ACCEPTED here (suite DK3J
+                // agrees) although SnakeYAML-load itself rejects it, so those
+                // shapes live in conformance, not in live-SnakeYAML differential.
                 "a: 1\n---\nb: 2\n",
                 "---\na: 1\n...\n---\nb: 2\n",
                 "%YAML 1.2\n---\na: 1\n"
         );
     }
 
+    static Stream<String> scalarHeaderCases() {
+        // Standalone vs inline block headers, header lookalikes, leading blanks
+        return Stream.of(
+                "key:\n  >\n  content\n",
+                "key:\n  |\n  content\n",
+                "- >\n  content\n",
+                "a: |\n\n\nb: 1\n",
+                "key: >-\n  stripped\n"
+        );
+    }
+
     @ParameterizedTest
     @MethodSource({"blockCases", "scalarCases", "flowCases", "blockScalarCases",
-            "anchorCases", "tagCases", "intEdgeCases"})
+            "anchorCases", "tagCases", "intEdgeCases", "scalarHeaderCases"})
     void differentialSingleDoc(String yaml) {
         assertSameAsSnakeYaml(yaml);
     }
@@ -223,6 +238,11 @@ class YamlDifferentialTest {
                 "a: 1\n  b: 2\n\tc: 3\n",
                 "{a: 1\n",
                 "a: [1, 2\n",
+                // Block collections cannot open on the same line as `---`
+                "--- key: value\n",
+                "--- - a\n",
+                // `>`/`|` must be followed by chomping/indent/end (not junk)
+                "key: >foo\n",
                 // Over-indented mapping content: SnakeYAML requires same-indent
                 // alignment ("mapping values are not allowed here")
                 "a: 1\n  b: 2\n",
