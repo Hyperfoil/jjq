@@ -3157,43 +3157,85 @@ final class YamlParser {
         return digit && (dot || exp);
     }
 
+    /**
+     * Integer conversion by direct digit accumulation (no substrings, no
+     * underscore-stripping copy on the hot path). Mirrors the previous
+     * parseLong-based semantics exactly, including octal/hex/binary prefixes,
+     * sexagesimal, and the BigDecimal-overflow fallback.
+     */
     private static JqValue convertInteger(String value) {
+        int s = 0;
+        int e = value.length();
+        boolean neg = false;
+        if (s < e && (value.charAt(s) == '-' || value.charAt(s) == '+')) {
+            neg = value.charAt(s) == '-';
+            s++;
+        }
+        int base = 10;
+        if (e - s > 2 && value.charAt(s) == '0'
+                && (value.charAt(s + 1) == 'x' || value.charAt(s + 1) == 'X')) {
+            base = 16;
+            s += 2;
+        } else if (e - s > 2 && value.charAt(s) == '0'
+                && (value.charAt(s + 1) == 'b' || value.charAt(s + 1) == 'B')) {
+            base = 2;
+            s += 2;
+        } else if (e - s > 1 && value.charAt(s) == '0') {
+            // YAML 1.1 octal: leading 0 (e.g., 077 = 63)
+            base = 8;
+            s++;
+        }
         try {
-            String v = value;
-            boolean neg = false;
-            if (v.startsWith("-") || v.startsWith("+")) {
-                neg = v.startsWith("-");
-                v = v.substring(1);
-            }
-            // Underscores are visual separators (SnakeYAML strips them before parsing)
-            v = v.replace("_", "");
-            if (v.contains(":")) {
-                // Sexagesimal H:M[:S]
-                long total = 0;
-                for (String part : v.split(":", -1)) {
-                    total = total * 60 + Long.parseLong(part);
+            long total = 0;
+            long part = 0;
+            boolean partHasDigit = false;
+            boolean anyDigit = false;
+            while (s < e) {
+                char c = value.charAt(s);
+                if (c == '_') {
+                    s++;
+                    continue;
                 }
-                return JqNumber.of(neg ? -total : total);
+                if (c == ':' && base == 10) {
+                    // Sexagesimal H:M[:S] part boundary (empty parts reject).
+                    if (!partHasDigit) throw new NumberFormatException("empty sexagesimal part");
+                    if (total > (Long.MAX_VALUE - part) / 60) {
+                        throw new NumberFormatException("overflow");
+                    }
+                    total = total * 60 + part;
+                    part = 0;
+                    partHasDigit = false;
+                    anyDigit = true;
+                    s++;
+                    continue;
+                }
+                int digit = Character.digit(c, base);
+                if (digit < 0) throw new NumberFormatException("bad digit: " + c);
+                if (part > (Long.MAX_VALUE - digit) / base) {
+                    throw new NumberFormatException("overflow");
+                }
+                part = part * base + digit;
+                partHasDigit = true;
+                anyDigit = true;
+                s++;
             }
-            long parsed;
-            if (v.startsWith("0x") || v.startsWith("0X")) {
-                parsed = Long.parseLong(v.substring(2), 16);
-            } else if (v.startsWith("0b") || v.startsWith("0B")) {
-                parsed = Long.parseLong(v.substring(2), 2);
-            } else if (v.startsWith("0") && v.length() > 1) {
-                // YAML 1.1 octal: leading 0 (e.g., 077 = 63)
-                parsed = Long.parseLong(v.substring(1), 8);
-            } else {
-                parsed = Long.parseLong(v);
-            }
-            return JqNumber.of(neg ? -parsed : parsed);
-        } catch (NumberFormatException e) {
-            // Overflow — use BigDecimal
-            try {
-                return JqNumber.of(new BigDecimal(value.replace("_", "")));
-            } catch (NumberFormatException e2) {
-                return JqString.of(value); // fallback
-            }
+            // A trailing colon leaves an empty part; no digits at all rejects.
+            if (!anyDigit || !partHasDigit) throw new NumberFormatException("no digits");
+            // Fold the final part (single-part values fold trivially).
+            if (total > (Long.MAX_VALUE - part) / 60) throw new NumberFormatException("overflow");
+            total = total * 60 + part;
+            return JqNumber.of(neg ? -total : total);
+        } catch (NumberFormatException ex) {
+            return convertIntegerFallback(value);
+        }
+    }
+
+    /** Overflow/malformed fallback: BigDecimal, else keep the string. */
+    private static JqValue convertIntegerFallback(String value) {
+        try {
+            return JqNumber.of(new BigDecimal(value.replace("_", "")));
+        } catch (NumberFormatException e2) {
+            return JqString.of(value); // fallback
         }
     }
 
@@ -3208,7 +3250,10 @@ final class YamlParser {
             return JqNumber.of(Double.NaN);
         }
         try {
-            return JqNumber.of(Double.parseDouble(value.replace("_", "")));
+            // Underscores stripped only when present (the common case parses
+            // directly with zero copying).
+            String clean = value.indexOf('_') < 0 ? value : value.replace("_", "");
+            return JqNumber.of(Double.parseDouble(clean));
         } catch (NumberFormatException e) {
             return JqString.of(value); // fallback
         }

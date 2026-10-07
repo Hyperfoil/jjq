@@ -176,7 +176,12 @@ class YamlDifferentialTest {
                 "a: 1:20\nb: 1:2:3\nc: +1:20\nd: -1:20\n",
                 "a: 0o17\n",
                 "a: 1_0.5\n",
-                "a: 0xFF_FF\nb: 0b10_1\n"
+                "a: 0xFF_FF\nb: 0b10_1\n",
+                // Long boundaries: max stays long, max+1 widens to BigDecimal
+                "a: 9223372036854775807\nb: 9223372036854775806\n",
+                "a: 9223372036854775808\n",
+                "a: -9223372036854775808\nb: -9223372036854775809\n",
+                "a: 1_2_3\nb: 0b1_0\nc: 0x1_F\n"
         );
     }
 
