@@ -12,7 +12,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 - **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing, field name interning with hash mixing. 1.5-2.3x faster than Jackson 3 on 1MB inputs; 1.5x faster on 14MB production data
 - **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
-- **YAML support** — `jjq-yaml` parses and emits YAML via SnakeYAML, with optional `jjq-mapper` integration for YAML → POJO mapping
+- **YAML support** — `jjq-yaml` parses and emits YAML with a dependency-free native parser, with optional `jjq-mapper` integration for YAML → POJO mapping
 - **Record and POJO data binding** — `jjq-mapper` maps `JqValue` to/from Java types with `@JqInclude`, `@JqNaming`, `@JqConverter`, and Jackson/JSON-B annotation bridges
 - **Jakarta EE integration** — `jjq-jakarta` module provides Hibernate persistence (BYTEA + JSONB), JPA `AttributeConverter`, JAX-RS body/param providers, and JSON-B serializers
 - **Jackson Module** — `jjq-jackson` includes `JqValueModule` for native `JqValue` serialization in POJOs via `ObjectMapper`
@@ -32,7 +32,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-mapper-processor` | Compile-time annotation processor for `jjq-mapper` — generates optimized mappings (6-11x faster than Jackson 3) |
 | `jjq-mapper-jackson` | Bridges Jackson 2 annotations (`@JsonProperty`, `@JsonIgnore`, `@JsonInclude`) into jjq-mapper |
 | `jjq-mapper-jsonb` | Bridges JSON-B annotations (`@JsonbProperty`, `@JsonbTransient`, `@JsonbNillable`) into jjq-mapper |
-| `jjq-yaml` | YAML parsing into `JqValue` trees via SnakeYAML — enables jq queries over YAML documents |
+| `jjq-yaml` | Dependency-free native YAML parsing into `JqValue` trees plus block-style emission — enables jq queries over YAML documents |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 127/558 conformance |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |

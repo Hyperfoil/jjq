@@ -54,8 +54,9 @@ List<JqValue> names = JqProgram.compile(".[].metadata.name").applyAll((JqValue) 
 ## Features
 
 - **Native byte-based parser** — YAML text straight to `JqValue` with no intermediate
-  node tree (field-name interning, direct number parsing); SnakeYAML is used
-  only for YAML *emission* until it is dropped entirely
+  node tree (field-name interning, direct number parsing)
+- **Native block-style emitter** — `JqValue` trees back to YAML with no dependencies
+  (scalars that would reparse as another type are quoted automatically)
 - **YAML anchors and aliases** — resolved transparently (including `<<` merge keys)
 - **Merge keys (`<<`)** — flattened into the parent mapping
 - **Flow and block styles** — both supported (`{a: 1}` and `a: 1`)
@@ -76,7 +77,9 @@ try (var out = Files.newOutputStream(path)) {
 JqYaml.toYaml(config, writer);
 ```
 
-Emission converts the tree to plain Java values and dumps block-style YAML via SnakeYAML.
+Emission writes block-style YAML with the dependency-free emitter (no flow
+collections except empty `{}`/`[]`; scalars that would reparse as another type
+are double-quoted automatically).
 
 ## YAML → Java Object Mapping
 
@@ -148,7 +151,10 @@ String json = config.toJsonString();
 
 ## Dependencies
 
-Parsing is dependency-free (hand-rolled `byte[]` parser in this module).
+This module is dependency-free at compile scope (only `jjq-core`, plus optional
+`jjq-mapper` integration): parsing (`YamlParser`) and emission (`YamlEmitter`)
+are hand-rolled with no third-party libraries.
 [SnakeYAML](https://bitbucket.org/snakeyaml/snakeyaml/) (see `${snakeyaml.version}`
-in the root `pom.xml`) is retained for YAML *emission* (`toYaml`) only, until
-the native emitter lands and the dependency is dropped entirely.
+in the root `pom.xml`) remains as a *test-scope* dependency only, as the
+reference implementation for the differential test suite
+(`YamlDifferentialTest`).

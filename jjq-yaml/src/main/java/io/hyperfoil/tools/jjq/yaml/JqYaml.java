@@ -1,9 +1,6 @@
 package io.hyperfoil.tools.jjq.yaml;
 
 import io.hyperfoil.tools.jjq.value.*;
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.nodes.*;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,6 +8,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.StringReader;
+import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -20,8 +18,9 @@ import java.util.List;
 /**
  * Parses YAML into jjq {@link JqValue} trees, enabling jq queries over YAML documents.
  *
- * <p>Uses SnakeYAML for parsing, then converts the SnakeYAML node tree into jjq's
- * value types. Supports single and multi-document YAML streams.</p>
+ * <p>Parses with the native dependency-free byte parser ({@link YamlParser})
+ * and emits block-style YAML ({@link YamlEmitter}). Supports single and
+ * multi-document YAML streams.</p>
  *
  * <h2>Example</h2>
  * <pre>{@code
@@ -248,7 +247,7 @@ public final class JqYaml {
      * @return the YAML string
      */
     public static String toYaml(JqValue value) {
-        return new Yaml(blockOptions()).dump(value.toJavaObject());
+        return YamlEmitter.emit(value);
     }
 
     /**
@@ -271,13 +270,11 @@ public final class JqYaml {
      * @param writer the Writer to write YAML to
      */
     public static void toYaml(JqValue value, Writer writer) {
-        new Yaml(blockOptions()).dump(value.toJavaObject(), writer);
-    }
-
-    private static DumperOptions blockOptions() {
-        DumperOptions options = new DumperOptions();
-        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        return options;
+        try {
+            writer.write(YamlEmitter.emit(value));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     // ========================================================================
@@ -412,142 +409,5 @@ public final class JqYaml {
     public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type,
                                  YamlOptions options) {
         return mapper.fromJqValue(parse(in, options), type);
-    }
-
-    // ========================================================================
-    //  SnakeYAML Node → JqValue conversion
-    // ========================================================================
-
-    private static JqValue convertNode(Node node, YamlOptions options) {
-        return switch (node) {
-            case MappingNode m -> convertMapping(m, options);
-            case SequenceNode s -> convertSequence(s, options);
-            case ScalarNode sc -> convertScalar(sc);
-            default -> JqNull.NULL;
-        };
-    }
-
-    private static JqObject convertMapping(MappingNode mapping, YamlOptions options) {
-        List<NodeTuple> tuples = mapping.getValue();
-        // First pass: collect merge keys (<<) to flatten
-        var builder = JqObject.builder(tuples.size());
-        // SnakeYAML 2.x no longer enforces LoaderOptions allowDuplicateKeys
-        // (verified: DuplicateKeyException is unreferenced dead code), so strict
-        // detection is done here. Only explicit keys participate: duplicates
-        // across << merges are legal YAML (explicit keys override merged ones).
-        java.util.Set<String> seen = options.allowDuplicateKeys() ? null : new java.util.HashSet<>();
-        for (NodeTuple tuple : tuples) {
-            String key = ((ScalarNode) tuple.getKeyNode()).getValue();
-            if ("<<".equals(key)) {
-                // YAML merge key: flatten the referenced mapping's entries
-                Node mergeValue = tuple.getValueNode();
-                if (mergeValue instanceof MappingNode mergeMapping) {
-                    for (NodeTuple merged : mergeMapping.getValue()) {
-                        String mergedKey = ((ScalarNode) merged.getKeyNode()).getValue();
-                        builder.put(mergedKey, convertNode(merged.getValueNode(), options));
-                    }
-                } else if (mergeValue instanceof SequenceNode mergeSeq) {
-                    // << can reference a list of mappings
-                    for (Node item : mergeSeq.getValue()) {
-                        if (item instanceof MappingNode itemMapping) {
-                            for (NodeTuple merged : itemMapping.getValue()) {
-                                String mergedKey = ((ScalarNode) merged.getKeyNode()).getValue();
-                                builder.put(mergedKey, convertNode(merged.getValueNode(), options));
-                            }
-                        }
-                    }
-                }
-            } else {
-                if (seen != null && !seen.add(key)) {
-                    // SnakeYAML Mark lines are 0-based; report 1-based
-                    int line = tuple.getKeyNode().getStartMark().getLine() + 1;
-                    throw new JqYamlException(key, line);
-                }
-                builder.put(key, convertNode(tuple.getValueNode(), options));
-            }
-        }
-        return (JqObject) builder.build();
-    }
-
-    private static JqArray convertSequence(SequenceNode sequence, YamlOptions options) {
-        List<Node> children = sequence.getValue();
-        JqValue[] elements = new JqValue[children.size()];
-        for (int i = 0; i < elements.length; i++) {
-            elements[i] = convertNode(children.get(i), options);
-        }
-        return JqArray.of(elements);
-    }
-
-    private static JqValue convertScalar(ScalarNode scalar) {
-        Tag tag = scalar.getTag();
-        String value = scalar.getValue();
-
-        // Explicit tags (use equals, not ==, since Tag is a class, not an enum)
-        if (Tag.NULL.equals(tag)) return JqNull.NULL;
-        if (Tag.BOOL.equals(tag)) return JqBoolean.of(isTrueish(value));
-        if (Tag.INT.equals(tag)) return convertInteger(value);
-        if (Tag.FLOAT.equals(tag)) return convertFloat(value);
-        if (Tag.STR.equals(tag)) return JqString.of(value);
-
-        // Untagged — auto-detect based on YAML core schema
-        if (value == null || "null".equals(value) || "~".equals(value) || value.isEmpty()) {
-            return JqNull.NULL;
-        }
-        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
-            return JqBoolean.of("true".equalsIgnoreCase(value));
-        }
-
-        // Try as string (SnakeYAML's resolver handles most tag detection,
-        // so reaching here with an unrecognized tag means it's a string)
-        return JqString.of(value);
-    }
-
-    private static JqValue convertInteger(String value) {
-        try {
-            // Handle hex (0x), octal (0/0o), and binary (0b) prefixes
-            if (value.startsWith("0x") || value.startsWith("0X")) {
-                return JqNumber.of(Long.parseLong(value.substring(2), 16));
-            }
-            if (value.startsWith("0o") || value.startsWith("0O")) {
-                return JqNumber.of(Long.parseLong(value.substring(2), 8));
-            }
-            if (value.startsWith("0b") || value.startsWith("0B")) {
-                return JqNumber.of(Long.parseLong(value.substring(2), 2));
-            }
-            // YAML 1.1 octal: leading 0 (e.g., 077 = 63)
-            if (value.startsWith("0") && value.length() > 1 && !value.contains(".")) {
-                return JqNumber.of(Long.parseLong(value.substring(1), 8));
-            }
-            return JqNumber.of(Long.parseLong(value));
-        } catch (NumberFormatException e) {
-            // Overflow — use BigDecimal
-            try {
-                return JqNumber.of(new BigDecimal(value));
-            } catch (NumberFormatException e2) {
-                return JqString.of(value); // fallback
-            }
-        }
-    }
-
-    private static JqValue convertFloat(String value) {
-        if (".inf".equals(value) || ".Inf".equals(value) || ".INF".equals(value)) {
-            return JqNumber.of(Double.POSITIVE_INFINITY);
-        }
-        if ("-.inf".equals(value) || "-.Inf".equals(value) || "-.INF".equals(value)) {
-            return JqNumber.of(Double.NEGATIVE_INFINITY);
-        }
-        if (".nan".equals(value) || ".NaN".equals(value) || ".NAN".equals(value)) {
-            return JqNumber.of(Double.NaN);
-        }
-        try {
-            return JqNumber.of(Double.parseDouble(value));
-        } catch (NumberFormatException e) {
-            return JqString.of(value); // fallback
-        }
-    }
-
-    private static boolean isTrueish(String value) {
-        return "true".equalsIgnoreCase(value) || "yes".equalsIgnoreCase(value)
-                || "on".equalsIgnoreCase(value) || "y".equalsIgnoreCase(value);
     }
 }

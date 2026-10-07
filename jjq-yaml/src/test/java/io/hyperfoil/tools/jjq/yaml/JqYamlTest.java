@@ -325,6 +325,66 @@ class JqYamlTest {
         assertEquals("Alice", JqYaml.parse(writer.toString()).getField("name").stringValue());
     }
 
+    @Test
+    void toYamlQuotableStringsRoundTrip() {
+        // Strings that would reparse as another type (or break structure)
+        // must be quoted by the emitter.
+        String[] tricky = {"true", "123", "1.5", "null", "~", "a: b", "a #b",
+                "", "  spaced  ", "- dash", "yes", "0x1F", "12:30", "a'b\"c", "tab\there"};
+        var builder = JqObject.builder(tricky.length);
+        for (int i = 0; i < tricky.length; i++) {
+            builder.putUnchecked("k" + i, JqString.of(tricky[i]));
+        }
+        JqValue original = builder.build();
+        String yaml = JqYaml.toYaml(original);
+        assertFalse(yaml.contains("{"));
+        JqValue reparsed = JqYaml.parse(yaml);
+        for (int i = 0; i < tricky.length; i++) {
+            assertEquals(tricky[i], reparsed.getField("k" + i).stringValue(), "field k" + i);
+            assertTrue(reparsed.getField("k" + i).isString(), "still a string: k" + i);
+        }
+    }
+
+    @Test
+    void toYamlMultilineStringsRoundTrip() {
+        JqValue original = JqObject.builder(2)
+                .putUnchecked("text", JqString.of("line one\nline two\n"))
+                .putUnchecked("list", JqArray.of(JqString.of("a\nb"), JqNumber.of(1)))
+                .build();
+        String yaml = JqYaml.toYaml(original);
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertEquals("line one\nline two\n", reparsed.getField("text").stringValue());
+        assertEquals("a\nb", reparsed.getField("list").getElement(0).stringValue());
+    }
+
+    @Test
+    void toYamlEmptyContainersRoundTrip() {
+        JqValue original = JqObject.builder(2)
+                .putUnchecked("map", JqObject.builder(0).build())
+                .putUnchecked("seq", JqArray.of())
+                .build();
+        String yaml = JqYaml.toYaml(original);
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertTrue(reparsed.getField("map").isObject());
+        assertEquals(0, ((JqObject) reparsed.getField("map")).size());
+        assertTrue(reparsed.getField("seq").isArray());
+        assertEquals(0, ((JqArray) reparsed.getField("seq")).size());
+    }
+
+    @Test
+    void toYamlSpecialDoublesRoundTrip() {
+        JqValue original = JqObject.builder(3)
+                .putUnchecked("nan", JqNumber.of(Double.NaN))
+                .putUnchecked("inf", JqNumber.of(Double.POSITIVE_INFINITY))
+                .putUnchecked("ninf", JqNumber.of(Double.NEGATIVE_INFINITY))
+                .build();
+        String yaml = JqYaml.toYaml(original);
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertTrue(Double.isNaN(reparsed.getField("nan").doubleValue()));
+        assertEquals(Double.POSITIVE_INFINITY, reparsed.getField("inf").doubleValue());
+        assertEquals(Double.NEGATIVE_INFINITY, reparsed.getField("ninf").doubleValue());
+    }
+
     record DatabaseConfig(String primary, java.util.List<String> replicas) {}
 
     @Test

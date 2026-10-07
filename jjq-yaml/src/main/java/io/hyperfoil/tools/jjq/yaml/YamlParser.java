@@ -727,7 +727,7 @@ final class YamlParser {
         }
         // A trailing comment completes the scalar: no folding past it (BF9H parity)
         if (commented) {
-            return convertScalar(first, null);
+            return convertScalar(first, null, line);
         }
         // Plain scalar document: fold following lines (entry rules terminate).
         // Blank lines are paragraph breaks when deeper plain content follows
@@ -775,7 +775,7 @@ final class YamlParser {
             pos = cs;
             sb.append(stripComment(readLine()).strip());
         }
-        return convertScalar(sb.toString(), null);
+        return convertScalar(sb.toString(), null, line);
     }
 
     /**
@@ -1316,9 +1316,9 @@ final class YamlParser {
         // A trailing comment completes the scalar: no folding past it (BF9H parity)
         String folded = firstCommented ? null : foldPlainContinuation(first, indent, foldSeqIndent);
         if (folded != null) {
-            return convertScalar(folded, null);
+            return convertScalar(folded, null, line);
         }
-        return convertScalar(first, null);
+        return convertScalar(first, null, line);
     }
 
     /**
@@ -1871,7 +1871,7 @@ final class YamlParser {
                 || (t.startsWith("\"") && t.endsWith("\"")))) {
             value = JqString.of(unquoteScalar(t.substring(1, t.length() - 1), t.charAt(0)));
         } else {
-            value = convertScalar(t, tag);
+            value = convertScalar(t, tag, line);
         }
         if (anchorName != null) anchors.put(anchorName, value);
         return value;
@@ -2520,7 +2520,7 @@ final class YamlParser {
                 if (plainText.equals("-")) {
                     throw new YamlParseException("dashes are not allowed as flow values", line);
                 }
-                value = convertScalar(plainText, tag);
+                value = convertScalar(plainText, tag, line);
             }
             if (anchor != null) anchors.put(anchor, value);
             return value;
@@ -2709,12 +2709,32 @@ final class YamlParser {
         }
     }
     /**
-     * Convert a plain scalar to a value. {@code tag} is an explicit `!`/`!!` tag
-     * or null. Mirrors the SnakeYAML-based conversion semantics exactly:
-     * known tags coerce (with lenient fallbacks), unknown tags and untagged
-     * values go through core-schema auto-detect.
+     * True when the parser would read {@code value} back as a plain string:
+     * no surrounding whitespace/newlines, no leading indicator, no `#`, and
+     * scalar conversion yields a string. The emitter uses this to decide
+     * bare-vs-quoted (round-trip safety by construction).
      */
-    private JqValue convertScalar(String value, String tag) {
+    static boolean parsesAsPlainString(String value) {
+        if (value.isEmpty()) return false;
+        char first = value.charAt(0);
+        char last = value.charAt(value.length() - 1);
+        if (first == ' ' || first == '\t' || last == ' ' || last == '\t') return false;
+        if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) return false;
+        if ("-?:,[]{}#&*!|>'\"%@`".indexOf(first) >= 0 || first == '<') return false;
+        if (value.indexOf('#') >= 0) return false;
+        try {
+            return convertScalar(value, null, -1) instanceof JqString;
+        } catch (YamlParseException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Convert a plain scalar to a value. {@code tag} is an explicit `!`/`!!` tag
+     * or null. Known tags coerce (with lenient fallbacks); unknown tags and
+     * untagged values go through core-schema auto-detect.
+     */
+    private static JqValue convertScalar(String value, String tag, int line) {
         if (tag != null) {
             String norm = normalizeTag(tag);
             // Bare `!` is the non-specific tag: plain scalars resolve as strings
@@ -2875,7 +2895,7 @@ final class YamlParser {
         return digit && (dot || exp);
     }
 
-    private JqValue convertInteger(String value) {
+    private static JqValue convertInteger(String value) {
         try {
             String v = value;
             boolean neg = false;
@@ -2915,7 +2935,7 @@ final class YamlParser {
         }
     }
 
-    private JqValue convertFloat(String value) {
+    private static JqValue convertFloat(String value) {
         if (value.equals(".inf") || value.equals(".Inf") || value.equals(".INF")) {
             return JqNumber.of(Double.POSITIVE_INFINITY);
         }
