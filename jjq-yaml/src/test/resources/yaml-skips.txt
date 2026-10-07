@@ -3,45 +3,29 @@
 # for triage (house rule: build stays green, regressions caught when fixed).
 # Lines starting with # and blank lines are ignored.
 2JQS: no in.json oracle to conform to
-2SXE: anchor/alias as mapping key unresolved (follow-up, #93)
 2XXW: explicit ? keys unsupported (documented limitation, #93)
 35KP: explicit ? keys unsupported (documented limitation, #93)
 4ABK: no in.json oracle to conform to
 4FJ6: no in.json oracle to conform to
-5C5M: flow edge cases (follow-up, #93)
 5WE3: explicit ? keys unsupported (documented limitation, #93)
 6BFJ: no in.json oracle to conform to
-6CA3: tab tolerance edge (follow-up, #93)
 6M2F: no in.json oracle to conform to
 6PBE: no in.json oracle to conform to
 7W2P: explicit ? keys unsupported (documented limitation, #93)
-87E4: flow edge cases (follow-up, #93)
-8KB6: flow edge cases (follow-up, #93)
 8UDB: flow edge cases (follow-up, #93)
-96NN/00: value mismatch (follow-up, #93)
-96NN/01: value mismatch (follow-up, #93)
-9BXH: flow edge cases (follow-up, #93)
-9KAX: document splitting edge (follow-up, #93)
 9MMW: no in.json oracle to conform to
-9YRD: document splitting edge (follow-up, #93)
 A2M4: explicit ? keys unsupported (documented limitation, #93)
 CFD4: no in.json oracle to conform to
 CN3R: flow edge cases (follow-up, #93)
 CT4Q: flow edge cases (follow-up, #93)
-DE56/02: value mismatch (follow-up, #93)
-DE56/03: value mismatch (follow-up, #93)
 DFF7: no in.json oracle to conform to
-DK95/00: tab tolerance edge (follow-up, #93)
-EX5H: document splitting edge (follow-up, #93)
 FH7J: no in.json oracle to conform to
 FRK4: no in.json oracle to conform to
 GH63: explicit ? keys unsupported (documented limitation, #93)
-HMQ5: anchor forward-ref or alias-as-key (follow-up, #93)
 JTV5: explicit ? keys unsupported (documented limitation, #93)
 KK5P: no in.json oracle to conform to
 L94M: explicit ? keys unsupported (documented limitation, #93)
 L9U5: flow edge cases (follow-up, #93)
-LE5A: value mismatch (follow-up, #93)
 LQZ7: flow edge cases (follow-up, #93)
 LX3P: no in.json oracle to conform to
 M2N8/00: no in.json oracle to conform to
@@ -50,7 +34,6 @@ M5DY: no in.json oracle to conform to
 NHX8: no in.json oracle to conform to
 NKF9: no in.json oracle to conform to
 PW8X: no in.json oracle to conform to
-Q5MG: tab tolerance edge (follow-up, #93)
 Q9WF: no in.json oracle to conform to
 QF4Y: flow edge cases (follow-up, #93)
 RR7F: explicit ? keys unsupported (documented limitation, #93)
@@ -60,14 +43,10 @@ S9E8: explicit ? keys unsupported (documented limitation, #93)
 SBG9: no in.json oracle to conform to
 SM9W/01: no in.json oracle to conform to
 U9NS: YAML 1.1 sexagesimal int not coerced to string (1.2 core schema, #93)
-UGM3: document splitting edge (follow-up, #93)
 UKK6/00: no in.json oracle to conform to
 UKK6/02: no in.json oracle to conform to
 V9D5: no in.json oracle to conform to
-W5VH: anchor forward-ref or alias-as-key (follow-up, #93)
-WZ62: flow edge cases (follow-up, #93)
 X38W: no in.json oracle to conform to
 X8DW: explicit ? keys unsupported (documented limitation, #93)
 XW4D: no in.json oracle to conform to
-ZCZ6: stricter than suite here [error] (leniency review, #93)
 ZWK4: explicit ? keys unsupported (documented limitation, #93)
