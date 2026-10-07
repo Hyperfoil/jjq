@@ -12,12 +12,9 @@
 6M2F: no in.json oracle to conform to
 6PBE: no in.json oracle to conform to
 7W2P: explicit ? keys unsupported (documented limitation, #93)
-8UDB: flow edge cases (follow-up, #93)
 9MMW: no in.json oracle to conform to
 A2M4: explicit ? keys unsupported (documented limitation, #93)
 CFD4: no in.json oracle to conform to
-CN3R: flow edge cases (follow-up, #93)
-CT4Q: flow edge cases (follow-up, #93)
 DFF7: no in.json oracle to conform to
 FH7J: no in.json oracle to conform to
 FRK4: no in.json oracle to conform to
@@ -25,8 +22,6 @@ GH63: explicit ? keys unsupported (documented limitation, #93)
 JTV5: explicit ? keys unsupported (documented limitation, #93)
 KK5P: no in.json oracle to conform to
 L94M: explicit ? keys unsupported (documented limitation, #93)
-L9U5: flow edge cases (follow-up, #93)
-LQZ7: flow edge cases (follow-up, #93)
 LX3P: no in.json oracle to conform to
 M2N8/00: no in.json oracle to conform to
 M2N8/01: no in.json oracle to conform to
@@ -35,7 +30,6 @@ NHX8: no in.json oracle to conform to
 NKF9: no in.json oracle to conform to
 PW8X: no in.json oracle to conform to
 Q9WF: no in.json oracle to conform to
-QF4Y: flow edge cases (follow-up, #93)
 RR7F: explicit ? keys unsupported (documented limitation, #93)
 RZP5: no in.json oracle to conform to
 S3PD: no in.json oracle to conform to

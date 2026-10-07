@@ -2314,7 +2314,12 @@ final class YamlParser {
                 char q = next();
                 return internKey(quoted(q));
             }
-            return resolveKeyPrefixes(plain());
+            // A leading `? ` is the explicit-key marker (suite CT4Q).
+            String key = resolveKeyPrefixes(plain());
+            if (key.startsWith("? ")) {
+                key = internKey(key.substring(2));
+            }
+            return key;
         }
 
         String quoted(char q) {
@@ -2422,7 +2427,12 @@ final class YamlParser {
             next();
             skipWs();
             JqValue value = flowValue();
-            return JqObject.builder(1).put(internKey(first.stringValue()), value).build();
+            // A leading `? ` is the explicit-key marker (suite CT4Q).
+            String key = first.stringValue();
+            if (key.startsWith("? ")) {
+                key = key.substring(2);
+            }
+            return JqObject.builder(1).put(internKey(key), value).build();
         }
 
         JqValue flowValue() {
