@@ -206,12 +206,54 @@ final class YamlParser {
     }
 
     /** Look at the current line without consuming it. */
-    private String peekLine() {
-        int e = pos;
+    // Line classification codes for block-structure decisions. Computed on byte
+    // ranges (no String allocation on the peek path); quoted regions tracked
+    // since quote characters are single bytes even in UTF-8 content.
+    private static final int LINE_BLANK = 0;    // whitespace only
+    private static final int LINE_COMMENT = 1;  // comment-only line
+    private static final int LINE_SEQ = 2;      // '- ' entry
+    private static final int LINE_EXPLICIT = 3; // '? ' key
+    private static final int LINE_MARKER = 4;   // '---' / '...'
+    private static final int LINE_MAP = 5;      // contains a mapping indicator
+    private static final int LINE_PLAIN = 6;    // anything else
+
+    /** End offset (excl. break, excl. one trailing \r) of the line starting at p. No allocation. */
+    private int lineEnd(int p) {
+        int e = p;
         while (e < end && d[e] != '\n' && d[e] != '\r') e++;
-        int trim = e;
-        if (trim > pos && d[trim - 1] == '\r') trim--;
-        return new String(d, pos, trim - pos, java.nio.charset.StandardCharsets.UTF_8);
+        return (e > p && d[e - 1] == '\r') ? e - 1 : e;
+    }
+
+    /** First non-space/tab offset in [s, e), or e. Tabs are NOT skipped (indent errors surface elsewhere). */
+    private static int contentStart(byte[] d, int s, int e) {
+        int p = s;
+        while (p < e && (d[p] == ' ' || d[p] == '\t')) p++;
+        return p;
+    }
+
+    /** Classify the line [s, e) for block-structure decisions. */
+    private int classifyLine(int s, int e) {
+        int p = contentStart(d, s, e);
+        if (p >= e) return LINE_BLANK;
+        byte c0 = d[p];
+        if (c0 == '#') return LINE_COMMENT;
+        boolean quoted = c0 == '\'' || c0 == '"';
+        if (!quoted) {
+            if (c0 == '-' && (p + 1 >= e || d[p + 1] == ' ' || d[p + 1] == '\t')) return LINE_SEQ;
+            if (c0 == '?' && (p + 1 >= e || d[p + 1] == ' ' || d[p + 1] == '\t')) return LINE_EXPLICIT;
+            if (isMarkerAt(p, e)) return LINE_MARKER;
+        }
+        return hasMappingIndicator(s, e) ? LINE_MAP : LINE_PLAIN;
+    }
+
+    /** True when `---`/`...` opens at p with a space/tab/EOL boundary at e. */
+    private boolean isMarkerAt(int p, int e) {
+        return matchMarkerBytes(p, e, '-') || matchMarkerBytes(p, e, '.');
+    }
+
+    private boolean matchMarkerBytes(int p, int e, char c) {
+        if (p + 3 > e || d[p] != c || d[p + 1] != c || d[p + 2] != c) return false;
+        return p + 3 == e || d[p + 3] == ' ' || d[p + 3] == '\t';
     }
 
     /** Spaces (not tabs) from pos, which must be at a line start. Tabs are a syntax error. */
@@ -260,16 +302,17 @@ final class YamlParser {
         if (isSeqEntry()) {
             return parseBlockSeq(indent);
         }
-        String code = stripComment(peekLine()).strip();
-        if (code.isEmpty()) return JqNull.NULL;
-        char c0 = code.charAt(0);
+        int le = lineEnd(pos);
+        int cs = contentStart(d, pos, le);
+        if (cs >= le) return JqNull.NULL;
+        byte c0 = d[cs];
         if (c0 == '{' || c0 == '[') {
             return parseInlineValue(gatherValueText(stripComment(readLine()).strip(), indent), indent, true);
         }
-        if (c0 == '?' && (code.length() == 1 || code.charAt(1) == ' ' || code.charAt(1) == '\t')) {
+        if (c0 == '?' && (cs + 1 >= le || d[cs + 1] == ' ' || d[cs + 1] == '\t')) {
             throw new YamlParseException("explicit '? ' mapping keys are not supported", line);
         }
-        if (!hasMappingIndicator(code)) {
+        if (!hasMappingIndicator(pos, le)) {
             return parseScalarDocument(indent);
         }
         return parseBlockMap(indent);
@@ -285,40 +328,22 @@ final class YamlParser {
         if (c0 == '{' || c0 == '[') {
             return parseInlineValue(gatherValueText(first, indent), indent, true);
         }
-        // Plain scalar document: fold following lines (any indent, entry rules apply)
+        // Plain scalar document: fold following lines (entry rules terminate)
         StringBuilder sb = new StringBuilder(first);
         for (;;) {
-            int saved = pos;
-            int savedLine = line;
             if (pos >= end) break;
-            int p = pos;
-            while (p < end && (d[p] == ' ' || d[p] == '\t')) p++;
-            if (p >= end) break;
-            byte c = d[p];
-            if (c == '\n' || c == '\r' || c == '#') break;
-            String code = stripComment(peekLine()).strip();
-            if (code.isEmpty() || isMarkerLine(code) || isSeqEntryAt(p) || isExplicitKeyAt(p)
-                    || hasMappingIndicator(code)) {
-                break;
-            }
-            pos = saved;
-            sb.append(' ').append(code);
-            advanceLinePastContent();
+            int le = lineEnd(pos);
+            int kind = classifyLine(pos, le);
+            if (kind != LINE_PLAIN) break;
+            int cs = contentStart(d, pos, le);
+            // The line is plain content: consume it (comment already excluded by kind)
+            pos = cs;
+            sb.append(' ').append(stripComment(readLine()).strip());
         }
         return convertScalar(sb.toString(), null);
     }
 
     /** Consume the current line (pos is at its start). */
-    private void advanceLinePastContent() {
-        advanceLine();
-    }
-
-    private boolean isMarkerLine(String code) {
-        return code.equals("---") || code.equals("...")
-                || code.startsWith("--- ") || code.startsWith("---\t")
-                || code.startsWith("... ") || code.startsWith("...\t");
-    }
-
     /** True when `- ` (or bare `-`) opens at absolute offset p. */
     private boolean isSeqEntryAt(int p) {
         if (p >= end || d[p] != '-') return false;
@@ -328,13 +353,6 @@ final class YamlParser {
     }
 
     /** True when `? ` opens at absolute offset p. */
-    private boolean isExplicitKeyAt(int p) {
-        if (p >= end || d[p] != '?') return false;
-        if (p + 1 >= end) return true;
-        byte c = d[p + 1];
-        return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-    }
-
     /** True when the line at pos opens a `- ` sequence entry (pos at line start). */
     private boolean isSeqEntry() {
         int p = pos;
@@ -346,18 +364,19 @@ final class YamlParser {
      * True when the text contains an unquoted `:` followed by space/tab/EOL
      * outside flow brackets — i.e. it can open a block mapping entry.
      */
-    private static boolean hasMappingIndicator(String text) {
+
+    /** Byte-range variant: unquoted `:` + space/tab/EOL outside flow brackets. */
+    private boolean hasMappingIndicator(int s, int e) {
         boolean sq = false, dq = false;
         int depth = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
+        for (int i = s; i < e; i++) {
+            byte c = d[i];
             if (c == '\'' && !dq) sq = !sq;
             else if (c == '"' && !sq) dq = !dq;
             else if ((c == '[' || c == '{') && !sq && !dq) depth++;
             else if ((c == ']' || c == '}') && !sq && !dq && depth > 0) depth--;
             else if (c == ':' && !sq && !dq && depth == 0) {
-                if (i + 1 >= text.length() || text.charAt(i + 1) == ' '
-                        || text.charAt(i + 1) == '\t') {
+                if (i + 1 >= e || d[i + 1] == ' ' || d[i + 1] == '\t') {
                     return true;
                 }
             }
@@ -518,7 +537,7 @@ final class YamlParser {
                 throw new YamlParseException("expected mapping key, found sequence entry", line);
             }
             pos += ind;
-            if (isMarkerLine(stripComment(peekLine()).strip())) break;
+            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) break;
             String rawLine = stripComment(readLine()).strip();
             if (rawLine.isEmpty()) continue;
             if (rawLine.equals("?") || rawLine.startsWith("? ")) {
@@ -567,7 +586,7 @@ final class YamlParser {
                 throw new YamlParseException("unexpected indentation in mapping", line);
             }
             pos += li;
-            if (isMarkerLine(stripComment(peekLine()).strip())) {
+            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) {
                 pos = saved;
                 line = savedLine;
                 break;
@@ -665,22 +684,20 @@ final class YamlParser {
 
     /**
      * Fold following deeper-indented lines into a plain scalar. Returns null when
-     * there is no continuation. Stops at blank+dedent, comments, markers, sequence
-     * entries, explicit keys, and lines that open new mapping entries.
+     * there is no continuation. Comment lines terminate (SnakeYAML parity);
+     * markers, sequence entries, explicit keys and new mapping entries do too.
      */
     private String foldPlainContinuation(String first, int indent) {
         StringBuilder sb = null;
         boolean pendingBlank = false;
         for (;;) {
             if (pos >= end) break;
-            int p = pos;
-            while (p < end && (d[p] == ' ' || d[p] == '\t')) p++;
-            if (p >= end) break;
-            byte c = d[p];
-            if (c == '\n' || c == '\r') {
-                // Blank line: paragraph break only if deeper content follows
-                int q = p;
-                if (d[q] == '\r') q++;
+            int le = lineEnd(pos);
+            int kind = classifyLine(pos, le);
+            if (kind == LINE_BLANK) {
+                // Paragraph break only if deeper content follows (look past the break)
+                int q = le;
+                if (q < end && d[q] == '\r') q++;
                 if (q < end && d[q] == '\n') q++;
                 int qi = 0;
                 while (q + qi < end && d[q + qi] == ' ') qi++;
@@ -691,17 +708,9 @@ final class YamlParser {
                 }
                 break;
             }
-            if (c == '#') break;
-            int li = p - pos;
-            if (d[p] == '\t') {
-                throw new YamlParseException("tabs are not allowed for indentation", line);
-            }
-            if (li <= indent) break;
-            String code = stripComment(peekLineFrom(p)).strip();
-            if (code.isEmpty() || isMarkerLine(code) || isSeqEntryAt(p) || isExplicitKeyAt(p)
-                    || hasMappingIndicator(code)) {
-                break;
-            }
+            if (kind != LINE_PLAIN) break;
+            int cs = contentStart(d, pos, le);
+            if (cs - pos <= indent) break;
             if (sb == null) {
                 sb = new StringBuilder(first);
             }
@@ -711,19 +720,10 @@ final class YamlParser {
             } else {
                 sb.append(' ');
             }
-            advanceTo(p);
+            pos = cs;
             sb.append(stripComment(readLine()).strip());
         }
         return sb == null ? null : sb.toString();
-    }
-
-    /** Peek the line starting at absolute offset p (no consume). */
-    private String peekLineFrom(int p) {
-        int e = p;
-        while (e < end && d[e] != '\n' && d[e] != '\r') e++;
-        int trim = e;
-        if (trim > p && d[trim - 1] == '\r') trim--;
-        return new String(d, p, trim - p, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** Move pos to q, counting any line breaks crossed. */
@@ -1497,32 +1497,52 @@ final class YamlParser {
         if (value.isEmpty()) return false;
         int i = (value.charAt(0) == '-' || value.charAt(0) == '+') ? 1 : 0;
         if (i >= value.length()) return false;
-        String rest = value.substring(i);
-        if (rest.startsWith("0b") || rest.startsWith("0B")) {
-            return allIn(rest, 2, "01_");
+        // Work on offsets into value throughout: no substring allocation
+        if (startsWithAt(value, i, "0b") || startsWithAt(value, i, "0B")) {
+            return allIn(value, i + 2, "01_");
         }
-        if (rest.startsWith("0x") || rest.startsWith("0X")) {
-            return allIn(rest, 2, "0123456789abcdefABCDEF_");
+        if (startsWithAt(value, i, "0x") || startsWithAt(value, i, "0X")) {
+            return allIn(value, i + 2, "0123456789abcdefABCDEF_");
         }
-        if (rest.startsWith("0") && rest.length() > 1 && rest.charAt(1) != ':') {
-            // Leading zero: only 0-7 and underscores (09 stays a string)
-            return allIn(rest, 1, "01234567_");
-        }
-        // Decimal with optional underscores, or sexagesimal H:M[:S]
-        String[] parts = rest.split(":", -1);
-        if (parts.length == 1) {
-            return isDigitRun(parts[0]);
-        }
-        if (parts.length > 3 || parts[0].isEmpty()) return false;
-        if (!isDigitRun(parts[0]) || parts[0].charAt(0) == '0') return false;
-        for (int k = 1; k < parts.length; k++) {
-            String p = parts[k];
-            // Minutes/seconds: 1-2 plain digits each (no underscores), tens <= 5
-            if (p.isEmpty() || p.length() > 2) return false;
-            for (int j = 0; j < p.length(); j++) {
-                if (p.charAt(j) < '0' || p.charAt(j) > '9') return false;
+        // indexOf is allocation-free; plain and sexagesimal have different
+        // leading-zero rules, so branch before validating
+        int colon = value.indexOf(':', i);
+        if (colon < 0) {
+            if (!isDigitRun(value, i, value.length())) return false;
+            if (value.length() - i > 1 && value.charAt(i) == '0') {
+                // Leading zero: only 0-7 and underscores (09 stays a string)
+                return allIn(value, i + 1, "01234567_");
             }
-            if (p.length() == 2 && p.charAt(0) > '5') return false;
+            return true;
+        }
+        // Sexagesimal H:M[:S]: hours are a digit run with no leading zero
+        int partStart = i;
+        int parts = 0;
+        for (int k = i; k <= value.length(); k++) {
+            if (k == value.length() || value.charAt(k) == ':') {
+                parts++;
+                if (parts > 3) return false;
+                if (parts == 1) {
+                    if (!isDigitRun(value, partStart, k) || value.charAt(partStart) == '0') return false;
+                } else {
+                    // Minutes/seconds: 1-2 plain digits each (no underscores), tens <= 5
+                    int len = k - partStart;
+                    if (len < 1 || len > 2) return false;
+                    for (int j = partStart; j < k; j++) {
+                        if (value.charAt(j) < '0' || value.charAt(j) > '9') return false;
+                    }
+                    if (len == 2 && value.charAt(partStart) > '5') return false;
+                }
+                partStart = k + 1;
+            }
+        }
+        return true;
+    }
+
+    private static boolean startsWithAt(String s, int from, String prefix) {
+        if (s.length() - from < prefix.length()) return false;
+        for (int k = 0; k < prefix.length(); k++) {
+            if (s.charAt(from + k) != prefix.charAt(k)) return false;
         }
         return true;
     }
@@ -1535,9 +1555,9 @@ final class YamlParser {
         return true;
     }
 
-    private static boolean isDigitRun(String s) {
-        if (s.isEmpty() || s.charAt(0) < '0' || s.charAt(0) > '9') return false;
-        for (int k = 1; k < s.length(); k++) {
+    private static boolean isDigitRun(String s, int from, int to) {
+        if (from >= to || s.charAt(from) < '0' || s.charAt(from) > '9') return false;
+        for (int k = from + 1; k < to; k++) {
             char c = s.charAt(k);
             if (!(c >= '0' && c <= '9') && c != '_') return false;
         }
