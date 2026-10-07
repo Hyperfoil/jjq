@@ -3276,4 +3276,42 @@ class JqValueTest {
         assertInstanceOf(JqArray.class, parsed);
         assertEquals(10, parsed.length());
     }
+
+    // ---- Byte-span APIs (jjq#96) ----
+
+    @Test
+    void internFieldNameRangeAscii() {
+        byte[] src = "xxkey-1yykey-1zz".getBytes(StandardCharsets.UTF_8);
+        String a = JqValues.internFieldName(src, 2, 7);
+        assertEquals("key-1", a);
+        // Same instance as the String interning (shared table)
+        assertSame(JqValues.internFieldName("key-1"), a);
+        // Sub-range of a larger buffer interns identically
+        assertSame(a, JqValues.internFieldName(src, 9, 14));
+    }
+
+    @Test
+    void internFieldNameRangeNonAscii() {
+        String name = "clé";
+        byte[] src = ("--" + name + "--").getBytes(StandardCharsets.UTF_8);
+        String interned = JqValues.internFieldName(src, 2, src.length - 2);
+        assertEquals(name, interned);
+        assertSame(JqValues.internFieldName(name), interned);
+    }
+
+    @Test
+    void internFieldNameRangeEmpty() {
+        byte[] src = "ab".getBytes(StandardCharsets.UTF_8);
+        assertEquals("", JqValues.internFieldName(src, 1, 1));
+    }
+
+    @Test
+    void deferredBytesPublic() {
+        // Public since #96: parsers other than JSON can defer value decoding.
+        // Contract: caller retains `source` while the JqString is reachable.
+        byte[] src = "xxhello worldyy".getBytes(StandardCharsets.UTF_8);
+        JqString s = JqString.deferredBytes(src, 2, 13, false);
+        assertEquals("hello world", s.stringValue());
+        assertEquals("\"hello world\"", s.toJsonString());
+    }
 }

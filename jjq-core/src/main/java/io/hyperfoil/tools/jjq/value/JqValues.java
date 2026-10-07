@@ -57,6 +57,36 @@ public final class JqValues {
             ThreadLocal.withInitial(() -> new InternSlot[L1_SIZE]);
 
     /**
+     * Intern a field name from a byte range, without materializing an
+     * intermediate String on lookup hits. The range must hold the key's UTF-8
+     * bytes (no surrounding quotes or whitespace).
+     *
+     * <p>ASCII ranges hash inline (identical to {@link String#hashCode}); ranges
+     * containing non-ASCII bytes fall back to materializing once and delegating
+     * to {@link #internFieldName(String)}. Returned instances come from the
+     * same shared table in both cases.</p>
+     *
+     * @param src   source buffer holding the key bytes
+     * @param start start offset (inclusive) of the key
+     * @param end   end offset (exclusive) of the key
+     * @return the interned (canonical) key instance
+     */
+    public static String internFieldName(byte[] src, int start, int end) {
+        int hash = 0;
+        int p = start;
+        while (p < end) {
+            int b = src[p] & 0xFF;
+            if (b >= 0x80) {
+                return internFieldName(new String(src, start, end - start,
+                        java.nio.charset.StandardCharsets.UTF_8));
+            }
+            hash = hash * 31 + b;
+            p++;
+        }
+        return internKeyWithHash(src, start, end, hash);
+    }
+
+    /**
      * Intern a field name string. Returns the cached instance if one exists
      * for this hash slot, or caches and returns the given string.
      * Also pre-computes the JSON key serialization form {@code "\"key\":"}.

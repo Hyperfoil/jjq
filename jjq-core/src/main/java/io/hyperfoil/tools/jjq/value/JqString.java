@@ -50,9 +50,22 @@ public final class JqString implements JqValue {
     /**
      * Create a deferred JqString that references a region of a UTF-8 byte array.
      * The Java String is materialized lazily on first access.
-     * Package-private -- used by the byte parser only.
+     *
+     * <p><b>Retention contract:</b> the caller must keep {@code source} reachable
+     * (and unmodified over {@code [start, end)}) for as long as the returned
+     * {@code JqString} is reachable — typically by holding the parse input
+     * buffer alongside the parsed tree. Strings whose range needs processing
+     * ({@code hasEscapes}) still decode lazily, but callers that cannot uphold
+     * YAML-style escapes (e.g. single-quote doubling) must materialize eagerly
+     * instead of passing {@code true}.</p>
+     *
+     * @param source     source buffer (retained, see contract above)
+     * @param start      content start offset (after any opening quote)
+     * @param end        content end offset (before any closing quote)
+     * @param hasEscapes whether the range contains backslash escapes
+     * @return a lazily-decoding string value
      */
-    static JqString deferredBytes(byte[] source, int start, int end, boolean hasEscapes) {
+    public static JqString deferredBytes(byte[] source, int start, int end, boolean hasEscapes) {
         return new JqString(null, source, start, end, hasEscapes);
     }
 
