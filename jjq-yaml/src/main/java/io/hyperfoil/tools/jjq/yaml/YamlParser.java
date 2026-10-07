@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.yaml;
 import io.hyperfoil.tools.jjq.value.*;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,6 +35,19 @@ final class YamlParser {
     private int pos;
     private int line = 1;
     private Map<String, JqValue> anchors = new HashMap<>();
+    /** `%TAG` handles defined by the current document's directives. */
+    private Map<String, String> tagHandles = new HashMap<>();
+    /** A `%YAML` directive was seen in this stream (duplicates are errors). */
+    private boolean seenYamlDirective;
+    /** Whether the last parsed document ended with an explicit `...`. */
+    private boolean lastDocEnded;
+    /**
+     * An anchor from an `&x` + nested-block value is waiting for its node.
+     * Another anchor on that same root node is a duplicate (suite 4JVG:
+     * `&node2` + `&v2 val2`); anchors on deeper nodes are independent.
+     * Set only by the anchor-empty branch; cleared on collection dispatch.
+     */
+    private boolean outerValueAnchorPending;
 
     private YamlParser(byte[] data, int offset, int length, YamlOptions options) {
         int start = offset;
@@ -62,6 +76,7 @@ final class YamlParser {
         boolean anyDoc = false;
         for (;;) {
             p.anchors = new HashMap<>();
+            p.tagHandles = new HashMap<>();
             if (anyDoc) {
                 p.skipTrailingEndMarkers();
             }
@@ -69,6 +84,22 @@ final class YamlParser {
             if (doc == null) break;
             anyDoc = true;
             docs.add(doc);
+            // An explicit `...` ends the directive scope (suite W4TN parity);
+            // without it a repeated %YAML is a duplicate (suite SF5V).
+            if (p.lastDocEnded) {
+                p.seenYamlDirective = false;
+            }
+            // Content after a complete document needs a `---` marker to start
+            // a new one (suite BS4K/KS4U parity; SnakeYAML agrees) — unless the
+            // previous document ended with `...` (suite 7Z25 parity).
+            // Directives are exempt here: their own placement rule reports them.
+            if (!p.lastDocEnded && p.skipBlankAndComments()) {
+                int c = p.d[p.pos];
+                if (c != '%' && !p.matchMarker("---") && !p.isDocEndAtLineStart()) {
+                    throw new YamlParseException("content after document without document marker",
+                            p.line);
+                }
+            }
         }
         return docs;
     }
@@ -80,7 +111,19 @@ final class YamlParser {
     /** Parse one document. Returns null at clean EOF (no more documents). */
     private JqValue parseDocument(boolean firstDoc) {
         boolean sawDirectives = skipDocPreamble();
-        if (pos >= end) return null;
+        // Directives mid-stream need a `...` footer on the previous document
+        // (suite 9HCY/EB22 parity).
+        if (sawDirectives && !firstDoc && !lastDocEnded) {
+            throw new YamlParseException("directive without document end marker", line);
+        }
+        lastDocEnded = false;
+        if (pos >= end) {
+            // Directives with no document at all are malformed (suite 9MMA).
+            if (sawDirectives) {
+                throw new YamlParseException("directives without document", line);
+            }
+            return null;
+        }
         if (isDocEndAtLineStart()) {
             // A bare `...` ends the stream with no document. Directives alone
             // do not start one, so `%YAML` + `...` is malformed (B63P parity).
@@ -104,6 +147,7 @@ final class YamlParser {
                 // `...` end, or another `---` (empty doc, left for next document).
                 if (!skipBlankAndComments()) return JqNull.NULL;
                 if (consumeDocEnd()) {
+                    lastDocEnded = true;
                     return JqNull.NULL;
                 }
                 if (matchMarker("---")) {
@@ -130,7 +174,9 @@ final class YamlParser {
         skipBlankAndComments();
         // Consume a trailing end marker (validates it stands alone).
         // Content after `...` starts a new document (suite 7Z25 parity).
-        consumeDocEnd();
+        if (consumeDocEnd()) {
+            lastDocEnded = true;
+        }
         return doc == null ? JqNull.NULL : doc;
     }
 
@@ -174,12 +220,50 @@ final class YamlParser {
         }
     }
 
-    /** Skip `%`-directive lines at the current position. */
+    /**
+     * Skip and validate `%`-directive lines at the current position.
+     * `%YAML n.m` must be exact (suite H7TQ/MUS6/00: no extra words, `#` needs
+     * separation space) and appear at most once per stream (suite SF5V/MUS6/01).
+     * `%TAG handle uri` records the handle for this document (suite QLJ7:
+     * handles do not cross `---` boundaries; the table resets per document).
+     */
     private void skipDirectives() {
         while (pos < end && d[pos] == '%') {
+            int le = lineEnd(pos);
+            String directive = new String(d, pos, le - pos, StandardCharsets.UTF_8);
+            if (isDirective(directive, "%YAML")) {
+                // Separation whitespace required (`%YAML 1.1#...` is malformed,
+                // suite MUS6/00); trailing comment allowed (suite BEC7).
+                if (!directive.matches("%YAML\\s+[0-9]+\\.[0-9]+(\\s+(#.*)?)?")) {
+                    throw new YamlParseException("invalid %YAML directive", line);
+                }
+                if (seenYamlDirective) {
+                    throw new YamlParseException("duplicate %YAML directive", line);
+                }
+                seenYamlDirective = true;
+            } else if (isDirective(directive, "%TAG")) {
+                String[] parts = directive.split("\\s+");
+                if (parts.length != 3 || !parts[1].startsWith("!")) {
+                    throw new YamlParseException("invalid %TAG directive", line);
+                }
+                tagHandles.put(parts[1], parts[2]);
+            }
+            // Any other %-directive is reserved and ignored (suite 2LFX/6LVF).
             advanceLine();
             skipBlankLinesOnly();
         }
+    }
+
+    /**
+     * True when the directive line is exactly `%NAME` or `%NAME` + separation
+     * whitespace (`%YAMLL` is not `%YAML`, suite MUS6/06 parity).
+     */
+    private static boolean isDirective(String directive, String name) {
+        if (directive.equals(name)) return true;
+        return directive.startsWith(name)
+                && directive.length() > name.length()
+                && (directive.charAt(name.length()) == ' '
+                    || directive.charAt(name.length()) == '\t');
     }
 
     /**
@@ -440,6 +524,11 @@ final class YamlParser {
         int anchorInd = -1;
         for (;;) {
             if (!skipBlankAndComments()) return JqNull.NULL;
+            // A `%` line here is a misplaced directive: directives end at `---`
+            // (suite MUS6/01 parity; `%` cannot start a plain scalar either).
+            if (pos < end && d[pos] == '%') {
+                throw new YamlParseException("directive after document start marker", line);
+            }
             int ind = peekIndent();
             if (ind < eff) return attachAnchor(JqNull.NULL, anchorName);
             if (isSeqEntry()) {
@@ -452,6 +541,7 @@ final class YamlParser {
                     eff = ind;
                 }
                 first = false;
+                outerValueAnchorPending = false;
                 return attachAnchor(parseBlockSeq(eff, nested), anchorName);
             }
             if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) {
@@ -473,6 +563,9 @@ final class YamlParser {
                 // adopting indent themselves (suite M5C3 parity: `!foo` at 3
                 // then `>1` at 2 still nests under the caller base).
                 if (!onlyAnchor.isEmpty()) {
+                    if (anchorName != null || outerValueAnchorPending) {
+                        throw new YamlParseException("duplicate anchor", line);
+                    }
                     anchorName = onlyAnchor;
                     anchorInd = ind;
                 }
@@ -499,6 +592,7 @@ final class YamlParser {
                 // Rewind: the map loop reads its first entry itself.
                 pos = linePos;
                 line = lineSaved;
+                outerValueAnchorPending = false;
                 return attachAnchor(parseBlockMap(ind), anchorName);
             }
             if (first) {
@@ -570,17 +664,17 @@ final class YamlParser {
         if (first.isEmpty()) return JqNull.NULL;
         char c0 = first.charAt(0);
         if (c0 == '"' || c0 == '\'') {
-            return parseInlineValue(gatherValueText(first, level), level, true);
+            return parseInlineValue(gatherValueText(first, level, false), level, true, false);
         }
         if (c0 == '{' || c0 == '[') {
-            return parseInlineValue(gatherValueText(first, level), level, true);
+            return parseInlineValue(gatherValueText(first, level, false), level, true, false);
         }
         if (isBlockScalarHeader(first)) {
             // Standalone header: content indent auto-detects (doc-root-like rules)
-            return parseInlineValue(first, -1, true);
+            return parseInlineValue(first, -1, true, false);
         }
         if (c0 == '&' || c0 == '*' || c0 == '!') {
-            return parseInlineValue(first, level, true);
+            return parseInlineValue(first, level, true, false);
         }
         // A trailing comment completes the scalar: no folding past it (BF9H parity)
         if (commented) {
@@ -759,11 +853,23 @@ final class YamlParser {
             pos += ind; // reach '-'
             pos++; // consume '-'
             if (pos < end && (d[pos] == ' ' || d[pos] == '\t')) {
-                while (pos < end && (d[pos] == ' ' || d[pos] == '\t')) pos++;
+                boolean tabSeparated = false;
+                while (pos < end && (d[pos] == ' ' || d[pos] == '\t')) {
+                    if (d[pos] == '\t') tabSeparated = true;
+                    pos++;
+                }
                 // Column (not absolute offset) of the item content, for nested indent
                 int dashCol = pos - lineStart;
                 String rawRest = readLine();
                 String rest = stripComment(rawRest).strip();
+                // A tab between `-` and a nested `- ` entry is illegal
+                // separation (suite Y79Y/004 `/-\t-` and /005; `-` + tab +
+                // content stays legal, suite 6BCT parity).
+                if (tabSeparated && (rest.equals("-") || rest.startsWith("- ")
+                        || rest.startsWith("-\t"))) {
+                    throw new YamlParseException("tabs cannot separate nested sequence entries",
+                            line - 1);
+                }
                 elems.add(parseSeqItemContent(rest, indent, dashCol, hasTrailingComment(rawRest), indent));
             } else {
                 // Bare '-' (EOL right after): null, or nested block on following lines.
@@ -978,7 +1084,7 @@ final class YamlParser {
      */
     private JqValue parseInlineMapValue(String inline, int keyCol, int parentIndent, boolean commented) {
         if (!inline.isEmpty() && isBlockScalarHeader(inline)) {
-            return parseInlineValue(inline, keyCol, true);
+            return parseInlineValue(inline, keyCol, true, true);
         }
         return parseMapValue(inline, parentIndent, commented);
     }
@@ -1030,6 +1136,10 @@ final class YamlParser {
                 anchorName = t.substring(1, sp);
                 t = t.substring(sp).strip();
             } else if (t.startsWith("*")) {
+                // Anchors cannot sit on alias keys either (suite SU74: `&b *alias`).
+                if (anchorName != null) {
+                    throw new YamlParseException("anchor on alias", line);
+                }
                 int sp = indexOfWs(t);
                 String alias = sp < 0 ? t.substring(1) : t.substring(1, sp);
                 JqValue v = anchors.get(alias);
@@ -1097,10 +1207,10 @@ final class YamlParser {
             int foldSeqIndent) {
         char c0 = first.charAt(0);
         if (c0 == '"' || c0 == '\'' || c0 == '{' || c0 == '[') {
-            return parseInlineValue(gatherValueText(first, indent), indent, sameIndentSeq);
+            return parseInlineValue(gatherValueText(first, indent, true), indent, sameIndentSeq, true);
         }
         if (c0 == '|' || c0 == '>' || c0 == '&' || c0 == '*' || c0 == '!') {
-            return parseInlineValue(first, indent, sameIndentSeq);
+            return parseInlineValue(first, indent, sameIndentSeq, true);
         }
         // A trailing comment completes the scalar: no folding past it (BF9H parity)
         String folded = firstCommented ? null : foldPlainContinuation(first, indent, foldSeqIndent);
@@ -1200,7 +1310,7 @@ final class YamlParser {
 
     /** Apply a `<<` merge value (alias or sequence of aliases to mappings). */
     private void applyMerge(JqObject.Builder builder, String inline, int indent) {
-        JqValue mergeValue = inline.isEmpty() ? parseNestedMerge(indent) : parseInlineValue(inline, indent, true);
+        JqValue mergeValue = inline.isEmpty() ? parseNestedMerge(indent) : parseInlineValue(inline, indent, true, true);
         if (mergeValue instanceof JqObject obj) {
             obj.forEach(builder::put);
         } else if (mergeValue instanceof JqArray arr) {
@@ -1233,16 +1343,47 @@ final class YamlParser {
      * quoted scalars (until the closing quote), flow collections (until balanced),
      * anything else returned as-is. Joins flow lines with a space (YAML folding).
      */
-    private String gatherValueText(String first, int indent) {
+    private String gatherValueText(String first, int indent, boolean quotedGate) {
         if (first.isEmpty()) return first;
         char c0 = first.charAt(0);
         if (c0 == '"' || c0 == '\'') {
-            return gatherQuoted(first, c0, indent);
+            checkQuotedTrailing(first, c0);
+            return gatherQuoted(first, c0, indent, quotedGate);
         }
         if (c0 == '{' || c0 == '[') {
             return gatherFlow(first, indent);
         }
         return first;
+    }
+
+    /**
+     * Reject trailing content after a quoted scalar closed on its first line
+     * (suite Q4CL/JY7Z/ZL4Z parity: `"quoted2" trailing`, `}in: valid`-class
+     * junk). Callers pre-strip comments, so any remainder is real junk —
+     * including `#...` without separation space (suite SU5Z parity).
+     */
+    private static void checkQuotedTrailing(String first, char quote) {
+        int close = closingQuote(first, quote, 1);
+        if (close >= 0 && !first.substring(close + 1).isBlank()) {
+            throw new YamlParseException("trailing content after quoted scalar", -1);
+        }
+    }
+
+    /** Index of the closing quote (escape-aware, `''`-aware), or -1. */
+    private static int closingQuote(String text, char quote, int from) {
+        for (int i = from; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (quote == '"' && c == '\\') {
+                i++;
+            } else if (c == quote) {
+                if (quote == '\'' && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                    i++;
+                } else {
+                    return i;
+                }
+            }
+        }
+        return -1;
     }
 
     /** Gather a possibly multi-line quoted scalar; folding like plain scalars.
@@ -1251,7 +1392,14 @@ final class YamlParser {
      * backslash escapes the line break itself (double quotes only), joining
      * the next line directly; other breaks fold to a space. A document marker
      * line aborts gathering (suite 5TRB: markers recognized mid-quote). */
-    private String gatherQuoted(String first, char quote, int indent) {
+    /**
+     * Gather continuations. When {@code gate} (map/sequence values only — bare
+     * document scalars are exempt, suite 7A4E/NP9H/Q8AD/PRH3/TL85/6WPF/9MQT/KSS4
+     * vs QB6E/JKF3/DK95 parity), non-blank continuations must stay deeper than
+     * the enclosing indent (spaces only; suite DK95/01), except a lone closing
+     * quote line (suite 6WPF).
+     */
+    private String gatherQuoted(String first, char quote, int indent, boolean gate) {
         if (isClosedQuote(first, quote)) return first;
         String continued = quote == '"' ? stripContinuation(first) : null;
         StringBuilder sb = new StringBuilder(continued != null ? continued : first);
@@ -1264,8 +1412,23 @@ final class YamlParser {
             if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) {
                 throw new YamlParseException("document marker inside quoted scalar", line);
             }
+            int le = lineEnd(pos);
+            int kind = classifyLine(pos, le);
             String rawLine = readLine();
             String content = rawLine.strip();
+            // A zero-indent continuation at root indent ends the quote region
+            // (suite QB6E/JKF3 parity: `"a` + `b` at base is an error; tabs do
+            // not count toward indent, suite DK95/01 parity). Blanks and
+            // comment lines inside quotes are content, as is a lone
+            // closing-quote line (suite 6WPF parity).
+            if (gate && kind != LINE_BLANK && kind != LINE_COMMENT
+                    && !content.equals("\"") && !content.equals("'")) {
+                int ci = 0;
+                while (ci < rawLine.length() && rawLine.charAt(ci) == ' ') ci++;
+                if (ci <= indent) {
+                    throw new YamlParseException("under-indented quoted continuation", line - 1);
+                }
+            }
             continued = quote == '"' ? stripContinuation(content) : null;
             if (continued != null) {
                 sb.append(continued);
@@ -1331,9 +1494,14 @@ final class YamlParser {
     }
 
     /** Gather a possibly multi-line flow collection until brackets balance.
-     * Blank and comment-only lines inside flow are skipped. Continuation lines
-     * must stay deeper than the enclosing indent (suite parity: same-or-less
-     * indented flow lines are rejected, e.g. 9C9N). */
+     * Blank lines inside flow are skipped; comment-only lines are rejected
+     * (suite CML9 parity; suite 7TMG's comma-following comment stays legal
+     * only when the flow remains valid — see below). A bare `:` must not open
+     * a continuation line at or below the enclosing indent (suite VJP3/00 vs
+     * VJP3/01 parity). Continuation indent itself is lenient (SnakeYAML parity;
+     * suite 9C9N stays documented-lenient since UT92/C2DT need the leniency).
+     * Tab-indented content lines are rejected, while bracket-only tab lines
+     * stay tolerated (suite Y79Y/003 vs 6CA3 parity). */
     private String gatherFlow(String first, int indent) {
         if (flowDepth(first) == 0) return first;
         StringBuilder sb = new StringBuilder(first);
@@ -1343,24 +1511,68 @@ final class YamlParser {
             }
             int le = lineEnd(pos);
             int kind = classifyLine(pos, le);
-            if (kind == LINE_BLANK || kind == LINE_COMMENT) {
+            if (kind == LINE_BLANK) {
+                advanceLine();
+                continue;
+            }
+            if (kind == LINE_COMMENT) {
+                // Comment lines are skipped only at a comma/bracket boundary
+                // (probe: `[ word1` + `# c` + `, word2]` parses but
+                // `[ word1` + `# c` + `word2 ]` throws, suite CML9 vs 7TMG).
+                String soFar = sb.toString().stripTrailing();
+                int nl = le;
+                if (nl < end && d[nl] == '\r') nl++;
+                if (nl < end && d[nl] == '\n') nl++;
+                int ne = nl;
+                while (ne < end && d[ne] != '\n' && d[ne] != '\r') ne++;
+                String nextLine = new String(d, nl, ne - nl, StandardCharsets.UTF_8).strip();
+                boolean prevOk = !soFar.isEmpty() && ",[{".indexOf(soFar.charAt(soFar.length() - 1)) >= 0;
+                boolean nextOk = !nextLine.isEmpty() && ",]}".indexOf(nextLine.charAt(0)) >= 0;
+                if (!prevOk && !nextOk) {
+                    throw new YamlParseException("comments are not allowed inside flow collections",
+                            line);
+                }
                 advanceLine();
                 continue;
             }
             if (kind == LINE_MARKER) {
                 throw new YamlParseException("unbalanced flow collection", line);
             }
-            // No indentation gate: flow continuation lines at any indent are
-            // accepted (suite 9C9N); genuinely unbalanced input still fails
-            // at EOF or on inner syntax errors.
-            String rawLine = stripComment(readLine()).strip();
-            if (rawLine.endsWith("\\")) {
-                sb.append(rawLine, 0, rawLine.length() - 1);
+            String rawLine = readLine();
+            String content = rawLine.strip();
+            // Tab-indented content is rejected (suite Y79Y/003); lines holding
+            // only brackets/commas stay tab-tolerant (suite 6CA3).
+            if (!content.isEmpty() && rawLine.charAt(0) == '\t' && !isFlowPunctOnly(content)) {
+                throw new YamlParseException("tabs are not allowed for indentation in flow", line);
+            }
+            String joined = stripComment(rawLine).strip();
+            // A bare `:` opener at or below the enclosing indent splits key and
+            // separator across lines (suite VJP3/00); deeper or valued colons
+            // stay legal (suite VJP3/01, 4MUZ parity).
+            if (joined.equals(":")) {
+                int li = 0;
+                while (li < rawLine.length()
+                        && (rawLine.charAt(li) == ' ' || rawLine.charAt(li) == '\t')) li++;
+                if (li <= indent) {
+                    throw new YamlParseException("flow mapping separator on its own line", line);
+                }
+            }
+            if (joined.endsWith("\\")) {
+                sb.append(joined, 0, joined.length() - 1);
             } else {
-                sb.append(' ').append(rawLine);
+                sb.append(' ').append(joined);
             }
             if (flowDepth(sb.toString()) == 0) return sb.toString();
         }
+    }
+
+    /** True when the text holds only flow brackets/commas (tab-tolerant lines). */
+    private static boolean isFlowPunctOnly(String content) {
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (c != '[' && c != ']' && c != '{' && c != '}' && c != ',') return false;
+        }
+        return !content.isEmpty();
     }
 
     /** Net bracket depth of flow characters, quote-aware. Negative clamps to -1 (over-close). */
@@ -1387,13 +1599,19 @@ final class YamlParser {
         return depth;
     }
 
-    /** Parse a same-line value with tag/anchor/alias prefixes. {@code indent} is the enclosing context. */
-    private JqValue parseInlineValue(String text, int indent, boolean sameIndentSeq) {
+    /** Parse a same-line value with tag/anchor/alias prefixes. {@code indent} is the enclosing context.
+     * {@code quotedGate} enables the quoted-continuation indent gate (map/sequence
+     * values only; bare scalars exempt). */
+    private JqValue parseInlineValue(String text, int indent, boolean sameIndentSeq, boolean quotedGate) {
         String t = text.strip();
         String tag = null;
         String anchorName = null;
         while (t.startsWith("!") || t.startsWith("&") || t.startsWith("*")) {
             if (t.startsWith("*")) {
+                // Anchors cannot sit on aliases (suite SR86: `&b *a`).
+                if (anchorName != null) {
+                    throw new YamlParseException("anchor on alias", line);
+                }
                 String name = t.substring(1).split("\\s")[0];
                 JqValue aliased = anchors.get(name);
                 if (aliased == null) {
@@ -1405,16 +1623,26 @@ final class YamlParser {
             String token = sp < 0 ? t : t.substring(0, sp);
             String rest = sp < 0 ? "" : t.substring(sp).strip();
             if (token.startsWith("&")) {
+                if (anchorName != null || outerValueAnchorPending) {
+                    throw new YamlParseException("duplicate anchor", line);
+                }
                 anchorName = token.substring(1);
                 if (rest.isEmpty()) {
-                    JqValue value = parseAnchoredNested(indent, sameIndentSeq);
-                    anchors.put(anchorName, value);
-                    return value;
+                    boolean savedPending = outerValueAnchorPending;
+                    outerValueAnchorPending = true;
+                    try {
+                        JqValue value = parseAnchoredNested(indent, sameIndentSeq);
+                        anchors.put(anchorName, value);
+                        return value;
+                    } finally {
+                        outerValueAnchorPending = savedPending;
+                    }
                 }
                 t = rest;
                 continue;
             }
             tag = token;
+            validateTag(token);
             t = rest;
             if (t.isEmpty()) {
                 JqValue value = parseAnchoredNested(indent, sameIndentSeq);
@@ -1422,7 +1650,13 @@ final class YamlParser {
                 return value;
             }
         }
-        t = gatherValueText(t, indent);
+        // A block sequence cannot open on the same line after an anchor/tag
+        // (suite SY6V: `&anchor - sequence entry`).
+        if ((anchorName != null || tag != null) && (t.equals("-") || t.startsWith("- ")
+                || t.startsWith("-\t"))) {
+            throw new YamlParseException("block sequence cannot follow anchor/tag on the same line", line);
+        }
+        t = gatherValueText(t, indent, quotedGate);
         JqValue value;
         if (startsBlockScalar(t)) {
             value = parseBlockScalar(t, indent);
@@ -1478,9 +1712,25 @@ final class YamlParser {
             else throw new YamlParseException("invalid block scalar header", line);
             i++;
         }
+        // After the indicators only separation space (then an optional comment)
+        // may follow: `> first line` is content on the header line (suite S4GJ)
+        // and `># comment` lacks the separation space (suite X4QW). A `#` only
+        // starts a comment after space/tab; anything else is junk.
+        if (i < header.length()) {
+            char c = header.charAt(i);
+            if (c == '#') {
+                throw new YamlParseException("invalid block scalar header", line);
+            }
+            int j = i;
+            while (j < header.length() && (header.charAt(j) == ' ' || header.charAt(j) == '\t')) j++;
+            if (j < header.length() && header.charAt(j) != '#') {
+                throw new YamlParseException("content on block scalar header line", line);
+            }
+        }
         var content = new ArrayList<String>();
         var blanks = new HashSet<Integer>();
         var keepLines = new HashSet<Integer>();
+        var leadingBlankLis = new ArrayList<Integer>();
         int contentIndent = -1;
         // Content must exceed the enclosing indent (doc-root passes -1, so
         // column-0 content is accepted there); explicit digits pin it exactly
@@ -1508,6 +1758,15 @@ final class YamlParser {
                     contentIndent = explicitIndent > 0
                             ? (indent < 0 ? explicitIndent : indent + explicitIndent)
                             : li;
+                    // Leading blanks must not exceed the first content indent
+                    // (suite S98Z/5LLU/W9L4 parity; spaces-only measure keeps
+                    // the R4YG tab remainder passing).
+                    for (int bli : leadingBlankLis) {
+                        if (bli > contentIndent) {
+                            throw new YamlParseException(
+                                    "block scalar leading blank line over-indented", line);
+                        }
+                    }
                 }
                 if (li < contentIndent) {
                     pos = saved;
@@ -1516,12 +1775,22 @@ final class YamlParser {
                 }
             }
             String rawLine = readLine();
+            // A tab in first position is illegal indentation (suite Y79Y/000
+            // parity); tabs after spaces are content (suite R4YG parity).
+            if (!rawLine.isEmpty() && rawLine.charAt(0) == '\t') {
+                throw new YamlParseException("tabs are not allowed for indentation", line - 1);
+            }
             if (blank) {
                 blanks.add(content.size());
                 // Store raw; the remainder past the (possibly not yet known)
                 // content indent is significant (suite L24T/R4YG parity).
                 // Stripped in post-processing below.
                 content.add(rawLine);
+                if (contentIndent < 0) {
+                    int bli = 0;
+                    while (bli < rawLine.length() && rawLine.charAt(bli) == ' ') bli++;
+                    leadingBlankLis.add(bli);
+                }
             } else {
                 // rawLine holds leading spaces (pos was at line start):
                 // strip exactly contentIndent of them (extra indent is significant)
@@ -1672,6 +1941,7 @@ final class YamlParser {
 
     /** Parse a `{k: v, ...}` flow mapping (complete text, possibly multi-line joined). */
     private JqValue parseFlowMap(String text) {
+        checkFlowText(text);
         FlowCursor c = new FlowCursor(text, 1);
         var builder = JqObject.builder(4);
         Set<String> seen = options.allowDuplicateKeys() ? null : new HashSet<>();
@@ -1724,10 +1994,14 @@ final class YamlParser {
 
     /** Parse a `[a, b]` flow sequence (complete text, possibly multi-line joined). */
     private JqValue parseFlowSeq(String text) {
+        checkFlowText(text);
         FlowCursor c = new FlowCursor(text, 1);
         var elems = new ArrayList<JqValue>();
         c.skipWs();
         if (c.peek() == ']') return JqArray.of(elems.toArray(new JqValue[0]));
+        if (c.peek() == ',') {
+            throw new YamlParseException("empty flow element", line);
+        }
         for (;;) {
             c.skipWs();
             elems.add(c.flowValue());
@@ -1737,14 +2011,75 @@ final class YamlParser {
             if (ch != ',') {
                 throw new YamlParseException("expected ',' or ']' in flow sequence", line);
             }
-            // Trailing comma before close is legal (suite 5KJE/UDR7 parity)
+            // Trailing comma before close is legal (suite 5KJE/UDR7 parity);
+            // any other comma adjacency is an empty element (9MAG/CTN5).
             c.skipWs();
             if (c.peek() == ']') {
                 c.next();
                 break;
             }
+            if (c.peek() == ',') {
+                throw new YamlParseException("empty flow element", line);
+            }
         }
         return JqArray.of(elems.toArray(new JqValue[0]));
+    }
+
+    /**
+     * Validate complete flow text before parsing: nothing may trail the
+     * closing bracket (suite 62EZ/P2EQ/C2SP: `{ y: z }in: valid`), and an
+     * unquoted `#` right after `,`, `[`, `{` or `:` is an invalid comment
+     * (suite CVW2: `[ a, b, c,#invalid`). Callers pre-strip separated
+     * comments, so any remainder is real junk (suite 9JBA: `]#invalid`).
+     */
+    private void checkFlowText(String text) {
+        int close = findFlowClose(text);
+        if (close >= 0 && !text.substring(close + 1).isBlank()) {
+            throw new YamlParseException("trailing content after flow collection", line);
+        }
+        boolean sq = false, dq = false, esc = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (esc) {
+                esc = false;
+            } else if (c == '\\' && dq) {
+                esc = true;
+            } else if (c == '\'' && !dq) {
+                sq = !sq;
+            } else if (c == '"' && !sq) {
+                dq = !dq;
+            } else if (c == '#' && !sq && !dq && i > 0) {
+                char p = text.charAt(i - 1);
+                if (p == ',' || p == '[' || p == '{' || p == ':') {
+                    throw new YamlParseException("invalid comment in flow collection", line);
+                }
+            }
+        }
+    }
+
+    /** Index of the bracket closing the opener at 0 (quote-aware), or -1. */
+    private static int findFlowClose(String text) {
+        boolean sq = false, dq = false, esc = false;
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (esc) {
+                esc = false;
+            } else if (c == '\\' && dq) {
+                esc = true;
+            } else if (c == '\'' && !dq) {
+                sq = !sq;
+            } else if (c == '"' && !sq) {
+                dq = !dq;
+            } else if (!sq && !dq) {
+                if (c == '[' || c == '{') depth++;
+                else if (c == ']' || c == '}') {
+                    depth--;
+                    if (depth == 0) return i;
+                }
+            }
+        }
+        return -1;
     }
 
     /** Cursor over a flow scalar/collection. */
@@ -1820,7 +2155,7 @@ final class YamlParser {
                 case ' ' -> ' ';
                 case '\t' -> '\t';
                 case '"' -> '"';
-                case '\'' -> '\'';
+                // No \' arm: invalid in double quotes (suite HRE5)
                 case '\\' -> '\\';
                 case '/' -> '/';
                 case 'N' -> '\u0085';
@@ -1895,7 +2230,10 @@ final class YamlParser {
                         && s.charAt(i) != '\n' && s.charAt(i) != '\r') i++;
                 String token = s.substring(start, i);
                 if (token.startsWith("&")) anchor = token.substring(1);
-                else tag = token;
+                else {
+                    tag = token;
+                    validateTag(token);
+                }
                 skipWs();
                 c = peek();
             }
@@ -1911,7 +2249,13 @@ final class YamlParser {
                 i++;
                 value = JqString.of(unquoteScalar(quoted(q), q));
             } else {
-                value = convertScalar(plain(), tag);
+                String plainText = plain();
+                // A bare `-` is not a value in flow (suite G5U8/YJV2 parity;
+                // SnakeYAML-load is lenient here, suite oracle wins).
+                if (plainText.equals("-")) {
+                    throw new YamlParseException("dashes are not allowed as flow values", line);
+                }
+                value = convertScalar(plainText, tag);
             }
             if (anchor != null) anchors.put(anchor, value);
             return value;
@@ -2011,7 +2355,7 @@ final class YamlParser {
                     case ' ' -> sb.append(' ');
                     case '\t' -> sb.append('\t');
                     case '"' -> sb.append('"');
-                    case '\'' -> sb.append('\'');
+                    // No \' arm: \' is not a valid double-quote escape (suite HRE5)
                     case '\\' -> sb.append('\\');
                     case '/' -> sb.append('/');
                     case 'N' -> sb.append('\u0085');
@@ -2064,6 +2408,35 @@ final class YamlParser {
         return t;
     }
 
+    /**
+     * Validate a tag token: verbatim `!<uri>` must close; shorthand bodies
+     * must not contain flow/map characters (suite LHL4: `!invalid{}tag`,
+     * U99R: `!!str,`). A `!handle!` prefix must be `%TAG`-defined in this
+     * document (`!!` and bare `!x` are always allowed; suite QLJ7 parity).
+     */
+    private void validateTag(String token) {
+        if (token.startsWith("!<")) {
+            if (!token.endsWith(">")) {
+                throw new YamlParseException("invalid verbatim tag", line);
+            }
+            return;
+        }
+        String body = token;
+        while (body.startsWith("!")) body = body.substring(1);
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '{' || c == '}' || c == '[' || c == ']' || c == ',' || c == ' ') {
+                throw new YamlParseException("invalid tag", line);
+            }
+        }
+        int second = token.indexOf('!', 1);
+        if (second > 0) {
+            String handle = token.substring(0, second + 1);
+            if (!handle.equals("!!") && !tagHandles.containsKey(handle)) {
+                throw new YamlParseException("unknown tag handle '" + handle + "'", line);
+            }
+        }
+    }
     /**
      * Convert a plain scalar to a value. {@code tag} is an explicit `!`/`!!` tag
      * or null. Mirrors the SnakeYAML-based conversion semantics exactly:

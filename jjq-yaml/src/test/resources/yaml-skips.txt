@@ -8,11 +8,8 @@
 35KP: explicit ? keys unsupported (documented limitation, #93)
 4ABK: no in.json oracle to conform to
 4FJ6: no in.json oracle to conform to
-4JVG: stricter than suite here [anchor] (leniency review, #93)
 5C5M: flow edge cases (follow-up, #93)
-5LLU: stricter than suite here [folded] (leniency review, #93)
 5WE3: explicit ? keys unsupported (documented limitation, #93)
-62EZ: stricter than suite here [flow] (leniency review, #93)
 6BFJ: no in.json oracle to conform to
 6CA3: tab tolerance edge (follow-up, #93)
 6M2F: no in.json oracle to conform to
@@ -24,95 +21,53 @@
 96NN/00: value mismatch (follow-up, #93)
 96NN/01: value mismatch (follow-up, #93)
 9BXH: flow edge cases (follow-up, #93)
-9C9N: stricter than suite here [flow] (leniency review, #93)
-9HCY: stricter than suite here [directive] (leniency review, #93)
-9JBA: stricter than suite here [flow] (leniency review, #93)
 9KAX: document splitting edge (follow-up, #93)
-9MAG: stricter than suite here [flow] (leniency review, #93)
-9MMA: stricter than suite here [directive] (leniency review, #93)
 9MMW: no in.json oracle to conform to
 9YRD: document splitting edge (follow-up, #93)
 A2M4: explicit ? keys unsupported (documented limitation, #93)
-BS4K: stricter than suite here [error] (leniency review, #93)
-C2SP: stricter than suite here [flow] (leniency review, #93)
 CFD4: no in.json oracle to conform to
-CML9: stricter than suite here [flow] (leniency review, #93)
 CN3R: flow edge cases (follow-up, #93)
 CT4Q: flow edge cases (follow-up, #93)
-CTN5: stricter than suite here [flow] (leniency review, #93)
-CVW2: stricter than suite here [flow] (leniency review, #93)
 DE56/02: value mismatch (follow-up, #93)
 DE56/03: value mismatch (follow-up, #93)
 DFF7: no in.json oracle to conform to
 DK95/00: tab tolerance edge (follow-up, #93)
-DK95/01: stricter than suite here [indent] (leniency review, #93)
-EB22: stricter than suite here [directive] (leniency review, #93)
 EX5H: document splitting edge (follow-up, #93)
 FH7J: no in.json oracle to conform to
 FRK4: no in.json oracle to conform to
-G5U8: stricter than suite here [flow] (leniency review, #93)
 GH63: explicit ? keys unsupported (documented limitation, #93)
-H7TQ: stricter than suite here [directive] (leniency review, #93)
 HMQ5: anchor forward-ref or alias-as-key (follow-up, #93)
-HRE5: stricter than suite here [error] (leniency review, #93)
-JKF3: stricter than suite here [indent] (leniency review, #93)
 JTV5: explicit ? keys unsupported (documented limitation, #93)
-JY7Z: stricter than suite here [error] (leniency review, #93)
 KK5P: no in.json oracle to conform to
-KS4U: stricter than suite here [flow] (leniency review, #93)
 L94M: explicit ? keys unsupported (documented limitation, #93)
 L9U5: flow edge cases (follow-up, #93)
 LE5A: value mismatch (follow-up, #93)
-LHL4: stricter than suite here [tag] (leniency review, #93)
 LQZ7: flow edge cases (follow-up, #93)
 LX3P: no in.json oracle to conform to
 M2N8/00: no in.json oracle to conform to
 M2N8/01: no in.json oracle to conform to
 M5DY: no in.json oracle to conform to
-MUS6/00: stricter than suite here [directive] (leniency review, #93)
-MUS6/01: stricter than suite here [directive] (leniency review, #93)
 NHX8: no in.json oracle to conform to
 NKF9: no in.json oracle to conform to
-P2EQ: stricter than suite here [flow] (leniency review, #93)
 PW8X: no in.json oracle to conform to
-Q4CL: stricter than suite here [error] (leniency review, #93)
 Q5MG: tab tolerance edge (follow-up, #93)
 Q9WF: no in.json oracle to conform to
-QB6E: stricter than suite here [indent] (leniency review, #93)
 QF4Y: flow edge cases (follow-up, #93)
-QLJ7: stricter than suite here [directive] (leniency review, #93)
 RR7F: explicit ? keys unsupported (documented limitation, #93)
 RZP5: no in.json oracle to conform to
 S3PD: no in.json oracle to conform to
-S4GJ: stricter than suite here [folded] (leniency review, #93)
-S98Z: stricter than suite here [comment] (leniency review, #93)
 S9E8: explicit ? keys unsupported (documented limitation, #93)
 SBG9: no in.json oracle to conform to
-SF5V: stricter than suite here [directive] (leniency review, #93)
 SM9W/01: no in.json oracle to conform to
-SR86: stricter than suite here [alias] (leniency review, #93)
-SU5Z: stricter than suite here [comment] (leniency review, #93)
-SU74: stricter than suite here [alias] (leniency review, #93)
-SY6V: stricter than suite here [anchor] (leniency review, #93)
-U99R: stricter than suite here [tag] (leniency review, #93)
 U9NS: YAML 1.1 sexagesimal int not coerced to string (1.2 core schema, #93)
 UGM3: document splitting edge (follow-up, #93)
 UKK6/00: no in.json oracle to conform to
 UKK6/02: no in.json oracle to conform to
 V9D5: no in.json oracle to conform to
-VJP3/00: stricter than suite here [flow] (leniency review, #93)
 W5VH: anchor forward-ref or alias-as-key (follow-up, #93)
-W9L4: stricter than suite here [literal] (leniency review, #93)
 WZ62: flow edge cases (follow-up, #93)
 X38W: no in.json oracle to conform to
-X4QW: stricter than suite here [comment] (leniency review, #93)
 X8DW: explicit ? keys unsupported (documented limitation, #93)
 XW4D: no in.json oracle to conform to
-Y79Y/000: stricter than suite here [whitespace] (leniency review, #93)
-Y79Y/003: stricter than suite here [whitespace] (leniency review, #93)
-Y79Y/004: stricter than suite here [whitespace] (leniency review, #93)
-Y79Y/005: stricter than suite here [whitespace] (leniency review, #93)
-YJV2: stricter than suite here [flow] (leniency review, #93)
 ZCZ6: stricter than suite here [error] (leniency review, #93)
-ZL4Z: stricter than suite here [error] (leniency review, #93)
 ZWK4: explicit ? keys unsupported (documented limitation, #93)
