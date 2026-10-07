@@ -42,6 +42,43 @@ class JqMapperTest {
         assertFalse(result.getField("active").booleanValue());
     }
 
+    // ---- Java-only fields are invisible (issue #95.2, Jackson parity) ----
+
+    static class WithCodeOnlyFlag {
+        public String name;
+        private boolean expandAtLogin;
+
+        WithCodeOnlyFlag() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+    }
+
+    @Test
+    void privateFieldWithoutGetterIsOmitted() {
+        WithCodeOnlyFlag bean = new WithCodeOnlyFlag();
+        bean.setName("x");
+        JqValue result = mapper.toJqValue(bean);
+        assertEquals("x", result.getField("name").stringValue());
+        assertFalse(result.has("expandAtLogin"),
+                "Private field with no getter must not leak: " + result.toJsonString());
+    }
+
+    static class NoAccessorsAtAll {
+        private int hidden = 3;
+
+        NoAccessorsAtAll() {}
+    }
+
+    @Test
+    void fullySkippedClassStillConstructs() {
+        // A class whose fields are all invisible serializes as {} and still
+        // constructs (Jackson parity: empty bean, ignored properties).
+        JqValue result = mapper.toJqValue(new NoAccessorsAtAll());
+        assertEquals("{}", result.toJsonString());
+        assertNotNull(mapper.fromJqValue(JqValues.parse("{\"hidden\":9}"), NoAccessorsAtAll.class));
+    }
+
     @Test
     void roundTrip_simpleRecord() {
         SimpleRecord original = new SimpleRecord("Alice", 30, true);

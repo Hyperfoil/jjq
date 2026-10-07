@@ -359,7 +359,16 @@ final class ClassMapping<T> implements Mapping<T> {
                 setter = findSetter(type, name, fieldType, lookup);
             }
 
-            // Last resort: setAccessible on the field itself
+            // Last resort: setAccessible on the field itself, unless Jackson
+            // parity applies (issue #95.2): a non-public field with neither a
+            // getter nor a setter method is not a property unless explicitly
+            // named (@JqField or a bridge rename such as @JsonProperty, which
+            // opts the field in). Setter-backed fields stay bound (explicit
+            // field-visibility configs rely on them).
+            if (!isPublic && getter == null && setter == null && jqFieldAnnotation == null
+                    && resolveBridgeFieldName(field, bridges) == null) {
+                continue;
+            }
             if (getter == null) {
                 try {
                     field.setAccessible(true);
@@ -480,8 +489,10 @@ final class ClassMapping<T> implements Mapping<T> {
     @SuppressWarnings("unchecked")
     @Override
     public T fromJqValue(JqValue value, JqMapper mapper) {
-        // POJO path: no-arg constructor + setters
-        if (fields.length > 0 && fields[0].constructorIndex() < 0) {
+        // POJO path: no-arg constructor + setters. Empty non-record mappings
+        // (all fields invisible, issue #95.2) also construct this way.
+        if ((fields.length > 0 && fields[0].constructorIndex() < 0)
+                || (fields.length == 0 && !type.isRecord())) {
             return fromJqValuePojo(value, mapper);
         }
 

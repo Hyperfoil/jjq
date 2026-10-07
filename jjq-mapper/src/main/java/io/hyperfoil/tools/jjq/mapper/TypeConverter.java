@@ -198,7 +198,17 @@ public final class TypeConverter {
                 if (handlers.isPresent() && handlers.get().creator() != null) {
                     yield invokeCreator(handlers.get(), value, targetType, mapper);
                 }
-                if (value instanceof JqString s) yield Enum.valueOf((Class<? extends Enum>) targetType, s.stringValue());
+                if (value instanceof JqString s) {
+                    // Wire names first (issue #95.1), then constant names.
+                    if (handlers.isPresent()) {
+                        for (var entry : handlers.get().wireNames().entrySet()) {
+                            if (entry.getValue().equals(s.stringValue())) {
+                                yield Enum.valueOf((Class<? extends Enum>) targetType, entry.getKey());
+                            }
+                        }
+                    }
+                    yield Enum.valueOf((Class<? extends Enum>) targetType, s.stringValue());
+                }
                 if (value.isContainer()) throw mismatch(JqValue.Type.STRING, targetType.getSimpleName(), value);
                 yield null;
             }
@@ -334,6 +344,8 @@ public final class TypeConverter {
         if (value.getClass().isEnum()) {
             JqValue wire = enumWireValue(value, mapper);
             if (wire != null) return wire;
+            String wireName = enumWireName((Enum<?>) value, mapper);
+            if (wireName != null) return JqString.of(wireName);
             return JqString.of(((Enum<?>) value).name());
         }
         if (value.getClass().isRecord()) {
@@ -398,9 +410,12 @@ public final class TypeConverter {
      * @param creator       single-arg static factory or constructor (may be null)
      * @param creatorArgClass raw creator parameter class (null when no creator)
      * @param creatorArgType  generic creator parameter type (null when no creator)
+     * @param wireNames     constant name to wire name from per-constant renames
+     *                      (e.g. Jackson {@code @JsonProperty}; empty when none)
      */
     record EnumHandlers(Method valueAccessor, Executable creator,
-                        Class<?> creatorArgClass, Type creatorArgType) {}
+                        Class<?> creatorArgClass, Type creatorArgType,
+                        java.util.Map<String, String> wireNames) {}
 
     /**
      * Resolve enum handlers from the mapper's bridges (native annotations are
@@ -430,14 +445,47 @@ public final class TypeConverter {
             }
             if (accessor != null && creator != null) break;
         }
-        if (accessor == null && creator == null) return java.util.Optional.empty();
+        if (accessor == null && creator == null) {
+            java.util.Map<String, String> wireOnly =
+                    resolveEnumWireNames(type, bridges);
+            if (wireOnly.isEmpty()) return java.util.Optional.empty();
+            return java.util.Optional.of(new EnumHandlers(null, null, null, null, wireOnly));
+        }
         Class<?> argClass = null;
         Type argType = null;
         if (creator != null) {
             argType = creator.getGenericParameterTypes()[0];
             argClass = rawClass(argType);
         }
-        return java.util.Optional.of(new EnumHandlers(accessor, creator, argClass, argType));
+        return java.util.Optional.of(new EnumHandlers(accessor, creator, argClass, argType,
+                resolveEnumWireNames(type, bridges)));
+    }
+
+    /**
+     * Per-constant wire names from rename annotations on the enum constants
+     * (issue #95.1: Jackson {@code @JsonProperty("set-if-unset")} on constants,
+     * resolved through bridges like any other field rename).
+     */
+    private static java.util.Map<String, String> resolveEnumWireNames(
+            Class<?> type, List<io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge> bridges) {
+        java.util.Map<String, String> wireNames = new java.util.LinkedHashMap<>();
+        for (Object constant : type.getEnumConstants()) {
+            String name = ((Enum<?>) constant).name();
+            java.lang.reflect.Field field;
+            try {
+                field = type.getField(name);
+            } catch (NoSuchFieldException e) {
+                continue;
+            }
+            for (io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge bridge : bridges) {
+                String wire = bridge.resolveFieldName(field);
+                if (wire != null && !wire.isEmpty()) {
+                    wireNames.put(name, wire);
+                    break;
+                }
+            }
+        }
+        return wireNames;
     }
 
     /** Fail fast on malformed value-accessor signatures (checked once per class). */
@@ -478,6 +526,17 @@ public final class TypeConverter {
         } catch (ReflectiveOperationException | IllegalArgumentException e) {
             throw new JqMapperException("Failed to invoke @JsonCreator for " + targetType.getName(), e);
         }
+    }
+
+    /**
+     * Per-constant wire name for an enum value, or null when it serializes
+     * via {@code name()} (issue #95.1). {@code @JsonValue} accessors take
+     * precedence (checked by the caller first).
+     */
+    private static String enumWireName(Enum<?> enumValue, JqMapper mapper) {
+        return mapper.enumHandlers(enumValue.getClass())
+                .map(h -> h.wireNames().get(enumValue.name()))
+                .orElse(null);
     }
 
     /**

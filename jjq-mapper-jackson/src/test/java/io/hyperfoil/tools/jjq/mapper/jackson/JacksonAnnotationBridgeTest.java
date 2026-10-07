@@ -44,6 +44,38 @@ class JacksonAnnotationBridgeTest {
         assertFalse(json.contains("\"name\""), "Should not use Java name: " + json);
     }
 
+    // ---- @JsonProperty on enum constants (issue #95.1) ----
+
+    enum Action {
+        @JsonProperty("set-if-unset")
+        SET_IF_UNSET,
+        @JsonProperty("plain")
+        PLAIN
+    }
+
+    record WithAction(String name, Action action) {}
+
+    @Test
+    void jsonProperty_enumSerializesWithWireName() {
+        JqValue result = mapper.toJqValue(new WithAction("x", Action.SET_IF_UNSET));
+        String json = result.toJsonString();
+        assertTrue(json.contains("\"set-if-unset\""), "Should use wire name: " + json);
+        assertFalse(json.contains("SET_IF_UNSET"), "Should not use name(): " + json);
+    }
+
+    @Test
+    void jsonProperty_enumDeserializesWireName() {
+        JqValue json = JqValues.parse("{\"name\":\"x\",\"action\":\"set-if-unset\"}");
+        WithAction r = mapper.fromJqValue(json, WithAction.class);
+        assertEquals(Action.SET_IF_UNSET, r.action());
+    }
+
+    @Test
+    void jsonProperty_enumRoundTrip() {
+        WithAction original = new WithAction("x", Action.PLAIN);
+        assertEquals(original, mapper.fromJqValue(mapper.toJqValue(original), WithAction.class));
+    }
+
     // ---- @JsonIgnore ----
 
     record IgnoredRecord(
