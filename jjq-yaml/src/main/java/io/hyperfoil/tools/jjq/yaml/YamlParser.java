@@ -42,6 +42,12 @@ final class YamlParser {
     /** Whether the last parsed document ended with an explicit `...`. */
     private boolean lastDocEnded;
     /**
+     * Keys of the last completed block mapping (per document): consecutive
+     * mappings with reference-identical interned keys share the array
+     * (mirrors the JSON parser's previousKeys; suite-blind optimization).
+     */
+    private String[] previousKeys;
+    /**
      * An anchor from an `&x` + nested-block value is waiting for its node.
      * Another anchor on that same root node is a duplicate (suite 4JVG:
      * `&node2` + `&v2 val2`); anchors on deeper nodes are independent.
@@ -77,6 +83,7 @@ final class YamlParser {
         for (;;) {
             p.anchors = new HashMap<>();
             p.tagHandles = new HashMap<>();
+            p.previousKeys = null;
             if (anyDoc) {
                 p.skipTrailingEndMarkers();
             }
@@ -1130,7 +1137,26 @@ final class YamlParser {
             }
             builder.put(key, parseMapValue(entry.value(), indent, hasTrailingComment(rawRest)));
         }
-        return (JqObject) builder.build();
+        return shareKeys((JqObject) builder.build());
+    }
+
+    /**
+     * Adopt a shared key array for a just-built mapping when its keys match
+     * the previous mapping by reference (jjq#96/#99 follow-up). Misses pay one
+     * indexed scan; the snapshot copy happens once per distinct shape.
+     */
+    private JqObject shareKeys(JqObject obj) {
+        int n = obj.size();
+        String[] prev = previousKeys;
+        if (prev != null && prev.length == n) {
+            int i = 0;
+            while (i < n && prev[i] == obj.keyAt(i)) i++;
+            if (i == n) return obj.withSharedKeys(prev);
+        }
+        String[] snap = new String[n];
+        for (int i = 0; i < n; i++) snap[i] = obj.keyAt(i);
+        previousKeys = snap;
+        return obj;
     }
 
     /**
@@ -1183,7 +1209,7 @@ final class YamlParser {
             builder.put(k, parseInlineMapValue(entry.value(), keyCol, parentIndent,
                     hasTrailingComment(rawRest2)));
         }
-        return builder.build();
+        return shareKeys((JqObject) builder.build());
     }
 
     /**
@@ -1205,8 +1231,8 @@ final class YamlParser {
      * a complex key. A following `:` line at the same indent (blank and
      * comment lines skipped) supplies the value, else null.
      */
-    private void parseExplicitEntry(JqObject.Builder builder, Set<String> seen, String rawLine,
-            String rawRest, int indent) {
+    private void parseExplicitEntry(JqObject.Builder builder,
+            Set<String> seen, String rawLine, String rawRest, int indent) {
         String keyFirst = rawLine.length() == 1 ? "" : rawLine.substring(1).strip();
         // A `- ` entry cannot be an explicit key (suite Y79Y/007).
         if (keyFirst.equals("-") || keyFirst.startsWith("- ") || keyFirst.startsWith("-\t")) {
@@ -1334,8 +1360,8 @@ final class YamlParser {
      * lines, gap-tailed values, and missing separators — all with identical
      * errors. Fully consumes the line on success.
      */
-    private boolean parseBlockMapEntryFast(JqObject.Builder builder, Set<String> seen,
-            int cs, int le, int indent) {
+    private boolean parseBlockMapEntryFast(JqObject.Builder builder,
+            Set<String> seen, int cs, int le, int indent) {
         int ce = commentStart(d, cs, le);
         int i = findMappingColon(cs, ce);
         if (i < 0) {
@@ -1361,8 +1387,8 @@ final class YamlParser {
             line++;
         }
         if ("<<".equals(key)) {
-            applyMerge(builder, new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8),
-                    indent);
+            applyMerge(builder,
+                    new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8), indent);
         } else {
             if (seen != null && !seen.add(key)) {
                 throw new JqYamlException(key, line - 1);
@@ -1700,13 +1726,19 @@ final class YamlParser {
 
     /** Apply a `<<` merge value (alias or sequence of aliases to mappings). */
     private void applyMerge(JqObject.Builder builder, String inline, int indent) {
+        applyMerge(builder::put, inline, indent);
+    }
+
+    /** Merge-expansion into list assembly (replace-in-place, like Builder.put). */
+    private void applyMerge(java.util.function.BiConsumer<String, JqValue> put, String inline,
+            int indent) {
         JqValue mergeValue = inline.isEmpty() ? parseNestedMerge(indent) : parseInlineValue(inline, indent, true, true);
         if (mergeValue instanceof JqObject obj) {
-            obj.forEach(builder::put);
+            obj.forEach(put);
         } else if (mergeValue instanceof JqArray arr) {
             for (JqValue item : arr) {
                 if (item instanceof JqObject obj) {
-                    obj.forEach(builder::put);
+                    obj.forEach(put);
                 }
             }
         }

@@ -121,6 +121,17 @@ public final class JqObject implements JqValue {
         // Hash index built lazily on first get()/has() call for objects > HASH_THRESHOLD
     }
 
+    /**
+     * Return an equal object sharing the given key array (which must hold the
+     * same keys in the same order). Used by parsers to share identical key
+     * sets across documents with repeated schemas: the values array is reused
+     * as-is, so callers must also treat it as immutable afterwards.
+     */
+    public JqObject withSharedKeys(String[] sharedKeys) {
+        if (size == 0) return EMPTY;
+        return new JqObject(sharedKeys, values, size, null);
+    }
+
     public static JqObject of(String key, JqValue value) {
         return new JqObject(new String[]{key}, new JqValue[]{value}, 1, null);
     }
