@@ -51,7 +51,7 @@ final class YamlParser {
     /** Parse a single document (first of a stream). Empty input yields {@link JqNull#NULL}. */
     static JqValue parse(byte[] data, int offset, int length, YamlOptions options) {
         YamlParser p = new YamlParser(data, offset, length, options);
-        JqValue doc = p.parseDocument();
+        JqValue doc = p.parseDocument(true);
         return doc == null ? JqNull.NULL : doc;
     }
 
@@ -65,7 +65,7 @@ final class YamlParser {
             if (anyDoc) {
                 p.skipTrailingEndMarkers();
             }
-            JqValue doc = p.parseDocument();
+            JqValue doc = p.parseDocument(!anyDoc);
             if (doc == null) break;
             anyDoc = true;
             docs.add(doc);
@@ -78,7 +78,7 @@ final class YamlParser {
     // ========================================================================
 
     /** Parse one document. Returns null at clean EOF (no more documents). */
-    private JqValue parseDocument() {
+    private JqValue parseDocument(boolean firstDoc) {
         boolean sawDirectives = skipDocPreamble();
         if (pos >= end) return null;
         if (isDocEndAtLineStart()) {
@@ -109,7 +109,7 @@ final class YamlParser {
                 if (matchMarker("---")) {
                     return JqNull.NULL;
                 }
-                doc = parseBlockNode(0);
+                doc = parseBlockNode(0, false, firstDoc);
             } else {
                 // Inline content after `--- `: full dispatch on the first line.
                 // Block mappings/sequences cannot open on the same line as the
@@ -125,7 +125,7 @@ final class YamlParser {
                 doc = parseScalarDocument(stripped, 0, commented);
             }
         } else {
-            doc = parseBlockNode(0);
+            doc = parseBlockNode(0, false, firstDoc);
         }
         skipBlankAndComments();
         // Consume a trailing end marker (validates it stands alone).
@@ -419,32 +419,148 @@ final class YamlParser {
     // =====================================================================///
 
     /**
-     * Parse a block node (mapping, sequence, flow or scalar document) whose
-     * content starts at {@code indent}.
+     * Parse a block node (mapping, sequence, flow or scalar document).
+     * {@code indent} is the caller's indent context; the effective indent
+     * adopts from the first content line when {@code adoptRoot} (stream-start
+     * content like ` - a`, suite 2AUY/93JH/F2C7 parity; later documents keep
+     * the strict throw, suite 2CMS parity) or always when nested.
+     * {@code nested} selects value-position sequence termination: a non-entry
+     * line ends the sequence for the outer map instead of throwing
+     * (suite 57H4/AZ63/RLU9/S9E8 parity).
+     *
+     * <p>Anchor/tag-only lines (`&a`, `!foo`) prefix the following node: the base
+     * adopts the anchor line's indent, so same-indent content nests
+     * (suite U3XV/SKE5/M5C3 parity) while dedented content ends the node
+     * (probe: `key:` + `  &a` + `sub: 1` yields `{key: null, sub: 1}`).
      */
-    private JqValue parseBlockNode(int indent) {
-        if (!skipBlankAndComments()) return JqNull.NULL;
-        int ind = peekIndent();
-        if (ind < indent) return JqNull.NULL;
-        if (ind > indent) {
-            throw new YamlParseException("unexpected indentation", line);
+    private JqValue parseBlockNode(int indent, boolean nested, boolean adoptRoot) {
+        int eff = indent;
+        boolean first = true;
+        String anchorName = null;
+        int anchorInd = -1;
+        for (;;) {
+            if (!skipBlankAndComments()) return JqNull.NULL;
+            int ind = peekIndent();
+            if (ind < eff) return attachAnchor(JqNull.NULL, anchorName);
+            if (isSeqEntry()) {
+                // Adopt the sequence's own indent on first content (or throw
+                // for later documents, 2CMS parity).
+                if (first) {
+                    if (ind > eff && !nested && !adoptRoot) {
+                        throw new YamlParseException("unexpected indentation", line);
+                    }
+                    eff = ind;
+                }
+                first = false;
+                return attachAnchor(parseBlockSeq(eff, nested), anchorName);
+            }
+            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) {
+                pos += ind;
+                break;
+            }
+            int le = lineEnd(pos);
+            int kind = classifyLine(pos, le);
+            if (kind == LINE_EXPLICIT) {
+                throw new YamlParseException("explicit '? ' mapping keys are not supported", line);
+            }
+            int linePos = pos;
+            int lineSaved = line;
+            String rawFirst = readLine();
+            String stripped = stripComment(rawFirst).strip();
+            String onlyAnchor = anchorOrTagOnly(stripped);
+            if (onlyAnchor != null) {
+                // Anchor/tag-only lines prefix the following node without
+                // adopting indent themselves (suite M5C3 parity: `!foo` at 3
+                // then `>1` at 2 still nests under the caller base).
+                if (!onlyAnchor.isEmpty()) {
+                    anchorName = onlyAnchor;
+                    anchorInd = ind;
+                }
+                continue;
+            }
+            if (anchorName != null && nested && ind < anchorInd) {
+                // Dropped below the anchor prefix in value position: the anchor
+                // attaches to nothing (probe: `key:` + `  &a` + `sub: 1`
+                // yields `{key: null, sub: 1}`). Restore the sibling line.
+                pos = linePos;
+                line = lineSaved;
+                return JqNull.NULL;
+            }
+            if (kind == LINE_MAP) {
+                if (first) {
+                    if (ind > eff && !nested && !adoptRoot) {
+                        pos = linePos;
+                        line = lineSaved;
+                        throw new YamlParseException("unexpected indentation", line);
+                    }
+                    eff = ind;
+                }
+                first = false;
+                // Rewind: the map loop reads its first entry itself.
+                pos = linePos;
+                line = lineSaved;
+                return attachAnchor(parseBlockMap(ind), anchorName);
+            }
+            if (first) {
+                if (ind > eff && !nested && !adoptRoot) {
+                    pos = linePos;
+                    line = lineSaved;
+                    throw new YamlParseException("unexpected indentation", line);
+                }
+                eff = ind;
+            }
+            first = false;
+            return attachAnchor(
+                    parseScalarDocument(stripped, ind, hasTrailingComment(rawFirst)), anchorName);
         }
-        if (isSeqEntry()) {
-            return parseBlockSeq(indent);
+        return attachAnchor(JqNull.NULL, anchorName);
+    }
+
+    /** Attach a block-level anchor to a parsed node (no-op when absent). */
+    private JqValue attachAnchor(JqValue node, String anchorName) {
+        if (anchorName != null && node != null && node != JqNull.NULL) {
+            anchors.put(anchorName, node);
         }
-        int le = lineEnd(pos);
-        int kind = classifyLine(pos, le);
-        if (kind == LINE_EXPLICIT) {
-            throw new YamlParseException("explicit '? ' mapping keys are not supported", line);
+        return node;
+    }
+
+    /**
+     * If the stripped line is only anchor/tag prefixes (`&a`, `!foo`,
+     * `&a !b`), return the anchor name (or "" for tags alone); else null.
+     */
+    private static String anchorOrTagOnly(String stripped) {
+        String t = stripped;
+        String anchorName = null;
+        boolean any = false;
+        for (;;) {
+            if (t.startsWith("&") || t.startsWith("!")) {
+                int sp = -1;
+                for (int i = 0; i < t.length(); i++) {
+                    char c = t.charAt(i);
+                    if (c == ' ' || c == '\t') {
+                        sp = i;
+                        break;
+                    }
+                }
+                if (sp < 0) {
+                    // Whole line is one token: anchor/tag only if named
+                    if (t.length() > 1) {
+                        any = true;
+                        if (t.startsWith("&")) anchorName = t.substring(1);
+                        return anchorName == null ? "" : anchorName;
+                    }
+                    return null;
+                }
+                String token = t.substring(0, sp);
+                if (token.length() <= 1) return null;
+                any = true;
+                if (token.startsWith("&")) anchorName = token.substring(1);
+                t = t.substring(sp).strip();
+                if (t.isEmpty()) return anchorName == null ? "" : anchorName;
+            } else {
+                return null;
+            }
         }
-        if (kind == LINE_MAP) {
-            return parseBlockMap(indent);
-        }
-        // Scalar, flow, standalone block header, or marker: read the first
-        // line and let the scalar document reader dispatch on content.
-        String rawFirst = readLine();
-        return parseScalarDocument(stripComment(rawFirst).strip(), indent,
-                hasTrailingComment(rawFirst));
     }
 
     /** A scalar-starting node whose first line is known. Dispatches quoted/flow/
@@ -470,18 +586,51 @@ final class YamlParser {
         if (commented) {
             return convertScalar(first, null);
         }
-        // Plain scalar document: fold following lines (entry rules terminate)
+        // Plain scalar document: fold following lines (entry rules terminate).
+        // Blank lines are paragraph breaks when deeper plain content follows
+        // (suite HS5T/NB6Z + probe scalar-blank parity); deeper `- ` lines
+        // fold as literal text (AB8U parity).
         StringBuilder sb = new StringBuilder(first);
+        boolean pendingBlank = false;
         for (;;) {
             if (pos >= end) break;
             int le = lineEnd(pos);
             int kind = classifyLine(pos, le);
-            if (kind != LINE_PLAIN) break;
-            int cs = contentStart(d, pos, le);
-            if (cs - pos < level) break;
+            if (kind == LINE_BLANK) {
+                int q = le;
+                if (q < end && d[q] == '\r') q++;
+                if (q < end && d[q] == '\n') q++;
+                int qi = 0;
+                while (q + qi < end && d[q + qi] == ' ') qi++;
+                if (q + qi < end && d[q + qi] != '\n' && d[q + qi] != '\r'
+                        && classifyLine(q, lineEnd(q)) == LINE_PLAIN) {
+                    int csq = contentStart(d, q, lineEnd(q));
+                    if (csq - q >= level) {
+                        pendingBlank = true;
+                        advanceTo(q);
+                        continue;
+                    }
+                }
+                break;
+            }
+            int cs;
+            if (kind == LINE_SEQ) {
+                cs = contentStart(d, pos, le);
+                if (cs - pos <= level) break;
+            } else {
+                if (kind != LINE_PLAIN) break;
+                cs = contentStart(d, pos, le);
+                if (cs - pos < level) break;
+            }
             // The line is plain content: consume it (comment already excluded by kind)
+            if (pendingBlank) {
+                sb.append('\n');
+                pendingBlank = false;
+            } else {
+                sb.append(' ');
+            }
             pos = cs;
-            sb.append(' ').append(stripComment(readLine()).strip());
+            sb.append(stripComment(readLine()).strip());
         }
         return convertScalar(sb.toString(), null);
     }
@@ -592,14 +741,19 @@ final class YamlParser {
         return -1;
     }
 
-    private JqArray parseBlockSeq(int indent) {
+    private JqArray parseBlockSeq(int indent, boolean nested) {
         var elems = new ArrayList<JqValue>();
         for (;;) {
             if (!skipBlankAndComments()) break;
             int lineStart = pos;
             int ind = peekIndent();
             if (ind < indent) break;
+            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) break;
             if (ind > indent || !isSeqEntry()) {
+                // In value position a non-entry line ends the sequence for the
+                // outer block (suite 57H4/AZ63/RLU9/S9E8 parity); at statement
+                // level it is an error. Nothing consumed yet (pos at line start).
+                if (nested) break;
                 throw new YamlParseException("expected '-' sequence entry", line);
             }
             pos += ind; // reach '-'
@@ -610,7 +764,7 @@ final class YamlParser {
                 int dashCol = pos - lineStart;
                 String rawRest = readLine();
                 String rest = stripComment(rawRest).strip();
-                elems.add(parseSeqItemContent(rest, indent, dashCol, hasTrailingComment(rawRest)));
+                elems.add(parseSeqItemContent(rest, indent, dashCol, hasTrailingComment(rawRest), indent));
             } else {
                 // Bare '-' (EOL right after): null, or nested block on following lines.
                 // Same-indent following entries are siblings, never nested.
@@ -633,7 +787,9 @@ final class YamlParser {
         if (skipBlankAndComments()) {
             int li = peekIndent();
             if (li > indent || (sameIndentSeq && li == indent && isSeqEntry())) {
-                return parseBlockNode(li);
+                // Caller indent is passed through: anchor-only lines prefix the
+                // following node without establishing indent (U3XV/SKE5 parity).
+                return parseBlockNode(indent, true, true);
             }
         }
         pos = saved;
@@ -655,8 +811,16 @@ final class YamlParser {
     /**
      * Parse one sequence item whose same-line remainder is {@code rest}.
      * {@code dashCol} is the column just after "- " (for nested indent).
+     * {@code foldSeqIndent}: `- ` lines at or below this indent terminate
+     * (owned by an enclosing sequence loop); deeper ones fold as text.
      */
-    private JqValue parseSeqItemContent(String rest, int indent, int dashCol, boolean commented) {
+    private JqValue parseSeqItemContent(String rest, int indent, int dashCol, boolean commented,
+            int foldSeqIndent) {
+        // A leading `#` starts a comment: `- # Empty` is an empty (null) item.
+        // (Quoted `"#..."` never reaches here starting with `#`.)
+        if (!rest.isEmpty() && rest.charAt(0) == '#') {
+            rest = "";
+        }
         if (rest.isEmpty()) {
             return nestedBlockOrNull(indent, false);
         }
@@ -664,11 +828,11 @@ final class YamlParser {
         if (inlineMapStart(rest)) {
             return parseInlineMap(rest, dashCol, indent, commented);
         }
-        // `- - a` nested sequence
+        // `- - a` nested sequence: the inner dash sits at our content column
         if (rest.equals("-") || rest.startsWith("- ")) {
-            return parseInlineSeq(rest.substring(1).stripLeading(), indent, dashCol + 1, commented);
+            return parseInlineSeq(rest.substring(1).stripLeading(), indent, dashCol, commented);
         }
-        return parseValueText(rest, indent, false, commented);
+        return parseValueText(rest, indent, false, commented, foldSeqIndent);
     }
 
     /**
@@ -683,33 +847,33 @@ final class YamlParser {
                 && !key.equals("-") && !key.startsWith("? ");
     }
 
-    /** Parse `- - a` style nested sequences (rare but legal). */
+    /** Parse `- - a` style nested sequences (rare but legal).
+     * {@code dashCol} is the column of this level's `-` dashes; item content
+     * sits two further (single `- ` prefix). `- ` lines at {@code dashCol}
+     * belong to this loop; only deeper ones may fold as item text. */
     private JqValue parseInlineSeq(String rest, int indent, int dashCol, boolean firstCommented) {
         var elems = new ArrayList<JqValue>();
-        elems.add(parseSeqItemContent(rest, indent, dashCol, firstCommented));
+        elems.add(parseSeqItemContent(rest, indent, dashCol + 2, firstCommented, dashCol));
         // Following `- ...` lines at the same dash column continue the sequence
         for (;;) {
             int saved = pos;
             int savedLine = line;
-            if (!skipBlankAndComments() || peekIndent() != indent) {
+            if (!skipBlankAndComments() || peekIndent() != dashCol
+                    || classifyLine(pos, lineEnd(pos)) == LINE_MARKER || !isSeqEntry()) {
                 pos = saved;
                 line = savedLine;
                 break;
             }
-            if (!isSeqEntry()) {
-                pos = saved;
-                line = savedLine;
-                break;
-            }
+            int lineStart = pos;
             int p = pos;
             while (p < end && d[p] == ' ') p++;
             pos = p + 1;
             if (pos < end && (d[pos] == ' ' || d[pos] == '\t')) {
                 while (pos < end && (d[pos] == ' ' || d[pos] == '\t')) pos++;
-                int col = pos;
+                int col = pos - lineStart;
                 String rawNext = readLine();
                 String next = stripComment(rawNext).strip();
-                elems.add(parseSeqItemContent(next, indent, col, hasTrailingComment(rawNext)));
+                elems.add(parseSeqItemContent(next, indent, col, hasTrailingComment(rawNext), dashCol));
             } else {
                 advanceLinePastEol();
                 elems.add(JqNull.NULL);
@@ -918,7 +1082,9 @@ final class YamlParser {
         if (inline.isEmpty()) {
             return nestedBlockOrNull(indent, true);
         }
-        return parseValueText(inline, indent, true, commented);
+        // Map values never fold `- ` lines (conservative: same-or-deeper
+        // entries terminate for the outer loops to judge).
+        return parseValueText(inline, indent, true, commented, Integer.MAX_VALUE);
     }
 
     /**
@@ -927,7 +1093,8 @@ final class YamlParser {
      * {@code sameIndentSeq} selects the nested-block rule (mapping values nest
      * same-indent sequences; sequence items treat them as siblings).
      */
-    private JqValue parseValueText(String first, int indent, boolean sameIndentSeq, boolean firstCommented) {
+    private JqValue parseValueText(String first, int indent, boolean sameIndentSeq, boolean firstCommented,
+            int foldSeqIndent) {
         char c0 = first.charAt(0);
         if (c0 == '"' || c0 == '\'' || c0 == '{' || c0 == '[') {
             return parseInlineValue(gatherValueText(first, indent), indent, sameIndentSeq);
@@ -936,7 +1103,7 @@ final class YamlParser {
             return parseInlineValue(first, indent, sameIndentSeq);
         }
         // A trailing comment completes the scalar: no folding past it (BF9H parity)
-        String folded = firstCommented ? null : foldPlainContinuation(first, indent);
+        String folded = firstCommented ? null : foldPlainContinuation(first, indent, foldSeqIndent);
         if (folded != null) {
             return convertScalar(folded, null);
         }
@@ -946,11 +1113,12 @@ final class YamlParser {
     /**
      * Fold following deeper-indented lines into a plain scalar. Returns null when
      * there is no continuation. Comment lines terminate (SnakeYAML parity);
-     * markers, sequence entries, explicit keys and new mapping entries do too.
-     * A trailing comment on a consumed line completes the scalar (suite BF9H:
-     * nothing may follow a comment-terminated plain line).
+     * markers, explicit keys and new mapping entries do too. A deeper `- ` line
+     * folds as literal text (suite AB8U + probe parity); same-or-less indented
+     * entries terminate. A trailing comment on a consumed line completes the
+     * scalar (suite BF9H: nothing may follow a comment-terminated plain line).
      */
-    private String foldPlainContinuation(String first, int indent) {
+    private String foldPlainContinuation(String first, int indent, int foldSeqIndent) {
         StringBuilder sb = null;
         boolean pendingBlank = false;
         for (;;) {
@@ -971,9 +1139,17 @@ final class YamlParser {
                 }
                 break;
             }
-            if (kind != LINE_PLAIN) break;
-            int cs = contentStart(d, pos, le);
-            if (cs - pos <= indent) break;
+            int cs;
+            if (kind == LINE_SEQ) {
+                // Deeper entries fold as text (kept with their `- ` prefix);
+                // entries at or below the fold indent terminate instead.
+                cs = contentStart(d, pos, le);
+                if (cs - pos <= foldSeqIndent) break;
+            } else {
+                if (kind != LINE_PLAIN) break;
+                cs = contentStart(d, pos, le);
+                if (cs - pos <= indent) break;
+            }
             if (sb == null) {
                 sb = new StringBuilder(first);
             }
@@ -1041,7 +1217,7 @@ final class YamlParser {
         int saved = pos;
         int savedLine = line;
         if (skipBlankAndComments() && peekIndent() > indent) {
-            return parseBlockNode(peekIndent());
+            return parseBlockNode(indent, true, true);
         }
         pos = saved;
         line = savedLine;

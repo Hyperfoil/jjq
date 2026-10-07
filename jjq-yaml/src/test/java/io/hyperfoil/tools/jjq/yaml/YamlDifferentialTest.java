@@ -72,7 +72,17 @@ class YamlDifferentialTest {
                 "# leading comment\nkey: value # trailing\n# tail\n",
                 "key: value#notacomment\n",
                 "key: a#b\n",
-                "- a # item comment\n- b\n"
+                "- a # item comment\n- b\n",
+                // indented root sequence (suite 2AUY/93JH/F2C7)
+                " - a\n - b\n",
+                // nested dash columns (suite 3ALJ/7ZZ5/W42U)
+                "- - s1\n  - s2\n- s3\n",
+                "- - - []\n- - - {}\n",
+                "- # Empty\n- |\n block node\n",
+                // sequence value with following sibling (suite 57H4/AZ63/RLU9)
+                "one:\n- 2\nfour: 5\n",
+                // anchor prefix without indent change (probe anchor-sibling)
+                "key:\n  &a\nsub: 1\n"
         );
     }
 
@@ -81,6 +91,11 @@ class YamlDifferentialTest {
                 // plain multiline + folding
                 "key: line one\n  line two\n",
                 "key: line one\n\n  para two\n",
+                // deeper `- ` folds as text (suite AB8U + probe)
+                "- single multiline\n - sequence entry\n",
+                "- a\n  - b\n",
+                // scalar document across blank lines (probe scalar-blank)
+                "1st\n\n 2nd\n",
                 // quoted
                 "a: 'single'\nb: \"double\"\n",
                 "a: 'it''s'\n",
