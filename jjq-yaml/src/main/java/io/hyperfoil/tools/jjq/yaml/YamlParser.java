@@ -1455,9 +1455,10 @@ final class YamlParser {
 
     private record MapEntry(String key, String value) {}
 
-    /** Strip quotes from a mapping key (single/double), else resolve prefixes. */
+    /** Strip quotes from a mapping key (single/double), else resolve prefixes.
+     * Callers pass pre-stripped keys (splitKeyValue strips both parts). */
     private String unquoteKey(String key) {
-        String t = key.strip();
+        String t = key;
         if (t.length() >= 2) {
             char q = t.charAt(0);
             if ((q == '\'' || q == '"') && t.charAt(t.length() - 1) == q) {
