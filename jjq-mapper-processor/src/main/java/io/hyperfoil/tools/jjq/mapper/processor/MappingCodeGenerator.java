@@ -394,10 +394,10 @@ final class MappingCodeGenerator {
             case "NON_EMPTY" -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("java.lang.String")) {
-                    sb.append("        if (").append(accessor).append(" != null && !").append(accessor).append(".isEmpty()) ");
+                    sb.append("        if (").append(accessor).append(" != null && !(").append(accessor).append(").isEmpty()) ");
                 } else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
                         || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection")) {
-                    sb.append("        if (").append(accessor).append(" != null && !").append(accessor).append(".isEmpty()) ");
+                    sb.append("        if (").append(accessor).append(" != null && !(").append(accessor).append(").isEmpty()) ");
                 } else {
                     sb.append("        if (").append(accessor).append(" != null) ");
                 }
@@ -551,10 +551,10 @@ final class MappingCodeGenerator {
             case "NON_EMPTY" -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("java.lang.String"))
-                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
                 else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
                         || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
                 else
                     yield accessor + " != null";
             }
@@ -689,10 +689,10 @@ final class MappingCodeGenerator {
             case "NON_EMPTY" -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("java.lang.String"))
-                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
                 else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
                         || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield accessor + " != null && !" + accessor + ".isEmpty()";
+                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
                 else
                     yield accessor + " != null";
             }
@@ -1228,10 +1228,10 @@ final class MappingCodeGenerator {
             case "NON_EMPTY" -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("java.lang.String"))
-                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
                 else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
                         || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
                 else
                     yield readExpr + " != null";
             }
@@ -1308,10 +1308,10 @@ final class MappingCodeGenerator {
             case "NON_EMPTY" -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("java.lang.String"))
-                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
                 else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
                         || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield readExpr + " != null && !" + readExpr + ".isEmpty()";
+                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
                 else
                     yield readExpr + " != null";
             }
@@ -1437,10 +1437,10 @@ final class MappingCodeGenerator {
             case "NON_EMPTY" -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("java.lang.String")) {
-                    sb.append("        if (").append(readExpr).append(" != null && !").append(readExpr).append(".isEmpty()) ");
+                    sb.append("        if (").append(readExpr).append(" != null && !(").append(readExpr).append(").isEmpty()) ");
                 } else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
                         || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection")) {
-                    sb.append("        if (").append(readExpr).append(" != null && !").append(readExpr).append(".isEmpty()) ");
+                    sb.append("        if (").append(readExpr).append(" != null && !(").append(readExpr).append(").isEmpty()) ");
                 } else {
                     sb.append("        if (").append(readExpr).append(" != null) ");
                 }

@@ -1514,6 +1514,45 @@ class JqMapperProcessorTest {
         assertEquals(out, mapper.toJson(r));
     }
 
+    @Test
+    void generatedMapping_nonEmptyPrivateFieldCompiles() throws Exception {
+        // Issue #108: NON_EMPTY guards emitted `!cast-expr.isEmpty()` — the `!`
+        // negated the cast instead of the test. Only triggers when the read
+        // expression is a cast (private field reflection fallback).
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class NonEmptyPrivate {
+                    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+                    private String apiKey;
+
+                    public NonEmptyPrivate() {}
+
+                    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.NonEmptyPrivate", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"apiKey\":\"k123\"}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        var field = pojoClass.getDeclaredField("apiKey");
+        field.setAccessible(true);
+        assertEquals("k123", field.get(p));
+
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"apiKey\":\"k123\""), out);
+
+        Object empty = pojoClass.getDeclaredConstructor().newInstance();
+        field.set(empty, "");
+        assertEquals("{}", mapper.toJqValue(empty).toJsonString());
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
