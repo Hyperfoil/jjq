@@ -1990,6 +1990,136 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("conflict"), e.getMessage());
     }
 
+    // ---- @JqEnum lenient parsing ----
+
+    @JqEnum(normalize = {JqEnum.Normalize.TRIM, JqEnum.Normalize.LOWERCASE,
+            JqEnum.Normalize.SEPARATOR_FOLD},
+            onUnknown = JqEnum.OnUnknown.NULL)
+    enum LenientAccount {
+        @JqName("api-key") API_KEY,
+        @JqName("oauth") OAUTH
+    }
+
+    @Test
+    void enum_lenientNormalizes() {
+        assertEquals(LenientAccount.API_KEY,
+                mapper.fromJqValue(JqValues.parse("\"api-key\""), LenientAccount.class));
+        assertEquals(LenientAccount.API_KEY,
+                mapper.fromJqValue(JqValues.parse("\"  API_KEY  \""), LenientAccount.class));
+        assertEquals(LenientAccount.OAUTH,
+                mapper.fromJqValue(JqValues.parse("\"OAuth\""), LenientAccount.class));
+    }
+
+    @Test
+    void enum_lenientUnknownBindsNull() {
+        assertNull(mapper.fromJqValue(JqValues.parse("\"typo\""), LenientAccount.class));
+    }
+
+    @JqEnum(onUnknown = JqEnum.OnUnknown.FAIL)
+    enum StrictAccount {
+        @JqName("api-key") API_KEY
+    }
+
+    @Test
+    void enum_failUnknownThrows() {
+        assertEquals(StrictAccount.API_KEY,
+                mapper.fromJqValue(JqValues.parse("\"api-key\""), StrictAccount.class));
+        assertThrows(RuntimeException.class,
+                () -> mapper.fromJqValue(JqValues.parse("\"typo\""), StrictAccount.class));
+    }
+
+    @JqEnum(normalize = {JqEnum.Normalize.LOWERCASE}, onUnknown = JqEnum.OnUnknown.NULL)
+    enum LenientMixed {
+        @JqName("api-key") API_KEY,
+        ENTERPRISE
+    }
+
+    @Test
+    void enum_exactNameFallbackSurvives() {
+        // Unnamed constants keep exact binding; normalization does not invent names
+        assertEquals(LenientMixed.ENTERPRISE,
+                mapper.fromJqValue(JqValues.parse("\"ENTERPRISE\""), LenientMixed.class));
+        assertNull(mapper.fromJqValue(JqValues.parse("\"enterprise\""), LenientMixed.class));
+    }
+
+    @JqEnum(normalize = {JqEnum.Normalize.SEPARATOR_FOLD}, onUnknown = JqEnum.OnUnknown.NULL)
+    enum Colliding {
+        @JqName("a-b") AB,
+        @JqName("a_b") CD
+    }
+
+    @Test
+    void enum_duplicateNormalizedWireFails() {
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("\"a-b\""), Colliding.class));
+        assertTrue(e.getMessage().contains("a-b"), e.getMessage());
+    }
+
+    enum CreatorLenient {
+        API_KEY, OAUTH;
+
+        public static CreatorLenient fromWire(String wire) {
+            if ("api-key".equals(wire)) return API_KEY;
+            return null;
+        }
+    }
+
+    @JqEnum(onUnknown = JqEnum.OnUnknown.FAIL)
+    enum CreatorNative {
+        API_KEY, OAUTH;
+
+        public static CreatorNative fromWire(String wire) {
+            if ("api-key".equals(wire)) return API_KEY;
+            return null;
+        }
+    }
+
+    static class CreatorBridge implements AnnotationBridge {
+        @Override
+        public String resolveFieldName(AnnotatedElement element) { return null; }
+        @Override
+        public boolean isIgnored(AnnotatedElement element) { return false; }
+        @Override
+        public JqInclude.Include resolveInclusion(AnnotatedElement element) { return null; }
+        @Override
+        public JqNaming.Strategy resolveNaming(Class<?> type) { return null; }
+        @Override
+        public java.lang.reflect.Executable resolveJsonCreator(Class<?> type) {
+            try {
+                if (type == CreatorLenient.class) {
+                    return CreatorLenient.class.getMethod("fromWire", String.class);
+                }
+                if (type == CreatorNative.class) {
+                    return CreatorNative.class.getMethod("fromWire", String.class);
+                }
+            } catch (NoSuchMethodException e) {
+                throw new AssertionError(e);
+            }
+            return null;
+        }
+    }
+
+    @Test
+    void enum_creatorHonoredWithoutJqEnum() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new CreatorBridge())
+                .build();
+        assertEquals(CreatorLenient.API_KEY,
+                bridgeMapper.fromJqValue(JqValues.parse("\"api-key\""), CreatorLenient.class));
+        assertNull(bridgeMapper.fromJqValue(JqValues.parse("\"whatever\""), CreatorLenient.class));
+    }
+
+    @Test
+    void enum_nativeBeatsCreator() {
+        // @JqEnum takes over deserialization: the lenient creator is ignored,
+        // unknown values fail strictly instead of binding null.
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new CreatorBridge())
+                .build();
+        assertThrows(RuntimeException.class,
+                () -> bridgeMapper.fromJqValue(JqValues.parse("\"whatever\""), CreatorNative.class));
+    }
+
     // ---- Bridge on POJO ----
 
     static class BridgePojo {

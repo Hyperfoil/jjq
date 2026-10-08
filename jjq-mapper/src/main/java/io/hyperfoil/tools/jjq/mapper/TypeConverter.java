@@ -222,6 +222,23 @@ public final class TypeConverter {
                     yield invokeCreator(handlers.get(), value, targetType, mapper);
                 }
                 if (value instanceof JqString s) {
+                    EnumLeniency leniency =
+                            handlers.isPresent() ? handlers.get().leniency() : null;
+                    if (leniency != null) {
+                        String constant = leniency.normalizedWire().get(
+                                normalizeWire(s.stringValue(), leniency.normalizations()));
+                        if (constant != null) {
+                            yield Enum.valueOf((Class<? extends Enum>) targetType, constant);
+                        }
+                        if (leniency.onUnknown() == JqEnum.OnUnknown.NULL) {
+                            // Exact constant-name fallback before giving up
+                            try {
+                                yield Enum.valueOf((Class<? extends Enum>) targetType, s.stringValue());
+                            } catch (IllegalArgumentException e) {
+                                yield null;
+                            }
+                        }
+                    }
                     // Wire names first (issue #95.1), then constant names.
                     if (handlers.isPresent()) {
                         for (var entry : handlers.get().wireNames().entrySet()) {
@@ -478,7 +495,16 @@ public final class TypeConverter {
      */
     record EnumHandlers(Method valueAccessor, Executable creator,
                         Class<?> creatorArgClass, Type creatorArgType,
-                        java.util.Map<String, String> wireNames) {}
+                        java.util.Map<String, String> wireNames, EnumLeniency leniency) {}
+
+    /**
+     * Native {@code @JqEnum} leniency policy (null when the annotation is
+     * absent — strict behavior). The normalized map goes from normalized wire
+     * name to constant name, built once at handler resolution.
+     */
+    record EnumLeniency(java.util.Set<JqEnum.Normalize> normalizations,
+                        JqEnum.OnUnknown onUnknown,
+                        java.util.Map<String, String> normalizedWire) {}
 
     /**
      * Resolve enum handlers from the mapper's bridges (native annotations are
@@ -489,6 +515,7 @@ public final class TypeConverter {
      */
     static java.util.Optional<EnumHandlers> resolveEnumHandlers(
             Class<?> type, List<io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge> bridges) {
+        EnumLeniency leniency = resolveEnumLeniency(type, bridges);
         Method accessor = null;
         Executable creator = null;
         for (io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge bridge : bridges) {
@@ -499,20 +526,22 @@ public final class TypeConverter {
                     accessor = m;
                 }
             }
-            if (creator == null) {
+            // A present @JqEnum takes over deserialization: bridge creators
+            // are ignored for that enum (serialization accessors still apply).
+            if (creator == null && leniency == null) {
                 Executable e = bridge.resolveJsonCreator(type);
                 if (e != null) {
                     validateCreator(e, type);
                     creator = e;
                 }
             }
-            if (accessor != null && creator != null) break;
+            if (accessor != null && (creator != null || leniency != null)) break;
         }
-        if (accessor == null && creator == null) {
+        if (accessor == null && creator == null && leniency == null) {
             java.util.Map<String, String> wireOnly =
                     resolveEnumWireNames(type, bridges);
             if (wireOnly.isEmpty()) return java.util.Optional.empty();
-            return java.util.Optional.of(new EnumHandlers(null, null, null, null, wireOnly));
+            return java.util.Optional.of(new EnumHandlers(null, null, null, null, wireOnly, null));
         }
         Class<?> argClass = null;
         Type argType = null;
@@ -521,7 +550,60 @@ public final class TypeConverter {
             argClass = rawClass(argType);
         }
         return java.util.Optional.of(new EnumHandlers(accessor, creator, argClass, argType,
-                resolveEnumWireNames(type, bridges)));
+                resolveEnumWireNames(type, bridges), leniency));
+    }
+
+    /**
+     * Native {@code @JqEnum} leniency for an enum type, or null when absent
+     * (strict behavior preserved). Wire names come from the same
+     * {@code @JqName}-first resolution as the strict path.
+     */
+    private static EnumLeniency resolveEnumLeniency(
+            Class<?> type, List<io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge> bridges) {
+        JqEnum spec = type.getAnnotation(JqEnum.class);
+        if (spec == null) return null;
+        java.util.Set<JqEnum.Normalize> normalizations = java.util.EnumSet.noneOf(JqEnum.Normalize.class);
+        normalizations.addAll(java.util.List.of(spec.normalize()));
+        java.util.Map<String, String> byWire = new java.util.LinkedHashMap<>();
+        for (var entry : resolveEnumWireNames(type, bridges).entrySet()) {
+            String key = normalizeWire(entry.getValue(), normalizations);
+            String prev = byWire.putIfAbsent(key, entry.getKey());
+            if (prev != null) {
+                throw new JqMapperException("@JqEnum on " + type.getName() + ": '"
+                        + prev + "' and '" + entry.getKey()
+                        + "' normalize to the same wire name '" + key + "'");
+            }
+        }
+        return new EnumLeniency(normalizations, spec.onUnknown(), byWire);
+    }
+
+    /**
+     * Fold a wire value per the normalization flags (all ASCII-only and
+     * locale-independent; no-ops avoid allocation when nothing changes).
+     */
+    static String normalizeWire(String wire, java.util.Set<JqEnum.Normalize> normalizations) {
+        String result = wire;
+        if (normalizations.contains(JqEnum.Normalize.TRIM)) result = result.strip();
+        if (normalizations.contains(JqEnum.Normalize.LOWERCASE)) {
+            StringBuilder folded = null;
+            for (int i = 0; i < result.length(); i++) {
+                char c = result.charAt(i);
+                if (c >= 'A' && c <= 'Z') {
+                    if (folded == null) {
+                        folded = new StringBuilder(result.length());
+                        folded.append(result, 0, i);
+                    }
+                    folded.append((char) (c + ('a' - 'A')));
+                } else if (folded != null) {
+                    folded.append(c);
+                }
+            }
+            if (folded != null) result = folded.toString();
+        }
+        if (normalizations.contains(JqEnum.Normalize.SEPARATOR_FOLD) && result.indexOf('_') >= 0) {
+            result = result.replace('_', '-');
+        }
+        return result;
     }
 
     /**

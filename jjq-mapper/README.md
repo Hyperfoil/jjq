@@ -118,7 +118,24 @@ record SpawnConfig(@JqName("host-paths") List<String> hostPaths) {}
 Unlike `@JqField` (which replaces extraction with a jq program), a renamed
 field keeps direct key lookup. Explicit names win over the naming strategy
 and bridge renames; combining `@JqName` with `@JqField` on one element is an
-error.
+error. On enum constants it sets the wire form both directions; see
+`@JqEnum` for lenient parsing.
+
+### `@JqEnum` — lenient enum parsing
+
+```java
+@JqEnum(normalize = {TRIM, LOWERCASE, SEPARATOR_FOLD}, onUnknown = NULL)
+public enum ClaudeAccountType {
+    @JqName("api-key") API_KEY, ...
+}
+// "  API_KEY  " binds; typos bind null instead of failing
+```
+
+Input is stripped, ASCII-lowercased, and `_`→`-` folded before matching
+`@JqName`/bridge wire names (exact constant names still bind). Without the
+annotation — or with `onUnknown = FAIL` — unknown values fail strictly.
+A present annotation takes over deserialization from bridge creators;
+serialization is unaffected.
 
 ### `@JqIgnore` — exclude fields
 
@@ -307,7 +324,7 @@ semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
 | `@JsonInclude` | `@JqInclude` | Same strategy names |
 | `@JsonAutoDetect` | `@JqVisibility` | Getter axes only; fields always bind |
 | `@JsonAnyGetter` / `@JsonAnySetter` | `@JqAnyGetter` / `@JqAnySetter` | Same method-form contract |
-| `@JsonValue` / `@JsonCreator` on enums | `@JqName` on constants | Strict exact mapping; leniency via `@JqConverter` |
+| `@JsonValue` / `@JsonCreator` on enums | `@JqName` on constants (+ `@JqEnum` for leniency) | Strict exact mapping; leniency via `@JqEnum`, custom policy via `@JqConverter` |
 | `@JsonNaming` | `@JqNaming` | Strategy-based, fewer strategies |
 | `TypeReference<T>` | `TypeToken<T>` | Anonymous-subclass capture, same idiom |
 

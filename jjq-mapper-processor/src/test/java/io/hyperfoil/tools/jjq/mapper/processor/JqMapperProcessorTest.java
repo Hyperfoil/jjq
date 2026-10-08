@@ -2351,6 +2351,46 @@ class JqMapperProcessorTest {
                 .hadErrorContaining("conflict");
     }
 
+    @Test
+    void generatedMapping_lenientEnumBindsNull() throws Exception {
+        // Issue #121: enum leniency needs no codegen — the record delegates
+        // to the runtime lookup. Pins that end to end.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqEnum;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                @JqMapped
+                public record WithLenient(String name, Kind kind) {
+                    @JqEnum(normalize = {JqEnum.Normalize.LOWERCASE},
+                            onUnknown = JqEnum.OnUnknown.NULL)
+                    public enum Kind {
+                        @JqName("fast") FAST,
+                        SLOW
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.WithLenient", source);
+        Class<?> kindClass = Class.forName("test.WithLenient$Kind", true,
+                recordClass.getClassLoader());
+        JqMapper mapper = JqMapper.create();
+
+        Object typo = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"kind\":\"typo\"}"),
+                recordClass);
+        assertNull(recordClass.getMethod("kind").invoke(typo));
+
+        Object fast = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"kind\":\"FAST\"}"),
+                recordClass);
+        Object fastConstant = Enum.valueOf((Class<Enum>) kindClass, "FAST");
+        assertEquals(fastConstant, recordClass.getMethod("kind").invoke(fast));
+
+        String out = mapper.toJqValue(fast).toJsonString();
+        assertTrue(out.contains("\"kind\":\"fast\""), out);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
