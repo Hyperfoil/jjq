@@ -126,9 +126,16 @@ public class JqMapperProcessor extends AbstractProcessor {
                     jqExpr = fieldProgram(jsonName);
                 }
 
-                // Resolve field-level @JqInclude (overrides class-level)
+                // Resolve field-level @JqInclude (overrides class-level), else the
+                // bridged @JsonInclude default (mirrors the reflection path)
                 JqInclude fieldInclude = rc.getAnnotation(JqInclude.class);
-                String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
+                String inclusion;
+                if (fieldInclude != null) {
+                    inclusion = fieldInclude.value().name();
+                } else {
+                    String bridged = bridgeInclusionForRecord(rc, recordType);
+                    inclusion = bridged != null ? bridged : classInclusion;
+                }
 
                 String serName = (jqField != null) ? name : jsonName; // @JqField overrides naming
                 String converterClass = resolveConverterClass(rc);
@@ -262,9 +269,16 @@ public class JqMapperProcessor extends AbstractProcessor {
                 setterName = null; // will use setAccessible at runtime, or read-only
             }
 
-            // Resolve field-level @JqInclude (overrides class-level)
+            // Resolve field-level @JqInclude (overrides class-level), else the
+            // bridged @JsonInclude default (mirrors the reflection path)
             JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
-            String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
+            String inclusion;
+            if (fieldInclude != null) {
+                inclusion = fieldInclude.value().name();
+            } else {
+                String bridged = bridgeInclusion(field);
+                inclusion = bridged != null ? bridged : classInclusion;
+            }
 
             String serName = (jqField != null) ? name : jsonName;
             String converterClass = resolveConverterClass(field);
@@ -339,7 +353,50 @@ public class JqMapperProcessor extends AbstractProcessor {
     /** Resolve class-level @JqInclude, defaulting to "ALWAYS". */
     private String resolveClassInclusion(TypeElement type) {
         JqInclude classInclude = type.getAnnotation(JqInclude.class);
-        return classInclude != null ? classInclude.value().name() : "ALWAYS";
+        if (classInclude != null) return classInclude.value().name();
+        // Bridged @JsonInclude default (mirrors the reflection path, issue #107.2)
+        String bridged = bridgeInclusion(type);
+        return bridged != null ? bridged : "ALWAYS";
+    }
+
+    /**
+     * Bridged inclusion for a class or field: Jackson {@code @JsonInclude(value)}
+     * maps 1:1 onto {@code JqInclude.Include} names; unmapped constants
+     * ({@code NON_ABSENT}, {@code CUSTOM}, ...) mean "no opinion" (null),
+     * mirroring the bridge. An absent {@code value} member (annotation default)
+     * also yields null.
+     */
+    private static String bridgeInclusion(Element element) {
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonInclude")) {
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("value")) {
+                        return switch (entry.getValue().getValue().toString()) {
+                            case "ALWAYS", "NON_NULL", "NON_EMPTY", "NON_DEFAULT" ->
+                                entry.getValue().getValue().toString();
+                            default -> null;
+                        };
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Bridged inclusion for a record component. {@code @JsonInclude} targets
+     * fields (not components), so fall back to the same-named field's mirrors
+     * (same fallback as the other Jackson mirrors).
+     */
+    private static String bridgeInclusionForRecord(RecordComponentElement rc, TypeElement enclosing) {
+        for (Element e : enclosing.getEnclosedElements()) {
+            if (e.getKind() == ElementKind.FIELD && e.getSimpleName().contentEquals(rc.getSimpleName())) {
+                String inclusion = bridgeInclusion(e);
+                if (inclusion != null) return inclusion;
+            }
+        }
+        return null;
     }
 
     /**
@@ -582,12 +639,18 @@ public class JqMapperProcessor extends AbstractProcessor {
         String setterName = null;
         boolean setterTakesJqValue = false;
         String getterName = null;
-        for (Element enclosed : type.getEnclosedElements()) {
-            if (enclosed.getKind() != ElementKind.METHOD) continue;
-            var method = (javax.lang.model.element.ExecutableElement) enclosed;
-            if (enclosed.getAnnotation(JqAnySetter.class) != null
-                    || hasMirrorAnnotation(enclosed,
-                        "com.fasterxml.jackson.annotation.JsonAnySetter")) {
+        // Walk the superclass chain, declared methods first: the runtime
+        // discovers any-methods via getMethods(), which includes inherited
+        // ones, so a base-declared any-setter must resolve too (issue #107.1).
+        // First mark per role wins.
+        for (TypeElement t = type; t != null; t = superclassOf(t)) {
+            for (Element enclosed : t.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.METHOD) continue;
+                var method = (javax.lang.model.element.ExecutableElement) enclosed;
+                if (setterName == null
+                        && (enclosed.getAnnotation(JqAnySetter.class) != null
+                            || hasMirrorAnnotation(enclosed,
+                                "com.fasterxml.jackson.annotation.JsonAnySetter"))) {
                 var params = method.getParameters();
                 if (!method.getModifiers().contains(Modifier.STATIC)
                         && params.size() == 2
@@ -605,9 +668,10 @@ public class JqMapperProcessor extends AbstractProcessor {
                     return AnyInfo.NONE;
                 }
             }
-            if (enclosed.getAnnotation(JqAnyGetter.class) != null
-                    || hasMirrorAnnotation(enclosed,
-                        "com.fasterxml.jackson.annotation.JsonAnyGetter")) {
+            if (getterName == null
+                    && (enclosed.getAnnotation(JqAnyGetter.class) != null
+                        || hasMirrorAnnotation(enclosed,
+                            "com.fasterxml.jackson.annotation.JsonAnyGetter"))) {
                 String rt = method.getReturnType().toString();
                 if (!method.getModifiers().contains(Modifier.STATIC)
                         && method.getParameters().isEmpty()
@@ -622,8 +686,27 @@ public class JqMapperProcessor extends AbstractProcessor {
                 }
             }
         }
+        }
         if (setterName == null && getterName == null) return AnyInfo.NONE;
         return new AnyInfo(setterName, setterTakesJqValue, getterName);
+    }
+
+    /**
+     * The superclass as a {@code TypeElement}, or null at the top of the
+     * chain ({@code java.lang.Object} has no methods of interest).
+     * Interfaces declare no superclass for this walk (boundary: an any-method
+     * default on an interface stays invisible, unlike the runtime's
+     * {@code getMethods()} view).
+     */
+    private static TypeElement superclassOf(TypeElement type) {
+        javax.lang.model.type.TypeMirror sup = type.getSuperclass();
+        if (sup.getKind() != javax.lang.model.type.TypeKind.DECLARED) return null;
+        Element element = ((javax.lang.model.type.DeclaredType) sup).asElement();
+        if (!(element instanceof TypeElement superType)
+                || superType.getQualifiedName().contentEquals("java.lang.Object")) {
+            return null;
+        }
+        return superType;
     }
 
     /** Presence of a framework annotation by mirror (no framework dependency). */

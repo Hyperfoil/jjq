@@ -1344,6 +1344,176 @@ class JqMapperProcessorTest {
                 back.getField("payload"));
     }
 
+    @Test
+    void generatedMapping_inheritedAnySetterForwards() throws Exception {
+        // Issue #107.1: the runtime finds any-methods via getMethods()
+        // (inherited included); the processor only scanned declared methods,
+        // so an inherited any-setter silently dropped unknown keys.
+        String baseSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
+                import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                public class ExtrasBase {
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    @JqAnySetter
+                    public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+                    @JqAnyGetter
+                    public Map<String, JqValue> getExtras() { return extras; }
+                }
+                """;
+        String subSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class ChildPojo extends ExtrasBase {
+                    public String name;
+
+                    public ChildPojo() {}
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.ExtrasBase", "test.ChildPojo"},
+                new String[]{baseSource, subSource});
+        Class<?> pojoClass = Class.forName("test.ChildPojo", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    @Test
+    void generatedMapping_inheritedBridgeAnyMethods() throws Exception {
+        // The exact isx shape: Jackson method-form marks inherited from a base.
+        String baseSource = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAnyGetter;
+                import com.fasterxml.jackson.annotation.JsonAnySetter;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                public class JacksonExtrasBase {
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    @JsonAnySetter
+                    public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+                    @JsonAnyGetter
+                    public Map<String, JqValue> getExtras() { return extras; }
+                }
+                """;
+        String subSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class JacksonChild extends JacksonExtrasBase {
+                    public String name;
+
+                    public JacksonChild() {}
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.JacksonExtrasBase", "test.JacksonChild"},
+                new String[]{baseSource, subSource});
+        Class<?> pojoClass = Class.forName("test.JacksonChild", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    @Test
+    void generatedMapping_jsonIncludeNonEmptyOmits() throws Exception {
+        // Issue #107.2: bridged @JsonInclude was never resolved, so all three
+        // serializers emitted every field unconditionally.
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class IncludePojo {
+                    public String name;
+                    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+                    public String email;
+                    @JsonInclude(JsonInclude.Include.NON_NULL)
+                    public String phone;
+
+                    public IncludePojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.IncludePojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getField("name").set(p, "t");
+        pojoClass.getField("email").set(p, "");
+        // phone stays null
+
+        String treeOut = mapper.toJqValue(p).toJsonString();
+        assertTrue(treeOut.contains("\"name\":\"t\""), treeOut);
+        assertFalse(treeOut.contains("email"), treeOut);
+        assertFalse(treeOut.contains("phone"), treeOut);
+
+        String jsonOut = mapper.toJson(p);
+        assertFalse(jsonOut.contains("email"), jsonOut);
+        assertFalse(jsonOut.contains("phone"), jsonOut);
+
+        String bytesOut = new String(mapper.toJsonBytes(p), java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(bytesOut.contains("email"), bytesOut);
+        assertFalse(bytesOut.contains("phone"), bytesOut);
+    }
+
+    @Test
+    void generatedMapping_jsonIncludeNonNullOmitsRecord() throws Exception {
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record IncludeRecord(String name,
+                        @JsonInclude(JsonInclude.Include.NON_NULL) String nick) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.IncludeRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object r = recordClass.getDeclaredConstructor(String.class, String.class)
+                .newInstance("t", null);
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"name\":\"t\""), out);
+        assertFalse(out.contains("nick"), out);
+        assertEquals(out, mapper.toJson(r));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
