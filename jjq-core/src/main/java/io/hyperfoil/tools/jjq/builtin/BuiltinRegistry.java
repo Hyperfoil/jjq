@@ -20,7 +20,7 @@ public final class BuiltinRegistry {
 
     private static volatile BuiltinRegistry defaultInstance;
 
-    private final Map<String, BuiltinFunction> builtins = new HashMap<>();
+    private final Map<String, BuiltinFunction> builtins = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Require the input to be a JqArray, throwing a descriptive error if not. */
     private static JqArray requireArray(JqValue input, String operation) {
@@ -28,8 +28,12 @@ public final class BuiltinRegistry {
         throw new JqException(operation + " requires array input");
     }
 
+    /**
+     * Creates an empty registry; defaults load on first lookup (see
+     * {@link #loadDefault}). Custom builtins registered via
+     * {@link #register} take precedence over same-named defaults.
+     */
     public BuiltinRegistry() {
-        registerDefaults();
     }
 
     /**
@@ -55,28 +59,246 @@ public final class BuiltinRegistry {
     }
 
     public BuiltinFunction get(String name, int arity) {
-        return builtins.get(name + "/" + arity);
+        String key = name + "/" + arity;
+        BuiltinFunction fn = builtins.get(key);
+        if (fn != null) return fn;
+        // Misses happen once per builtin ever: synchronize the fill, keep the
+        // fast path to a single lock-free map read (issue #122).
+        synchronized (builtins) {
+            fn = builtins.get(key);
+            if (fn == null) {
+                fn = loadDefault(key);
+                if (fn != null) builtins.put(key, fn);
+            }
+            return fn;
+        }
     }
 
-    private void registerDefaults() {
-        // Core
-        register("length", 0, (input, args, env, eval, out) -> {
+    /**
+     * Load one default builtin on first lookup (issue #122). Each case
+     * arm's lambda executes — and its hidden class generates — only when
+     * that builtin is first requested; builtin-free programs load none.
+     * Results are cached in {@link #builtins} by {@link #get}.
+     * Duplicate registrations keep last-wins, matching the old bulk map.
+     */
+    /** All default builtin keys ({@code name/arity}), without loading any. */
+    /** All default builtin keys ({@code name/arity}), without loading any. */
+    private static final java.util.Set<String> DEFAULT_KEYS = java.util.Set.of(
+            "length/0",
+            "utf8bytelength/0",
+            "keys/0",
+            "keys_unsorted/0",
+            "values/0",
+            "type/0",
+            "empty/0",
+            "error/0",
+            "error/1",
+            "has/1",
+            "in/1",
+            "contains/1",
+            "inside/1",
+            "not/0",
+            "null/0",
+            "true/0",
+            "false/0",
+            "map/1",
+            "map_values/1",
+            "select/1",
+            "add/0",
+            "add/1",
+            "any/0",
+            "any/1",
+            "all/0",
+            "all/1",
+            "flatten/0",
+            "flatten/1",
+            "sort/0",
+            "sort_by/1",
+            "group_by/1",
+            "unique/0",
+            "unique_by/1",
+            "reverse/0",
+            "min/0",
+            "max/0",
+            "min_by/1",
+            "max_by/1",
+            "transpose/0",
+            "range/1",
+            "range/2",
+            "range/3",
+            "limit/2",
+            "first/1",
+            "last/1",
+            "first/0",
+            "last/0",
+            "nth/1",
+            "recurse/0",
+            "recurse/1",
+            "recurse/2",
+            "repeat/1",
+            "while/2",
+            "until/2",
+            "tostring/0",
+            "tonumber/0",
+            "ascii_downcase/0",
+            "ascii_upcase/0",
+            "split/1",
+            "join/1",
+            "test/1",
+            "test/2",
+            "match/1",
+            "capture/1",
+            "scan/1",
+            "sub/2",
+            "gsub/2",
+            "startswith/1",
+            "endswith/1",
+            "ltrimstr/1",
+            "rtrimstr/1",
+            "explode/0",
+            "implode/0",
+            "indices/1",
+            "index/1",
+            "rindex/1",
+            "floor/0",
+            "ceil/0",
+            "round/0",
+            "sqrt/0",
+            "pow/2",
+            "log/0",
+            "log2/0",
+            "log10/0",
+            "exp/0",
+            "exp2/0",
+            "exp10/0",
+            "fabs/0",
+            "nan/0",
+            "infinite/0",
+            "isinfinite/0",
+            "isnan/0",
+            "isnormal/0",
+            "isfinite/0",
+            "path/1",
+            "getpath/1",
+            "setpath/2",
+            "delpaths/1",
+            "leaf_paths/0",
+            "tojson/0",
+            "fromjson/0",
+            "ascii/0",
+            "to_entries/0",
+            "from_entries/0",
+            "with_entries/1",
+            "debug/0",
+            "debug/1",
+            "stderr/0",
+            "builtins/0",
+            "have_decnum/0",
+            "env/0",
+            "input/0",
+            "inputs/0",
+            "del/1",
+            "paths/0",
+            "paths/1",
+            "scalars/0",
+            "nulls/0",
+            "booleans/0",
+            "numbers/0",
+            "strings/0",
+            "arrays/0",
+            "objects/0",
+            "iterables/0",
+            "isempty/1",
+            "any/2",
+            "all/2",
+            "halt/0",
+            "halt_error/0",
+            "halt_error/1",
+            "now/0",
+            "todate/0",
+            "fromdate/0",
+            "strftime/1",
+            "gmtime/0",
+            "mktime/0",
+            "dateadd/2",
+            "datesub/2",
+            "strflocaltime/1",
+            "strptime/1",
+            "splits/1",
+            "splits/2",
+            "match/2",
+            "nth/2",
+            "type_error/0",
+            "abs/0",
+            "combinations/0",
+            "combinations/1",
+            "walk/1",
+            "bsearch/1",
+            "skip/2",
+            "INDEX/2",
+            "input_line_number/0",
+            "significand/0",
+            "exponent/0",
+            "drem/2",
+            "lgamma/0",
+            "tgamma/0",
+            "j0/0",
+            "j1/0",
+            "rint/0",
+            "trunc/0",
+            "nearbyint/0",
+            "logb/0",
+            "cbrt/0",
+            "sin/0",
+            "cos/0",
+            "tan/0",
+            "asin/0",
+            "acos/0",
+            "atan/0",
+            "atan2/2",
+            "sinh/0",
+            "cosh/0",
+            "tanh/0",
+            "asinh/0",
+            "acosh/0",
+            "atanh/0",
+            "remainder/2",
+            "hypot/2",
+            "fma/3",
+            "trim/0",
+            "ltrim/0",
+            "rtrim/0",
+            "trimstr/1",
+            "toboolean/0",
+            "pick/1",
+            "IN/1",
+            "IN/2",
+            "JOIN/2",
+            "tostream/0",
+            "fromstream/1",
+            "truncate_stream/1");
+
+    private BuiltinFunction loadDefault(String builtinKey) {
+        return switch (builtinKey) {
+// Core
+            case "length/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqNumber n) {
                 out.accept((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
             } else {
                 out.accept(JqNumber.of(input.length()));
             }
-        });
+        };
+            case "utf8bytelength/0" -> (input, args, env, eval, out) -> {
 
-        register("utf8bytelength", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqString s) {
                 out.accept(JqNumber.of(s.stringValue().getBytes(java.nio.charset.StandardCharsets.UTF_8).length));
             } else {
                 throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") only strings have UTF-8 byte length");
             }
-        });
+        };
+            case "keys/0" -> (input, args, env, eval, out) -> {
 
-        register("keys", 0, (input, args, env, eval, out) -> {
             switch (input) {
                 case JqObject obj -> {
                     out.accept(obj.sortedKeysAsArray());
@@ -90,9 +312,20 @@ public final class BuiltinRegistry {
                 }
                 default -> throw new JqException("keys requires object or array input");
             }
-        });
+        };
+// length already handles null=0, but ensure strings count codepoints
+        // (already correct - String.length() counts chars which matches jq for BMP)
 
-        register("keys_unsorted", 0, (input, args, env, eval, out) -> {
+        // ltrimstr/rtrimstr already registered
+
+        // @base32 and @base32d formats
+        // (handled in evaluator's evalFormat)
+
+        // infinite/nan already registered
+
+        // object operations
+            case "keys_unsorted/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqObject obj) {
                 var keys = obj.objectValue().keySet().stream()
                         .map(k -> (JqValue) JqString.of(k))
@@ -101,32 +334,32 @@ public final class BuiltinRegistry {
             } else {
                 throw new JqException("keys_unsorted requires object input");
             }
-        });
+        };
+            case "values/0" -> (input, args, env, eval, out) -> {
 
-        register("values", 0, (input, args, env, eval, out) -> {
             // values is a type-selector filter: passes through non-null values
             if (!(input instanceof JqNull)) {
                 out.accept(input);
             }
-        });
+        };
+            case "type/0" -> (input, args, env, eval, out) ->
 
-        register("type", 0, (input, args, env, eval, out) ->
-                out.accept(JqString.of(input.type().jqName())));
+                out.accept(JqString.of(input.type().jqName()));
+            case "empty/0" -> (input, args, env, eval, out) -> {
 
-        register("empty", 0, (input, args, env, eval, out) -> {
             throw EmptyException.INSTANCE;
-        });
+        };
+            case "error/0" -> (input, args, env, eval, out) -> {
 
-        register("error", 0, (input, args, env, eval, out) -> {
             throw new JqException(input);
-        });
+        };
+            case "error/1" -> (input, args, env, eval, out) -> {
 
-        register("error", 1, (input, args, env, eval, out) -> {
             List<JqValue> msgVals = eval.eval(args.getFirst(), input, env);
             throw new JqException(msgVals.getFirst());
-        });
+        };
+            case "has/1" -> (input, args, env, eval, out) -> {
 
-        register("has", 1, (input, args, env, eval, out) -> {
             for (JqValue key : eval.eval(args.getFirst(), input, env)) {
                 boolean result = switch (input) {
                     case JqObject obj -> obj.has(key instanceof JqString s ? s.stringValue() : key.toJsonString());
@@ -139,9 +372,9 @@ public final class BuiltinRegistry {
                 };
                 out.accept(JqBoolean.of(result));
             }
-        });
+        };
+            case "in/1" -> (input, args, env, eval, out) -> {
 
-        register("in", 1, (input, args, env, eval, out) -> {
             for (JqValue container : eval.eval(args.getFirst(), input, env)) {
                 boolean result = switch (container) {
                     case JqObject obj -> obj.has(input instanceof JqString s ? s.stringValue() : input.toJsonString());
@@ -153,43 +386,43 @@ public final class BuiltinRegistry {
                 };
                 out.accept(JqBoolean.of(result));
             }
-        });
+        };
+            case "contains/1" -> (input, args, env, eval, out) -> {
 
-        register("contains", 1, (input, args, env, eval, out) -> {
             for (JqValue other : eval.eval(args.getFirst(), input, env)) {
                 out.accept(JqBoolean.of(containsValue(input, other)));
             }
-        });
+        };
+            case "inside/1" -> (input, args, env, eval, out) -> {
 
-        register("inside", 1, (input, args, env, eval, out) -> {
             for (JqValue other : eval.eval(args.getFirst(), input, env)) {
                 out.accept(JqBoolean.of(containsValue(other, input)));
             }
-        });
+        };
+            case "not/0" -> (input, args, env, eval, out) ->
 
-        register("not", 0, (input, args, env, eval, out) ->
-                out.accept(JqBoolean.of(!input.isTruthy())));
+                out.accept(JqBoolean.of(!input.isTruthy()));
+            case "null/0" -> (input, args, env, eval, out) ->
 
-        register("null", 0, (input, args, env, eval, out) ->
-                out.accept(JqNull.NULL));
+                out.accept(JqNull.NULL);
+            case "true/0" -> (input, args, env, eval, out) ->
 
-        register("true", 0, (input, args, env, eval, out) ->
-                out.accept(JqBoolean.TRUE));
+                out.accept(JqBoolean.TRUE);
+            case "false/0" -> (input, args, env, eval, out) ->
 
-        register("false", 0, (input, args, env, eval, out) ->
-                out.accept(JqBoolean.FALSE));
+                out.accept(JqBoolean.FALSE);
+// Collection builtins
+            case "map/1" -> (input, args, env, eval, out) -> {
 
-        // Collection builtins
-        register("map", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "map");
             var results = new ArrayList<JqValue>();
             for (JqValue elem : arr.arrayValue()) {
                 eval.eval(args.getFirst(), elem, env, results::add);
             }
             out.accept(JqArray.of(results));
-        });
+        };
+            case "map_values/1" -> (input, args, env, eval, out) -> {
 
-        register("map_values", 1, (input, args, env, eval, out) -> {
             switch (input) {
                 case JqArray arr -> {
                     var results = new ArrayList<JqValue>();
@@ -208,17 +441,17 @@ public final class BuiltinRegistry {
                 }
                 default -> throw new JqException("map_values requires array or object input");
             }
-        });
+        };
+            case "select/1" -> (input, args, env, eval, out) -> {
 
-        register("select", 1, (input, args, env, eval, out) -> {
             for (JqValue cond : eval.eval(args.getFirst(), input, env)) {
                 if (cond.isTruthy()) {
                     out.accept(input);
                 }
             }
-        });
+        };
+            case "add/0" -> (input, args, env, eval, out) -> {
 
-        register("add", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "add");
             if (arr.arrayValue().isEmpty()) {
                 out.accept(JqNull.NULL);
@@ -229,10 +462,10 @@ public final class BuiltinRegistry {
                 result = result.add(arr.arrayValue().get(i));
             }
             out.accept(result);
-        });
+        };
+// add(f) — collect outputs of f, then add them
+            case "add/1" -> (input, args, env, eval, out) -> {
 
-        // add(f) — collect outputs of f, then add them
-        register("add", 1, (input, args, env, eval, out) -> {
             var collected = new ArrayList<JqValue>();
             try {
                 eval.eval(args.getFirst(), input, env, collected::add);
@@ -248,14 +481,14 @@ public final class BuiltinRegistry {
                 result = result.add(collected.get(i));
             }
             out.accept(result);
-        });
+        };
+            case "any/0" -> (input, args, env, eval, out) -> {
 
-        register("any", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "any");
             out.accept(JqBoolean.of(arr.arrayValue().stream().anyMatch(JqValue::isTruthy)));
-        });
+        };
+            case "any/1" -> (input, args, env, eval, out) -> {
 
-        register("any", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "any");
             for (JqValue elem : arr.arrayValue()) {
                 var results = eval.eval(args.getFirst(), elem, env);
@@ -265,14 +498,14 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(JqBoolean.FALSE);
-        });
+        };
+            case "all/0" -> (input, args, env, eval, out) -> {
 
-        register("all", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "all");
             out.accept(JqBoolean.of(arr.arrayValue().stream().allMatch(JqValue::isTruthy)));
-        });
+        };
+            case "all/1" -> (input, args, env, eval, out) -> {
 
-        register("all", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "all");
             for (JqValue elem : arr.arrayValue()) {
                 var results = eval.eval(args.getFirst(), elem, env);
@@ -282,16 +515,16 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(JqBoolean.TRUE);
-        });
+        };
+            case "flatten/0" -> (input, args, env, eval, out) -> {
 
-        register("flatten", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "flatten");
             var result = new ArrayList<JqValue>();
             flattenArray(arr, result, Integer.MAX_VALUE);
             out.accept(JqArray.of(result));
-        });
+        };
+            case "flatten/1" -> (input, args, env, eval, out) -> {
 
-        register("flatten", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "flatten");
             eval.eval(args.getFirst(), input, env, depthVal -> {
                 int depth = (int) depthVal.longValue();
@@ -300,16 +533,16 @@ public final class BuiltinRegistry {
                 flattenArray(arr, result, depth);
                 out.accept(JqArray.of(result));
             });
-        });
+        };
+            case "sort/0" -> (input, args, env, eval, out) -> {
 
-        register("sort", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "sort");
             var list = new ArrayList<>(arr.arrayValue());
             list.sort(JqValue::compareTo);
             out.accept(JqArray.of(list));
-        });
+        };
+            case "sort_by/1" -> (input, args, env, eval, out) -> {
 
-        register("sort_by", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "sort_by");
             var list = new ArrayList<>(arr.arrayValue());
             list.sort((a, b) -> {
@@ -322,9 +555,9 @@ public final class BuiltinRegistry {
                 return Integer.compare(keysA.size(), keysB.size());
             });
             out.accept(JqArray.of(list));
-        });
+        };
+            case "group_by/1" -> (input, args, env, eval, out) -> {
 
-        register("group_by", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "group_by");
             var groups = new LinkedHashMap<String, List<JqValue>>();
             var sortedList = new ArrayList<>(arr.arrayValue());
@@ -341,9 +574,9 @@ public final class BuiltinRegistry {
                     .map(g -> (JqValue) JqArray.of(g))
                     .toList();
             out.accept(JqArray.of(result));
-        });
+        };
+            case "unique/0" -> (input, args, env, eval, out) -> {
 
-        register("unique", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "unique");
             var result = new ArrayList<JqValue>();
             var sorted = new ArrayList<>(arr.arrayValue());
@@ -356,9 +589,9 @@ public final class BuiltinRegistry {
                 prev = v;
             }
             out.accept(JqArray.of(result));
-        });
+        };
+            case "unique_by/1" -> (input, args, env, eval, out) -> {
 
-        register("unique_by", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "unique_by");
             var seen = new LinkedHashSet<String>();
             var result = new ArrayList<JqValue>();
@@ -369,9 +602,9 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(JqArray.of(result));
-        });
+        };
+            case "reverse/0" -> (input, args, env, eval, out) -> {
 
-        register("reverse", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqArray arr) {
                 var list = new ArrayList<>(arr.arrayValue());
                 Collections.reverse(list);
@@ -381,25 +614,25 @@ public final class BuiltinRegistry {
             } else {
                 throw new JqException("reverse requires array or string input");
             }
-        });
+        };
+            case "min/0" -> (input, args, env, eval, out) -> {
 
-        register("min", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
                 out.accept(JqNull.NULL);
                 return;
             }
             out.accept(arr.arrayValue().stream().min(JqValue::compareTo).orElse(JqNull.NULL));
-        });
+        };
+            case "max/0" -> (input, args, env, eval, out) -> {
 
-        register("max", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
                 out.accept(JqNull.NULL);
                 return;
             }
             out.accept(arr.arrayValue().stream().max(JqValue::compareTo).orElse(JqNull.NULL));
-        });
+        };
+            case "min_by/1" -> (input, args, env, eval, out) -> {
 
-        register("min_by", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
                 out.accept(JqNull.NULL);
                 return;
@@ -408,9 +641,9 @@ public final class BuiltinRegistry {
                     .min((a, b) -> eval.eval(args.getFirst(), a, env).getFirst()
                             .compareTo(eval.eval(args.getFirst(), b, env).getFirst()))
                     .orElse(JqNull.NULL));
-        });
+        };
+            case "max_by/1" -> (input, args, env, eval, out) -> {
 
-        register("max_by", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
                 out.accept(JqNull.NULL);
                 return;
@@ -427,9 +660,9 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(maxElem);
-        });
+        };
+            case "transpose/0" -> (input, args, env, eval, out) -> {
 
-        register("transpose", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "transpose");
             int maxLen = 0;
             for (JqValue v : arr.arrayValue()) {
@@ -448,19 +681,19 @@ public final class BuiltinRegistry {
                 result.add(JqArray.of(row));
             }
             out.accept(JqArray.of(result));
-        });
+        };
+// Iteration
+            case "range/1" -> (input, args, env, eval, out) -> {
 
-        // Iteration
-        register("range", 1, (input, args, env, eval, out) -> {
             eval.eval(args.getFirst(), input, env, endVal -> {
                 long end = endVal.longValue();
                 for (long i = 0; i < end; i++) {
                     out.accept(JqNumber.of(i));
                 }
             });
-        });
+        };
+            case "range/2" -> (input, args, env, eval, out) -> {
 
-        register("range", 2, (input, args, env, eval, out) -> {
             eval.eval(args.get(0), input, env, startVal -> {
                 eval.eval(args.get(1), input, env, endVal -> {
                     long start = startVal.longValue();
@@ -470,9 +703,9 @@ public final class BuiltinRegistry {
                     }
                 });
             });
-        });
+        };
+            case "range/3" -> (input, args, env, eval, out) -> {
 
-        register("range", 3, (input, args, env, eval, out) -> {
             eval.eval(args.get(0), input, env, startVal -> {
                 eval.eval(args.get(1), input, env, endVal -> {
                     eval.eval(args.get(2), input, env, stepVal -> {
@@ -497,9 +730,9 @@ public final class BuiltinRegistry {
                     });
                 });
             });
-        });
+        };
+            case "limit/2" -> (input, args, env, eval, out) -> {
 
-        register("limit", 2, (input, args, env, eval, out) -> {
             eval.eval(args.get(0), input, env, nVal -> {
                 long n = nVal.longValue();
                 if (n < 0) throw new JqException("limit doesn't support negative count");
@@ -516,9 +749,9 @@ public final class BuiltinRegistry {
                     if (count[0] < n) throw e;
                 }
             });
-        });
+        };
+            case "first/1" -> (input, args, env, eval, out) -> {
 
-        register("first", 1, (input, args, env, eval, out) -> {
             boolean[] found = {false};
             try {
                 eval.eval(args.getFirst(), input, env, val -> {
@@ -531,51 +764,51 @@ public final class BuiltinRegistry {
             } catch (JqException | JqTypeError e) {
                 if (!found[0]) throw e; // propagate error if no value found yet
             }
-        });
+        };
+            case "last/1" -> (input, args, env, eval, out) -> {
 
-        register("last", 1, (input, args, env, eval, out) -> {
             JqValue[] last = {null};
             try {
                 eval.eval(args.getFirst(), input, env, val -> last[0] = val);
             } catch (EmptyException ignored) {}
             if (last[0] != null) out.accept(last[0]);
-        });
+        };
+// first/0 = .[0], last/0 = .[-1]
+            case "first/0" -> (input, args, env, eval, out) -> {
 
-        // first/0 = .[0], last/0 = .[-1]
-        register("first", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
                 out.accept(arr.arrayValue().getFirst());
             }
-        });
+        };
+            case "last/0" -> (input, args, env, eval, out) -> {
 
-        register("last", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
                 out.accept(arr.arrayValue().getLast());
             }
-        });
+        };
+            case "nth/1" -> (input, args, env, eval, out) -> {
 
-        register("nth", 1, (input, args, env, eval, out) -> {
             // nth(n) = .[] | ... select nth
             int n = (int) eval.eval(args.getFirst(), input, env).getFirst().longValue();
             if (input instanceof JqArray arr && n >= 0 && n < arr.arrayValue().size()) {
                 out.accept(arr.arrayValue().get(n));
             }
-        });
+        };
+            case "recurse/0" -> (input, args, env, eval, out) -> {
 
-        register("recurse", 0, (input, args, env, eval, out) -> {
             recurseValue(input, out);
-        });
+        };
+            case "recurse/1" -> (input, args, env, eval, out) -> {
 
-        register("recurse", 1, (input, args, env, eval, out) -> {
             recurseWithFilter(input, args.getFirst(), env, eval, out, new HashSet<>());
-        });
+        };
+// recurse(f; cond) - recurse applying f while cond is truthy
+            case "recurse/2" -> (input, args, env, eval, out) -> {
 
-        // recurse(f; cond) - recurse applying f while cond is truthy
-        register("recurse", 2, (input, args, env, eval, out) -> {
             recurseWithCondition(input, args.get(0), args.get(1), env, eval, out);
-        });
+        };
+            case "repeat/1" -> (input, args, env, eval, out) -> {
 
-        register("repeat", 1, (input, args, env, eval, out) -> {
             JqValue current = input;
             for (int i = 0; i < 10000; i++) { // safety limit
                 out.accept(current);
@@ -583,9 +816,9 @@ public final class BuiltinRegistry {
                 if (results.isEmpty()) break;
                 current = results.getFirst();
             }
-        });
+        };
+            case "while/2" -> (input, args, env, eval, out) -> {
 
-        register("while", 2, (input, args, env, eval, out) -> {
             JqValue current = input;
             for (int i = 0; i < 10000; i++) {
                 var cond = eval.eval(args.get(0), current, env).getFirst();
@@ -593,9 +826,9 @@ public final class BuiltinRegistry {
                 out.accept(current);
                 current = eval.eval(args.get(1), current, env).getFirst();
             }
-        });
+        };
+            case "until/2" -> (input, args, env, eval, out) -> {
 
-        register("until", 2, (input, args, env, eval, out) -> {
             JqValue current = input;
             for (int i = 0; i < 10000; i++) {
                 var cond = eval.eval(args.get(0), current, env).getFirst();
@@ -603,18 +836,18 @@ public final class BuiltinRegistry {
                 current = eval.eval(args.get(1), current, env).getFirst();
             }
             out.accept(current);
-        });
+        };
+// String builtins
+            case "tostring/0" -> (input, args, env, eval, out) -> {
 
-        // String builtins
-        register("tostring", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqString) {
                 out.accept(input);
             } else {
                 out.accept(JqString.of(input.toJsonString()));
             }
-        });
+        };
+            case "tonumber/0" -> (input, args, env, eval, out) -> {
 
-        register("tonumber", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqNumber) {
                 out.accept(input);
             } else if (input instanceof JqString s) {
@@ -626,19 +859,19 @@ public final class BuiltinRegistry {
             } else {
                 throw new JqException("Cannot convert " + input.type().jqName() + " to number");
             }
-        });
+        };
+            case "ascii_downcase/0" -> (input, args, env, eval, out) -> {
 
-        register("ascii_downcase", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("ascii_downcase requires string");
             out.accept(JqString.of(asciiLowerCase(s.stringValue())));
-        });
+        };
+            case "ascii_upcase/0" -> (input, args, env, eval, out) -> {
 
-        register("ascii_upcase", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("ascii_upcase requires string");
             out.accept(JqString.of(asciiUpperCase(s.stringValue())));
-        });
+        };
+            case "split/1" -> (input, args, env, eval, out) -> {
 
-        register("split", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("split requires string input");
             JqValue sep = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(sep instanceof JqString sepStr)) throw new JqException("split separator must be string");
@@ -655,9 +888,9 @@ public final class BuiltinRegistry {
                 result = Arrays.stream(parts).map(p -> (JqValue) JqString.of(p)).toList();
             }
             out.accept(JqArray.of(result));
-        });
+        };
+            case "join/1" -> (input, args, env, eval, out) -> {
 
-        register("join", 1, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "join");
             eval.eval(args.getFirst(), input, env, sep -> {
                 String sepStr = sep instanceof JqString s ? s.stringValue() : sep.toJsonString();
@@ -678,24 +911,24 @@ public final class BuiltinRegistry {
                 }
                 out.accept(JqString.of(sb.toString()));
             });
-        });
+        };
+            case "test/1" -> (input, args, env, eval, out) -> {
 
-        register("test", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("test requires string input");
             JqValue pattern = eval.eval(args.getFirst(), input, env).getFirst();
             String regex = pattern instanceof JqString ps ? ps.stringValue() : pattern.toJsonString();
             out.accept(JqBoolean.of(Pattern.compile(regex).matcher(s.stringValue()).find()));
-        });
+        };
+            case "test/2" -> (input, args, env, eval, out) -> {
 
-        register("test", 2, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("test requires string input");
             String regex = eval.eval(args.get(0), input, env).getFirst().stringValue();
             String flags = eval.eval(args.get(1), input, env).getFirst().stringValue();
             int pFlags = parseRegexFlags(flags);
             out.accept(JqBoolean.of(Pattern.compile(regex, pFlags).matcher(s.stringValue()).find()));
-        });
+        };
+            case "match/1" -> (input, args, env, eval, out) -> {
 
-        register("match", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("match requires string input");
             String regex = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
             var matcher = Pattern.compile(regex).matcher(s.stringValue());
@@ -704,9 +937,9 @@ public final class BuiltinRegistry {
             } else {
                 out.accept(JqNull.NULL);
             }
-        });
+        };
+            case "capture/1" -> (input, args, env, eval, out) -> {
 
-        register("capture", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("capture requires string input");
             String regex = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
             var pattern = Pattern.compile(regex);
@@ -722,9 +955,9 @@ public final class BuiltinRegistry {
             } else {
                 out.accept(JqNull.NULL);
             }
-        });
+        };
+            case "scan/1" -> (input, args, env, eval, out) -> {
 
-        register("scan", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("scan requires string input");
             String regex = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
             var matcher = Pattern.compile(regex).matcher(s.stringValue());
@@ -740,9 +973,9 @@ public final class BuiltinRegistry {
                     out.accept(JqString.of(matcher.group()));
                 }
             }
-        });
+        };
+            case "sub/2" -> (input, args, env, eval, out) -> {
 
-        register("sub", 2, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("sub requires string input");
             String regex = eval.eval(args.get(0), input, env).getFirst().stringValue();
             // The second arg is a jq expression to apply to the match
@@ -753,9 +986,9 @@ public final class BuiltinRegistry {
             } else {
                 out.accept(input);
             }
-        });
+        };
+            case "gsub/2" -> (input, args, env, eval, out) -> {
 
-        register("gsub", 2, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("gsub requires string input");
             String regex = eval.eval(args.get(0), input, env).getFirst().stringValue();
             var matcher = Pattern.compile(regex).matcher(s.stringValue());
@@ -766,25 +999,25 @@ public final class BuiltinRegistry {
             }
             matcher.appendTail(sb);
             out.accept(JqString.of(sb.toString()));
-        });
+        };
+            case "startswith/1" -> (input, args, env, eval, out) -> {
 
-        register("startswith", 1, (input, args, env, eval, out) -> {
             JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(input instanceof JqString s) || !(arg instanceof JqString prefix)) {
                 throw new JqException("startswith() requires string inputs");
             }
             out.accept(JqBoolean.of(s.stringValue().startsWith(prefix.stringValue())));
-        });
+        };
+            case "endswith/1" -> (input, args, env, eval, out) -> {
 
-        register("endswith", 1, (input, args, env, eval, out) -> {
             JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(input instanceof JqString s) || !(arg instanceof JqString suffix)) {
                 throw new JqException("endswith() requires string inputs");
             }
             out.accept(JqBoolean.of(s.stringValue().endsWith(suffix.stringValue())));
-        });
+        };
+            case "ltrimstr/1" -> (input, args, env, eval, out) -> {
 
-        register("ltrimstr", 1, (input, args, env, eval, out) -> {
             JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(input instanceof JqString s) || !(arg instanceof JqString prefix)) {
                 throw new JqException("startswith() requires string inputs");
@@ -792,9 +1025,9 @@ public final class BuiltinRegistry {
             String str = s.stringValue();
             String p = prefix.stringValue();
             out.accept(JqString.of(str.startsWith(p) ? str.substring(p.length()) : str));
-        });
+        };
+            case "rtrimstr/1" -> (input, args, env, eval, out) -> {
 
-        register("rtrimstr", 1, (input, args, env, eval, out) -> {
             JqValue arg = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(input instanceof JqString s) || !(arg instanceof JqString suffix)) {
                 throw new JqException("endswith() requires string inputs");
@@ -802,17 +1035,17 @@ public final class BuiltinRegistry {
             String str = s.stringValue();
             String sfx = suffix.stringValue();
             out.accept(JqString.of(str.endsWith(sfx) ? str.substring(0, str.length() - sfx.length()) : str));
-        });
+        };
+            case "explode/0" -> (input, args, env, eval, out) -> {
 
-        register("explode", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("explode requires string");
             var codepoints = s.stringValue().codePoints()
                     .mapToObj(cp -> (JqValue) JqNumber.of(cp))
                     .toList();
             out.accept(JqArray.of(codepoints));
-        });
+        };
+            case "implode/0" -> (input, args, env, eval, out) -> {
 
-        register("implode", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr)) {
                 throw new JqException("implode input must be an array");
             }
@@ -833,9 +1066,9 @@ public final class BuiltinRegistry {
                 sb.appendCodePoint(cp);
             }
             out.accept(JqString.of(sb.toString()));
-        });
+        };
+            case "indices/1" -> (input, args, env, eval, out) -> {
 
-        register("indices", 1, (input, args, env, eval, out) -> {
             eval.eval(args.getFirst(), input, env, target -> {
                 if (input instanceof JqString s && target instanceof JqString t) {
                     var indices = new ArrayList<JqValue>();
@@ -877,9 +1110,9 @@ public final class BuiltinRegistry {
                     throw new JqException("indices requires string or array");
                 }
             });
-        });
+        };
+            case "index/1" -> (input, args, env, eval, out) -> {
 
-        register("index", 1, (input, args, env, eval, out) -> {
             eval.eval(args.getFirst(), input, env, target -> {
                 if (input instanceof JqString s && target instanceof JqString t) {
                     if (t.stringValue().isEmpty()) {
@@ -921,9 +1154,9 @@ public final class BuiltinRegistry {
                     throw new JqException("index requires string or array");
                 }
             });
-        });
+        };
+            case "rindex/1" -> (input, args, env, eval, out) -> {
 
-        register("rindex", 1, (input, args, env, eval, out) -> {
             eval.eval(args.getFirst(), input, env, target -> {
                 if (input instanceof JqString s && target instanceof JqString t) {
                     String str = s.stringValue();
@@ -957,94 +1190,94 @@ public final class BuiltinRegistry {
                     throw new JqException("rindex requires string or array");
                 }
             });
-        });
+        };
+// Math builtins
+            case "floor/0" -> (input, args, env, eval, out) -> {
 
-        // Math builtins
-        register("floor", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of((long) Math.floor(input.doubleValue())));
-        });
+        };
+            case "ceil/0" -> (input, args, env, eval, out) -> {
 
-        register("ceil", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of((long) Math.ceil(input.doubleValue())));
-        });
+        };
+            case "round/0" -> (input, args, env, eval, out) -> {
 
-        register("round", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.round(input.doubleValue())));
-        });
+        };
+            case "sqrt/0" -> (input, args, env, eval, out) -> {
 
-        register("sqrt", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.sqrt(input.doubleValue())));
-        });
+        };
+            case "pow/2" -> (input, args, env, eval, out) -> {
 
-        register("pow", 2, (input, args, env, eval, out) -> {
             double base = eval.eval(args.get(0), input, env).getFirst().doubleValue();
             double exp = eval.eval(args.get(1), input, env).getFirst().doubleValue();
             out.accept(JqNumber.of(Math.pow(base, exp)));
-        });
+        };
+            case "log/0" -> (input, args, env, eval, out) -> {
 
-        register("log", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.log(input.doubleValue())));
-        });
+        };
+            case "log2/0" -> (input, args, env, eval, out) -> {
 
-        register("log2", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.log(input.doubleValue()) / Math.log(2)));
-        });
+        };
+            case "log10/0" -> (input, args, env, eval, out) -> {
 
-        register("log10", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.log10(input.doubleValue())));
-        });
+        };
+            case "exp/0" -> (input, args, env, eval, out) -> {
 
-        register("exp", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.exp(input.doubleValue())));
-        });
+        };
+            case "exp2/0" -> (input, args, env, eval, out) -> {
 
-        register("exp2", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.pow(2, input.doubleValue())));
-        });
+        };
+            case "exp10/0" -> (input, args, env, eval, out) -> {
 
-        register("exp10", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.pow(10, input.doubleValue())));
-        });
+        };
+            case "fabs/0" -> (input, args, env, eval, out) -> {
 
-        register("fabs", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.abs(input.doubleValue())));
-        });
+        };
+            case "nan/0" -> (input, args, env, eval, out) -> {
 
-        register("nan", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Double.NaN));
-        });
+        };
+            case "infinite/0" -> (input, args, env, eval, out) -> {
 
-        register("infinite", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Double.POSITIVE_INFINITY));
-        });
+        };
+            case "isinfinite/0" -> (input, args, env, eval, out) -> {
 
-        register("isinfinite", 0, (input, args, env, eval, out) -> {
             out.accept(JqBoolean.of(Double.isInfinite(input.doubleValue())));
-        });
+        };
+            case "isnan/0" -> (input, args, env, eval, out) -> {
 
-        register("isnan", 0, (input, args, env, eval, out) -> {
             out.accept(JqBoolean.of(Double.isNaN(input.doubleValue())));
-        });
+        };
+            case "isnormal/0" -> (input, args, env, eval, out) -> {
 
-        register("isnormal", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqNumber)) {
                 out.accept(JqBoolean.FALSE);
                 return;
             }
             double d = input.doubleValue();
             out.accept(JqBoolean.of(!Double.isNaN(d) && !Double.isInfinite(d) && d != 0));
-        });
+        };
+            case "isfinite/0" -> (input, args, env, eval, out) -> {
 
-        register("isfinite", 0, (input, args, env, eval, out) -> {
             out.accept(JqBoolean.of(Double.isFinite(input.doubleValue())));
-        });
+        };
+// Path builtins
+            case "path/1" -> (input, args, env, eval, out) -> {
 
-        // Path builtins
-        register("path", 1, (input, args, env, eval, out) -> {
             eval.eval(new JqExpr.PathExpr(args.getFirst()), input, env, out);
-        });
+        };
+            case "getpath/1" -> (input, args, env, eval, out) -> {
 
-        register("getpath", 1, (input, args, env, eval, out) -> {
             JqValue pathArr = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(pathArr instanceof JqArray arr)) throw new JqException("getpath requires array argument");
             if (arr.arrayValue().size() > MAX_PATH_DEPTH) throw new JqException("Path too deep");
@@ -1058,16 +1291,16 @@ public final class BuiltinRegistry {
                 };
             }
             out.accept(current);
-        });
+        };
+            case "setpath/2" -> (input, args, env, eval, out) -> {
 
-        register("setpath", 2, (input, args, env, eval, out) -> {
             JqValue pathArr = eval.eval(args.get(0), input, env).getFirst();
             JqValue value = eval.eval(args.get(1), input, env).getFirst();
             if (!(pathArr instanceof JqArray arr)) throw new JqException("setpath requires array path");
             out.accept(setPath(input, arr.arrayValue(), 0, value));
-        });
+        };
+            case "delpaths/1" -> (input, args, env, eval, out) -> {
 
-        register("delpaths", 1, (input, args, env, eval, out) -> {
             JqValue pathsArr = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(pathsArr instanceof JqArray paths)) throw new JqException("Paths must be specified as an array");
             for (JqValue p : paths.arrayValue()) {
@@ -1090,36 +1323,37 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(result);
-        });
+        };
+            case "leaf_paths/0" -> (input, args, env, eval, out) -> {
 
-        register("leaf_paths", 0, (input, args, env, eval, out) -> {
             leafPaths(input, new ArrayList<>(), out);
-        });
+        };
+// Format builtins (as zero-arg functions)
+            case "tojson/0" -> (input, args, env, eval, out) -> {
 
-        // Format builtins (as zero-arg functions)
-        register("tojson", 0, (input, args, env, eval, out) -> {
             out.accept(JqString.of(JqValues.toJsonStringDepthLimited(input)));
-        });
+        };
+            case "fromjson/0" -> (input, args, env, eval, out) -> {
 
-        register("fromjson", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("fromjson requires string");
             try {
                 out.accept(JqValues.parseStrict(s.stringValue()));
             } catch (IllegalArgumentException e) {
                 throw new JqException(e.getMessage());
             }
-        });
+        };
+// ascii - convert number to character
+            case "ascii/0" -> (input, args, env, eval, out) -> {
 
-        register("ascii", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqNumber n) {
                 out.accept(JqString.of(String.valueOf((char) n.longValue())));
             } else {
                 throw new JqException("ascii requires number input");
             }
-        });
+        };
+// Object builtins
+            case "to_entries/0" -> (input, args, env, eval, out) -> {
 
-        // Object builtins
-        register("to_entries", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqObject obj)) throw new JqException("to_entries requires object");
             var entries = new ArrayList<JqValue>();
             for (var entry : obj.objectValue().entrySet()) {
@@ -1129,9 +1363,9 @@ public final class BuiltinRegistry {
                 entries.add(JqObject.ofTrusted(map));
             }
             out.accept(JqArray.of(entries));
-        });
+        };
+            case "from_entries/0" -> (input, args, env, eval, out) -> {
 
-        register("from_entries", 0, (input, args, env, eval, out) -> {
             JqArray arr = requireArray(input, "from_entries");
             var map = new LinkedHashMap<String, JqValue>();
             for (JqValue v : arr.arrayValue()) {
@@ -1152,9 +1386,9 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(JqObject.ofTrusted(map));
-        });
+        };
+            case "with_entries/1" -> (input, args, env, eval, out) -> {
 
-        register("with_entries", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqObject obj)) throw new JqException("with_entries requires object");
             var entries = new ArrayList<JqValue>();
             for (var entry : obj.objectValue().entrySet()) {
@@ -1174,45 +1408,45 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(JqObject.ofTrusted(map));
-        });
+        };
+// Misc
+            case "debug/0" -> (input, args, env, eval, out) -> {
 
-        // Misc
-        register("debug", 0, (input, args, env, eval, out) -> {
             System.err.println("[\"DEBUG:\","+input.toJsonString()+"]");
             out.accept(input);
-        });
+        };
+            case "debug/1" -> (input, args, env, eval, out) -> {
 
-        register("debug", 1, (input, args, env, eval, out) -> {
             JqValue msg = eval.eval(args.getFirst(), input, env).getFirst();
             System.err.println("[\"DEBUG:\","+msg.toJsonString()+"]");
             out.accept(input);
-        });
+        };
+            case "stderr/0" -> (input, args, env, eval, out) -> {
 
-        register("stderr", 0, (input, args, env, eval, out) -> {
             System.err.println(input.toJsonString());
             out.accept(input);
-        });
+        };
+            case "builtins/0" -> (input, args, env, eval, out) -> {
 
-        register("builtins", 0, (input, args, env, eval, out) -> {
             var names = builtins.keySet().stream()
                     .sorted()
                     .map(k -> (JqValue) JqString.of(k))
                     .toList();
             out.accept(JqArray.of(names));
-        });
+        };
+// have_decnum — jjq uses BigDecimal internally, so decimal number support is available
+            case "have_decnum/0" -> (input, args, env, eval, out) -> {
 
-        // have_decnum — jjq uses BigDecimal internally, so decimal number support is available
-        register("have_decnum", 0, (input, args, env, eval, out) -> {
             out.accept(JqBoolean.TRUE);
-        });
+        };
+            case "env/0" -> (input, args, env, eval, out) -> {
 
-        register("env", 0, (input, args, env, eval, out) -> {
             var map = new LinkedHashMap<String, JqValue>();
             System.getenv().forEach((k, v) -> map.put(k, JqString.of(v)));
             out.accept(JqObject.ofTrusted(map));
-        });
+        };
+            case "input/0" -> (input, args, env, eval, out) -> {
 
-        register("input", 0, (input, args, env, eval, out) -> {
             if (env.hasInputs()) {
                 JqValue next = env.nextInput();
                 if (next != null) {
@@ -1221,9 +1455,9 @@ public final class BuiltinRegistry {
                 }
             }
             throw new JqException("break");
-        });
+        };
+            case "inputs/0" -> (input, args, env, eval, out) -> {
 
-        register("inputs", 0, (input, args, env, eval, out) -> {
             if (env.hasInputs()) {
                 for (JqValue v : env.remainingInputs()) {
                     out.accept(v);
@@ -1231,12 +1465,12 @@ public final class BuiltinRegistry {
                 return;
             }
             throw new JqException("inputs not available in this context");
-        });
-
-        // --- Phase 2 builtins ---
+        };
+// --- Phase 2 builtins ---
 
         // del(path_expr) - delete elements at the given paths
-        register("del", 1, (input, args, env, eval, out) -> {
+            case "del/1" -> (input, args, env, eval, out) -> {
+
             JqExpr pathExpr = args.getFirst();
             // Flatten comma expressions and collect all deletion targets
             var subExprs = new ArrayList<JqExpr>();
@@ -1303,51 +1537,58 @@ public final class BuiltinRegistry {
                 result = deletePath(result, path, 0);
             }
             out.accept(result);
-        });
+        };
+// paths - output all paths as arrays
+            case "paths/0" -> (input, args, env, eval, out) -> {
 
-        // paths - output all paths as arrays
-        register("paths", 0, (input, args, env, eval, out) -> {
             allPaths(input, new ArrayList<>(), out);
-        });
+        };
+// paths(filter) - output paths where filter is truthy
+            case "paths/1" -> (input, args, env, eval, out) -> {
 
-        // paths(filter) - output paths where filter is truthy
-        register("paths", 1, (input, args, env, eval, out) -> {
             allPathsFiltered(input, new ArrayList<>(), args.getFirst(), env, eval, out);
-        });
+        };
+// scalars - select scalar values
+            case "scalars/0" -> (input, args, env, eval, out) -> {
 
-        // scalars - select scalar values
-        register("scalars", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray) && !(input instanceof JqObject)) {
                 out.accept(input);
             }
-        });
+        };
+// nulls, booleans, numbers, strings, arrays, objects, iterables, values - type selectors
+            case "nulls/0" -> (input, args, env, eval, out) -> {
 
-        // nulls, booleans, numbers, strings, arrays, objects, iterables, values - type selectors
-        register("nulls", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqNull) out.accept(input);
-        });
-        register("booleans", 0, (input, args, env, eval, out) -> {
+        };
+            case "booleans/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqBoolean) out.accept(input);
-        });
-        register("numbers", 0, (input, args, env, eval, out) -> {
+        };
+            case "numbers/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqNumber) out.accept(input);
-        });
-        register("strings", 0, (input, args, env, eval, out) -> {
+        };
+            case "strings/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqString) out.accept(input);
-        });
-        register("arrays", 0, (input, args, env, eval, out) -> {
+        };
+            case "arrays/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqArray) out.accept(input);
-        });
-        register("objects", 0, (input, args, env, eval, out) -> {
+        };
+            case "objects/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqObject) out.accept(input);
-        });
-        register("iterables", 0, (input, args, env, eval, out) -> {
+        };
+            case "iterables/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqArray || input instanceof JqObject) out.accept(input);
-        });
-        // values/0 already registered above as a type-selector filter
+        };
+// values/0 already registered above as a type-selector filter
 
         // isempty(expr) - true if expr produces no output
-        register("isempty", 1, (input, args, env, eval, out) -> {
+            case "isempty/1" -> (input, args, env, eval, out) -> {
+
             boolean[] found = {false};
             try {
                 eval.eval(args.getFirst(), input, env, val -> found[0] = true);
@@ -1356,10 +1597,10 @@ public final class BuiltinRegistry {
                 if (!found[0]) throw e;
             }
             out.accept(JqBoolean.of(!found[0]));
-        });
+        };
+// any(generator; condition) - two-arg any
+            case "any/2" -> (input, args, env, eval, out) -> {
 
-        // any(generator; condition) - two-arg any
-        register("any", 2, (input, args, env, eval, out) -> {
             boolean[] found = {false};
             try {
                 eval.eval(args.get(0), input, env, val -> {
@@ -1373,10 +1614,10 @@ public final class BuiltinRegistry {
                 if (!found[0]) throw e;
             }
             out.accept(JqBoolean.of(found[0]));
-        });
+        };
+// all(generator; condition) - two-arg all
+            case "all/2" -> (input, args, env, eval, out) -> {
 
-        // all(generator; condition) - two-arg all
-        register("all", 2, (input, args, env, eval, out) -> {
             boolean[] allMatch = {true};
             boolean[] foundFalse = {false};
             try {
@@ -1392,42 +1633,42 @@ public final class BuiltinRegistry {
                 if (!foundFalse[0]) throw e;
             }
             out.accept(JqBoolean.of(allMatch[0]));
-        });
+        };
+// halt - exit with code 0
+            case "halt/0" -> (input, args, env, eval, out) -> {
 
-        // halt - exit with code 0
-        register("halt", 0, (input, args, env, eval, out) -> {
             throw new HaltException(0, null);
-        });
+        };
+// halt_error - exit with error
+            case "halt_error/0" -> (input, args, env, eval, out) -> {
 
-        // halt_error - exit with error
-        register("halt_error", 0, (input, args, env, eval, out) -> {
             throw new HaltException(5, input instanceof JqString s ? s.stringValue() : input.toJsonString());
-        });
+        };
+// halt_error(code)
+            case "halt_error/1" -> (input, args, env, eval, out) -> {
 
-        // halt_error(code)
-        register("halt_error", 1, (input, args, env, eval, out) -> {
             int code = (int) eval.eval(args.getFirst(), input, env).getFirst().longValue();
             throw new HaltException(code, input instanceof JqString s ? s.stringValue() : input.toJsonString());
-        });
+        };
+// Date builtins
+            case "now/0" -> (input, args, env, eval, out) -> {
 
-        // Date builtins
-        register("now", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(System.currentTimeMillis() / 1000.0));
-        });
+        };
+            case "todate/0" -> (input, args, env, eval, out) -> {
 
-        register("todate", 0, (input, args, env, eval, out) -> {
             long epoch = input.longValue();
             var instant = java.time.Instant.ofEpochSecond(epoch);
             out.accept(JqString.of(java.time.format.DateTimeFormatter.ISO_INSTANT.format(instant)));
-        });
+        };
+            case "fromdate/0" -> (input, args, env, eval, out) -> {
 
-        register("fromdate", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("fromdate requires string input");
             var instant = java.time.Instant.parse(s.stringValue());
             out.accept(JqNumber.of(instant.getEpochSecond()));
-        });
+        };
+            case "strftime/1" -> (input, args, env, eval, out) -> {
 
-        register("strftime", 1, (input, args, env, eval, out) -> {
             JqValue fmtVal = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(fmtVal instanceof JqString)) throw new JqException("strftime/1 requires a string format");
             String format = fmtVal.stringValue();
@@ -1448,9 +1689,9 @@ public final class BuiltinRegistry {
             var formatter = java.time.format.DateTimeFormatter.ofPattern(
                     jqFormatToJava(format));
             out.accept(JqString.of(formatter.format(zdt)));
-        });
+        };
+            case "gmtime/0" -> (input, args, env, eval, out) -> {
 
-        register("gmtime", 0, (input, args, env, eval, out) -> {
             double epochDouble = input.doubleValue();
             long epochSec = (long) Math.floor(epochDouble);
             double frac = epochDouble - epochSec;
@@ -1469,9 +1710,9 @@ public final class BuiltinRegistry {
                     JqNumber.of(zdt.getDayOfWeek().getValue() % 7),
                     JqNumber.of(zdt.getDayOfYear() - 1)
             )));
-        });
+        };
+            case "mktime/0" -> (input, args, env, eval, out) -> {
 
-        register("mktime", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
                 throw new JqException("mktime requires parsed datetime inputs");
             }
@@ -1482,9 +1723,9 @@ public final class BuiltinRegistry {
                 }
             }
             out.accept(JqNumber.of(brokenDownTimeToZdt(arr).toEpochSecond()));
-        });
+        };
+            case "dateadd/2" -> (input, args, env, eval, out) -> {
 
-        register("dateadd", 2, (input, args, env, eval, out) -> {
             String unit = eval.eval(args.get(0), input, env).getFirst().stringValue();
             long amount = eval.eval(args.get(1), input, env).getFirst().longValue();
             long epoch = input.longValue();
@@ -1499,9 +1740,9 @@ public final class BuiltinRegistry {
                 default -> throw new JqException("Unknown time unit: " + unit);
             };
             out.accept(JqNumber.of(instant.getEpochSecond()));
-        });
+        };
+            case "datesub/2" -> (input, args, env, eval, out) -> {
 
-        register("datesub", 2, (input, args, env, eval, out) -> {
             String unit = eval.eval(args.get(0), input, env).getFirst().stringValue();
             long amount = eval.eval(args.get(1), input, env).getFirst().longValue();
             long epoch = input.longValue();
@@ -1516,10 +1757,10 @@ public final class BuiltinRegistry {
                 default -> throw new JqException("Unknown time unit: " + unit);
             };
             out.accept(JqNumber.of(instant.getEpochSecond()));
-        });
+        };
+// strflocaltime — same as strftime but with local time zone (simplified: use UTC)
+            case "strflocaltime/1" -> (input, args, env, eval, out) -> {
 
-        // strflocaltime — same as strftime but with local time zone (simplified: use UTC)
-        register("strflocaltime", 1, (input, args, env, eval, out) -> {
             eval.eval(args.getFirst(), input, env, fmtVal -> {
             if (!(fmtVal instanceof JqString)) throw new JqException("strflocaltime/1 requires a string format");
             String format = fmtVal.stringValue();
@@ -1540,10 +1781,10 @@ public final class BuiltinRegistry {
             var formatter = java.time.format.DateTimeFormatter.ofPattern(jqFormatToJava(format));
             out.accept(JqString.of(formatter.format(zdt)));
             });
-        });
+        };
+// strptime — parse a date string according to a format, returning broken-down time
+            case "strptime/1" -> (input, args, env, eval, out) -> {
 
-        // strptime — parse a date string according to a format, returning broken-down time
-        register("strptime", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("strptime/1 requires string input");
             JqValue fmtVal = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(fmtVal instanceof JqString)) throw new JqException("strptime/1 requires a string format");
@@ -1561,28 +1802,19 @@ public final class BuiltinRegistry {
                     JqNumber.of(zdt.getDayOfWeek().getValue() % 7),
                     JqNumber.of(zdt.getDayOfYear() - 1)
             )));
-        });
+        };
+// splits(regex) - like split but outputs a stream
+            case "splits/1" -> (input, args, env, eval, out) -> {
 
-        // ascii - convert number to character
-        register("ascii", 0, (input, args, env, eval, out) -> {
-            if (input instanceof JqNumber n) {
-                out.accept(JqString.of(String.valueOf((char) n.longValue())));
-            } else {
-                throw new JqException("ascii requires number input");
-            }
-        });
-
-        // splits(regex) - like split but outputs a stream
-        register("splits", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("splits requires string input");
             String regex = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
             var parts = Pattern.compile(regex).split(s.stringValue(), -1);
             for (String part : parts) {
                 out.accept(JqString.of(part));
             }
-        });
+        };
+            case "splits/2" -> (input, args, env, eval, out) -> {
 
-        register("splits", 2, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("splits requires string input");
             String regex = eval.eval(args.get(0), input, env).getFirst().stringValue();
             String flags = eval.eval(args.get(1), input, env).getFirst().stringValue();
@@ -1591,13 +1823,13 @@ public final class BuiltinRegistry {
             for (String part : parts) {
                 out.accept(JqString.of(part));
             }
-        });
-
-        // test with flags
+        };
+// test with flags
         // (test/2 already registered above)
 
         // match with flags
-        register("match", 2, (input, args, env, eval, out) -> {
+            case "match/2" -> (input, args, env, eval, out) -> {
+
             if (!(input instanceof JqString s)) throw new JqException("match requires string input");
             String regex = eval.eval(args.get(0), input, env).getFirst().stringValue();
             String flags = eval.eval(args.get(1), input, env).getFirst().stringValue();
@@ -1616,12 +1848,12 @@ public final class BuiltinRegistry {
                     out.accept(JqNull.NULL);
                 }
             }
-        });
-
-        // limit(n; expr) already registered above
+        };
+// limit(n; expr) already registered above
 
         // nth(n; expr)
-        register("nth", 2, (input, args, env, eval, out) -> {
+            case "nth/2" -> (input, args, env, eval, out) -> {
+
             eval.eval(args.get(0), input, env, nVal -> {
                 long n = nVal.longValue();
                 if (n < 0) throw new JqException("nth doesn't support negative indices");
@@ -1641,45 +1873,23 @@ public final class BuiltinRegistry {
                     if (!found[0]) throw e;
                 }
             });
-        });
-
-        // getpath already registered, setpath already registered
+        };
+// getpath already registered, setpath already registered
 
         // path(expr) already registered
 
         // type_error helper
-        register("type_error", 0, (input, args, env, eval, out) -> {
+            case "type_error/0" -> (input, args, env, eval, out) -> {
+
             throw new JqException(input.type().jqName() + " is not valid");
-        });
-
-        // length already handles null=0, but ensure strings count codepoints
-        // (already correct - String.length() counts chars which matches jq for BMP)
-
-        // ltrimstr/rtrimstr already registered
-
-        // @base32 and @base32d formats
-        // (handled in evaluator's evalFormat)
-
-        // infinite/nan already registered
-
-        // object operations
-        register("keys_unsorted", 0, (input, args, env, eval, out) -> {
-            if (input instanceof JqObject obj) {
-                var keys = obj.objectValue().keySet().stream()
-                        .map(k -> (JqValue) JqString.of(k))
-                        .toList();
-                out.accept(JqArray.of(keys));
-            } else {
-                throw new JqException("keys_unsorted requires object input");
-            }
-        });
-
-        // limit/first/last for generators - already registered above
+        };
+// limit/first/last for generators - already registered above
 
         // label-$out | ... break $out - handled in evaluator
 
         // abs
-        register("abs", 0, (input, args, env, eval, out) -> {
+            case "abs/0" -> (input, args, env, eval, out) -> {
+
             if (input instanceof JqNumber n) {
                 out.accept(JqNumber.of(n.decimalValue().abs()));
             } else if (input instanceof JqNull) {
@@ -1688,9 +1898,8 @@ public final class BuiltinRegistry {
                 // jq: abs on non-number returns the value itself
                 out.accept(input);
             }
-        });
-
-        // min_by/max_by already registered
+        };
+// min_by/max_by already registered
 
         // group_by already registered
 
@@ -1706,7 +1915,8 @@ public final class BuiltinRegistry {
         // with_entries already registered
 
         // combinations
-        register("combinations", 0, (input, args, env, eval, out) -> {
+            case "combinations/0" -> (input, args, env, eval, out) -> {
+
             JqArray arr = requireArray(input, "combinations");
             var arrays = new ArrayList<List<JqValue>>();
             for (JqValue v : arr.arrayValue()) {
@@ -1717,9 +1927,9 @@ public final class BuiltinRegistry {
                 }
             }
             generateCombinations(arrays, 0, new ArrayList<>(), out);
-        });
+        };
+            case "combinations/1" -> (input, args, env, eval, out) -> {
 
-        register("combinations", 1, (input, args, env, eval, out) -> {
             int n = (int) eval.eval(args.getFirst(), input, env).getFirst().longValue();
             JqArray arr = requireArray(input, "combinations");
             var arrays = new ArrayList<List<JqValue>>();
@@ -1727,22 +1937,22 @@ public final class BuiltinRegistry {
                 arrays.add(arr.arrayValue());
             }
             generateCombinations(arrays, 0, new ArrayList<>(), out);
-        });
-
-        // tojson/fromjson already registered
+        };
+// tojson/fromjson already registered
 
         // to_entries/from_entries/with_entries already registered
 
         // walk(f) - recursively apply f to all values bottom-up
-        register("walk", 1, (input, args, env, eval, out) -> {
+            case "walk/1" -> (input, args, env, eval, out) -> {
+
             // walk recurses into children, then applies filter at top level
             // For children, only the first result is used; at top level, all results are emitted
             JqValue transformed = walkTransform(input, args.getFirst(), env, eval);
             eval.eval(args.getFirst(), transformed, env, out);
-        });
+        };
+// bsearch(x) - binary search in sorted array
+            case "bsearch/1" -> (input, args, env, eval, out) -> {
 
-        // bsearch(x) - binary search in sorted array
-        register("bsearch", 1, (input, args, env, eval, out) -> {
             if (!(input instanceof JqArray arr)) {
                 throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be searched from");
             }
@@ -1758,10 +1968,10 @@ public final class BuiltinRegistry {
                 }
                 out.accept(JqNumber.of(-lo - 1));
             });
-        });
+        };
+// skip(n; generator) - skip the first n outputs of a generator
+            case "skip/2" -> (input, args, env, eval, out) -> {
 
-        // skip(n; generator) - skip the first n outputs of a generator
-        register("skip", 2, (input, args, env, eval, out) -> {
             eval.eval(args.get(0), input, env, nVal -> {
                 int n = (int) nVal.longValue();
                 if (n < 0) throw new JqException("skip doesn't support negative count");
@@ -1773,10 +1983,10 @@ public final class BuiltinRegistry {
                     });
                 } catch (EmptyException ignored) {}
             });
-        });
+        };
+// INDEX(stream; idx_expr) - build object from stream
+            case "INDEX/2" -> (input, args, env, eval, out) -> {
 
-        // INDEX(stream; idx_expr) - build object from stream
-        register("INDEX", 2, (input, args, env, eval, out) -> {
             var map = new LinkedHashMap<String, JqValue>();
             try {
                 eval.eval(args.get(0), input, env, val -> {
@@ -1788,9 +1998,8 @@ public final class BuiltinRegistry {
                 });
             } catch (EmptyException ignored) {}
             out.accept(JqObject.ofTrusted(map));
-        });
-
-        // env already registered
+        };
+// env already registered
 
         // @base32 and @base32d - simple Base32 encoding
         // (handled via evalFormat in evaluator)
@@ -1798,141 +2007,157 @@ public final class BuiltinRegistry {
         // getpath with nested already works
 
         // input_line_number (stub)
-        register("input_line_number", 0, (input, args, env, eval, out) -> {
-            out.accept(JqNull.NULL);
-        });
+            case "input_line_number/0" -> (input, args, env, eval, out) -> {
 
-        // indices already registered
+            out.accept(JqNull.NULL);
+        };
+// indices already registered
 
         // inside already registered
 
         // Numeric builtins
-        register("significand", 0, (input, args, env, eval, out) -> {
+            case "significand/0" -> (input, args, env, eval, out) -> {
+
             double d = input.doubleValue();
             int exp = Math.getExponent(d);
             out.accept(JqNumber.of(d / Math.pow(2, exp)));
-        });
+        };
+            case "exponent/0" -> (input, args, env, eval, out) -> {
 
-        register("exponent", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.getExponent(input.doubleValue())));
-        });
+        };
+            case "drem/2" -> (input, args, env, eval, out) -> {
 
-        register("drem", 2, (input, args, env, eval, out) -> {
             double x = eval.eval(args.get(0), input, env).getFirst().doubleValue();
             double y = eval.eval(args.get(1), input, env).getFirst().doubleValue();
             out.accept(JqNumber.of(Math.IEEEremainder(x, y)));
-        });
+        };
+            case "lgamma/0" -> (input, args, env, eval, out) -> {
 
-        register("lgamma", 0, (input, args, env, eval, out) -> {
             // Log of gamma function - approximation
             double x = input.doubleValue();
             // Use Stirling's approximation for lgamma
             out.accept(JqNumber.of(logGamma(x)));
-        });
+        };
+            case "tgamma/0" -> (input, args, env, eval, out) -> {
 
-        register("tgamma", 0, (input, args, env, eval, out) -> {
             double x = input.doubleValue();
             out.accept(JqNumber.of(Math.exp(logGamma(x))));
-        });
+        };
+            case "j0/0" -> (input, args, env, eval, out) -> {
 
-        register("j0", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(besselJ0(input.doubleValue())));
-        });
+        };
+            case "j1/0" -> (input, args, env, eval, out) -> {
 
-        register("j1", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(besselJ1(input.doubleValue())));
-        });
+        };
+            case "rint/0" -> (input, args, env, eval, out) -> {
 
-        register("rint", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.rint(input.doubleValue())));
-        });
+        };
+            case "trunc/0" -> (input, args, env, eval, out) -> {
 
-        register("trunc", 0, (input, args, env, eval, out) -> {
             double d = input.doubleValue();
             out.accept(JqNumber.of(d >= 0 ? Math.floor(d) : Math.ceil(d)));
-        });
+        };
+            case "nearbyint/0" -> (input, args, env, eval, out) -> {
 
-        register("nearbyint", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.rint(input.doubleValue())));
-        });
+        };
+            case "logb/0" -> (input, args, env, eval, out) -> {
 
-        register("logb", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.getExponent(input.doubleValue())));
-        });
+        };
+            case "cbrt/0" -> (input, args, env, eval, out) -> {
 
-        register("cbrt", 0, (input, args, env, eval, out) -> {
             out.accept(JqNumber.of(Math.cbrt(input.doubleValue())));
-        });
+        };
+            case "sin/0" -> (input, args, env, eval, out) ->
 
-        register("sin", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.sin(input.doubleValue()))));
-        register("cos", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.cos(input.doubleValue()))));
-        register("tan", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.tan(input.doubleValue()))));
-        register("asin", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.asin(input.doubleValue()))));
-        register("acos", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.acos(input.doubleValue()))));
-        register("atan", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.atan(input.doubleValue()))));
-        register("atan2", 2, (input, args, env, eval, out) -> {
+                out.accept(JqNumber.of(Math.sin(input.doubleValue())));
+            case "cos/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.cos(input.doubleValue())));
+            case "tan/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.tan(input.doubleValue())));
+            case "asin/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.asin(input.doubleValue())));
+            case "acos/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.acos(input.doubleValue())));
+            case "atan/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.atan(input.doubleValue())));
+            case "atan2/2" -> (input, args, env, eval, out) -> {
+
             double y = eval.eval(args.get(0), input, env).getFirst().doubleValue();
             double x = eval.eval(args.get(1), input, env).getFirst().doubleValue();
             out.accept(JqNumber.of(Math.atan2(y, x)));
-        });
-        register("sinh", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.sinh(input.doubleValue()))));
-        register("cosh", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.cosh(input.doubleValue()))));
-        register("tanh", 0, (input, args, env, eval, out) ->
-                out.accept(JqNumber.of(Math.tanh(input.doubleValue()))));
-        register("asinh", 0, (input, args, env, eval, out) -> {
+        };
+            case "sinh/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.sinh(input.doubleValue())));
+            case "cosh/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.cosh(input.doubleValue())));
+            case "tanh/0" -> (input, args, env, eval, out) ->
+
+                out.accept(JqNumber.of(Math.tanh(input.doubleValue())));
+            case "asinh/0" -> (input, args, env, eval, out) -> {
+
             double d = input.doubleValue();
             out.accept(JqNumber.of(Math.log(d + Math.sqrt(d * d + 1))));
-        });
-        register("acosh", 0, (input, args, env, eval, out) -> {
+        };
+            case "acosh/0" -> (input, args, env, eval, out) -> {
+
             double d = input.doubleValue();
             out.accept(JqNumber.of(Math.log(d + Math.sqrt(d * d - 1))));
-        });
-        register("atanh", 0, (input, args, env, eval, out) -> {
+        };
+            case "atanh/0" -> (input, args, env, eval, out) -> {
+
             double d = input.doubleValue();
             out.accept(JqNumber.of(0.5 * Math.log((1 + d) / (1 - d))));
-        });
+        };
+            case "remainder/2" -> (input, args, env, eval, out) -> {
 
-        register("remainder", 2, (input, args, env, eval, out) -> {
             double x = eval.eval(args.get(0), input, env).getFirst().doubleValue();
             double y = eval.eval(args.get(1), input, env).getFirst().doubleValue();
             out.accept(JqNumber.of(Math.IEEEremainder(x, y)));
-        });
+        };
+            case "hypot/2" -> (input, args, env, eval, out) -> {
 
-        register("hypot", 2, (input, args, env, eval, out) -> {
             double x = eval.eval(args.get(0), input, env).getFirst().doubleValue();
             double y = eval.eval(args.get(1), input, env).getFirst().doubleValue();
             out.accept(JqNumber.of(Math.hypot(x, y)));
-        });
+        };
+            case "fma/3" -> (input, args, env, eval, out) -> {
 
-        register("fma", 3, (input, args, env, eval, out) -> {
             double x = eval.eval(args.get(0), input, env).getFirst().doubleValue();
             double y = eval.eval(args.get(1), input, env).getFirst().doubleValue();
             double z = eval.eval(args.get(2), input, env).getFirst().doubleValue();
             out.accept(JqNumber.of(Math.fma(x, y, z)));
-        });
+        };
+// String operations — trim family (Unicode-aware)
+            case "trim/0" -> (input, args, env, eval, out) -> {
 
-        // String operations — trim family (Unicode-aware)
-        register("trim", 0, (input, args, env, eval, out) -> {
             if (!(input instanceof JqString s)) throw new JqException("trim input must be a string");
             out.accept(JqString.of(unicodeTrim(s.stringValue())));
-        });
-        register("ltrim", 0, (input, args, env, eval, out) -> {
+        };
+            case "ltrim/0" -> (input, args, env, eval, out) -> {
+
             if (!(input instanceof JqString s)) throw new JqException("trim input must be a string");
             out.accept(JqString.of(unicodeLtrim(s.stringValue())));
-        });
-        register("rtrim", 0, (input, args, env, eval, out) -> {
+        };
+            case "rtrim/0" -> (input, args, env, eval, out) -> {
+
             if (!(input instanceof JqString s)) throw new JqException("trim input must be a string");
             out.accept(JqString.of(unicodeRtrim(s.stringValue())));
-        });
-        register("trimstr", 1, (input, args, env, eval, out) -> {
+        };
+            case "trimstr/1" -> (input, args, env, eval, out) -> {
+
             if (!(input instanceof JqString s)) throw new JqException("trimstr requires string");
             String fix = eval.eval(args.getFirst(), input, env).getFirst().stringValue();
             String str = s.stringValue();
@@ -1941,10 +2166,10 @@ public final class BuiltinRegistry {
             while (str.startsWith(fix)) str = str.substring(fix.length());
             while (str.endsWith(fix)) str = str.substring(0, str.length() - fix.length());
             out.accept(JqString.of(str));
-        });
+        };
+// toboolean
+            case "toboolean/0" -> (input, args, env, eval, out) -> {
 
-        // toboolean
-        register("toboolean", 0, (input, args, env, eval, out) -> {
             if (input instanceof JqBoolean) { out.accept(input); return; }
             if (input instanceof JqString s) {
                 String v = s.stringValue();
@@ -1953,10 +2178,10 @@ public final class BuiltinRegistry {
                 throw new JqException("string (" + JqString.formatForError(v) + ") cannot be parsed as a boolean");
             }
             throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") cannot be parsed as a boolean");
-        });
+        };
+// pick/1 — select paths from input
+            case "pick/1" -> (input, args, env, eval, out) -> {
 
-        // pick/1 — select paths from input
-        register("pick", 1, (input, args, env, eval, out) -> {
             // Evaluate the path expression to get paths
             var paths = new ArrayList<List<JqValue>>();
             eval.eval(new JqExpr.FuncCallExpr("path", args), input, env, pathVal -> {
@@ -1970,18 +2195,19 @@ public final class BuiltinRegistry {
                 result = setPath(result, path, 0, val);
             }
             out.accept(result);
-        });
+        };
+// IN/1 and IN/2 — membership test
+            case "IN/1" -> (input, args, env, eval, out) -> {
 
-        // IN/1 and IN/2 — membership test
-        register("IN", 1, (input, args, env, eval, out) -> {
             // input | IN(generator) — tests if input is in the generator's outputs
             var values = eval.eval(args.getFirst(), input, env);
             for (JqValue v : values) {
                 if (input.equals(v)) { out.accept(JqBoolean.TRUE); return; }
             }
             out.accept(JqBoolean.FALSE);
-        });
-        register("IN", 2, (input, args, env, eval, out) -> {
+        };
+            case "IN/2" -> (input, args, env, eval, out) -> {
+
             // IN(stream; filter) — check if any output of stream is in filter's outputs
             var filterOutputs = eval.eval(args.get(1), input, env);
             var filterSet = new java.util.HashSet<>(filterOutputs);
@@ -1991,10 +2217,10 @@ public final class BuiltinRegistry {
                 if (filterSet.contains(v)) { found = true; break; }
             }
             out.accept(JqBoolean.of(found));
-        });
+        };
+// JOIN(idx; idx_expr) — for each element $x in input array, output [$x, idx[$x | idx_expr]]
+            case "JOIN/2" -> (input, args, env, eval, out) -> {
 
-        // JOIN(idx; idx_expr) — for each element $x in input array, output [$x, idx[$x | idx_expr]]
-        register("JOIN", 2, (input, args, env, eval, out) -> {
             JqValue idx = eval.eval(args.get(0), input, env).getFirst();
             JqArray arr = requireArray(input, "JOIN");
             var results = new java.util.ArrayList<JqValue>();
@@ -2004,14 +2230,14 @@ public final class BuiltinRegistry {
                 results.add(JqArray.of(java.util.List.of(elem, looked != null ? looked : JqNull.NULL)));
             }
             out.accept(JqArray.of(results));
-        });
+        };
+// tostream/fromstream - streaming representation
+            case "tostream/0" -> (input, args, env, eval, out) -> {
 
-        // tostream/fromstream - streaming representation
-        register("tostream", 0, (input, args, env, eval, out) -> {
             toStream(input, new ArrayList<>(), out);
-        });
+        };
+            case "fromstream/1" -> (input, args, env, eval, out) -> {
 
-        register("fromstream", 1, (input, args, env, eval, out) -> {
             JqValue[] result = {null};
             eval.eval(args.getFirst(), input, env, streamEvent -> {
                 if (streamEvent instanceof JqArray arr) {
@@ -2037,10 +2263,10 @@ public final class BuiltinRegistry {
             if (result[0] != null) {
                 out.accept(result[0]);
             }
-        });
+        };
+// truncate_stream(expr)
+            case "truncate_stream/1" -> (input, args, env, eval, out) -> {
 
-        // truncate_stream(expr)
-        register("truncate_stream", 1, (input, args, env, eval, out) -> {
             eval.eval(args.getFirst(), input, env, streamEvent -> {
                 if (streamEvent instanceof JqArray arr) {
                     var items = arr.arrayValue();
@@ -2053,7 +2279,8 @@ public final class BuiltinRegistry {
                     }
                 }
             });
-        });
+        };
+
 
         // getpath/setpath/delpaths already registered
 
@@ -2083,10 +2310,14 @@ public final class BuiltinRegistry {
         // ascii_downcase/ascii_upcase already registered
 
         // gsub/sub already registered
+                default -> null;
+        };
     }
 
     public Set<String> keySet() {
-        return builtins.keySet();
+        var all = new java.util.LinkedHashSet<>(DEFAULT_KEYS);
+        all.addAll(builtins.keySet());
+        return java.util.Collections.unmodifiableSet(all);
     }
 
     // Helper methods
