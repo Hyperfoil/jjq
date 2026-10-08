@@ -193,10 +193,10 @@ final class MappingCodeGenerator {
 
     /**
      * True when a POJO property's extraction can throw {@code JqMapperException}.
-     * Mirrors {@link #isFallibleExtraction} for {@code PropertyInfo} (generated
-     * POJO deserialization does not emit custom-converter calls).
+     * Custom converters can throw, like every other non-passthrough extraction.
      */
     private static boolean isFalliblePojoExtraction(JqMapperProcessor.PropertyInfo prop) {
+        if (prop.converterClass() != null) return true;
         String typeName = prop.typeName();
         // JqValue passthrough never throws
         if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
@@ -863,6 +863,14 @@ final class MappingCodeGenerator {
                   .append("\");\n");
             }
         }
+        // Static converter fields for @JqConverter annotations (mirrors record path)
+        for (var prop : properties) {
+            if (!prop.ignored() && prop.converterClass() != null) {
+                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> CONV_")
+                  .append(prop.name().toUpperCase())
+                  .append(" = new ").append(prop.converterClass()).append("();\n");
+            }
+        }
         if (anyInfo.hasSetter()) {
             generateAnyKnownSet(sb, knownJsonNamesPojo(properties));
         }
@@ -876,7 +884,7 @@ final class MappingCodeGenerator {
         for (var prop : properties) {
             if (prop.ignored() || prop.skipDeserialize()) continue;
             String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
-            String writeExpr = buildExtraction(prop.typeName(), apply);
+            String writeExpr = buildExtraction(prop, apply);
 
             String statement;
             if (prop.isPublicField() && prop.setterName() == null) {
@@ -1097,6 +1105,12 @@ final class MappingCodeGenerator {
     /** Append JSON bytes for a POJO field value. */
     private static void appendJsonBytesValueForPojo(StringBuilder sb,
                                                      JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        // Custom converter — must go through JqValue (null-safe via appendJqValue)
+        if (prop.converterClass() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append("));\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(");\n");
@@ -1171,6 +1185,12 @@ final class MappingCodeGenerator {
     /** Append JSON value for a POJO field. */
     private static void appendJsonValueForPojo(StringBuilder sb,
                                                 JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        // Custom converter — must go through JqValue (null-safe via appendJqValue)
+        if (prop.converterClass() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append("));\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(");\n");
@@ -1242,7 +1262,13 @@ final class MappingCodeGenerator {
     }
 
     /** Build a type-coerced extraction expression for a POJO field. */
-    private static String buildExtraction(String typeName, String apply) {
+    private static String buildExtraction(JqMapperProcessor.PropertyInfo prop, String apply) {
+        // Custom converter takes priority (mirrors record generateExtraction)
+        if (prop.converterClass() != null) {
+            return "(" + prop.typeName() + ") CONV_" + prop.name().toUpperCase()
+                    + ".fromJqValue(" + apply + ")";
+        }
+        String typeName = prop.typeName();
         return switch (typeName) {
             case "java.lang.String" -> "asStringChecked(" + apply + ")";
             case "int", "java.lang.Integer" -> "(int) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\").asLong(0)";
@@ -1325,6 +1351,12 @@ final class MappingCodeGenerator {
     /** Generate the serialization value expression for a POJO field. */
     private static void generateSerializationValueForPojo(StringBuilder sb,
                                                            JqMapperProcessor.PropertyInfo prop, String readExpr) {
+        // Custom converter takes priority (mirrors record path)
+        if (prop.converterClass() != null) {
+            sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
+              .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append(")");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String" ->
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(")");

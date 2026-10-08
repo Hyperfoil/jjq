@@ -830,6 +830,100 @@ class JqMapperProcessorTest {
                 mapper.toJsonBytes(r));
     }
 
+    @Test
+    void generatedMapping_sameRoundConverterResolves() throws Exception {
+        // Issue #100: converter compiled in the same round has no Class object yet —
+        // reading annotation.value() directly throws MirroredTypeException.
+        String converterSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                import io.hyperfoil.tools.jjq.value.JqString;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+
+                public class UpperConverter implements ValueConverter<String> {
+                    @Override
+                    public String fromJqValue(JqValue value) {
+                        return value.isNull() ? null : value.stringValue().toUpperCase();
+                    }
+
+                    @Override
+                    public JqValue toJqValue(String value) {
+                        return value == null ? io.hyperfoil.tools.jjq.value.JqNull.NULL : JqString.of(value.toLowerCase());
+                    }
+                }
+                """;
+        String recordSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record WithConv(@JqConverter(UpperConverter.class) String name) {}
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.UpperConverter", "test.WithConv"},
+                new String[]{converterSource, recordSource});
+        Class<?> recordClass = Class.forName("test.WithConv", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"hello\"}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals("HELLO", recordClass.getMethod("name").invoke(r));
+
+        JqValue back = mapper.toJqValue(r);
+        assertEquals("hello", back.getField("name").stringValue());
+    }
+
+    @Test
+    void generatedMapping_sameRoundConverterResolvesPojo() throws Exception {
+        String converterSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                import io.hyperfoil.tools.jjq.value.JqString;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+
+                public class LowerConverter implements ValueConverter<String> {
+                    @Override
+                    public String fromJqValue(JqValue value) {
+                        return value.isNull() ? null : value.stringValue().toLowerCase();
+                    }
+
+                    @Override
+                    public JqValue toJqValue(String value) {
+                        return value == null ? io.hyperfoil.tools.jjq.value.JqNull.NULL : JqString.of(value.toUpperCase());
+                    }
+                }
+                """;
+        String pojoSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class ConvPojo {
+                    @JqConverter(LowerConverter.class)
+                    public String name;
+
+                    public ConvPojo() {}
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.LowerConverter", "test.ConvPojo"},
+                new String[]{converterSource, pojoSource});
+        Class<?> pojoClass = Class.forName("test.ConvPojo", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"HELLO\"}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("hello", pojoClass.getField("name").get(p));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

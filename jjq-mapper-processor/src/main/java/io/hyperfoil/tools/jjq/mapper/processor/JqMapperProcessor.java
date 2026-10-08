@@ -3,7 +3,6 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
-import io.hyperfoil.tools.jjq.mapper.JqConverter;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
@@ -126,8 +125,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                 String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
 
                 String serName = (jqField != null) ? name : jsonName; // @JqField overrides naming
-                JqConverter jqConverter = rc.getAnnotation(JqConverter.class);
-                String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
+                String converterClass = resolveConverterClass(rc);
 
                 String rcAccess = resolveJacksonAccess(rc, recordType);
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
@@ -256,8 +254,7 @@ public class JqMapperProcessor extends AbstractProcessor {
             String inclusion = fieldInclude != null ? fieldInclude.value().name() : classInclusion;
 
             String serName = (jqField != null) ? name : jsonName;
-            JqConverter jqConverter = field.getAnnotation(JqConverter.class);
-            String converterClass = jqConverter != null ? jqConverter.value().getCanonicalName() : null;
+            String converterClass = resolveConverterClass(field);
 
             if (!ignored && pojoAnyInfo.hasGetter()
                     && ((getterName != null && getterName.equals(pojoAnyInfo.getterName()))
@@ -404,6 +401,35 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
         }
         return false;
+    }
+
+    /**
+     * Resolve {@code @JqConverter(value)} via annotation mirrors (issue #100).
+     * Reading {@code annotation.value()} directly throws
+     * {@code MirroredTypeException} when the converter class is compiled in the
+     * same round (it has no {@code Class} object yet) — the normal case for
+     * custom union converters. The mirror's {@code TypeMirror} works for both
+     * same-round and already-compiled converters; {@code toString()} yields the
+     * qualified name used in generated {@code new <name>()} expressions.
+     *
+     * @return the converter qualified name, or null when absent
+     */
+     static String resolveConverterClass(Element element) {
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .equals("io.hyperfoil.tools.jjq.mapper.JqConverter")) {
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("value")) {
+                        Object value = entry.getValue().getValue();
+                        if (value instanceof javax.lang.model.type.TypeMirror tm) {
+                            return tm.toString();
+                        }
+                        return value.toString();
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /** Resolve class-level @JqNaming, defaulting to IDENTITY. */
