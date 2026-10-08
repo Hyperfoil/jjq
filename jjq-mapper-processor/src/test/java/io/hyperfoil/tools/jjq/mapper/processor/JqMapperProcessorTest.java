@@ -1284,6 +1284,66 @@ class JqMapperProcessorTest {
         assertFalse(out.contains("\"extras\""), out);
     }
 
+    @Test
+    void generatedMapping_objectFieldBindsPlainValues() throws Exception {
+        // Issue #106: Object fields were bound via mapper introspection of
+        // java.lang.Object (module-closure fatal). The reflection path uses
+        // toJavaObject() — generated code must do the same.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class UntypedPojo {
+                    public Object artifactCache;
+
+                    public UntypedPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.UntypedPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"artifactCache\":{\"size\":10,\"tags\":[\"a\"]}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        Object cache = pojoClass.getField("artifactCache").get(p);
+        assertInstanceOf(java.util.Map.class, cache);
+        assertEquals(10L, ((java.util.Map<?, ?>) cache).get("size"));
+
+        // Round-trips verbatim
+        JqValue back = mapper.toJqValue(p);
+        assertEquals(10L, back.getField("artifactCache").getField("size").longValue());
+        Object roundTripped = mapper.fromJqValue(back, pojoClass);
+        assertEquals(cache, pojoClass.getField("artifactCache").get(roundTripped));
+    }
+
+    @Test
+    void generatedMapping_objectFieldBindsPlainValuesRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record UntypedRecord(String name, Object payload) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.UntypedRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"payload\":{\"k\":[1,2]}}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals("t", recordClass.getMethod("name").invoke(r));
+        Object payload = recordClass.getMethod("payload").invoke(r);
+        assertInstanceOf(java.util.Map.class, payload);
+
+        JqValue back = mapper.toJqValue(r);
+        assertEquals("t", back.getField("name").stringValue());
+        assertInstanceOf(io.hyperfoil.tools.jjq.value.JqObject.class,
+                back.getField("payload"));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

@@ -278,6 +278,12 @@ final class MappingCodeGenerator {
                     // capture it with a TypeToken instead (issue #101).
                     sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName)).append(")");
                 }
+                // Plain Object fields hold any shape: convert to plain Java
+                // values like the reflection path (issue #106). Introspecting
+                // java.lang.Object as a bean dies on module closure.
+                else if (typeName.equals("java.lang.Object") || typeName.equals("Object")) {
+                    sb.append(apply).append(".toJavaObject()");
+                }
                 else {
                     // Fallback — delegate to mapper
                     sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName)).append(")");
@@ -1350,6 +1356,11 @@ final class MappingCodeGenerator {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     yield apply;
+                }
+                // Plain Object fields hold any shape: convert to plain Java
+                // values like the reflection path (issue #106)
+                if (typeName.equals("java.lang.Object") || typeName.equals("Object")) {
+                    yield apply + ".toJavaObject()";
                 }
                 // A parameterized type cannot form a .class literal: capture
                 // it with a TypeToken instead (issue #101). Covers every
