@@ -1529,6 +1529,98 @@ class JqMapperTest {
 
     record BridgeRecordWithJqField(@JqField(".custom") String name, int age, String secret) {}
 
+    // ---- @JqName ----
+
+    record RenamedRecord(@JqName("host-paths") List<String> hostPaths, String name) {}
+
+    @Test
+    void fromJqValue_jqName() {
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\"],\"name\":\"t\"}");
+        RenamedRecord r = mapper.fromJqValue(json, RenamedRecord.class);
+        assertEquals(List.of("/a"), r.hostPaths());
+        assertEquals("t", r.name());
+    }
+
+    @Test
+    void toJqValue_jqName() {
+        RenamedRecord r = new RenamedRecord(List.of("/a"), "t");
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"host-paths\":[\"/a\"]"), out);
+        assertFalse(out.contains("hostPaths"), out);
+    }
+
+    @Test
+    void roundTrip_jqName() {
+        RenamedRecord original = new RenamedRecord(List.of("/a", "/b"), "t");
+        RenamedRecord restored = mapper.fromJqValue(mapper.toJqValue(original), RenamedRecord.class);
+        assertEquals(original, restored);
+    }
+
+    @JqNaming(JqNaming.Strategy.SNAKE_CASE)
+    record SnakeRenamed(@JqName("host-paths") List<String> hostPaths, String displayName) {}
+
+    @Test
+    void jqName_beatsNamingStrategy() {
+        // Explicit rename wins; every other field still uses the strategy
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\"],\"display_name\":\"d\"}");
+        SnakeRenamed r = mapper.fromJqValue(json, SnakeRenamed.class);
+        assertEquals(List.of("/a"), r.hostPaths());
+        assertEquals("d", r.displayName());
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"host-paths\""), out);
+        assertTrue(out.contains("\"display_name\""), out);
+    }
+
+    record NativeBeatsBridge(@JqName("given-name") String name, int age) {}
+
+    @Test
+    void jqName_beatsBridge() {
+        // MockBridge renames name -> full_name; the native rename wins
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new MockBridge())
+                .build();
+        JqValue json = JqValues.parse("{\"given-name\":\"Alice\",\"age\":30}");
+        NativeBeatsBridge r = bridgeMapper.fromJqValue(json, NativeBeatsBridge.class);
+        assertEquals("Alice", r.name());
+        String out = bridgeMapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"given-name\""), out);
+        assertFalse(out.contains("full_name"), out);
+    }
+
+    record ConflictingNameAndField(@JqField(".custom") @JqName("other") String name) {}
+
+    @Test
+    void jqName_conflictsWithJqField() {
+        assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{}"), ConflictingNameAndField.class));
+    }
+
+    static class NamedPojo {
+        @JqName("host-paths")
+        public List<String> hostPaths;
+        public String name;
+
+        public NamedPojo() {}
+    }
+
+    @Test
+    void fromJqValue_jqNamePojo() {
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\"],\"name\":\"t\"}");
+        NamedPojo p = mapper.fromJqValue(json, NamedPojo.class);
+        assertEquals(List.of("/a"), p.hostPaths);
+        assertEquals("t", p.name);
+    }
+
+    @Test
+    void toJqValue_jqNamePojo() {
+        NamedPojo p = new NamedPojo();
+        p.hostPaths = List.of("/a");
+        p.name = "t";
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"host-paths\":[\"/a\"]"), out);
+        assertFalse(out.contains("hostPaths"), out);
+    }
+
     // ---- Bridge on POJO ----
 
     static class BridgePojo {

@@ -138,16 +138,27 @@ final class ClassMapping<T> implements Mapping<T> {
             String jsonName = namingStrategy.transform(name);
 
             // Determine extraction strategy:
-            // 1. @JqField: compile the jq expression
-            // 2. Bridge resolveFieldName: use as JSON name
-            // 3. Default: use naming-transformed name
+            // 1. @JqField: compile the jq expression (@JqName conflicts: fail fast)
+            // 2. @JqName: explicit wire name with direct lookup
+            // 3. Bridge resolveFieldName: use as JSON name
+            // 4. Default: use naming-transformed name
             String directFieldName;
             JqProgram program;
             JqField jqFieldAnnotation = rc.getAnnotation(JqField.class);
+            JqName jqNameAnnotation = rc.getAnnotation(JqName.class);
+            if (!ignored && jqFieldAnnotation != null && hasWireName(jqNameAnnotation)) {
+                throw new JqMapperException("@JqName and @JqField conflict on '" + name
+                        + "' of " + type.getName() + ": rename the key or query it, not both");
+            }
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
                 jsonName = name; // @JqField overrides naming strategy
+            } else if (!ignored && hasWireName(jqNameAnnotation)) {
+                // Explicit rename wins over naming strategy and bridges
+                jsonName = jqNameAnnotation.value();
+                directFieldName = jsonName;
+                program = null;
             } else if (!ignored) {
                 // Check bridges for field name override
                 String bridgeName = resolveBridgeFieldName(rc, bridges);
@@ -317,10 +328,20 @@ final class ClassMapping<T> implements Mapping<T> {
             String directFieldName;
             JqProgram program;
             JqField jqFieldAnnotation = field.getAnnotation(JqField.class);
+            JqName jqNameAnnotation = field.getAnnotation(JqName.class);
+            if (!ignored && jqFieldAnnotation != null && hasWireName(jqNameAnnotation)) {
+                throw new JqMapperException("@JqName and @JqField conflict on '" + name
+                        + "' of " + type.getName() + ": rename the key or query it, not both");
+            }
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
                 jsonName = name; // @JqField overrides naming strategy
+            } else if (!ignored && hasWireName(jqNameAnnotation)) {
+                // Explicit rename wins over naming strategy and bridges
+                jsonName = jqNameAnnotation.value();
+                directFieldName = jsonName;
+                program = null;
             } else if (!ignored) {
                 // Check bridges for field name override
                 String bridgeName = resolveBridgeFieldName(field, bridges);
@@ -820,6 +841,11 @@ final class ClassMapping<T> implements Mapping<T> {
             if (name != null) return name;
         }
         return null;
+    }
+
+    /** True when a @JqName carries a non-empty wire name (empty means "no rename"). */
+    private static boolean hasWireName(JqName annotation) {
+        return annotation != null && !annotation.value().isEmpty();
     }
 
     /** Resolve class-level @JqInclude, defaulting to ALWAYS. */

@@ -1696,6 +1696,86 @@ class JqMapperProcessorTest {
                 .hadErrorContaining("Converter test.AbstractConverter must be a concrete class");
     }
 
+    @Test
+    void generatedMapping_jqNameBinds() throws Exception {
+        // Issue #111: native wire names end to end (no bridge needed).
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+                import java.util.List;
+
+                @JqMapped
+                public record NamedRecord(@JqName("host-paths") List<String> hostPaths, String name) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.NamedRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\"],\"name\":\"t\"}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals(List.of("/a"), recordClass.getMethod("hostPaths").invoke(r));
+
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"host-paths\":[\"/a\"]"), out);
+        assertFalse(out.contains("hostPaths"), out);
+
+        Object roundTripped = mapper.fromJqValue(JqValues.parse(out), recordClass);
+        assertEquals(r, roundTripped);
+    }
+
+    @Test
+    void generatedMapping_jqNameBindsPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+                import java.util.List;
+
+                @JqMapped
+                public class NamedPojo {
+                    @JqName("host-paths")
+                    public List<String> hostPaths;
+
+                    public NamedPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.NamedPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\",\"/b\"]}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals(List.of("/a", "/b"), pojoClass.getField("hostPaths").get(p));
+
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"host-paths\""), out);
+        assertFalse(out.contains("hostPaths"), out);
+    }
+
+    @Test
+    void generatedMapping_jqNameConflictsWithJqField() throws Exception {
+        javax.tools.JavaFileObject source = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.Conflicting", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.JqField;
+                        import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                        import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                        @JqMapped
+                        public record Conflicting(@JqField(".custom") @JqName("other") String name) {}
+                        """);
+        com.google.testing.compile.Compilation compilation = com.google.testing.compile.Compiler.javac()
+                .withProcessors(new JqMapperProcessor())
+                .compile(source);
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+        com.google.testing.compile.CompilationSubject.assertThat(compilation)
+                .hadErrorContaining("@JqName and @JqField conflict");
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

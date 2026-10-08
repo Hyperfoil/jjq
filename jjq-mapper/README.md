@@ -107,6 +107,19 @@ record PerfResult(
 ) {}
 ```
 
+### `@JqName` — explicit wire name
+
+```java
+@JqMapped
+record SpawnConfig(@JqName("host-paths") List<String> hostPaths) {}
+// Deserializes from {"host-paths":[...]} and serializes back under the same key
+```
+
+Unlike `@JqField` (which replaces extraction with a jq program), a renamed
+field keeps direct key lookup. Explicit names win over the naming strategy
+and bridge renames; combining `@JqName` with `@JqField` on one element is an
+error.
+
 ### `@JqIgnore` — exclude fields
 
 ```java
@@ -233,7 +246,7 @@ JqMapper mapper = JqMapper.create(); // auto-discovers bridge via ServiceLoader
 User user = mapper.fromJqValue(json, User.class);
 ```
 
-Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqNaming`, `@JqConverter`)
+Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqNaming`, `@JqConverter`)
 over bridge annotations over defaults. Bridges are consulted in registration order;
 the first non-null answer wins.
 See [jjq-mapper-jackson](../jjq-mapper-jackson/README.md) and [jjq-mapper-jsonb](../jjq-mapper-jsonb/README.md).

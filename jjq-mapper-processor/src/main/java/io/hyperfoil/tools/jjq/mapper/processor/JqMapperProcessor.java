@@ -7,6 +7,7 @@ import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqName;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -109,6 +110,17 @@ public class JqMapperProcessor extends AbstractProcessor {
                 // Apply naming strategy for default expression
                 String jsonName = namingStrategy.transform(name);
                 JqField jqField = rc.getAnnotation(JqField.class);
+                // Direct read is safe: JqName is compiled, and String values never mirror
+                JqName jqNameAnn = rc.getAnnotation(JqName.class);
+                String jqName = jqNameAnn != null && !jqNameAnn.value().isEmpty()
+                        ? jqNameAnn.value() : null;
+                if (jqField != null && jqName != null) {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@JqName and @JqField conflict on '" + name
+                                    + "': rename the key or query it, not both",
+                            rc);
+                    return null;
+                }
                 String jqExpr;
                 if (jqField != null) {
                     jqExpr = jqField.value();
@@ -121,10 +133,14 @@ public class JqMapperProcessor extends AbstractProcessor {
                         return null;
                     }
                 } else {
-                    // Bridge renames (e.g. @JsonProperty("host-paths")) override
-                    // the naming strategy, mirroring the reflection path (issue #103)
-                    String renamed = bridgeRenameForRecord(rc, recordType);
-                    if (renamed != null) jsonName = renamed;
+                    // Explicit @JqName wins over naming strategy and bridges;
+                    // bridge renames apply only without one (issue #103)
+                    if (jqName != null) {
+                        jsonName = jqName;
+                    } else {
+                        String renamed = bridgeRenameForRecord(rc, recordType);
+                        if (renamed != null) jsonName = renamed;
+                    }
                     jqExpr = fieldProgram(jsonName);
                 }
 
@@ -225,6 +241,16 @@ public class JqMapperProcessor extends AbstractProcessor {
             // Apply naming strategy
             String jsonName = namingStrategy.transform(name);
             JqField jqField = field.getAnnotation(JqField.class);
+            JqName jqNameAnn = field.getAnnotation(JqName.class);
+            String jqName = jqNameAnn != null && !jqNameAnn.value().isEmpty()
+                    ? jqNameAnn.value() : null;
+            if (jqField != null && jqName != null) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqName and @JqField conflict on '" + name
+                                + "': rename the key or query it, not both",
+                        field);
+                return null;
+            }
             String jqExpr;
             if (jqField != null) {
                 jqExpr = jqField.value();
@@ -236,10 +262,14 @@ public class JqMapperProcessor extends AbstractProcessor {
                     return null;
                 }
             } else {
-                // Bridge renames override the naming strategy, mirroring the
-                // reflection path (issue #103)
-                String renamed = bridgeRename(field);
-                if (renamed != null) jsonName = renamed;
+                // Explicit @JqName wins over naming strategy and bridges;
+                // bridge renames apply only without one
+                if (jqName != null) {
+                    jsonName = jqName;
+                } else {
+                    String renamed = bridgeRename(field);
+                    if (renamed != null) jsonName = renamed;
+                }
                 jqExpr = fieldProgram(jsonName);
             }
 
