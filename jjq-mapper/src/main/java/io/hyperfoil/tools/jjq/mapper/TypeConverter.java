@@ -500,7 +500,8 @@ public final class TypeConverter {
     /**
      * Per-constant wire names from rename annotations on the enum constants
      * (issue #95.1: Jackson {@code @JsonProperty("set-if-unset")} on constants,
-     * resolved through bridges like any other field rename).
+     * resolved through bridges like any other field rename; issue #112: native
+     * {@code @JqName} wins over bridges, like any other field rename).
      */
     private static java.util.Map<String, String> resolveEnumWireNames(
             Class<?> type, List<io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge> bridges) {
@@ -511,6 +512,11 @@ public final class TypeConverter {
             try {
                 field = type.getField(name);
             } catch (NoSuchFieldException e) {
+                continue;
+            }
+            JqName jqName = field.getAnnotation(JqName.class);
+            if (jqName != null && !jqName.value().isEmpty()) {
+                wireNames.put(name, jqName.value());
                 continue;
             }
             for (io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge bridge : bridges) {

@@ -1621,6 +1621,61 @@ class JqMapperTest {
         assertFalse(out.contains("hostPaths"), out);
     }
 
+    // ---- @JqName on enum constants ----
+
+    enum AccountType {
+        @JqName("api-key") API_KEY,
+        @JqName("oauth") OAUTH,
+        ENTERPRISE
+    }
+
+    @Test
+    void enum_jqNameWireNames() {
+        assertEquals("\"api-key\"", mapper.toJqValue(AccountType.API_KEY).toJsonString());
+        assertEquals("\"oauth\"", mapper.toJqValue(AccountType.OAUTH).toJsonString());
+        assertEquals("\"ENTERPRISE\"", mapper.toJqValue(AccountType.ENTERPRISE).toJsonString());
+
+        assertEquals(AccountType.API_KEY,
+                mapper.fromJqValue(JqValues.parse("\"api-key\""), AccountType.class));
+        assertEquals(AccountType.OAUTH,
+                mapper.fromJqValue(JqValues.parse("\"oauth\""), AccountType.class));
+        assertEquals(AccountType.ENTERPRISE,
+                mapper.fromJqValue(JqValues.parse("\"ENTERPRISE\""), AccountType.class));
+    }
+
+    @Test
+    void enum_jqNameUnknownFails() {
+        // Strict mapping: unknown wire values still fail (leniency is a
+        // hand-written @JqConverter)
+        assertThrows(RuntimeException.class,
+                () -> mapper.fromJqValue(JqValues.parse("\"nope\""), AccountType.class));
+    }
+
+    static class EnumRenamingBridge implements AnnotationBridge {
+        @Override
+        public String resolveFieldName(AnnotatedElement element) {
+            if (element instanceof Field f && "API_KEY".equals(f.getName())) return "bridge-key";
+            return null;
+        }
+        @Override
+        public boolean isIgnored(AnnotatedElement element) { return false; }
+        @Override
+        public JqInclude.Include resolveInclusion(AnnotatedElement element) { return null; }
+        @Override
+        public JqNaming.Strategy resolveNaming(Class<?> type) { return null; }
+    }
+
+    @Test
+    void enum_jqNameBeatsBridge() {
+        JqMapper bridgeMapper = JqMapper.builder()
+                .bridge(new EnumRenamingBridge())
+                .build();
+        assertEquals(AccountType.API_KEY,
+                bridgeMapper.fromJqValue(JqValues.parse("\"api-key\""), AccountType.class));
+        assertEquals("\"api-key\"",
+                bridgeMapper.toJqValue(AccountType.API_KEY).toJsonString());
+    }
+
     // ---- Bridge on POJO ----
 
     static class BridgePojo {

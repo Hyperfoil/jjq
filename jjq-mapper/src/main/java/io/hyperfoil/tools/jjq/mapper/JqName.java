@@ -28,6 +28,11 @@ import java.lang.annotation.Target;
  * bridge renames (e.g. Jackson {@code @JsonProperty}). An empty value means
  * "no rename", mirroring the bridges.</p>
  *
+ * <p>Also names enum constants: a {@code @JqName("api-key")} on a constant is
+ * used as its wire form in both directions (strict — unknown wire values
+ * still fail), winning over bridge constant renames. Lenient parsing
+ * (normalization, unknown-to-null) stays a hand-written {@code @JqConverter}.</p>
+ *
  * @see JqField
  * @see JqNaming
  * @see JqMapped

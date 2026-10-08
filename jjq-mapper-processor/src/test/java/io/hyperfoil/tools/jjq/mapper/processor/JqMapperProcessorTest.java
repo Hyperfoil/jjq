@@ -1776,6 +1776,42 @@ class JqMapperProcessorTest {
                 .hadErrorContaining("@JqName and @JqField conflict");
     }
 
+    @Test
+    void generatedMapping_jqNameEnumConstants() throws Exception {
+        // Issue #112: enum fields delegate to the runtime wire-name lookup,
+        // so no codegen change is needed — this pins that end to end.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                @JqMapped
+                public record WithAccount(String name, AccountType account) {
+                    public enum AccountType {
+                        @JqName("api-key") API_KEY,
+                        OAUTH
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.WithAccount", source);
+        Class<?> accountType = Class.forName("test.WithAccount$AccountType", true,
+                recordClass.getClassLoader());
+        JqMapper mapper = JqMapper.create();
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        Object apiKey = Enum.valueOf((Class<Enum>) accountType, "API_KEY");
+        Object r = recordClass.getDeclaredConstructor(String.class, accountType)
+                .newInstance("t", apiKey);
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"account\":\"api-key\""), out);
+
+        Object back = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"account\":\"api-key\"}"),
+                recordClass);
+        assertEquals(apiKey, recordClass.getMethod("account").invoke(back));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
