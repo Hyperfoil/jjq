@@ -383,49 +383,17 @@ final class MappingCodeGenerator {
 
     /** Generate an inclusion-conditional put for a record component. */
     private static void generateInclusionCheck(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
-        String inclusion = comp.inclusion();
-        switch (inclusion) {
-            case "NON_NULL" -> {
-                sb.append("        if (").append(accessor).append(" != null) ");
-                sb.append("_b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
-                generateSerializationValue(sb, comp);
-                sb.append(");\n");
-            }
-            case "NON_EMPTY" -> {
-                String typeName = comp.typeName();
-                if (typeName.equals("java.lang.String")) {
-                    sb.append("        if (").append(accessor).append(" != null && !(").append(accessor).append(").isEmpty()) ");
-                } else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
-                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection")) {
-                    sb.append("        if (").append(accessor).append(" != null && !(").append(accessor).append(").isEmpty()) ");
-                } else {
-                    sb.append("        if (").append(accessor).append(" != null) ");
-                }
-                sb.append("_b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
-                generateSerializationValue(sb, comp);
-                sb.append(");\n");
-            }
-            case "NON_DEFAULT" -> {
-                String typeName = comp.typeName();
-                String check = switch (typeName) {
-                    case "int", "long", "short", "byte" -> accessor + " != 0";
-                    case "double", "float" -> accessor + " != 0.0";
-                    case "boolean" -> accessor;
-                    case "char" -> accessor + " != '\\0'";
-                    default -> accessor + " != null";
-                };
-                sb.append("        if (").append(check).append(") ");
-                sb.append("_b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
-                generateSerializationValue(sb, comp);
-                sb.append(");\n");
-            }
-            default -> {
-                // ALWAYS — no check
-                sb.append("        _b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
-                generateSerializationValue(sb, comp);
-                sb.append(");\n");
-            }
+        String condition = inclusionCondition(comp.inclusion(), accessor, comp.typeName());
+        if ("true".equals(condition)) {
+            sb.append("        _b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
+            generateSerializationValue(sb, comp);
+            sb.append(");\n");
+            return;
         }
+        sb.append("        if (").append(condition).append(") ");
+        sb.append("_b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
+        generateSerializationValue(sb, comp);
+        sb.append(");\n");
     }
 
     @SuppressWarnings("rawtypes")
@@ -545,28 +513,12 @@ final class MappingCodeGenerator {
     /** Append a field with inclusion check. */
     private static void appendJsonFieldWithInclusion(StringBuilder sb,
                                                       JqMapperProcessor.ComponentInfo comp, String accessor) {
-        String inclusion = comp.inclusion();
-        String condition = switch (inclusion) {
-            case "NON_NULL" -> accessor + " != null";
-            case "NON_EMPTY" -> {
-                String typeName = comp.typeName();
-                if (typeName.equals("java.lang.String"))
-                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
-                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
-                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
-                else
-                    yield accessor + " != null";
-            }
-            case "NON_DEFAULT" -> switch (comp.typeName()) {
-                case "int", "long", "short", "byte" -> accessor + " != 0";
-                case "double", "float" -> accessor + " != 0.0";
-                case "boolean" -> accessor;
-                case "char" -> accessor + " != '\\0'";
-                default -> accessor + " != null";
-            };
-            default -> "true";
-        };
+        String condition = inclusionCondition(comp.inclusion(), accessor, comp.typeName());
+        if ("true".equals(condition)) {
+            sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
+            appendJsonField(sb, comp);
+            return;
+        }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
         sb.append("            _sb.append(\"\\\"").append(escapeJava(comp.jsonName())).append("\\\":\");\n");
@@ -683,28 +635,12 @@ final class MappingCodeGenerator {
     /** Append a field with inclusion check as bytes. */
     private static void appendJsonBytesFieldWithInclusion(StringBuilder sb,
                                                            JqMapperProcessor.ComponentInfo comp, String accessor) {
-        String inclusion = comp.inclusion();
-        String condition = switch (inclusion) {
-            case "NON_NULL" -> accessor + " != null";
-            case "NON_EMPTY" -> {
-                String typeName = comp.typeName();
-                if (typeName.equals("java.lang.String"))
-                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
-                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
-                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield accessor + " != null && !(" + accessor + ").isEmpty()";
-                else
-                    yield accessor + " != null";
-            }
-            case "NON_DEFAULT" -> switch (comp.typeName()) {
-                case "int", "long", "short", "byte" -> accessor + " != 0";
-                case "double", "float" -> accessor + " != 0.0";
-                case "boolean" -> accessor;
-                case "char" -> accessor + " != '\\0'";
-                default -> accessor + " != null";
-            };
-            default -> "true";
-        };
+        String condition = inclusionCondition(comp.inclusion(), accessor, comp.typeName());
+        if ("true".equals(condition)) {
+            sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
+            appendJsonBytesField(sb, comp);
+            return;
+        }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
         sb.append("            io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(comp.jsonName())).append("\");\n");
@@ -861,6 +797,59 @@ final class MappingCodeGenerator {
     /** {@code new TypeToken<T>(){}.getType()} for a parameterized type string. */
     private static String typeTokenExpr(String typeName) {
         return "new io.hyperfoil.tools.jjq.mapper.TypeToken<" + typeName + ">(){}.getType()";
+    }
+
+    /**
+     * Inclusion guard condition for one field, mirroring
+     * {@code FieldMapping.shouldInclude} (issue #109). Returns {@code "true"}
+     * when the field is unconditional ({@code ALWAYS}, or a primitive under
+     * {@code NON_NULL}/{@code NON_EMPTY} — boxed primitives are never null,
+     * and the runtime includes every primitive under {@code NON_EMPTY});
+     * callers emit a plain put then. Reference-type conditions are null-safe;
+     * emptiness uses the parenthesized form (issue #108).
+     *
+     * @param inclusion the resolved inclusion name ({@code ALWAYS}/{@code NON_NULL}/...)
+     * @param expr      the value expression ({@code instance.x()}, getter call, field read)
+     * @param typeName  the declared field type (primitives take the unconditional path)
+     */
+    private static String inclusionCondition(String inclusion, String expr, String typeName) {
+        switch (inclusion) {
+            case "NON_NULL" -> {
+                if (isPrimitiveType(typeName)) return "true";
+                return expr + " != null";
+            }
+            case "NON_EMPTY" -> {
+                if (isPrimitiveType(typeName)) return "true";
+                if (typeName.equals("java.lang.String")
+                        || typeName.startsWith("java.util.List")
+                        || typeName.startsWith("java.util.Map")
+                        || typeName.startsWith("java.util.Set")
+                        || typeName.startsWith("java.util.Collection")) {
+                    return expr + " != null && !(" + expr + ").isEmpty()";
+                }
+                return expr + " != null";
+            }
+            case "NON_DEFAULT" -> {
+                return switch (typeName) {
+                    case "int", "long", "short", "byte" -> expr + " != 0";
+                    case "double", "float" -> expr + " != 0.0";
+                    case "boolean" -> expr;
+                    case "char" -> expr + " != '\\0'";
+                    default -> expr + " != null";
+                };
+            }
+            default -> {
+                return "true";
+            }
+        }
+    }
+
+    /** The eight JVM primitive type names. */
+    private static boolean isPrimitiveType(String typeName) {
+        return switch (typeName) {
+            case "boolean", "byte", "short", "int", "long", "float", "double", "char" -> true;
+            default -> false;
+        };
     }
 
     /**
@@ -1222,28 +1211,14 @@ final class MappingCodeGenerator {
     /** Append a POJO field with inclusion check as bytes. */
     private static void appendJsonBytesFieldWithInclusionForPojo(StringBuilder sb,
                                                                   JqMapperProcessor.PropertyInfo prop, String readExpr) {
-        String inclusion = prop.inclusion();
-        String condition = switch (inclusion) {
-            case "NON_NULL" -> readExpr + " != null";
-            case "NON_EMPTY" -> {
-                String typeName = prop.typeName();
-                if (typeName.equals("java.lang.String"))
-                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
-                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
-                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
-                else
-                    yield readExpr + " != null";
-            }
-            case "NON_DEFAULT" -> switch (prop.typeName()) {
-                case "int", "long", "short", "byte" -> readExpr + " != 0";
-                case "double", "float" -> readExpr + " != 0.0";
-                case "boolean" -> readExpr;
-                case "char" -> readExpr + " != '\\0'";
-                default -> readExpr + " != null";
-            };
-            default -> "true";
-        };
+        String condition = inclusionCondition(prop.inclusion(), readExpr, prop.typeName());
+        if ("true".equals(condition)) {
+            sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
+            sb.append("        _out.writeByte(':');\n");
+            appendJsonBytesValueForPojo(sb, prop, readExpr);
+            return;
+        }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
         sb.append("            io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
@@ -1302,28 +1277,13 @@ final class MappingCodeGenerator {
     /** Append a POJO field with inclusion check in appendJson. */
     private static void appendJsonFieldWithInclusionForPojo(StringBuilder sb,
                                                              JqMapperProcessor.PropertyInfo prop, String readExpr) {
-        String inclusion = prop.inclusion();
-        String condition = switch (inclusion) {
-            case "NON_NULL" -> readExpr + " != null";
-            case "NON_EMPTY" -> {
-                String typeName = prop.typeName();
-                if (typeName.equals("java.lang.String"))
-                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
-                else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
-                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection"))
-                    yield readExpr + " != null && !(" + readExpr + ").isEmpty()";
-                else
-                    yield readExpr + " != null";
-            }
-            case "NON_DEFAULT" -> switch (prop.typeName()) {
-                case "int", "long", "short", "byte" -> readExpr + " != 0";
-                case "double", "float" -> readExpr + " != 0.0";
-                case "boolean" -> readExpr;
-                case "char" -> readExpr + " != '\\0'";
-                default -> readExpr + " != null";
-            };
-            default -> "true";
-        };
+        String condition = inclusionCondition(prop.inclusion(), readExpr, prop.typeName());
+        if ("true".equals(condition)) {
+            sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
+            sb.append("        _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+            appendJsonValueForPojo(sb, prop, readExpr);
+            return;
+        }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
         sb.append("            _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
@@ -1426,48 +1386,11 @@ final class MappingCodeGenerator {
     /** Generate an inclusion-conditional put for a POJO property. */
     private static void generatePojoInclusionCheck(StringBuilder sb,
                                                     JqMapperProcessor.PropertyInfo prop, String readExpr) {
-        String inclusion = prop.inclusion();
-        switch (inclusion) {
-            case "NON_NULL" -> {
-                sb.append("        if (").append(readExpr).append(" != null) ");
-                sb.append("_b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
-                generateSerializationValueForPojo(sb, prop, readExpr);
-                sb.append(");\n");
-            }
-            case "NON_EMPTY" -> {
-                String typeName = prop.typeName();
-                if (typeName.equals("java.lang.String")) {
-                    sb.append("        if (").append(readExpr).append(" != null && !(").append(readExpr).append(").isEmpty()) ");
-                } else if (typeName.startsWith("java.util.List") || typeName.startsWith("java.util.Map")
-                        || typeName.startsWith("java.util.Set") || typeName.startsWith("java.util.Collection")) {
-                    sb.append("        if (").append(readExpr).append(" != null && !(").append(readExpr).append(").isEmpty()) ");
-                } else {
-                    sb.append("        if (").append(readExpr).append(" != null) ");
-                }
-                sb.append("_b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
-                generateSerializationValueForPojo(sb, prop, readExpr);
-                sb.append(");\n");
-            }
-            case "NON_DEFAULT" -> {
-                String typeName = prop.typeName();
-                String check = switch (typeName) {
-                    case "int", "long", "short", "byte" -> readExpr + " != 0";
-                    case "double", "float" -> readExpr + " != 0.0";
-                    case "boolean" -> readExpr;
-                    case "char" -> readExpr + " != '\\0'";
-                    default -> readExpr + " != null";
-                };
-                sb.append("        if (").append(check).append(") ");
-                sb.append("_b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
-                generateSerializationValueForPojo(sb, prop, readExpr);
-                sb.append(");\n");
-            }
-            default -> {
-                sb.append("        _b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
-                generateSerializationValueForPojo(sb, prop, readExpr);
-                sb.append(");\n");
-            }
-        }
+        String condition = inclusionCondition(prop.inclusion(), readExpr, prop.typeName());
+        if (!"true".equals(condition)) sb.append("        if (").append(condition).append(") ");
+        sb.append("_b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
+        generateSerializationValueForPojo(sb, prop, readExpr);
+        sb.append(");\n");
     }
 
     /** Generate the serialization value expression for a POJO field. */

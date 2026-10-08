@@ -1553,6 +1553,76 @@ class JqMapperProcessorTest {
         assertEquals("{}", mapper.toJqValue(empty).toJsonString());
     }
 
+    @Test
+    void generatedMapping_primitiveInclusionGuards() throws Exception {
+        // Issue #109: guards compared primitives to null (uncompilable); parity
+        // with shouldInclude means primitives are unconditional under
+        // NON_NULL/NON_EMPTY (boxed values are never null/empty).
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JsonInclude(JsonInclude.Include.NON_EMPTY)
+                public class PrimitiveInclusion {
+                    public boolean licenseConsent;
+                    public int retries;
+                    public double ratio;
+                    public String name;
+
+                    public PrimitiveInclusion() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.PrimitiveInclusion", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getField("name").set(p, "t");
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"name\":\"t\""), out);
+        assertTrue(out.contains("\"licenseConsent\":false"), out);
+        assertTrue(out.contains("\"retries\":0"), out);
+
+        Object on = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getField("licenseConsent").setBoolean(on, true);
+        pojoClass.getField("retries").setInt(on, 3);
+        pojoClass.getField("name").set(on, "t");
+        String onTree = mapper.toJqValue(on).toJsonString();
+        assertTrue(onTree.contains("\"licenseConsent\":true"), onTree);
+        assertTrue(onTree.contains("\"retries\":3"), onTree);
+        assertEquals(onTree, mapper.toJson(on));
+        assertEquals(onTree, new String(mapper.toJsonBytes(on),
+                java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void generatedMapping_primitiveInclusionGuardsRecord() throws Exception {
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JsonInclude(JsonInclude.Include.NON_EMPTY)
+                public record PrimRec(boolean flag, int count, String name) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.PrimRec", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object r = recordClass.getDeclaredConstructor(boolean.class, int.class, String.class)
+                .newInstance(false, 0, "t");
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"name\":\"t\""), out);
+        assertTrue(out.contains("\"flag\":false"), out);
+        assertTrue(out.contains("\"count\":0"), out);
+        assertEquals(out, mapper.toJson(r));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
