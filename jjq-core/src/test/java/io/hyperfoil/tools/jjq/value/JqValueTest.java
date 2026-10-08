@@ -744,6 +744,30 @@ class JqValueTest {
     }
 
     @Test
+    void testAsDisplayText() {
+        // Issue #119: null -> default, containers -> "", else asText().
+        assertEquals("d", JqNull.NULL.asDisplayText("d"));
+        assertEquals("hi", JqString.of("hi").asDisplayText("d"));
+        assertEquals("42", JqNumber.of(42).asDisplayText("d"));
+        assertEquals("true", JqBoolean.TRUE.asDisplayText("d"));
+        assertEquals("", JqArray.of(JqNumber.of(1)).asDisplayText("d"));
+        assertEquals("", JqObject.of("a", JqNumber.of(1)).asDisplayText("d"));
+    }
+
+    @Test
+    void testSize() {
+        // Issue #119: Jackson JsonNode.size() semantics — total, never throws.
+        assertEquals(2, JqValues.parse("{\"a\":1,\"b\":2}").size());
+        assertEquals(3, JqValues.parse("[1,2,3]").size());
+        assertEquals(0, JqObject.EMPTY.size());
+        assertEquals(0, JqArray.EMPTY.size());
+        assertEquals(0, JqString.of("hello").size());
+        assertEquals(0, JqNumber.of(42).size());
+        assertEquals(0, JqBoolean.TRUE.size());
+        assertEquals(0, JqNull.NULL.size());
+    }
+
+    @Test
     void testPathText() {
         // Issue #118: missing/null -> default, containers -> "" (Jackson asText),
         // scalars follow asText(default).

@@ -150,6 +150,7 @@ public final class JqArray implements JqValue, Iterable<JqValue> {
     public List<JqValue> arrayValue() { return elements; }
 
     /** Return the number of elements. */
+    @Override
     public int size() { return elements.size(); }
 
     @Override

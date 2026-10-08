@@ -346,6 +346,21 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     }
 
     /**
+     * Return display text with Jackson-compatible container handling: null
+     * yields the default, containers yield {@code ""} (Jackson's
+     * {@code asText()} behavior), everything else follows {@link #asText()}.
+     * Total: never throws and never returns null for a non-null default.
+     *
+     * @param defaultValue the value for null inputs
+     * @return the display text, {@code ""} for containers, or {@code defaultValue}
+     */
+    default String asDisplayText(String defaultValue) {
+        if (isNull()) return defaultValue;
+        if (isContainer()) return "";
+        return asText();
+    }
+
+    /**
      * Return a field's text with Jackson-compatible container handling:
      * missing or null fields yield the default, containers yield {@code ""}
      * (Jackson's {@code asText()} behavior), everything else follows
@@ -580,6 +595,18 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
             case JqArray a -> a.size();
             case JqObject o -> o.size();
         };
+    }
+
+    /**
+     * Container size with Jackson {@code JsonNode.size()} semantics: objects
+     * and arrays count their entries, everything else is 0. Total — never
+     * throws, unlike {@link #length()} (which measures strings and rejects
+     * booleans and numbers).
+     *
+     * @return the entry count for containers, 0 otherwise
+     */
+    default int size() {
+        return 0;
     }
 
     default JqValue add(JqValue other) {
