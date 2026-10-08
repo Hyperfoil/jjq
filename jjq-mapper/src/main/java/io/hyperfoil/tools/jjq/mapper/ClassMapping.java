@@ -293,9 +293,13 @@ final class ClassMapping<T> implements Mapping<T> {
         Method[] anyMethods = resolveAnyMethods(type, bridges);
         Method anyGetter = anyMethods[1];
 
-        // Getter visibility per class (issue #89): any bridge may suppress getX/isX
-        // binding, falling back to direct field reads below
-        boolean useGetters = true, useIsGetters = true;
+        // Getter visibility per class: native @JqVisibility NONE suppresses
+        // unconditionally; bridges still apply under native ANY (issue #114)
+        JqVisibility visibility = type.getAnnotation(JqVisibility.class);
+        boolean useGetters = visibility == null
+                || visibility.getters() == JqVisibility.Visibility.ANY;
+        boolean useIsGetters = visibility == null
+                || visibility.isGetters() == JqVisibility.Visibility.ANY;
         for (AnnotationBridge bridge : bridges) {
             if (useGetters && !bridge.includeGetters(type)) useGetters = false;
             if (useIsGetters && !bridge.includeIsGetters(type)) useIsGetters = false;

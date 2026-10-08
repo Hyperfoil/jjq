@@ -1,15 +1,16 @@
 package io.hyperfoil.tools.jjq.mapper.processor;
 
 import io.hyperfoil.tools.jjq.JqProgram;
+import io.hyperfoil.tools.jjq.mapper.JqAccess;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
-import io.hyperfoil.tools.jjq.mapper.JqAccess;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqName;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
+import io.hyperfoil.tools.jjq.mapper.JqVisibility;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
@@ -217,8 +218,14 @@ public class JqMapperProcessor extends AbstractProcessor {
         // Any-setter/getter first: any-getter-backed properties are suppressed (issue #88.1)
         AnyInfo pojoAnyInfo = resolveAnyInfo(classType);
 
-        // Getter visibility per class (issue #89): AutoDetect NONE suppresses getX/isX
+        // Getter visibility per class (issue #89): AutoDetect NONE suppresses getX/isX.
+        // Native @JqVisibility NONE ORs in on top; bridges still apply under ANY (issue #114).
         boolean[] noGetters = jacksonGetterSuppression(classType);
+        JqVisibility visibility = classType.getAnnotation(JqVisibility.class);
+        if (visibility != null) {
+            if (visibility.getters() == JqVisibility.Visibility.NONE) noGetters[0] = true;
+            if (visibility.isGetters() == JqVisibility.Visibility.NONE) noGetters[1] = true;
+        }
 
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();

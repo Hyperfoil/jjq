@@ -174,6 +174,21 @@ record SpawnConfig(
 `WRITE_ONLY` binds on read (absent keys tolerated) and skips serialization;
 `READ_ONLY` is the mirror. `@JqIgnore` stays bidirectional and wins over both.
 
+### `@JqVisibility` — bind fields, ignore getters
+
+```java
+@JqMapped
+@JqVisibility(getters = JqVisibility.Visibility.NONE,
+              isGetters = JqVisibility.Visibility.NONE)
+public class ClaudeConfig {
+    private String apiKey;  // read directly; getApiKey() never bound
+    public ClaudeConfig() {}
+}
+```
+
+A native `NONE` suppresses unconditionally; under `ANY` (the default) a bridge
+`NONE` still suppresses. There is no field axis — fields are always bound.
+Records ignore it (canonical accessors, no `getX()` binding).
 ## POJO Support
 
 POJOs with a no-arg constructor and getters/setters are supported alongside records.
@@ -259,7 +274,7 @@ JqMapper mapper = JqMapper.create(); // auto-discovers bridge via ServiceLoader
 User user = mapper.fromJqValue(json, User.class);
 ```
 
-Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqNaming`, `@JqConverter`)
+Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqNaming`, `@JqConverter`)
 over bridge annotations over defaults. Bridges are consulted in registration order;
 the first non-null answer wins.
 See [jjq-mapper-jackson](../jjq-mapper-jackson/README.md) and [jjq-mapper-jsonb](../jjq-mapper-jsonb/README.md).

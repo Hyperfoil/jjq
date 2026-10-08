@@ -1730,6 +1730,41 @@ class JqMapperTest {
         assertTrue(out.contains("\"name\":\"t\""), out);
     }
 
+    // ---- @JqVisibility ----
+
+    @JqVisibility(getters = JqVisibility.Visibility.NONE,
+            isGetters = JqVisibility.Visibility.NONE)
+    static class SmartGetterPojo {
+        private String apiKey = "stored";
+        private boolean active;
+
+        public SmartGetterPojo() {}
+
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public void setActive(boolean active) { this.active = active; }
+
+        public String getApiKey() {
+            throw new AssertionError("smart getter must not be bound");
+        }
+
+        public boolean isActive() {
+            throw new AssertionError("smart is-getter must not be bound");
+        }
+    }
+
+    @Test
+    void visibility_suppressedGettersReadFields() {
+        SmartGetterPojo p = mapper.fromJqValue(
+                JqValues.parse("{\"apiKey\":\"k\",\"active\":true}"), SmartGetterPojo.class);
+        // Ser reads the stored fields directly (no throw)
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"apiKey\":\"k\""), out);
+        assertTrue(out.contains("\"active\":true"), out);
+
+        SmartGetterPojo restored = mapper.fromJqValue(JqValues.parse(out), SmartGetterPojo.class);
+        assertEquals(out, mapper.toJqValue(restored).toJsonString());
+    }
+
     // ---- Bridge on POJO ----
 
     static class BridgePojo {

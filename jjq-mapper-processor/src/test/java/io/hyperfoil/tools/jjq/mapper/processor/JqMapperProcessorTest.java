@@ -1903,6 +1903,83 @@ class JqMapperProcessorTest {
         assertTrue(mapper.toJqValue(p).toJsonString().contains("\"field\":\"c\""));
     }
 
+    @Test
+    void generatedMapping_nativeVisibilitySuppressesGetters() throws Exception {
+        // Issue #114: native "bind fields, ignore getters" end to end. The
+        // throwing getters prove binding never touches them.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqVisibility;
+
+                @JqMapped
+                @JqVisibility(getters = JqVisibility.Visibility.NONE,
+                        isGetters = JqVisibility.Visibility.NONE)
+                public class NativeFieldsOnly {
+                    private String apiKey;
+                    private boolean active;
+
+                    public NativeFieldsOnly() {}
+
+                    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+                    public void setActive(boolean active) { this.active = active; }
+
+                    public String getApiKey() {
+                        throw new AssertionError("smart getter must not be bound");
+                    }
+
+                    public boolean isActive() {
+                        throw new AssertionError("smart is-getter must not be bound");
+                    }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.NativeFieldsOnly", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"apiKey\":\"k\",\"active\":true}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"apiKey\":\"k\""), out);
+        assertTrue(out.contains("\"active\":true"), out);
+        assertEquals(out, mapper.toJson(p));
+    }
+
+    @Test
+    void generatedMapping_bridgeNoneStillSuppressesWithNativeAny() throws Exception {
+        // Composition: native ANY (default) leaves the bridge NONE effective.
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAutoDetect;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+                        getterVisibility = JsonAutoDetect.Visibility.NONE,
+                        isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+                public class BridgeStillSuppresses {
+                    private String apiKey;
+
+                    public BridgeStillSuppresses() {}
+
+                    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+
+                    public String getApiKey() {
+                        throw new AssertionError("suppressed getter must not be bound");
+                    }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.BridgeStillSuppresses", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"apiKey\":\"k\"}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertTrue(mapper.toJqValue(p).toJsonString().contains("\"apiKey\":\"k\""));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
