@@ -193,8 +193,11 @@ final class ClassMapping<T> implements Mapping<T> {
             // Resolve @JqConverter
             ValueConverter<?> converter = resolveConverter(rc.getAnnotation(JqConverter.class));
 
-            // Directional exclusion (e.g. Jackson WRITE_ONLY/READ_ONLY via bridges)
-            boolean skipSer = false, skipDeser = false;
+            // Directional exclusion: native @JqAccess first, then bridges
+            // (e.g. Jackson WRITE_ONLY/READ_ONLY). Native wins (issue #113).
+            JqAccess jqAccess = rc.getAnnotation(JqAccess.class);
+            boolean skipSer = jqAccess != null && jqAccess.value() == JqAccess.Access.WRITE_ONLY;
+            boolean skipDeser = jqAccess != null && jqAccess.value() == JqAccess.Access.READ_ONLY;
             for (AnnotationBridge bridge : bridges) {
                 if (!skipSer && bridge.skipOnSerialize(rc)) skipSer = true;
                 if (!skipDeser && bridge.skipOnDeserialize(rc)) skipDeser = true;
@@ -421,8 +424,13 @@ final class ClassMapping<T> implements Mapping<T> {
             // Resolve @JqConverter
             ValueConverter<?> converter = resolveConverter(field.getAnnotation(JqConverter.class));
 
-            // Directional exclusion (e.g. Jackson WRITE_ONLY/READ_ONLY via bridges)
-            boolean skipSer = false, skipDeser = false;
+            // Directional exclusion: native @JqAccess first, then bridges.
+            // Native wins (issue #113).
+            JqAccess fieldAccess = field.getAnnotation(JqAccess.class);
+            boolean skipSer = fieldAccess != null
+                    && fieldAccess.value() == JqAccess.Access.WRITE_ONLY;
+            boolean skipDeser = fieldAccess != null
+                    && fieldAccess.value() == JqAccess.Access.READ_ONLY;
             for (AnnotationBridge bridge : bridges) {
                 if (!skipSer && bridge.skipOnSerialize(field)) skipSer = true;
                 if (!skipDeser && bridge.skipOnDeserialize(field)) skipDeser = true;

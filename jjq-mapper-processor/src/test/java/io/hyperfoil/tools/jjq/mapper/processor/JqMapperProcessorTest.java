@@ -1812,6 +1812,97 @@ class JqMapperProcessorTest {
         assertEquals(apiKey, recordClass.getMethod("account").invoke(back));
     }
 
+    @Test
+    void generatedMapping_writeOnlySkipsSerialization() throws Exception {
+        // Issue #113: native direction control end to end.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAccess;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                @JqMapped
+                public record LegacyRecord(
+                        @JqAccess(JqAccess.Access.WRITE_ONLY) @JqName("host-path") String hostPath,
+                        String name) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.LegacyRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"host-path\":\"/old\",\"name\":\"t\"}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals("/old", recordClass.getMethod("hostPath").invoke(r));
+
+        String out = mapper.toJqValue(r).toJsonString();
+        assertFalse(out.contains("host-path"), out);
+        assertTrue(out.contains("\"name\":\"t\""), out);
+        assertEquals(out, mapper.toJson(r));
+    }
+
+    @Test
+    void generatedMapping_readOnlySkipsDeserialization() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAccess;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class ReadOnlyPojo {
+                    @JqAccess(JqAccess.Access.READ_ONLY)
+                    public String computed;
+                    public String name;
+
+                    public ReadOnlyPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.ReadOnlyPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"computed\":\"x\",\"name\":\"t\"}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertNull(pojoClass.getField("computed").get(p));
+        assertEquals("t", pojoClass.getField("name").get(p));
+
+        pojoClass.getField("computed").set(p, "c");
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"computed\":\"c\""), out);
+    }
+
+    @Test
+    void generatedMapping_nativeAccessBeatsBridge() throws Exception {
+        // Native @JqAccess wins over @JsonProperty(access): bridge says
+        // WRITE_ONLY (skip ser) but native READ_ONLY applies (skip deser).
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonProperty;
+                import io.hyperfoil.tools.jjq.mapper.JqAccess;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class AccessPriority {
+                    @JqAccess(JqAccess.Access.READ_ONLY)
+                    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+                    public String field;
+
+                    public AccessPriority() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.AccessPriority", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = mapper.fromJqValue(JqValues.parse("{\"field\":\"x\"}"), pojoClass);
+        assertNull(pojoClass.getField("field").get(p));
+
+        pojoClass.getField("field").set(p, "c");
+        assertTrue(mapper.toJqValue(p).toJsonString().contains("\"field\":\"c\""));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

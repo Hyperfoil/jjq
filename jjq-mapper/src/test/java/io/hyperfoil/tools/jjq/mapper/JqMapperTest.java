@@ -1676,6 +1676,60 @@ class JqMapperTest {
                 bridgeMapper.toJqValue(AccountType.API_KEY).toJsonString());
     }
 
+    // ---- @JqAccess ----
+
+    record WriteOnlyRecord(@JqAccess(JqAccess.Access.WRITE_ONLY) String legacy, String name) {}
+
+    @Test
+    void access_writeOnlyBindsButNeverSerializes() {
+        WriteOnlyRecord r = mapper.fromJqValue(
+                JqValues.parse("{\"legacy\":\"old\",\"name\":\"t\"}"), WriteOnlyRecord.class);
+        assertEquals("old", r.legacy());
+        assertEquals("t", r.name());
+
+        // Absent keys tolerated
+        WriteOnlyRecord absent = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\"}"),
+                WriteOnlyRecord.class);
+        assertNull(absent.legacy());
+
+        String out = mapper.toJqValue(r).toJsonString();
+        assertFalse(out.contains("legacy"), out);
+        assertTrue(out.contains("\"name\":\"t\""), out);
+    }
+
+    record ReadOnlyRecord(@JqAccess(JqAccess.Access.READ_ONLY) String computed, String name) {}
+
+    @Test
+    void access_readOnlySerializesButNeverBinds() {
+        ReadOnlyRecord r = mapper.fromJqValue(
+                JqValues.parse("{\"computed\":\"x\",\"name\":\"t\"}"), ReadOnlyRecord.class);
+        assertNull(r.computed());
+        assertEquals("t", r.name());
+
+        String out = mapper.toJqValue(new ReadOnlyRecord("c", "t")).toJsonString();
+        assertTrue(out.contains("\"computed\":\"c\""), out);
+        assertTrue(out.contains("\"name\":\"t\""), out);
+    }
+
+    static class AccessPojo {
+        @JqAccess(JqAccess.Access.WRITE_ONLY)
+        public String legacy;
+        public String name;
+
+        public AccessPojo() {}
+    }
+
+    @Test
+    void access_writeOnlyPojo() {
+        AccessPojo p = mapper.fromJqValue(
+                JqValues.parse("{\"legacy\":\"old\",\"name\":\"t\"}"), AccessPojo.class);
+        assertEquals("old", p.legacy);
+
+        String out = mapper.toJqValue(p).toJsonString();
+        assertFalse(out.contains("legacy"), out);
+        assertTrue(out.contains("\"name\":\"t\""), out);
+    }
+
     // ---- Bridge on POJO ----
 
     static class BridgePojo {

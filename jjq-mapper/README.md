@@ -151,7 +151,6 @@ record PcpMetric(String metricName, double metricValue) {}
 Strategies: `IDENTITY` (default), `SNAKE_CASE`.
 
 ### `@JqConverter` — custom type conversion
-
 ```java
 public class InstantConverter implements ValueConverter<Instant> {
     public Instant fromJqValue(JqValue v) { return Instant.parse(v.stringValue()); }
@@ -160,6 +159,20 @@ public class InstantConverter implements ValueConverter<Instant> {
 
 record Event(String name, @JqConverter(InstantConverter.class) Instant timestamp) {}
 ```
+
+### `@JqAccess` — bind direction
+
+```java
+@JqMapped
+record SpawnConfig(
+    @JqAccess(JqAccess.Access.WRITE_ONLY) @JqName("host-path") String hostPath,
+    @JqName("host-paths") List<String> hostPaths
+) {}
+// "host-path" still reads (legacy files migrate) but is never written back
+```
+
+`WRITE_ONLY` binds on read (absent keys tolerated) and skips serialization;
+`READ_ONLY` is the mirror. `@JqIgnore` stays bidirectional and wins over both.
 
 ## POJO Support
 
@@ -246,7 +259,7 @@ JqMapper mapper = JqMapper.create(); // auto-discovers bridge via ServiceLoader
 User user = mapper.fromJqValue(json, User.class);
 ```
 
-Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqNaming`, `@JqConverter`)
+Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqNaming`, `@JqConverter`)
 over bridge annotations over defaults. Bridges are consulted in registration order;
 the first non-null answer wins.
 See [jjq-mapper-jackson](../jjq-mapper-jackson/README.md) and [jjq-mapper-jsonb](../jjq-mapper-jsonb/README.md).

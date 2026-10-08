@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+import io.hyperfoil.tools.jjq.mapper.JqAccess;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
@@ -159,7 +160,9 @@ public class JqMapperProcessor extends AbstractProcessor {
                 String converterClass = resolveConverterClass(rc);
                 if (converterClass != null && !validateConverter(rc, mappingPackage)) return null;
 
-                String rcAccess = resolveJacksonAccess(rc, recordType);
+                // Native @JqAccess wins over the bridged access (issue #113)
+                String rcAccess = nativeAccess(rc);
+                if (rcAccess == null) rcAccess = resolveJacksonAccess(rc, recordType);
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
                         "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess)));
@@ -324,7 +327,9 @@ public class JqMapperProcessor extends AbstractProcessor {
                         || name.equals(anyGetterPropertyName(pojoAnyInfo.getterName())))) {
                 ignored = true;
             }
-            String fieldAccess = resolveJacksonAccess(field, classType);
+            // Native @JqAccess wins over the bridged access (issue #113)
+            String fieldAccess = nativeAccess(field);
+            if (fieldAccess == null) fieldAccess = resolveJacksonAccess(field, classType);
             boolean skipSer = "WRITE_ONLY".equals(fieldAccess)
                     || hasJacksonJsonIgnore(methodElements.get(getterName));
             boolean skipDeser = "READ_ONLY".equals(fieldAccess)
@@ -433,6 +438,15 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
         }
         return null;
+    }
+
+    /**
+     * Native {@code @JqAccess} direction (null when absent). Enum names align
+     * with Jackson's, so downstream comparisons work unchanged (issue #113).
+     */
+    private static String nativeAccess(Element element) {
+        JqAccess access = element.getAnnotation(JqAccess.class);
+        return access != null ? access.value().name() : null;
     }
 
     /**
