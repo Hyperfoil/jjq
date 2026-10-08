@@ -924,6 +924,95 @@ class JqMapperProcessorTest {
         assertEquals("hello", pojoClass.getField("name").get(p));
     }
 
+    @Test
+    void generatedMapping_genericCollectionsPojo() throws Exception {
+        // Issue #101: generic fields emitted illegal `Map<K,V>.class` literals.
+        // The POJO path had no List/Map branches at all (every generic hit the
+        // `typeName.class` default); the record Map branch compiled but dropped
+        // value types (null genericType -> untyped values).
+        String toolSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Tool(String name) {}
+                """;
+        String pojoSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+                import java.util.Map;
+
+                @JqMapped
+                public class Bundle {
+                    public List<String> tags;
+                    public Map<String, Tool> tools;
+
+                    public Bundle() {}
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.Tool", "test.Bundle"},
+                new String[]{toolSource, pojoSource});
+        Class<?> bundleClass = Class.forName("test.Bundle", true, loader);
+        Class<?> toolClass = Class.forName("test.Tool", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse(
+                "{\"tags\":[\"a\",\"b\"],\"tools\":{\"hammer\":{\"name\":\"hammer\"}}}");
+        Object b = mapper.fromJqValue(json, bundleClass);
+        assertEquals(java.util.List.of("a", "b"), bundleClass.getField("tags").get(b));
+        Object tools = bundleClass.getField("tools").get(b);
+        assertInstanceOf(java.util.Map.class, tools);
+        // Map values must bind as Tool records, not untyped maps (issue #101)
+        Object hammer = ((java.util.Map<?, ?>) tools).get("hammer");
+        assertEquals(toolClass, hammer.getClass());
+        assertEquals("hammer", toolClass.getMethod("name").invoke(hammer));
+
+        // Serialization round-trips through the same typed values
+        JqValue back = mapper.toJqValue(b);
+        assertEquals("a", back.getField("tags").getElement(0).stringValue());
+        assertEquals("hammer", back.getField("tools").getField("hammer").getField("name").stringValue());
+    }
+
+    @Test
+    void generatedMapping_genericMapRecordBindsTypedValues() throws Exception {
+        String toolSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Tool(String name) {}
+                """;
+        String bundleSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.Map;
+
+                @JqMapped
+                public record MapBundle(String id, Map<String, Tool> tools) {}
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.Tool", "test.MapBundle"},
+                new String[]{toolSource, bundleSource});
+        Class<?> bundleClass = Class.forName("test.MapBundle", true, loader);
+        Class<?> toolClass = Class.forName("test.Tool", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"id\":\"b\",\"tools\":{\"hammer\":{\"name\":\"hammer\"}}}");
+        Object b = mapper.fromJqValue(json, bundleClass);
+        Object tools = bundleClass.getMethod("tools").invoke(b);
+        Object hammer = ((java.util.Map<?, ?>) tools).get("hammer");
+        assertEquals(toolClass, hammer.getClass());
+        assertEquals("hammer", toolClass.getMethod("name").invoke(hammer));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

@@ -1896,6 +1896,16 @@ class JqMapperTest {
         assertEquals("SF", addresses.get(1).city());
     }
 
+    @Test
+    void fromJqValue_genericType_mapOfRecords() {
+        // Issue #101: the documented TypeToken pattern, now shipped
+        JqValue json = JqValues.parse("{\"home\":{\"city\":\"NYC\",\"zip\":\"10001\"}}");
+        java.lang.reflect.Type mapType = new TypeToken<Map<String, Address>>(){}.getType();
+        Map<String, Address> addresses = mapper.fromJqValue(json, mapType);
+        assertEquals(1, addresses.size());
+        assertEquals("NYC", addresses.get("home").city());
+    }
+
     // ---- toJson vs toJqValue consistency ----
 
     @Test
@@ -2111,13 +2121,5 @@ class JqMapperTest {
     void toJsonBytes_matchesTree_optional() {
         assertBytesMatch(new WithOptional("Alice", Optional.of("a@b.c")));
         assertBytesMatch(new WithOptional("Bob", Optional.empty()));
-    }
-
-    // Helper for capturing generic types (like Jackson's TypeReference)
-    static abstract class TypeToken<T> {
-        java.lang.reflect.Type getType() {
-            return ((java.lang.reflect.ParameterizedType) getClass().getGenericSuperclass())
-                    .getActualTypeArguments()[0];
-        }
     }
 }

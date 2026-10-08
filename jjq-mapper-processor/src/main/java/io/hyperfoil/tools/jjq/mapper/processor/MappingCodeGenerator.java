@@ -245,15 +245,24 @@ final class MappingCodeGenerator {
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append(apply);
                 }
-                // List<T> — delegate to mapper for element conversion
+                // List<T> — delegate to mapper for element conversion.
+                // A generic element (List<List<..>>) cannot form a Class
+                // literal: route the whole List through a TypeToken (issue #101).
                 else if (typeName.startsWith("java.util.List<")) {
                     String elementType = extractGenericArg(typeName);
-                    sb.append("_toList(").append(apply).append(", mapper, ").append(elementType).append(".class)");
+                    if (elementType.contains("<")) {
+                        sb.append("mapper.fromJqValue(").append(apply).append(", ")
+                          .append(typeTokenExpr(typeName)).append(")");
+                    } else {
+                        sb.append("_toList(").append(apply).append(", mapper, ").append(elementType).append(".class)");
+                    }
                 }
-                // Map<String, V> — delegate to mapper for value conversion
+                // Map<String, V> — bind values with their declared types via a
+                // TypeToken (issue #101). The old form passed a null genericType,
+                // leaving values untyped unlike the reflection path.
                 else if (typeName.startsWith("java.util.Map<")) {
-                    sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJava(")
-                      .append(apply).append(", java.util.Map.class, null, mapper)");
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ")
+                      .append(typeTokenExpr(typeName)).append(")");
                 }
                 // Optional<T>
                 else if (typeName.startsWith("java.util.Optional<")) {
@@ -264,12 +273,14 @@ final class MappingCodeGenerator {
                 }
                 // Enum
                 else if (typeName.contains(".") && !typeName.startsWith("java.")) {
-                    // Assume it's a record or enum — delegate to mapper
-                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeName).append(".class)");
+                    // Assume it's a record or enum — delegate to mapper.
+                    // A parameterized type cannot form a .class literal:
+                    // capture it with a TypeToken instead (issue #101).
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName)).append(")");
                 }
                 else {
                     // Fallback — delegate to mapper
-                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeName).append(".class)");
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName)).append(")");
                 }
             }
         }
@@ -291,9 +302,14 @@ final class MappingCodeGenerator {
                 sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\") instanceof JqNumber _n ? _n.decimalValue() : null");
             default -> {
                 // Nested record/enum/POJO: bind structurally (fail-fast on shape
-                // mismatch, mirroring the reflection path). JqValue passthrough
-                // and java.* types keep the lenient toJavaObject conversion.
-                if (typeName.contains(".") && !typeName.startsWith("java.")
+                // mismatch, mirroring the reflection path). A parameterized type
+                // cannot form a .class literal: capture it with a TypeToken
+                // instead (issue #101). JqValue passthrough and java.* types
+                // keep the lenient toJavaObject conversion.
+                if (typeName.contains("<")) {
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ")
+                      .append(typeTokenExpr(typeName)).append(")");
+                } else if (typeName.contains(".") && !typeName.startsWith("java.")
                         && !typeName.equals("JqValue")
                         && !typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeName).append(".class)");
@@ -825,6 +841,23 @@ final class MappingCodeGenerator {
     }
 
     /**
+     * A {@code Class} literal for plain types, or a {@code TypeToken} capture
+     * for parameterized ones — a parameterized {@code .class} literal is
+     * illegal Java (issue #101). The emitted form needs no import (fully
+     * qualified) and its type arguments are already fully qualified, so it
+     * resolves in any generated package.
+     */
+    private static String typeLiteral(String typeName) {
+        if (typeName.contains("<")) return typeTokenExpr(typeName);
+        return typeName + ".class";
+    }
+
+    /** {@code new TypeToken<T>(){}.getType()} for a parameterized type string. */
+    private static String typeTokenExpr(String typeName) {
+        return "new io.hyperfoil.tools.jjq.mapper.TypeToken<" + typeName + ">(){}.getType()";
+    }
+
+    /**
      * Generate the complete Java source for a POJO _JqMapping class.
      * Uses no-arg constructor + setter calls for deserialization,
      * and getter calls for serialization.
@@ -1286,7 +1319,12 @@ final class MappingCodeGenerator {
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     yield apply;
                 }
-                yield "mapper.fromJqValue(" + apply + ", " + typeName + ".class)";
+                // A parameterized type cannot form a .class literal: capture
+                // it with a TypeToken instead (issue #101). Covers every
+                // generic (List/Map/Set/Optional/...) since the POJO path has
+                // no per-container branches; the runtime binds them from the
+                // captured Type exactly like the reflection path.
+                yield "mapper.fromJqValue(" + apply + ", " + typeLiteral(typeName) + ")";
             }
         };
     }
