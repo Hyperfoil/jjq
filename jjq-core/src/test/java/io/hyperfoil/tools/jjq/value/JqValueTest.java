@@ -744,6 +744,57 @@ class JqValueTest {
     }
 
     @Test
+    void testPathText() {
+        // Issue #118: missing/null -> default, containers -> "" (Jackson asText),
+        // scalars follow asText(default).
+        var doc = JqValues.parse(
+                "{\"s\":\"hi\",\"n\":42,\"b\":true,\"nil\":null,\"arr\":[1],\"obj\":{\"k\":1}}");
+        assertEquals("hi", doc.pathText("s", "d"));
+        assertEquals("d", doc.pathText("missing", "d"));
+        assertEquals("d", doc.pathText("nil", "d"));
+        assertEquals("", doc.pathText("arr", "d"));
+        assertEquals("", doc.pathText("obj", "d"));
+        assertEquals("d", doc.pathText("n", "d"));
+        assertEquals("d", doc.pathText("b", "d"));
+        // Non-object receivers behave like a missing key ...
+        assertEquals("d", JqNumber.of(1).pathText("s", "d"));
+        assertEquals("d", JqArray.of(JqNumber.of(1)).pathText("s", "d"));
+        // ... including the null receiver
+        assertEquals("d", JqNull.NULL.pathText("s", "d"));
+    }
+
+    @Test
+    void testPathBoolean() {
+        var doc = JqValues.parse("{\"b\":true,\"s\":\"yes\",\"n\":1,\"nil\":null}");
+        assertTrue(doc.pathBoolean("b", false));
+        // Only a real boolean counts: strings/numbers/null/missing yield the default
+        assertTrue(doc.pathBoolean("s", true));
+        assertFalse(doc.pathBoolean("s", false));
+        assertFalse(doc.pathBoolean("n", false));
+        assertTrue(doc.pathBoolean("nil", true));
+        assertFalse(doc.pathBoolean("missing", false));
+        assertTrue(JqNumber.of(1).pathBoolean("b", true));
+    }
+
+    @Test
+    void testPathLong() {
+        var doc = JqValues.parse("{\"n\":42,\"s\":\"42\",\"nil\":null}");
+        assertEquals(42L, doc.pathLong("n", -1L));
+        assertEquals(-1L, doc.pathLong("s", -1L));
+        assertEquals(-1L, doc.pathLong("nil", -1L));
+        assertEquals(-1L, doc.pathLong("missing", -1L));
+    }
+
+    @Test
+    void testPathInt() {
+        var doc = JqValues.parse("{\"n\":42,\"big\":3000000000,\"nil\":null}");
+        assertEquals(42, doc.pathInt("n", -1));
+        assertEquals((int) 3000000000L, doc.pathInt("big", -1));
+        assertEquals(-1, doc.pathInt("nil", -1));
+        assertEquals(-1, doc.pathInt("missing", -1));
+    }
+
+    @Test
     void testIntValue() {
         assertEquals(42, JqNumber.of(42).intValue());
         assertEquals(3, JqNumber.of(3.7).intValue());

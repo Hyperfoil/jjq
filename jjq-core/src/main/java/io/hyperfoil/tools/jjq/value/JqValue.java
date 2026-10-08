@@ -346,6 +346,62 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     }
 
     /**
+     * Return a field's text with Jackson-compatible container handling:
+     * missing or null fields yield the default, containers yield {@code ""}
+     * (Jackson's {@code asText()} behavior), everything else follows
+     * {@link #asText(String)}.
+     *
+     * <p>The container rule applies to the <em>field value</em>: calling this
+     * on a non-object receiver still yields the default, since {@link #path}
+     * on it returns null.</p>
+     *
+     * @param field        the field name to read
+     * @param defaultValue the value for missing/null/non-string scalars
+     * @return the field text, {@code ""} for containers, or {@code defaultValue}
+     */
+    default String pathText(String field, String defaultValue) {
+        JqValue node = path(field);
+        if (node.isContainer()) return "";
+        return node.asText(defaultValue);
+    }
+
+    /**
+     * Return a field's boolean, or the default unless the field holds a real
+     * boolean (missing, null, and non-boolean values all yield the default).
+     *
+     * @param field        the field name to read
+     * @param defaultValue the value for missing/null/non-boolean fields
+     * @return the field value, or {@code defaultValue}
+     */
+    default boolean pathBoolean(String field, boolean defaultValue) {
+        return path(field).asBoolean(defaultValue);
+    }
+
+    /**
+     * Return a field's long (via {@link #asLong(long)}), or the default when
+     * the field is missing, null, or not a number.
+     *
+     * @param field        the field name to read
+     * @param defaultValue the value for missing/null/non-number fields
+     * @return the field value, or {@code defaultValue}
+     */
+    default long pathLong(String field, long defaultValue) {
+        return path(field).asLong(defaultValue);
+    }
+
+    /**
+     * Return a field's int, narrowed like {@link #asInt(int)}, or the default
+     * when the field is missing, null, or not a number.
+     *
+     * @param field        the field name to read
+     * @param defaultValue the value for missing/null/non-number fields
+     * @return the field value, or {@code defaultValue}
+     */
+    default int pathInt(String field, int defaultValue) {
+        return path(field).asInt(defaultValue);
+    }
+
+    /**
      * Returns a new object with the field added or replaced.
      * If the key already exists, the value is replaced at its current position.
      *
