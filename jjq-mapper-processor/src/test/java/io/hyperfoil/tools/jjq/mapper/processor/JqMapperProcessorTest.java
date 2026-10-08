@@ -1623,6 +1623,79 @@ class JqMapperProcessorTest {
         assertEquals(out, mapper.toJson(r));
     }
 
+    @Test
+    void converterWithoutNoArgCtor_failsWithNamedError() {
+        // Issue #110: a converter that cannot be constructed must fail the
+        // build with a named error, not a raw javac error in generated code.
+        javax.tools.JavaFileObject converter = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.ArgConverter", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                        import io.hyperfoil.tools.jjq.value.JqString;
+                        import io.hyperfoil.tools.jjq.value.JqValue;
+
+                        public class ArgConverter implements ValueConverter<String> {
+                            public ArgConverter(String arg) {}
+
+                            @Override
+                            public String fromJqValue(JqValue value) { return "x"; }
+
+                            @Override
+                            public JqValue toJqValue(String value) { return JqString.of(value); }
+                        }
+                        """);
+        javax.tools.JavaFileObject record = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.WithArgConv", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                        import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                        @JqMapped
+                        public record WithArgConv(@JqConverter(ArgConverter.class) String name) {}
+                        """);
+        com.google.testing.compile.Compilation compilation = com.google.testing.compile.Compiler.javac()
+                .withProcessors(new JqMapperProcessor())
+                .compile(converter, record);
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+        com.google.testing.compile.CompilationSubject.assertThat(compilation)
+                .hadErrorContaining(
+                    "Converter test.ArgConverter must have an accessible no-arg constructor");
+    }
+
+    @Test
+    void abstractConverter_failsWithNamedError() {
+        javax.tools.JavaFileObject converter = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.AbstractConverter", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                        import io.hyperfoil.tools.jjq.value.JqValue;
+
+                        public abstract class AbstractConverter implements ValueConverter<String> {
+                            @Override
+                            public String fromJqValue(JqValue value) { return "x"; }
+                        }
+                        """);
+        javax.tools.JavaFileObject record = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.WithAbstractConv", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                        import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                        @JqMapped
+                        public record WithAbstractConv(@JqConverter(AbstractConverter.class) String name) {}
+                        """);
+        com.google.testing.compile.Compilation compilation = com.google.testing.compile.Compiler.javac()
+                .withProcessors(new JqMapperProcessor())
+                .compile(converter, record);
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+        com.google.testing.compile.CompilationSubject.assertThat(compilation)
+                .hadErrorContaining("Converter test.AbstractConverter must be a concrete class");
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

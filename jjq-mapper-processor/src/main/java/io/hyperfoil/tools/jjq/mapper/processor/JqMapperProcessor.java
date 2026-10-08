@@ -87,6 +87,8 @@ public class JqMapperProcessor extends AbstractProcessor {
         // Resolve class-level @JqInclude and @JqNaming
         String classInclusion = resolveClassInclusion(recordType);
         JqNaming.Strategy namingStrategy = resolveNamingStrategy(recordType);
+        String mappingPackage = processingEnv.getElementUtils().getPackageOf(recordType)
+                .getQualifiedName().toString();
 
         // Any-setter/getter first: any-getter-backed components are suppressed (issue #88.1)
         AnyInfo recordAnyInfo = resolveAnyInfo(recordType);
@@ -139,6 +141,7 @@ public class JqMapperProcessor extends AbstractProcessor {
 
                 String serName = (jqField != null) ? name : jsonName; // @JqField overrides naming
                 String converterClass = resolveConverterClass(rc);
+                if (converterClass != null && !validateConverter(rc, mappingPackage)) return null;
 
                 String rcAccess = resolveJacksonAccess(rc, recordType);
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
@@ -148,7 +151,7 @@ public class JqMapperProcessor extends AbstractProcessor {
         }
 
         // Generate the mapping class
-        String packageName = processingEnv.getElementUtils().getPackageOf(recordType).getQualifiedName().toString();
+        String packageName = mappingPackage;
         String recordQualifiedName = recordType.getQualifiedName().toString();
 
         // For nested records (e.g., Outer.Inner), compute the source-level name
@@ -189,6 +192,8 @@ public class JqMapperProcessor extends AbstractProcessor {
         // Resolve class-level @JqInclude and @JqNaming
         String classInclusion = resolveClassInclusion(classType);
         JqNaming.Strategy namingStrategy = resolveNamingStrategy(classType);
+        String mappingPackage = processingEnv.getElementUtils().getPackageOf(classType)
+                .getQualifiedName().toString();
 
         // Any-setter/getter first: any-getter-backed properties are suppressed (issue #88.1)
         AnyInfo pojoAnyInfo = resolveAnyInfo(classType);
@@ -282,6 +287,7 @@ public class JqMapperProcessor extends AbstractProcessor {
 
             String serName = (jqField != null) ? name : jsonName;
             String converterClass = resolveConverterClass(field);
+            if (converterClass != null && !validateConverter(field, mappingPackage)) return null;
 
             if (!ignored && pojoAnyInfo.hasGetter()
                     && ((getterName != null && getterName.equals(pojoAnyInfo.getterName()))
@@ -300,7 +306,7 @@ public class JqMapperProcessor extends AbstractProcessor {
         }
 
         // Generate the mapping class
-        String packageName = processingEnv.getElementUtils().getPackageOf(classType).getQualifiedName().toString();
+        String packageName = mappingPackage;
         String classQualifiedName = classType.getQualifiedName().toString();
 
         String classSourceName;
@@ -485,6 +491,16 @@ public class JqMapperProcessor extends AbstractProcessor {
      * @return the converter qualified name, or null when absent
      */
      static String resolveConverterClass(Element element) {
+        javax.lang.model.type.TypeMirror tm = converterTypeMirror(element);
+        return tm != null ? tm.toString() : null;
+    }
+
+    /**
+     * The {@code @JqConverter} value as a {@code TypeMirror} (null when
+     * absent). Works for same-round classes that have no {@code Class} object
+     * yet, where reading the annotation value directly would throw.
+     */
+    private static javax.lang.model.type.TypeMirror converterTypeMirror(Element element) {
         for (var mirror : element.getAnnotationMirrors()) {
             if (mirror.getAnnotationType().toString()
                     .equals("io.hyperfoil.tools.jjq.mapper.JqConverter")) {
@@ -492,14 +508,79 @@ public class JqMapperProcessor extends AbstractProcessor {
                     if (entry.getKey().getSimpleName().contentEquals("value")) {
                         Object value = entry.getValue().getValue();
                         if (value instanceof javax.lang.model.type.TypeMirror tm) {
-                            return tm.toString();
+                            return tm;
                         }
-                        return value.toString();
                     }
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Fail the build with a named error when a {@code @JqConverter} class
+     * cannot be instantiated in generated code (issue #110): not a concrete
+     * class, a non-static nested class (no outer instance to construct with),
+     * or no accessible no-arg constructor. Generated code shares the mapping's
+     * package, so same-package non-private suffices while cross-package needs
+     * public. A converter that cannot be constructed is a programming error;
+     * failing at compile time beats the native runtime warning.
+     *
+     * @param annotated      the annotated field/component (error location)
+     * @param mappingPackage the package of the generated mapping class
+     * @return true when valid (an error is already reported otherwise)
+     */
+    private boolean validateConverter(Element annotated, String mappingPackage) {
+        javax.lang.model.type.TypeMirror tm = converterTypeMirror(annotated);
+        if (tm == null) return true;
+        String name = tm.toString();
+        Element element = processingEnv.getTypeUtils().asElement(tm);
+        if (!(element instanceof TypeElement converter)
+                || converter.getKind() != ElementKind.CLASS
+                || converter.getModifiers().contains(Modifier.ABSTRACT)) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "Converter " + name + " must be a concrete class", annotated);
+            return false;
+        }
+        Element enclosing = converter.getEnclosingElement();
+        if ((enclosing.getKind() == ElementKind.CLASS || enclosing.getKind() == ElementKind.RECORD)
+                && !converter.getModifiers().contains(Modifier.STATIC)) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "Converter " + name + " must be a top-level or static nested class", annotated);
+            return false;
+        }
+        String converterPackage = processingEnv.getElementUtils().getPackageOf(converter)
+                .getQualifiedName().toString();
+        boolean samePackage = converterPackage.equals(mappingPackage);
+        boolean hasAccessibleDefault = false;
+        boolean hasDeclaredCtor = false;
+        for (Element enclosed : converter.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.CONSTRUCTOR) continue;
+            hasDeclaredCtor = true;
+            var ctor = (javax.lang.model.element.ExecutableElement) enclosed;
+            if (ctor.getParameters().isEmpty()
+                    && isAccessibleFrom(ctor.getModifiers(), samePackage)) {
+                hasAccessibleDefault = true;
+                break;
+            }
+        }
+        if (!hasDeclaredCtor) {
+            // Implicit default constructor: same access as the class itself
+            hasAccessibleDefault = isAccessibleFrom(converter.getModifiers(), samePackage);
+        }
+        if (!hasAccessibleDefault) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "Converter " + name + " must have an accessible no-arg constructor", annotated);
+            return false;
+        }
+        return true;
+    }
+
+    /** Public, or non-private within the same package. */
+    private static boolean isAccessibleFrom(java.util.Set<Modifier> modifiers, boolean samePackage) {
+        if (modifiers.contains(Modifier.PUBLIC)) return true;
+        if (modifiers.contains(Modifier.PRIVATE)) return false;
+        return samePackage;
     }
 
     /**
