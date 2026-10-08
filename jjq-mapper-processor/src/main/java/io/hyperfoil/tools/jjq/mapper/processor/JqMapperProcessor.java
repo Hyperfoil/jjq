@@ -106,8 +106,8 @@ public class JqMapperProcessor extends AbstractProcessor {
 
                 // Apply naming strategy for default expression
                 String jsonName = namingStrategy.transform(name);
-                String jqExpr = "." + jsonName;
                 JqField jqField = rc.getAnnotation(JqField.class);
+                String jqExpr;
                 if (jqField != null) {
                     jqExpr = jqField.value();
                     // Validate the jq expression at compile time
@@ -118,6 +118,12 @@ public class JqMapperProcessor extends AbstractProcessor {
                                 "Invalid jq expression in @JqField(\"" + jqExpr + "\"): " + e.getMessage(), rc);
                         return null;
                     }
+                } else {
+                    // Bridge renames (e.g. @JsonProperty("host-paths")) override
+                    // the naming strategy, mirroring the reflection path (issue #103)
+                    String renamed = bridgeRenameForRecord(rc, recordType);
+                    if (renamed != null) jsonName = renamed;
+                    jqExpr = fieldProgram(jsonName);
                 }
 
                 // Resolve field-level @JqInclude (overrides class-level)
@@ -206,8 +212,8 @@ public class JqMapperProcessor extends AbstractProcessor {
 
             // Apply naming strategy
             String jsonName = namingStrategy.transform(name);
-            String jqExpr = "." + jsonName;
             JqField jqField = field.getAnnotation(JqField.class);
+            String jqExpr;
             if (jqField != null) {
                 jqExpr = jqField.value();
                 try {
@@ -217,6 +223,12 @@ public class JqMapperProcessor extends AbstractProcessor {
                             "Invalid jq expression in @JqField(\"" + jqExpr + "\"): " + e.getMessage(), field);
                     return null;
                 }
+            } else {
+                // Bridge renames override the naming strategy, mirroring the
+                // reflection path (issue #103)
+                String renamed = bridgeRename(field);
+                if (renamed != null) jsonName = renamed;
+                jqExpr = fieldProgram(jsonName);
             }
 
             // Determine access strategy
@@ -430,6 +442,84 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
         }
         return null;
+    }
+
+    /**
+     * Bridge rename for a field: {@code @JsonProperty} first, then
+     * {@code @JsonbProperty} (issue #103). Mirrors the bridge precedence of
+     * the reflection path for the default bridge set.
+     *
+     * @return the wire name, or null when no bridge renames the field
+     */
+    private static String bridgeRename(Element element) {
+        String name = renameFromMirrors(element.getAnnotationMirrors(),
+                "com.fasterxml.jackson.annotation.JsonProperty");
+        if (name != null) return name;
+        return renameFromMirrors(element.getAnnotationMirrors(),
+                "jakarta.json.bind.annotation.JsonbProperty");
+    }
+
+    /**
+     * Bridge rename for a record component. Jackson/JSON-B annotations land on
+     * the field rather than the component, so fall back to the same-named
+     * field's mirrors (same fallback as {@link #resolveJacksonAccess}).
+     */
+    private static String bridgeRenameForRecord(RecordComponentElement rc, TypeElement enclosing) {
+        String name = bridgeRename(rc);
+        if (name != null) return name;
+        for (Element e : enclosing.getEnclosedElements()) {
+            if (e.getKind() == ElementKind.FIELD && e.getSimpleName().contentEquals(rc.getSimpleName())) {
+                name = bridgeRename(e);
+                if (name != null) return name;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Read a string-valued {@code value} member from one annotation type's
+     * mirrors (stringly-typed: no framework dependency). Empty values mean
+     * "no rename" (Jackson's {@code USE_DEFAULT_NAME} is {@code ""}).
+     */
+    private static String renameFromMirrors(
+            java.util.List<? extends javax.lang.model.element.AnnotationMirror> mirrors,
+            String annotationName) {
+        for (javax.lang.model.element.AnnotationMirror m : mirrors) {
+            if (m.getAnnotationType().toString().equals(annotationName)) {
+                for (var entry : m.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("value")) {
+                        Object value = entry.getValue().getValue();
+                        if (value instanceof String s && !s.isEmpty()) return s;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Extraction program for a JSON field name: {@code .name} for plain ASCII
+     * identifiers, {@code ."..."} (escaped) otherwise — {@code .host-paths}
+     * would parse as a subtraction (issue #103). Both forms compile to
+     * {@code DOT_FIELD}, so the {@code FIELD_ACCESS} fast path is preserved.
+     */
+    static String fieldProgram(String jsonName) {
+        if (isPlainIdentifier(jsonName)) return "." + jsonName;
+        return ".\"" + jsonName.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    /** ASCII identifier check; anything else (dashes, spaces, non-ASCII) needs quoting. */
+    private static boolean isPlainIdentifier(String s) {
+        if (s.isEmpty()) return false;
+        char c0 = s.charAt(0);
+        if (c0 != '_' && (c0 < 'a' || c0 > 'z') && (c0 < 'A' || c0 > 'Z')) return false;
+        for (int i = 1; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '_' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Resolve class-level @JqNaming, defaulting to IDENTITY. */

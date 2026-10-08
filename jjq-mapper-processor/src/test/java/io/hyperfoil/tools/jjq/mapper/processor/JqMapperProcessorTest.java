@@ -1041,6 +1041,96 @@ class JqMapperProcessorTest {
         assertEquals(r, mapper.fromJqValue(back, recordClass));
     }
 
+    @Test
+    void generatedMapping_jsonPropertyRenameBinds() throws Exception {
+        // Issue #103: codegen ignored bridge renames — the program and has()
+        // guard used the Java name, so wire-named fields silently bound defaults.
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonProperty;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+
+                @JqMapped
+                public class RenamedPojo {
+                    @JsonProperty("host-paths")
+                    public List<String> hostPaths;
+
+                    public RenamedPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.RenamedPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\",\"/b\"]}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals(List.of("/a", "/b"), pojoClass.getField("hostPaths").get(p));
+
+        // Serialization emits the wire name, not the Java name
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"host-paths\""), out);
+        assertFalse(out.contains("hostPaths"), out);
+
+        Object roundTripped = mapper.fromJqValue(JqValues.parse(out), pojoClass);
+        assertEquals(List.of("/a", "/b"), pojoClass.getField("hostPaths").get(roundTripped));
+    }
+
+    @Test
+    void generatedMapping_jsonPropertyRenameBindsRecord() throws Exception {
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonProperty;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+
+                @JqMapped
+                public record RenamedRecord(@JsonProperty("host-paths") List<String> hostPaths) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.RenamedRecord", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"host-paths\":[\"/a\"]}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals(List.of("/a"), recordClass.getMethod("hostPaths").invoke(r));
+
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"host-paths\""), out);
+        assertFalse(out.contains("hostPaths"), out);
+    }
+
+    @Test
+    void generatedMapping_jsonbPropertyRenameBinds() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import jakarta.json.bind.annotation.JsonbProperty;
+
+                @JqMapped
+                public class JsonbRenamed {
+                    @JsonbProperty("repo-paths")
+                    public java.util.List<String> repoPaths;
+
+                    public JsonbRenamed() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.JsonbRenamed", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"repo-paths\":[\"/r\"]}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals(List.of("/r"), pojoClass.getField("repoPaths").get(p));
+
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"repo-paths\""), out);
+        assertFalse(out.contains("repoPaths"), out);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
