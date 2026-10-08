@@ -239,6 +239,23 @@ class JqMapperTest {
     }
 
     @Test
+    void fromJqValue_setPreservesDeclaredImpl() {
+        // Issue scope item 2: a declared HashSet must bind as one (was always
+        // LinkedHashSet); LinkedHashSet stays as is.
+        record HashSetHolder(java.util.HashSet<String> tags) {}
+        record LinkedHolder(java.util.LinkedHashSet<String> tags) {}
+
+        HashSetHolder h = mapper.fromJqValue(JqValues.parse("{\"tags\":[\"b\",\"a\"]}"),
+                HashSetHolder.class);
+        assertEquals(java.util.HashSet.class, h.tags().getClass());
+        assertEquals(java.util.Set.of("b", "a"), h.tags());
+
+        LinkedHolder l = mapper.fromJqValue(JqValues.parse("{\"tags\":[\"b\",\"a\"]}"),
+                LinkedHolder.class);
+        assertEquals(java.util.LinkedHashSet.class, l.tags().getClass());
+    }
+
+    @Test
     void fromJqValue_setMismatchHasPath() {
         JqValue json = JqValues.parse("{\"name\":\"Alice\",\"tags\":\"oops\"}");
         io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
@@ -1763,6 +1780,74 @@ class JqMapperTest {
 
         SmartGetterPojo restored = mapper.fromJqValue(JqValues.parse(out), SmartGetterPojo.class);
         assertEquals(out, mapper.toJqValue(restored).toJsonString());
+    }
+
+    // ---- Any-methods from interfaces ----
+
+    interface ExtrasInterface {
+        @JqAnySetter
+        default void setExtra(String key, JqValue value) { extrasMap().put(key, value); }
+
+        @JqAnyGetter
+        default Map<String, JqValue> getExtras() { return extrasMap(); }
+
+        Map<String, JqValue> extrasMap();
+    }
+
+    static class InterfaceImpl implements ExtrasInterface {
+        public String name;
+        private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+        public InterfaceImpl() {}
+
+        @Override
+        public Map<String, JqValue> extrasMap() { return extras; }
+    }
+
+    @Test
+    void anyMethods_interfaceDefaultsForward() {
+        InterfaceImpl p = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}"), InterfaceImpl.class);
+        assertEquals("t", p.name);
+        assertEquals(1L, p.extras.get("mystery").getField("a").longValue());
+
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    // ---- Sorted and enum sets ----
+
+    @Test
+    void fromJqValue_sortedSetOrdersNaturally() {
+        record SortedHolder(java.util.SortedSet<String> tags) {}
+
+        SortedHolder h = mapper.fromJqValue(JqValues.parse("{\"tags\":[\"b\",\"a\",\"b\"]}"),
+                SortedHolder.class);
+        assertEquals(java.util.TreeSet.class, h.tags().getClass());
+        assertEquals(java.util.List.of("a", "b"), new java.util.ArrayList<>(h.tags()));
+    }
+
+    enum Level { LOW, HIGH }
+
+    @Test
+    void fromJqValue_enumSetBinds() {
+        record LevelHolder(java.util.EnumSet<Level> levels) {}
+
+        LevelHolder h = mapper.fromJqValue(JqValues.parse("{\"levels\":[\"HIGH\",\"LOW\",\"HIGH\"]}"),
+                LevelHolder.class);
+        assertEquals(java.util.EnumSet.of(Level.HIGH, Level.LOW), h.levels());
+    }
+
+    @Test
+    @SuppressWarnings("rawtypes")
+    void fromJqValue_enumSetRejectsNonEnum() {
+        record BadSet(java.util.EnumSet tags) {}
+
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"tags\":[\"a\"]}"), BadSet.class));
+        assertTrue(e.getMessage().contains("EnumSet"), e.getMessage());
     }
 
     // ---- Bridge on POJO ----

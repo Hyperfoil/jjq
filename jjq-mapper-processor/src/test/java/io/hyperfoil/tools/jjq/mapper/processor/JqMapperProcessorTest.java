@@ -1980,6 +1980,219 @@ class JqMapperProcessorTest {
         assertTrue(mapper.toJqValue(p).toJsonString().contains("\"apiKey\":\"k\""));
     }
 
+    @Test
+    void generatedMapping_nonDefaultBoxed() throws Exception {
+        // Boxed ""/0/false must be excluded like the reflection path
+        // (FieldMapping.shouldInclude), not just nulls.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.math.BigDecimal;
+
+                @JqMapped
+                @JqInclude(JqInclude.Include.NON_DEFAULT)
+                public record BoxedDefaults(String name, Integer count, Boolean flag,
+                        Double ratio, Character grade, BigDecimal amount) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.BoxedDefaults", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(String.class, Integer.class, Boolean.class,
+                Double.class, Character.class, java.math.BigDecimal.class);
+        Object defaults = ctor.newInstance("", 0, false, 0.0, '\0', java.math.BigDecimal.ZERO);
+        assertEquals("{}", mapper.toJqValue(defaults).toJsonString());
+
+        Object present = ctor.newInstance("t", 3, true, 2.5, 'A', java.math.BigDecimal.TEN);
+        String out = mapper.toJqValue(present).toJsonString();
+        for (String key : new String[]{"name", "count", "flag", "ratio", "grade", "amount"}) {
+            assertTrue(out.contains("\"" + key + "\""), out);
+        }
+        assertEquals(out, mapper.toJson(present));
+    }
+
+    @Test
+    void generatedMapping_nonDefaultBoxedPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JqInclude(JqInclude.Include.NON_DEFAULT)
+                public class BoxedPojo {
+                    public String name;
+                    public Integer count;
+                    public Boolean flag;
+
+                    public BoxedPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.BoxedPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getField("name").set(p, "");
+        pojoClass.getField("count").set(p, 0);
+        pojoClass.getField("flag").set(p, false);
+        assertEquals("{}", mapper.toJqValue(p).toJsonString());
+
+        pojoClass.getField("count").set(p, 7);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"count\":7"), out);
+        assertFalse(out.contains("\"name\""), out);
+        assertFalse(out.contains("\"flag\""), out);
+        assertEquals(out, mapper.toJson(p));
+        assertEquals(out, new String(mapper.toJsonBytes(p),
+                java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void generatedMapping_interfaceDefaultAnyMethods() throws Exception {
+        // Interface default any-methods resolve like inherited ones
+        // (first mark per role wins).
+        String ifaceSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
+                import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.Map;
+
+                public interface ExtrasIface {
+                    @JqAnySetter
+                    default void setExtra(String key, JqValue value) { extrasMap().put(key, value); }
+
+                    @JqAnyGetter
+                    default Map<String, JqValue> getExtras() { return extrasMap(); }
+
+                    Map<String, JqValue> extrasMap();
+                }
+                """;
+        String implSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                @JqMapped
+                public class IfaceImpl implements ExtrasIface {
+                    public String name;
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    public IfaceImpl() {}
+
+                    @Override
+                    public Map<String, JqValue> extrasMap() { return extras; }
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.ExtrasIface", "test.IfaceImpl"},
+                new String[]{ifaceSource, implSource});
+        Class<?> pojoClass = Class.forName("test.IfaceImpl", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    @Test
+    void generatedMapping_interfaceDefaultBridgeAnyMethods() throws Exception {
+        String ifaceSource = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAnyGetter;
+                import com.fasterxml.jackson.annotation.JsonAnySetter;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.Map;
+
+                public interface JacksonExtrasIface {
+                    @JsonAnySetter
+                    default void setExtra(String key, JqValue value) { extrasMap().put(key, value); }
+
+                    @JsonAnyGetter
+                    default Map<String, JqValue> getExtras() { return extrasMap(); }
+
+                    Map<String, JqValue> extrasMap();
+                }
+                """;
+        String implSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                @JqMapped
+                public class JacksonIfaceImpl implements JacksonExtrasIface {
+                    public String name;
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    public JacksonIfaceImpl() {}
+
+                    @Override
+                    public Map<String, JqValue> extrasMap() { return extras; }
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.JacksonExtrasIface", "test.JacksonIfaceImpl"},
+                new String[]{ifaceSource, implSource});
+        Class<?> pojoClass = Class.forName("test.JacksonIfaceImpl", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
+    @Test
+    void generatedMapping_sortedAndEnumSets() throws Exception {
+        // Sorted/enum sets flow through the TypeToken path with no codegen change.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.EnumSet;
+                import java.util.SortedSet;
+
+                @JqMapped
+                public record SortedRec(SortedSet<String> tags, EnumSet<Level> levels) {
+                    public enum Level { LOW, HIGH }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.SortedRec", source);
+        Class<?> levelClass = Class.forName("test.SortedRec$Level", true,
+                recordClass.getClassLoader());
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"tags\":[\"b\",\"a\",\"b\"],\"levels\":[\"HIGH\",\"LOW\"]}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals(java.util.List.of("a", "b"),
+                new java.util.ArrayList<>((java.util.Set<?>) recordClass.getMethod("tags").invoke(r)));
+
+        Object back = mapper.fromJqValue(mapper.toJqValue(r), recordClass);
+        assertEquals(r, back);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

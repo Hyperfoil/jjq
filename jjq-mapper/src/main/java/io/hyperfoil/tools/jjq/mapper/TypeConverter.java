@@ -46,7 +46,7 @@ public final class TypeConverter {
         OPTIONAL,
         /** Target is {@link java.util.List}. */
         LIST,
-        /** Target is {@link java.util.Set}. */
+        /** Target is {@link java.util.Set} (incl. sorted and enum sets). */
         SET,
         /** Target is {@link java.util.Map}. */
         MAP,
@@ -86,7 +86,8 @@ public final class TypeConverter {
         if (targetType == BigDecimal.class) return Kind.BIG_DECIMAL;
         if (targetType == List.class || targetType == ArrayList.class) return Kind.LIST;
         if (targetType == Set.class || targetType == HashSet.class
-                || targetType == LinkedHashSet.class) return Kind.SET;
+                || targetType == LinkedHashSet.class || targetType == SortedSet.class
+                || targetType == TreeSet.class || targetType == EnumSet.class) return Kind.SET;
         if (targetType == Map.class || targetType == LinkedHashMap.class || targetType == HashMap.class) return Kind.MAP;
         if (targetType.isEnum()) return Kind.ENUM;
         if (targetType.isRecord()) return Kind.RECORD;
@@ -178,14 +179,14 @@ public final class TypeConverter {
                 yield list;
             }
             case SET -> {
-                if (value == null || value instanceof JqNull) yield Set.of();
+                Type elementType = extractTypeArgument(genericType, 0);
+                Class<?> elementClass = rawClass(elementType);
+                if (value == null || value instanceof JqNull) yield emptySetFor(targetType, elementClass);
                 if (!(value instanceof JqArray arr)) {
                     throw mismatch(JqValue.Type.ARRAY, "array for " + setTarget(targetType, genericType), value);
                 }
-                Type elementType = extractTypeArgument(genericType, 0);
-                Class<?> elementClass = rawClass(elementType);
                 Kind innerKind = resolveKind(elementClass, elementType);
-                var set = new LinkedHashSet<>(arr.size() * 4 / 3 + 1);
+                java.util.Set<Object> set = newSetFor(targetType, elementClass, arr.size());
                 for (int i = 0; i < arr.size(); i++) {
                     try {
                         set.add(convert(arr.get(i), innerKind, elementClass, elementType, mapper));
@@ -328,6 +329,32 @@ public final class TypeConverter {
     private static String setTarget(Class<?> targetType, Type genericType) {
         Type elementType = extractTypeArgument(genericType, 0);
         return "Set<" + rawClass(elementType).getSimpleName() + ">";
+    }
+
+    /** Empty set matching the declared implementation (null inputs). */
+    private static Object emptySetFor(Class<?> targetType, Class<?> elementClass) {
+        if (targetType == EnumSet.class) return newSetFor(targetType, elementClass, 0);
+        if (targetType == TreeSet.class || targetType == SortedSet.class) return new TreeSet<>();
+        return Set.of();
+    }
+
+    /**
+     * Mutable set matching the declared implementation: {@code HashSet} stays
+     * one, sorted sets order naturally, {@code EnumSet} uses its compact
+     * representation (and rejects non-enum element types fail-fast).
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static java.util.Set<Object> newSetFor(Class<?> targetType, Class<?> elementClass, int size) {
+        if (targetType == EnumSet.class) {
+            if (!elementClass.isEnum()) {
+                throw new JqMapperException("EnumSet requires an enum element type, not "
+                        + elementClass.getName());
+            }
+            return (java.util.Set<Object>) (java.util.Set<?>) EnumSet.noneOf((Class) elementClass);
+        }
+        if (targetType == TreeSet.class || targetType == SortedSet.class) return new TreeSet<>();
+        if (targetType == HashSet.class) return new HashSet<>(size * 4 / 3 + 1);
+        return new LinkedHashSet<>(size * 4 / 3 + 1);
     }
 
     /** Target description for Map mismatches, e.g. {@code Map<String, Integer>}. */

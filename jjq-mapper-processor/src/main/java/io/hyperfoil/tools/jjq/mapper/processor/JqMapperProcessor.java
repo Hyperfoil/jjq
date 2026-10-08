@@ -768,67 +768,94 @@ public class JqMapperProcessor extends AbstractProcessor {
      * @return the discovered methods, or {@link AnyInfo#NONE} when neither is present
      */
     private AnyInfo resolveAnyInfo(TypeElement type) {
-        String setterName = null;
-        boolean setterTakesJqValue = false;
-        String getterName = null;
-        // Walk the superclass chain, declared methods first: the runtime
-        // discovers any-methods via getMethods(), which includes inherited
-        // ones, so a base-declared any-setter must resolve too (issue #107.1).
-        // First mark per role wins.
+        var acc = new AnyAcc();
+        // Superclass chain first (most specific wins), then implemented
+        // interfaces breadth-first: the runtime discovers any-methods via
+        // getMethods(), which sees inherited and interface-default methods
+        // alike (issues #107.1, 0.2 scope item 3). First mark per role wins.
+        var seen = new java.util.HashSet<String>();
+        var queue = new java.util.ArrayDeque<TypeElement>();
         for (TypeElement t = type; t != null; t = superclassOf(t)) {
-            for (Element enclosed : t.getEnclosedElements()) {
-                if (enclosed.getKind() != ElementKind.METHOD) continue;
-                var method = (javax.lang.model.element.ExecutableElement) enclosed;
-                if (setterName == null
-                        && (enclosed.getAnnotation(JqAnySetter.class) != null
-                            || hasMirrorAnnotation(enclosed,
-                                "com.fasterxml.jackson.annotation.JsonAnySetter"))) {
-                var params = method.getParameters();
-                if (!method.getModifiers().contains(Modifier.STATIC)
-                        && params.size() == 2
-                        && params.get(0).asType().toString().equals("java.lang.String")
-                        && (params.get(1).asType().toString().equals("io.hyperfoil.tools.jjq.value.JqValue")
-                            || params.get(1).asType().toString().equals("java.lang.Object"))
-                        && method.getReturnType().toString().equals("void")) {
-                    setterName = method.getSimpleName().toString();
-                    setterTakesJqValue = params.get(1).asType().toString()
-                            .equals("io.hyperfoil.tools.jjq.value.JqValue");
-                } else {
-                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "Any-setter must be a non-static void (String, JqValue|Object) method",
-                            enclosed);
-                    return AnyInfo.NONE;
-                }
+            queue.addLast(t);
+        }
+        while (!queue.isEmpty()) {
+            TypeElement t = queue.removeFirst();
+            if (!seen.add(t.getQualifiedName().toString())) continue;
+            if (!scanAnyMethods(t, acc)) return AnyInfo.NONE;
+            if (acc.setterName != null && acc.getterName != null) break;
+            for (javax.lang.model.type.TypeMirror iface : t.getInterfaces()) {
+                if (iface.getKind() != javax.lang.model.type.TypeKind.DECLARED) continue;
+                Element element = ((javax.lang.model.type.DeclaredType) iface).asElement();
+                if (element instanceof TypeElement ite) queue.addLast(ite);
             }
-            if (getterName == null
-                    && (enclosed.getAnnotation(JqAnyGetter.class) != null
+        }
+        if (acc.setterName == null && acc.getterName == null) return AnyInfo.NONE;
+        return new AnyInfo(acc.setterName, acc.setterTakesJqValue, acc.getterName);
+    }
+
+    /** Mutable accumulator for any-method discovery across the hierarchy walk. */
+    private static final class AnyAcc {
+        String setterName;
+        boolean setterTakesJqValue;
+        String getterName;
+    }
+
+    /**
+     * Scan one type's declared methods for any-setter/any-getter marks.
+     *
+     * @return false when a marked method is malformed (error already reported)
+     */
+    private boolean scanAnyMethods(TypeElement t, AnyAcc acc) {
+        for (Element enclosed : t.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            var method = (javax.lang.model.element.ExecutableElement) enclosed;
+            if (acc.setterName == null
+                    && (enclosed.getAnnotation(JqAnySetter.class) != null
                         || hasMirrorAnnotation(enclosed,
-                            "com.fasterxml.jackson.annotation.JsonAnyGetter"))) {
-                String rt = method.getReturnType().toString();
-                if (!method.getModifiers().contains(Modifier.STATIC)
-                        && method.getParameters().isEmpty()
-                        && (rt.startsWith("java.util.Map")
-                            || rt.equals("io.hyperfoil.tools.jjq.value.JqObject"))) {
-                    getterName = method.getSimpleName().toString();
-                } else {
-                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "Any-getter must be a non-static no-arg method returning Map<String, ?> or JqObject",
-                            enclosed);
-                    return AnyInfo.NONE;
-                }
+                            "com.fasterxml.jackson.annotation.JsonAnySetter"))) {
+            var params = method.getParameters();
+            if (!method.getModifiers().contains(Modifier.STATIC)
+                    && params.size() == 2
+                    && params.get(0).asType().toString().equals("java.lang.String")
+                    && (params.get(1).asType().toString().equals("io.hyperfoil.tools.jjq.value.JqValue")
+                        || params.get(1).asType().toString().equals("java.lang.Object"))
+                    && method.getReturnType().toString().equals("void")) {
+                acc.setterName = method.getSimpleName().toString();
+                acc.setterTakesJqValue = params.get(1).asType().toString()
+                        .equals("io.hyperfoil.tools.jjq.value.JqValue");
+            } else {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "Any-setter must be a non-static void (String, JqValue|Object) method",
+                        enclosed);
+                return false;
+            }
+        }
+        if (acc.getterName == null
+                && (enclosed.getAnnotation(JqAnyGetter.class) != null
+                    || hasMirrorAnnotation(enclosed,
+                        "com.fasterxml.jackson.annotation.JsonAnyGetter"))) {
+            String rt = method.getReturnType().toString();
+            if (!method.getModifiers().contains(Modifier.STATIC)
+                    && method.getParameters().isEmpty()
+                    && (rt.startsWith("java.util.Map")
+                        || rt.equals("io.hyperfoil.tools.jjq.value.JqObject"))) {
+                acc.getterName = method.getSimpleName().toString();
+            } else {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "Any-getter must be a non-static no-arg method returning Map<String, ?> or JqObject",
+                        enclosed);
+                return false;
             }
         }
         }
-        if (setterName == null && getterName == null) return AnyInfo.NONE;
-        return new AnyInfo(setterName, setterTakesJqValue, getterName);
+        return true;
     }
 
     /**
      * The superclass as a {@code TypeElement}, or null at the top of the
      * chain ({@code java.lang.Object} has no methods of interest).
-     * Interfaces declare no superclass for this walk (boundary: an any-method
-     * default on an interface stays invisible, unlike the runtime's
-     * {@code getMethods()} view).
+     * Implemented interfaces are enqueued separately (breadth-first) by the
+     * caller; diamond defaults resolve first-found-wins.
      */
     private static TypeElement superclassOf(TypeElement type) {
         javax.lang.model.type.TypeMirror sup = type.getSuperclass();

@@ -830,11 +830,24 @@ final class MappingCodeGenerator {
                 return expr + " != null";
             }
             case "NON_DEFAULT" -> {
+                // Boxed mirrors of the primitive rules (null-safe first):
+                // shouldInclude excludes ""/0/false/0.0/'\0' for wrappers too.
                 return switch (typeName) {
                     case "int", "long", "short", "byte" -> expr + " != 0";
                     case "double", "float" -> expr + " != 0.0";
                     case "boolean" -> expr;
                     case "char" -> expr + " != '\\0'";
+                    case "java.lang.String" -> expr + " != null && !(" + expr + ").isEmpty()";
+                    case "java.lang.Integer" -> expr + " != null && (int) " + expr + " != 0";
+                    case "java.lang.Long" -> expr + " != null && (long) " + expr + " != 0";
+                    case "java.lang.Short" -> expr + " != null && (short) " + expr + " != 0";
+                    case "java.lang.Byte" -> expr + " != null && (byte) " + expr + " != 0";
+                    case "java.lang.Double", "java.lang.Float" ->
+                        expr + " != null && (double) " + expr + " != 0.0";
+                    case "java.lang.Boolean" -> expr + " != null && " + expr;
+                    case "java.lang.Character" -> expr + " != null && (char) " + expr + " != '\\0'";
+                    case "java.math.BigDecimal" ->
+                        expr + " != null && " + expr + ".doubleValue() != 0.0";
                     default -> expr + " != null";
                 };
             }
