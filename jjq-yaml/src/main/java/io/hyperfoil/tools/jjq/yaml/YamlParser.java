@@ -655,8 +655,13 @@ final class YamlParser {
                 eff = ind;
             }
             first = false;
+            boolean commentedFirst = hasTrailingComment(rawFirst);
+            JqValue deferredDoc = !commentedFirst
+                    ? tryDeferSeqItem(linePos, ind, stripped, ind, ind, false)
+                    : null;
+            if (deferredDoc != null) return attachAnchor(deferredDoc, anchorName);
             return attachAnchor(
-                    parseScalarDocument(stripped, ind, hasTrailingComment(rawFirst)), anchorName);
+                    parseScalarDocument(stripped, ind, commentedFirst), anchorName);
         }
         return attachAnchor(JqNull.NULL, anchorName);
     }
@@ -956,7 +961,13 @@ final class YamlParser {
                     throw new YamlParseException("tabs cannot separate nested sequence entries",
                             line - 1);
                 }
-                elems.add(parseSeqItemContent(rest, indent, dashCol, hasTrailingComment(rawRest), indent));
+                JqValue deferred = tryDeferSeqItem(lineStart, dashCol, rest, indent, indent, true);
+                if (deferred != null) {
+                    elems.add(deferred);
+                } else {
+                    elems.add(parseSeqItemContent(rest, indent, dashCol, hasTrailingComment(rawRest),
+                            indent));
+                }
             } else {
                 // Bare '-' (EOL right after): null, or nested block on following lines.
                 // Same-indent following entries are siblings, never nested.
@@ -1075,7 +1086,13 @@ final class YamlParser {
                     throw new YamlParseException("tabs cannot separate nested sequence entries",
                             line - 1);
                 }
-                elems.add(parseSeqItemContent(next, indent, col, hasTrailingComment(rawNext), dashCol));
+                JqValue deferredSeq = tryDeferSeqItem(lineStart, col, next, indent, dashCol, true);
+                if (deferredSeq != null) {
+                    elems.add(deferredSeq);
+                } else {
+                    elems.add(parseSeqItemContent(next, indent, col, hasTrailingComment(rawNext),
+                            dashCol));
+                }
             } else {
                 advanceLinePastEol();
                 elems.add(JqNull.NULL);
@@ -1393,7 +1410,7 @@ final class YamlParser {
             if (seen != null && !seen.add(key)) {
                 throw new JqYamlException(key, line - 1);
             }
-            JqValue deferred = tryDeferPlainString(vs, ve, indent);
+            JqValue deferred = tryDeferPlainString(vs, ve, indent, Integer.MAX_VALUE, true);
             builder.put(key, deferred != null ? deferred
                     : parseMapValue(new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8),
                             indent, commented));
@@ -1410,13 +1427,18 @@ final class YamlParser {
      *   <li>first byte must be an ASCII letter outside bool initials
      *       ({@code t,f,y,n,o} case-insensitive go the converting route),
      *       {@code _}, {@code $}, or non-ASCII (never a keyword/number);</li>
-     *   <li>a top-level {@code : } still rejects (ZCZ6 parity);</li>
+     *   <li>a top-level separator inside still rejects (ZCZ6 parity);</li>
      *   <li>single-quoted doubling and backslash escapes never reach here
      *       (only plain values qualify — the deferred path cannot unescape
-     *       YAML doubling).</li>
+     *       YAML doubling);</li>
+     *   <li>a value that continues on following lines cannot defer (folding
+     *       would join them): sequence continuations past
+     *       {@code foldSeqIndent} count (AB8U parity; map values pass
+     *       {@code MAX_VALUE} since they never fold those).</li>
      * </ul>
      */
-    private JqValue tryDeferPlainString(int vs, int ve, int indent) {
+    private JqValue tryDeferPlainString(int vs, int ve, int indent, int foldSeqIndent,
+            boolean plainStrict) {
         if (vs >= ve) return null;
         byte c0 = d[vs];
         if (c0 >= 0x80 || c0 == '_' || c0 == '$') {
@@ -1431,35 +1453,71 @@ final class YamlParser {
         } else {
             return null;
         }
-        // A top-level separator inside still rejects (never silently kept).
         boolean hasColon = false;
+        // JSON-special bytes disqualify: the zero-copy serializer writes
+        // deferred ranges verbatim, so `"`, `\` and controls must escape via
+        // the materializing path (suite 4V8U/RZT7 parity).
         for (int k = vs; k < ve; k++) {
-            if (d[k] == ':') {
+            int c = d[k] & 0xFF;
+            if (c == '"' || c == '\\' || c < 0x20 || c == 0x7f) return null;
+            if (c == ':') {
                 hasColon = true;
-                break;
             }
         }
         if (hasColon && findMappingColon(vs, ve) >= 0) return null;
-        // A value that continues on following lines cannot defer (folding
-        // would join them): only single-line values qualify.
-        if (valueContinues(indent)) return null;
+        if (valueContinues(indent, foldSeqIndent, plainStrict)) return null;
         return JqString.deferredBytes(d, vs, ve, false);
+    }
+
+    /**
+     * Byte-range deferral for a sequence item whose stripped rest starts at
+     * {@code lineStart + contentCol}. Returns the deferred value or null.
+     * The stripped text gates cheaply (first character); ranges recompute
+     * from the source so comments, trailing whitespace, and gap tails route
+     * to the materializing path with identical results.
+     */
+    private JqValue tryDeferSeqItem(int lineStart, int contentCol, String rest, int indent,
+            int foldSeqIndent, boolean plainStrict) {
+        if (rest.isEmpty()) return null;
+        char r0 = rest.charAt(0);
+        if (r0 == '"' || r0 == '\'' || r0 == '{' || r0 == '[' || r0 == '|' || r0 == '>'
+                || r0 == '&' || r0 == '*' || r0 == '!' || r0 == '?' || r0 == '-') {
+            return null;
+        }
+        int cs = lineStart + contentCol;
+        int le = lineEnd(lineStart);
+        int ce = commentStart(d, cs, le);
+        int ve = ce;
+        while (ve > cs && (d[ve - 1] == ' ' || d[ve - 1] == '\t')) ve--;
+        if (hasTrailingGap(d, cs, ve)) return null;
+        return tryDeferPlainString(cs, ve, indent, foldSeqIndent, plainStrict);
     }
 
     /**
      * True when a plain value at {@code indent} would fold following lines
      * (same rules as the materializing path, read-only): a deeper plain line,
-     * paragraph or direct. Sequence lines never continue map values.
+     * paragraph or direct. Sequence lines continue only past
+     * {@code foldSeqIndent} (AB8U parity); map values never fold them.
      */
-    private boolean valueContinues(int indent) {
+    private boolean valueContinues(int indent, int foldSeqIndent, boolean plainStrict) {
         int saved = pos;
         int savedLine = line;
         try {
             if (!skipBlankAndComments()) return false;
             int li = peekIndent();
-            if (li <= indent) return false;
+            if (plainStrict) {
+                if (li <= indent && li <= foldSeqIndent) return false;
+            } else if (li < indent) {
+                return false;
+            }
             int le = lineEnd(pos);
-            return classifyLine(pos, le) == LINE_PLAIN;
+            int kind = classifyLine(pos, le);
+            if (kind == LINE_PLAIN) return plainStrict ? li > indent : li >= indent;
+            if (kind == LINE_SEQ) {
+                int cs = contentStart(d, pos, le);
+                return cs - pos > foldSeqIndent;
+            }
+            return false;
         } finally {
             pos = saved;
             line = savedLine;
