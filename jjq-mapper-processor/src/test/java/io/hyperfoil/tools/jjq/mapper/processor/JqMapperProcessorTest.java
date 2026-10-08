@@ -1208,6 +1208,82 @@ class JqMapperProcessorTest {
         assertTrue(out.contains("\"secret\":\"s3cr3t\""), out);
     }
 
+    @Test
+    void generatedMapping_bridgeAnyGetterSuppressesBackingField() throws Exception {
+        // Issue #105: bridge method-form @JsonAnyGetter/@JsonAnySetter were
+        // invisible to the processor — the any-getter was hijacked as a bean
+        // getter (double emission) and the write fallback referenced an
+        // undeclared F_ constant (fatal). Mirrors the reflection path (#87/#88.1).
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAnyGetter;
+                import com.fasterxml.jackson.annotation.JsonAnySetter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                @JqMapped
+                public class BridgeExtras {
+                    public String name;
+                    private Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    public BridgeExtras() {}
+
+                    @JsonAnySetter
+                    public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+                    @JsonAnyGetter
+                    public Map<String, JqValue> getExtras() { return extras; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.BridgeExtras", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(p));
+
+        // Flattened entries present, backing field never emitted (no double emission)
+        String out = mapper.toJson(p);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+
+        Object roundTripped = mapper.fromJqValue(JqValues.parse(out), pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(roundTripped));
+    }
+
+    @Test
+    void generatedMapping_bridgeAnyGetterSuppressesRecordComponent() throws Exception {
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAnyGetter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.Map;
+
+                @JqMapped
+                public record BridgeRec(String name, Map<String, JqValue> extras) {
+                    @JsonAnyGetter
+                    public Map<String, JqValue> getExtras() { return extras; }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.BridgeRec", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"k\":1}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals("t", recordClass.getMethod("name").invoke(r));
+
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"name\":\"t\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

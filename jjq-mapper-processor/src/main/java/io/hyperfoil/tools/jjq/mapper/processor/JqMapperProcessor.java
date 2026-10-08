@@ -570,6 +570,10 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /**
      * Discover {@code @JqAnySetter}/{@code @JqAnyGetter} methods on a mapped type.
+     * Bridge method-form marks (Jackson {@code @JsonAnySetter}/{@code @JsonAnyGetter})
+     * count the same as native ones, mirroring the runtime bridges (issue #105):
+     * without this the any-getter is hijacked as a bean getter (double emission)
+     * while the write fallback references an undeclared field constant (fatal).
      * Reports compile errors for malformed signatures (mirrors the runtime validation).
      *
      * @return the discovered methods, or {@link AnyInfo#NONE} when neither is present
@@ -581,7 +585,9 @@ public class JqMapperProcessor extends AbstractProcessor {
         for (Element enclosed : type.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.METHOD) continue;
             var method = (javax.lang.model.element.ExecutableElement) enclosed;
-            if (enclosed.getAnnotation(JqAnySetter.class) != null) {
+            if (enclosed.getAnnotation(JqAnySetter.class) != null
+                    || hasMirrorAnnotation(enclosed,
+                        "com.fasterxml.jackson.annotation.JsonAnySetter")) {
                 var params = method.getParameters();
                 if (!method.getModifiers().contains(Modifier.STATIC)
                         && params.size() == 2
@@ -599,7 +605,9 @@ public class JqMapperProcessor extends AbstractProcessor {
                     return AnyInfo.NONE;
                 }
             }
-            if (enclosed.getAnnotation(JqAnyGetter.class) != null) {
+            if (enclosed.getAnnotation(JqAnyGetter.class) != null
+                    || hasMirrorAnnotation(enclosed,
+                        "com.fasterxml.jackson.annotation.JsonAnyGetter")) {
                 String rt = method.getReturnType().toString();
                 if (!method.getModifiers().contains(Modifier.STATIC)
                         && method.getParameters().isEmpty()
@@ -616,6 +624,14 @@ public class JqMapperProcessor extends AbstractProcessor {
         }
         if (setterName == null && getterName == null) return AnyInfo.NONE;
         return new AnyInfo(setterName, setterTakesJqValue, getterName);
+    }
+
+    /** Presence of a framework annotation by mirror (no framework dependency). */
+    private static boolean hasMirrorAnnotation(Element element, String annotationName) {
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationName)) return true;
+        }
+        return false;
     }
 
     /**
