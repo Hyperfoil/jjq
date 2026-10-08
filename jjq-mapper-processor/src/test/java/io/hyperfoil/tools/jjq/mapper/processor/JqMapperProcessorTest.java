@@ -1131,6 +1131,83 @@ class JqMapperProcessorTest {
         assertFalse(out.contains("repoPaths"), out);
     }
 
+    @Test
+    void generatedMapping_getterSuppressedStillSerializes() throws Exception {
+        // Issue #104: with getters suppressed the generated serializers emitted
+        // empty containers, while deser (via setters) worked. Mirrors the
+        // reflection fallback ladder: suppressed/absent getter -> field read.
+        String source = """
+                package test;
+
+                import com.fasterxml.jackson.annotation.JsonAutoDetect;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+                        getterVisibility = JsonAutoDetect.Visibility.NONE,
+                        isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+                public class SuppressedPojo {
+                    private String endpoint;
+                    private int retries;
+                    private boolean enabled;
+
+                    public SuppressedPojo() {}
+
+                    public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
+                    public void setRetries(int retries) { this.retries = retries; }
+                    public void setEnabled(boolean enabled) { this.enabled = enabled; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.SuppressedPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        var endpointField = pojoClass.getDeclaredField("endpoint");
+        endpointField.setAccessible(true);
+        JqValue json = JqValues.parse("{\"endpoint\":\"https://x\",\"retries\":3,\"enabled\":true}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("https://x", endpointField.get(p));
+
+        // Serialization must emit every field, not an empty container
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"endpoint\":\"https://x\""), out);
+        assertTrue(out.contains("\"retries\":3"), out);
+        assertTrue(out.contains("\"enabled\":true"), out);
+
+        Object roundTripped = mapper.fromJqValue(JqValues.parse(out), pojoClass);
+        assertEquals("https://x", endpointField.get(roundTripped));
+    }
+
+    @Test
+    void generatedMapping_privateFieldWithoutSetterBindsBothWays() throws Exception {
+        // No getter and no setter: the runtime reads/writes via setAccessible;
+        // generated code must use the same field fallback on both directions.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class NoAccessors {
+                    private String secret = "default";
+
+                    public NoAccessors() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.NoAccessors", source);
+        JqMapper mapper = JqMapper.create();
+
+        var secretField = pojoClass.getDeclaredField("secret");
+        secretField.setAccessible(true);
+        JqValue json = JqValues.parse("{\"secret\":\"s3cr3t\"}");
+        Object p = mapper.fromJqValue(json, pojoClass);
+        assertEquals("s3cr3t", secretField.get(p));
+
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"secret\":\"s3cr3t\""), out);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

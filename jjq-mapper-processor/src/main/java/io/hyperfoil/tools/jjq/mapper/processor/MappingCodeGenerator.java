@@ -904,6 +904,29 @@ final class MappingCodeGenerator {
                   .append(" = new ").append(prop.converterClass()).append("();\n");
             }
         }
+        // Cached field handles for the private-field fallback (issue #104):
+        // same setAccessible semantics as the reflection path, resolved once.
+        var fallbackProps = properties.stream().filter(MappingCodeGenerator::needsFieldHandle).toList();
+        for (var prop : fallbackProps) {
+            sb.append("    private static final java.lang.reflect.Field F_")
+              .append(prop.name().toUpperCase())
+              .append(";\n");
+        }
+        if (!fallbackProps.isEmpty()) {
+            sb.append("\n    static {\n");
+            sb.append("        try {\n");
+            for (var prop : fallbackProps) {
+                String handle = "F_" + prop.name().toUpperCase();
+                sb.append("            ").append(handle).append(" = ")
+                  .append(classSimpleName).append(".class.getDeclaredField(\"")
+                  .append(prop.name()).append("\");\n");
+                sb.append("            ").append(handle).append(".setAccessible(true);\n");
+            }
+            sb.append("        } catch (NoSuchFieldException _e) {\n");
+            sb.append("            throw new ExceptionInInitializerError(_e);\n");
+            sb.append("        }\n");
+            sb.append("    }\n");
+        }
         if (anyInfo.hasSetter()) {
             generateAnyKnownSet(sb, knownJsonNamesPojo(properties));
         }
@@ -926,8 +949,17 @@ final class MappingCodeGenerator {
             } else if (prop.setterName() != null) {
                 // Setter method
                 statement = "instance." + prop.setterName() + "(" + writeExpr + ");";
+            } else if (!prop.privateField()) {
+                // Same-package field (package-private/protected): direct write
+                // is legal (mirrors the read fallback in resolvePojoReadExpr)
+                statement = "instance." + prop.name() + " = " + writeExpr + ";";
+            } else if (!prop.finalField()) {
+                // Private non-final field: cached reflection handle, same
+                // setAccessible semantics as the reflection path (issue #104)
+                statement = "writeField(F_" + prop.name().toUpperCase() + ", instance, "
+                        + writeExpr + ");";
             } else {
-                // No setter and not public — skip (read-only at runtime via setAccessible)
+                // Private final field — read-only (the runtime path skips it too)
                 continue;
             }
             if (prop.hasJqField()) {
@@ -1329,14 +1361,55 @@ final class MappingCodeGenerator {
         };
     }
 
-    /** Resolve read expression for a POJO field. Returns null if not accessible. */
+    /**
+     * Resolve read expression for a POJO field. Mirrors the reflection
+     * fallback ladder (issue #104): public field or same-package field
+     * (generated code shares the package) read directly; usable getter by
+     * call; private field with no usable getter via a cached reflection
+     * handle. Returns null only for ignored/inaccessible properties, which
+     * callers skip.
+     */
     private static String resolvePojoReadExpr(JqMapperProcessor.PropertyInfo prop) {
-        if (prop.isPublicField() && prop.getterName() == null) {
-            return "instance." + prop.name();
-        } else if (prop.getterName() != null) {
+        if (prop.getterName() != null) {
             return "instance." + prop.getterName() + "()";
         }
-        return null; // not accessible in generated code
+        if (!prop.privateField()) {
+            // Public, package-private, or protected field in the same package:
+            // direct access is legal.
+            return "instance." + prop.name();
+        }
+        return readFallbackExpr(prop);
+    }
+
+    /**
+     * Read expression through a cached reflection handle for a private field
+     * with no usable getter. Primitive-typed reads avoid boxing.
+     */
+    private static String readFallbackExpr(JqMapperProcessor.PropertyInfo prop) {
+        String handle = "F_" + prop.name().toUpperCase();
+        return switch (prop.typeName()) {
+            case "boolean" -> "readBooleanField(" + handle + ", instance)";
+            case "byte" -> "readByteField(" + handle + ", instance)";
+            case "short" -> "readShortField(" + handle + ", instance)";
+            case "int" -> "readIntField(" + handle + ", instance)";
+            case "long" -> "readLongField(" + handle + ", instance)";
+            case "float" -> "readFloatField(" + handle + ", instance)";
+            case "double" -> "readDoubleField(" + handle + ", instance)";
+            case "char" -> "readCharField(" + handle + ", instance)";
+            default -> "(" + prop.typeName() + ") readField(" + handle + ", instance)";
+        };
+    }
+
+    /**
+     * True when a property needs a cached reflection handle: a private field
+     * with no usable getter that is actually read or written by generated code
+     * (active direction only — mirrors the skip logic at the emission sites).
+     */
+    private static boolean needsFieldHandle(JqMapperProcessor.PropertyInfo prop) {
+        if (prop.ignored() || !prop.privateField() || prop.getterName() != null) return false;
+        if (!prop.skipSerialize()) return true;
+        return !prop.skipDeserialize() && !prop.finalField()
+                && !prop.isPublicField() && prop.setterName() == null;
     }
 
     /** Generate an inclusion-conditional put for a POJO property. */

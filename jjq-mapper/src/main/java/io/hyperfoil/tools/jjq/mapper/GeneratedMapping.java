@@ -19,7 +19,8 @@ import io.hyperfoil.tools.jjq.value.JqValue;
  *   <li>Direct-to-JSON serialization ({@code appendJson}) bypassing the JqValue tree</li>
  *   <li>Direct-to-bytes serialization ({@code appendJsonBytes}) bypassing the JqValue tree</li>
  *   <li>Static {@code JqProgram} fields for {@code @JqField} expressions</li>
- *   <li>No reflection at runtime — GraalVM native-image friendly</li>
+ *   <li>No reflection at runtime — GraalVM native-image friendly (except the
+ *       private-field fallback below, which mirrors the reflection path)</li>
  * </ul>
  *
  * <p>Example generated class:</p>
@@ -134,5 +135,115 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
         if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
         if (value instanceof io.hyperfoil.tools.jjq.value.JqArray arr) return arr;
         throw TypeConverter.mismatch(JqValue.Type.ARRAY, "array for " + target, value);
+    }
+
+    /**
+     * Read a field through a {@code setAccessible(true)} handle — the
+     * generated-code counterpart of the reflection path's field fallback
+     * (issue #104). Emitted only for private fields with no usable getter;
+     * every other shape keeps direct access and stays reflection-free.
+     *
+     * @param field    the accessible field handle (cached in a static field)
+     * @param instance the object to read from
+     * @return the field value (boxed for primitive fields)
+     * @throws JqMapperException if the read fails
+     */
+    protected static Object readField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.get(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static boolean readBooleanField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getBoolean(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static byte readByteField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getByte(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static short readShortField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getShort(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static int readIntField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getInt(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static long readLongField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getLong(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static float readFloatField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getFloat(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static double readDoubleField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getDouble(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /** Primitive-typed field reads (avoid the boxing of {@link #readField}). */
+    protected static char readCharField(java.lang.reflect.Field field, Object instance) {
+        try {
+            return field.getChar(instance);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot read field " + field.getName(), e);
+        }
+    }
+
+    /**
+     * Write a field through a {@code setAccessible(true)} handle — the
+     * generated-code counterpart of the reflection path's field fallback
+     * (issue #104). Emitted only for private non-final fields with no setter.
+     * Boxed values auto-unbox for primitive fields.
+     *
+     * @param field    the accessible field handle (cached in a static field)
+     * @param instance the object to write to
+     * @param value    the value to write (boxed for primitive fields)
+     * @throws JqMapperException if the write fails
+     */
+    protected static void writeField(java.lang.reflect.Field field, Object instance, Object value) {
+        try {
+            field.set(instance, value);
+        } catch (IllegalAccessException e) {
+            throw new JqMapperException("Cannot write field " + field.getName(), e);
+        }
     }
 }

@@ -234,6 +234,7 @@ public class JqMapperProcessor extends AbstractProcessor {
             // Determine access strategy
             boolean isPublic = field.getModifiers().contains(Modifier.PUBLIC);
             boolean isFinal = field.getModifiers().contains(Modifier.FINAL);
+            boolean isPrivate = field.getModifiers().contains(Modifier.PRIVATE);
             String capitalized = Character.toUpperCase(name.charAt(0)) + name.substring(1);
 
             // Getter: public field, getX(), isX() for boolean.
@@ -281,7 +282,7 @@ public class JqMapperProcessor extends AbstractProcessor {
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
-                    skipSer, skipDeser));
+                    skipSer, skipDeser, isPrivate, isFinal));
         }
 
         // Generate the mapping class
@@ -537,7 +538,8 @@ public class JqMapperProcessor extends AbstractProcessor {
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
                         String converterClass, boolean nestedRecord,
-                        boolean skipSerialize, boolean skipDeserialize) {}
+                        boolean skipSerialize, boolean skipDeserialize,
+                        boolean privateField, boolean finalField) {}
 
     /**
      * Any-setter/any-getter methods discovered on a mapped type (issue #87).
