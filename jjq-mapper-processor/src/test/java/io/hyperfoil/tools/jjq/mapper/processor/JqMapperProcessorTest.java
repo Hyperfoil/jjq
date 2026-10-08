@@ -1013,6 +1013,34 @@ class JqMapperProcessorTest {
         assertEquals("hammer", toolClass.getMethod("name").invoke(hammer));
     }
 
+    @Test
+    void generatedMapping_setFieldRoundTrip() throws Exception {
+        // Issue #102: Set fields previously fell to the untyped DEFAULT
+        // fallback (and the old codegen couldn't even name the type).
+        // Generated mappings get runtime Set support for free via TypeToken.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.Set;
+
+                @JqMapped
+                public record WithTags(String name, Set<String> tags) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.WithTags", source);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"tags\":[\"b\",\"a\",\"b\"]}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals(java.util.Set.of("b", "a"), recordClass.getMethod("tags").invoke(r));
+
+        JqValue back = mapper.toJqValue(r);
+        assertInstanceOf(io.hyperfoil.tools.jjq.value.JqArray.class, back.getField("tags"));
+        assertEquals(2, ((io.hyperfoil.tools.jjq.value.JqArray) back.getField("tags")).size());
+        assertEquals(r, mapper.fromJqValue(back, recordClass));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

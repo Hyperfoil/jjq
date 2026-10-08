@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -201,6 +202,65 @@ class JqMapperTest {
         ));
         JqValue json = mapper.toJqValue(original);
         Order restored = mapper.fromJqValue(json, Order.class);
+        assertEquals(original, restored);
+    }
+
+    // ---- Sets (issue #102) ----
+
+    record WithSet(String name, Set<String> tags) {}
+
+    @Test
+    void fromJqValue_set() {
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"tags\":[\"b\",\"a\",\"b\"]}");
+        WithSet r = mapper.fromJqValue(json, WithSet.class);
+        assertEquals("Alice", r.name());
+        assertEquals(Set.of("b", "a"), r.tags());
+    }
+
+    @Test
+    void fromJqValue_setOfRecords() {
+        record TagBag(String id, Set<Address> places) {}
+        JqValue json = JqValues.parse("""
+                {"id":"t1","places":[
+                    {"city":"NYC","zip":"10001"},
+                    {"city":"SF","zip":"94105"}
+                ]}""");
+        TagBag bag = mapper.fromJqValue(json, TagBag.class);
+        assertEquals("t1", bag.id());
+        assertEquals(2, bag.places().size());
+        assertTrue(bag.places().contains(new Address("NYC", "10001")));
+    }
+
+    @Test
+    void fromJqValue_setNullBindsEmpty() {
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"tags\":null}");
+        WithSet r = mapper.fromJqValue(json, WithSet.class);
+        assertEquals(Set.of(), r.tags());
+    }
+
+    @Test
+    void fromJqValue_setMismatchHasPath() {
+        JqValue json = JqValues.parse("{\"name\":\"Alice\",\"tags\":\"oops\"}");
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(json, WithSet.class));
+        assertTrue(e.getMessage().contains("tags"), e.getMessage());
+        assertTrue(e instanceof io.hyperfoil.tools.jjq.mapper.ShapeMismatchException);
+    }
+
+    @Test
+    void toJqValue_set() {
+        WithSet r = new WithSet("Bob", new java.util.LinkedHashSet<>(List.of("x", "y")));
+        JqValue json = mapper.toJqValue(r);
+        assertInstanceOf(JqArray.class, json.getField("tags"));
+        assertEquals(2, ((JqArray) json.getField("tags")).size());
+    }
+
+    @Test
+    void roundTrip_set() {
+        WithSet original = new WithSet("Alice", new java.util.LinkedHashSet<>(List.of("b", "a")));
+        JqValue json = mapper.toJqValue(original);
+        WithSet restored = mapper.fromJqValue(json, WithSet.class);
         assertEquals(original, restored);
     }
 

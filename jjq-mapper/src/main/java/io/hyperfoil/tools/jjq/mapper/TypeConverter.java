@@ -46,6 +46,8 @@ public final class TypeConverter {
         OPTIONAL,
         /** Target is {@link java.util.List}. */
         LIST,
+        /** Target is {@link java.util.Set}. */
+        SET,
         /** Target is {@link java.util.Map}. */
         MAP,
         /** Target is an {@code enum} type. */
@@ -83,6 +85,8 @@ public final class TypeConverter {
         if (targetType == char.class || targetType == Character.class) return Kind.CHAR;
         if (targetType == BigDecimal.class) return Kind.BIG_DECIMAL;
         if (targetType == List.class || targetType == ArrayList.class) return Kind.LIST;
+        if (targetType == Set.class || targetType == HashSet.class
+                || targetType == LinkedHashSet.class) return Kind.SET;
         if (targetType == Map.class || targetType == LinkedHashMap.class || targetType == HashMap.class) return Kind.MAP;
         if (targetType.isEnum()) return Kind.ENUM;
         if (targetType.isRecord()) return Kind.RECORD;
@@ -172,6 +176,24 @@ public final class TypeConverter {
                     }
                 }
                 yield list;
+            }
+            case SET -> {
+                if (value == null || value instanceof JqNull) yield Set.of();
+                if (!(value instanceof JqArray arr)) {
+                    throw mismatch(JqValue.Type.ARRAY, "array for " + setTarget(targetType, genericType), value);
+                }
+                Type elementType = extractTypeArgument(genericType, 0);
+                Class<?> elementClass = rawClass(elementType);
+                Kind innerKind = resolveKind(elementClass, elementType);
+                var set = new LinkedHashSet<>(arr.size() * 4 / 3 + 1);
+                for (int i = 0; i < arr.size(); i++) {
+                    try {
+                        set.add(convert(arr.get(i), innerKind, elementClass, elementType, mapper));
+                    } catch (JqMapperException e) {
+                        throw e.prependPath(i);
+                    }
+                }
+                yield set;
             }
             case MAP -> {
                 if (value == null || value instanceof JqNull) yield Map.of();
@@ -302,6 +324,12 @@ public final class TypeConverter {
         return "List<" + rawClass(elementType).getSimpleName() + ">";
     }
 
+    /** Target description for Set mismatches, e.g. {@code Set<String>}. */
+    private static String setTarget(Class<?> targetType, Type genericType) {
+        Type elementType = extractTypeArgument(genericType, 0);
+        return "Set<" + rawClass(elementType).getSimpleName() + ">";
+    }
+
     /** Target description for Map mismatches, e.g. {@code Map<String, Integer>}. */
     private static String mapTarget(Class<?> targetType, Type genericType) {
         Type valueType = extractTypeArgument(genericType, 1);
@@ -331,6 +359,14 @@ public final class TypeConverter {
             JqValue[] elements = new JqValue[list.size()];
             for (int i = 0; i < list.size(); i++) {
                 elements[i] = toJqValue(list.get(i), mapper);
+            }
+            return JqArray.ofTrusted(elements);
+        }
+        if (value instanceof Set<?> set) {
+            JqValue[] elements = new JqValue[set.size()];
+            int i = 0;
+            for (Object element : set) {
+                elements[i++] = toJqValue(element, mapper);
             }
             return JqArray.ofTrusted(elements);
         }
