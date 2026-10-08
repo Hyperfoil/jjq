@@ -1850,6 +1850,146 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("EnumSet"), e.getMessage());
     }
 
+    // ---- @JqAdapter ----
+
+    record JqFromBox(String v) {
+        static JqFromBox fromWire(JqValue jv) {
+            if (jv.isNull()) throw new AssertionError("from must not be called on null");
+            return new JqFromBox(jv.asText("?"));
+        }
+
+        JqValue toWire() {
+            return JqString.of(v);
+        }
+    }
+
+    record StrFromBox(String v) {
+        static StrFromBox fromWire(String wire) {
+            if (wire == null) throw new AssertionError("from must not be called on null");
+            return new StrFromBox(wire.toUpperCase());
+        }
+
+        static String toWire(StrFromBox box) {
+            return box.v().toLowerCase();
+        }
+    }
+
+    record StaticJqBox(String v) {
+        static StaticJqBox fromWire(JqValue jv) {
+            return new StaticJqBox(jv.asText("?"));
+        }
+
+        static JqValue toWire(StaticJqBox box) {
+            if (box == null) throw new AssertionError("to must not be called on null");
+            return JqString.of(box.v());
+        }
+    }
+
+    record InstStrBox(String v) {
+        static InstStrBox fromWire(JqValue jv) {
+            return new InstStrBox(jv.asText("?"));
+        }
+
+        String wireValue() {
+            return v;
+        }
+    }
+
+    record Adapted(
+            @JqAdapter(from = "fromWire", to = "toWire") JqFromBox a,
+            @JqAdapter(from = "fromWire", to = "toWire") StrFromBox b,
+            @JqAdapter(from = "fromWire", to = "toWire") StaticJqBox c,
+            @JqAdapter(from = "fromWire", to = "wireValue") InstStrBox d) {}
+
+    @Test
+    void adapter_allShapesRoundTrip() {
+        Adapted original = new Adapted(new JqFromBox("a"), new StrFromBox("B"),
+                new StaticJqBox("c"), new InstStrBox("D"));
+        JqValue json = mapper.toJqValue(original);
+        assertEquals("a", json.getField("a").stringValue());
+        assertEquals("b", json.getField("b").stringValue());
+        assertEquals("c", json.getField("c").stringValue());
+        assertEquals("D", json.getField("d").stringValue());
+
+        Adapted restored = mapper.fromJqValue(json, Adapted.class);
+        assertEquals(original, restored);
+    }
+
+    record NullableBox(@JqAdapter(from = "fromWire", to = "toWire") JqFromBox box) {}
+
+    @Test
+    void adapter_nullInputSkipsFrom() {
+        NullableBox r = mapper.fromJqValue(JqValues.parse("{\"box\":null}"), NullableBox.class);
+        assertNull(r.box());
+    }
+
+    record NullableStaticBox(@JqAdapter(from = "fromWire", to = "toWire") StaticJqBox box) {}
+
+    @Test
+    void adapter_nullFieldSkipsTo() {
+        JqValue json = mapper.toJqValue(new NullableStaticBox(null));
+        assertTrue(json.getField("box").isNull());
+    }
+
+    static class MissingType {
+        MissingType(String v) {}
+    }
+
+    record MissingFrom(@JqAdapter(from = "nope", to = "nope") MissingType f) {}
+
+    @Test
+    void adapter_missingMethodFails() {
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{}"), MissingFrom.class));
+        assertTrue(e.getMessage().contains("nope"), e.getMessage());
+    }
+
+    static class BadArityType {
+        static BadArityType fromWire(String a, String b) { return new BadArityType(); }
+        static String toWire(BadArityType t) { return "x"; }
+    }
+
+    record BadArity(@JqAdapter(from = "fromWire", to = "toWire") BadArityType f) {}
+
+    @Test
+    void adapter_missignedFromFails() {
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{}"), BadArity.class));
+        assertTrue(e.getMessage().contains("fromWire"), e.getMessage());
+    }
+
+    static class NonStaticFrom {
+        NonStaticFrom fromWire(JqValue v) { return new NonStaticFrom(); }
+        static String toWire(NonStaticFrom t) { return "x"; }
+    }
+
+    record NonStatic(@JqAdapter(from = "fromWire", to = "toWire") NonStaticFrom f) {}
+
+    @Test
+    void adapter_nonStaticFromFails() {
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{}"), NonStatic.class));
+        assertTrue(e.getMessage().contains("fromWire"), e.getMessage());
+    }
+
+    static class PassConverter implements ValueConverter<String> {
+        @Override
+        public String fromJqValue(JqValue value) { return value.stringValue(); }
+
+        @Override
+        public JqValue toJqValue(String value) { return JqString.of(value); }
+    }
+
+    record AdapterConflict(
+            @JqAdapter(from = "fromWire", to = "toWire") @JqConverter(PassConverter.class) String f) {}
+
+    @Test
+    void adapter_conflictsWithConverter() {
+        JqMapperException e = assertThrows(JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{}"), AdapterConflict.class));
+        assertTrue(e.getMessage().contains("conflict"), e.getMessage());
+    }
+
     // ---- Bridge on POJO ----
 
     static class BridgePojo {

@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.mapper.JqAccess;
+import io.hyperfoil.tools.jjq.mapper.JqAdapter;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
 import io.hyperfoil.tools.jjq.mapper.JqField;
@@ -164,9 +165,11 @@ public class JqMapperProcessor extends AbstractProcessor {
                 // Native @JqAccess wins over the bridged access (issue #113)
                 String rcAccess = nativeAccess(rc);
                 if (rcAccess == null) rcAccess = resolveJacksonAccess(rc, recordType);
+                AdapterInfo adapter = resolveAdapterInfo(rc, rc.asType(), mappingPackage);
+                if (adapter == null && rc.getAnnotation(JqAdapter.class) != null) return null;
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
-                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess)));
+                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter));
             }
         }
 
@@ -341,10 +344,12 @@ public class JqMapperProcessor extends AbstractProcessor {
                     || hasJacksonJsonIgnore(methodElements.get(getterName));
             boolean skipDeser = "READ_ONLY".equals(fieldAccess)
                     || hasJacksonJsonIgnore(methodElements.get(setterName));
+            AdapterInfo adapter = resolveAdapterInfo(field, field.asType(), mappingPackage);
+            if (adapter == null && field.getAnnotation(JqAdapter.class) != null) return null;
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
-                    skipSer, skipDeser, isPrivate, isFinal));
+                    skipSer, skipDeser, isPrivate, isFinal, adapter));
         }
 
         // Generate the mapping class
@@ -569,6 +574,173 @@ public class JqMapperProcessor extends AbstractProcessor {
     }
 
     /**
+     * Resolve {@code @JqAdapter} policy methods on the field's declared type
+     * for direct static emission (issue #120). Returns null when absent;
+     * malformed adapters report a named error (the caller aborts when the
+     * annotation is present but no descriptor comes back). Mirrors the runtime
+     * lookup order: {@code (JqValue)} before {@code (String)} for
+     * {@code from}, instance before static for {@code to}.
+     *
+     * @param annotated      the annotated field/component (error location)
+     * @param fieldType      the declared field type (policy methods resolve against it)
+     * @param mappingPackage the package of the generated mapping class (access rules)
+     */
+    private AdapterInfo resolveAdapterInfo(Element annotated,
+            javax.lang.model.type.TypeMirror fieldType, String mappingPackage) {
+        JqAdapter adapter = annotated.getAnnotation(JqAdapter.class);
+        if (adapter == null) return null;
+        String where = "'" + annotated.getSimpleName() + "'";
+        if (hasMirrorAnnotation(annotated, "io.hyperfoil.tools.jjq.mapper.JqConverter")) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter and @JqConverter conflict on " + where
+                            + ": delegate statically or convert, not both",
+                    annotated);
+            return null;
+        }
+        if (adapter.from().isEmpty() || adapter.to().isEmpty()) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + " must name both from and to methods",
+                    annotated);
+            return null;
+        }
+        Element ownerElement = processingEnv.getTypeUtils().asElement(fieldType);
+        if (!(ownerElement instanceof TypeElement owner)
+                || (owner.getKind() != ElementKind.CLASS
+                    && owner.getKind() != ElementKind.RECORD
+                    && owner.getKind() != ElementKind.ENUM)) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + " needs a reference-typed field of a concrete"
+                            + " class, record, or enum (adapter methods resolve against "
+                            + fieldType + "); use @JqConverter for other shapes",
+                    annotated);
+            return null;
+        }
+        String ownerPackage = processingEnv.getElementUtils().getPackageOf(owner)
+                .getQualifiedName().toString();
+        boolean samePackage = ownerPackage.equals(mappingPackage);
+        javax.lang.model.element.ExecutableElement fromJq = null;
+        javax.lang.model.element.ExecutableElement fromString = null;
+        javax.lang.model.element.ExecutableElement toInstance = null;
+        javax.lang.model.element.ExecutableElement toStatic = null;
+        for (Element enclosed : owner.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            var method = (javax.lang.model.element.ExecutableElement) enclosed;
+            if (method.getSimpleName().contentEquals(adapter.from())
+                    && method.getModifiers().contains(Modifier.STATIC)
+                    && method.getParameters().size() == 1
+                    && method.getReturnType().getKind()
+                        != javax.lang.model.type.TypeKind.VOID) {
+                String param = method.getParameters().get(0).asType().toString();
+                if (param.equals("io.hyperfoil.tools.jjq.value.JqValue") && fromJq == null) {
+                    fromJq = method;
+                } else if (param.equals("java.lang.String") && fromString == null) {
+                    fromString = method;
+                }
+            }
+            if (method.getSimpleName().contentEquals(adapter.to())) {
+                if (!method.getModifiers().contains(Modifier.STATIC)
+                        && method.getParameters().isEmpty()
+                        && method.getReturnType().getKind()
+                            != javax.lang.model.type.TypeKind.VOID
+                        && toInstance == null) {
+                    toInstance = method;
+                } else if (method.getModifiers().contains(Modifier.STATIC)
+                        && method.getParameters().size() == 1 && toStatic == null) {
+                    toStatic = method;
+                }
+            }
+        }
+        if (fromJq == null && fromString == null) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + ": no suitable static '" + adapter.from()
+                            + "' on " + owner.getQualifiedName()
+                            + " (static (JqValue)->T or (String)->T)",
+                    annotated);
+            return null;
+        }
+        javax.lang.model.element.ExecutableElement from = fromJq != null ? fromJq : fromString;
+        if (!isAssignableBoxed(from.getReturnType(), fieldType)) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + ": '" + adapter.from() + "' returns "
+                            + from.getReturnType() + ", not assignable to " + fieldType,
+                    annotated);
+            return null;
+        }
+        javax.lang.model.element.ExecutableElement to = toInstance != null ? toInstance : toStatic;
+        if (to == null) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + ": no suitable '" + adapter.to()
+                            + "' on " + owner.getQualifiedName()
+                            + " (instance ()->JqValue/String or static (T)->JqValue/String)",
+                    annotated);
+            return null;
+        }
+        String toReturn = to.getReturnType().toString();
+        boolean toStringForm;
+        if (toReturn.equals("java.lang.String")) {
+            toStringForm = true;
+        } else if (isJqValueType(to.getReturnType())) {
+            toStringForm = false;
+        } else {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + ": '" + adapter.to()
+                            + "' must return JqValue or String, not " + toReturn,
+                    annotated);
+            return null;
+        }
+        if (to == toStatic && !isAssignableBoxed(fieldType,
+                to.getParameters().get(0).asType())) {
+            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                    "@JqAdapter on " + where + ": '" + adapter.to() + "' takes "
+                            + to.getParameters().get(0).asType()
+                            + ", not assignable from " + fieldType,
+                    annotated);
+            return null;
+        }
+        for (javax.lang.model.element.ExecutableElement m : new javax.lang.model.element.ExecutableElement[]{from, to}) {
+            if (!isAccessibleFrom(m.getModifiers(), samePackage)) {
+                processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR,
+                        "@JqAdapter on " + where + ": '" + m.getSimpleName()
+                                + "' must be public"
+                                + (samePackage ? "" : " (or non-private in " + mappingPackage + ")"),
+                        annotated);
+                return null;
+            }
+        }
+        return new AdapterInfo(from.getSimpleName().toString(), from == fromString,
+                to.getSimpleName().toString(), to == toStatic, toStringForm);
+    }
+
+    /** Assignability with a boxed-name fallback (Types.isAssignable may not box). */
+    private boolean isAssignableBoxed(javax.lang.model.type.TypeMirror from,
+            javax.lang.model.type.TypeMirror to) {
+        if (processingEnv.getTypeUtils().isAssignable(from, to)) return true;
+        return boxedName(from.toString()).equals(boxedName(to.toString()));
+    }
+
+    /** Normalize a type name for boxing-tolerant comparison. */
+    private static String boxedName(String name) {
+        return switch (name) {
+            case "boolean" -> "java.lang.Boolean";
+            case "byte" -> "java.lang.Byte";
+            case "short" -> "java.lang.Short";
+            case "int" -> "java.lang.Integer";
+            case "long" -> "java.lang.Long";
+            case "float" -> "java.lang.Float";
+            case "double" -> "java.lang.Double";
+            case "char" -> "java.lang.Character";
+            default -> name;
+        };
+    }
+
+    /** True when the type is JqValue or a subtype of it. */
+    private boolean isJqValueType(javax.lang.model.type.TypeMirror type) {
+        TypeElement jqValue =
+                processingEnv.getElementUtils().getTypeElement("io.hyperfoil.tools.jjq.value.JqValue");
+        return jqValue != null && processingEnv.getTypeUtils().isAssignable(type, jqValue.asType());
+    }
+
+    /**
      * Fail the build with a named error when a {@code @JqConverter} class
      * cannot be instantiated in generated code (issue #110): not a concrete
      * class, a non-static nested class (no outer instance to construct with),
@@ -721,14 +893,22 @@ public class JqMapperProcessor extends AbstractProcessor {
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                          String inclusion, String converterClass, boolean nestedRecord,
-                         boolean skipSerialize, boolean skipDeserialize) {}
+                         boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
                         String converterClass, boolean nestedRecord,
                         boolean skipSerialize, boolean skipDeserialize,
-                        boolean privateField, boolean finalField) {}
+                        boolean privateField, boolean finalField, AdapterInfo adapter) {}
+
+    /**
+     * Compile-time adapter descriptor: resolved method names plus call shapes
+     * for direct static emission (issue #120). The owner is always the
+     * field's declared type, so it is not stored.
+     */
+    record AdapterInfo(String fromName, boolean fromString, String toName, boolean toStatic,
+                       boolean toStringForm) {}
 
     /**
      * Any-setter/any-getter methods discovered on a mapped type (issue #87).

@@ -160,6 +160,20 @@ public class InstantConverter implements ValueConverter<Instant> {
 record Event(String name, @JqConverter(InstantConverter.class) Instant timestamp) {}
 ```
 
+### `@JqAdapter` — static-method delegation
+
+```java
+@JqMapped
+record SpawnConfig(@JqAdapter(from = "fromWire", to = "wireName") ClaudeAccountType type) {}
+```
+
+Names static policy methods on the field's declared type instead of a
+converter class: `from` is `static T method(JqValue)` or `static T
+method(String)`; `to` is instance `JqValue/String method()` or `static
+JqValue/String method(T)`. Nulls short-circuit on both directions;
+combining with `@JqConverter` is an error. No Jackson equivalent —
+this replaces hand-written converters.
+
 ### `@JqAccess` — bind direction
 
 ```java
@@ -274,7 +288,7 @@ JqMapper mapper = JqMapper.create(); // auto-discovers bridge via ServiceLoader
 User user = mapper.fromJqValue(json, User.class);
 ```
 
-Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqNaming`, `@JqConverter`)
+Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqNaming`, `@JqConverter`, `@JqAdapter`)
 over bridge annotations over defaults. Bridges are consulted in registration order;
 the first non-null answer wins.
 See [jjq-mapper-jackson](../jjq-mapper-jackson/README.md) and [jjq-mapper-jsonb](../jjq-mapper-jsonb/README.md).

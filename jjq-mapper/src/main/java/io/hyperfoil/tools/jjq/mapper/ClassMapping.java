@@ -190,8 +190,9 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("Cannot access record component accessor: " + name, e);
             }
 
-            // Resolve @JqConverter
-            ValueConverter<?> converter = resolveConverter(rc.getAnnotation(JqConverter.class));
+            // Resolve @JqAdapter (backs the same custom-converter slot) or @JqConverter
+            ValueConverter<?> converter = resolveAdapter(rc, fieldType, type, name);
+            if (converter == null) converter = resolveConverter(rc.getAnnotation(JqConverter.class));
 
             // Directional exclusion: native @JqAccess first, then bridges
             // (e.g. Jackson WRITE_ONLY/READ_ONLY). Native wins (issue #113).
@@ -425,8 +426,9 @@ final class ClassMapping<T> implements Mapping<T> {
                 }
             }
 
-            // Resolve @JqConverter
-            ValueConverter<?> converter = resolveConverter(field.getAnnotation(JqConverter.class));
+            // Resolve @JqAdapter (backs the same custom-converter slot) or @JqConverter
+            ValueConverter<?> converter = resolveAdapter(field, fieldType, type, name);
+            if (converter == null) converter = resolveConverter(field.getAnnotation(JqConverter.class));
 
             // Directional exclusion: native @JqAccess first, then bridges.
             // Native wins (issue #113).
@@ -880,6 +882,181 @@ final class ClassMapping<T> implements Mapping<T> {
         } catch (Exception e) {
             throw new JqMapperException("Failed to instantiate converter: " + annotation.value().getName(), e);
         }
+    }
+
+    /**
+     * Build a {@code ValueConverter} from a {@code @JqAdapter} annotation by
+     * resolving static policy methods on the field's declared type (issue
+     * #120). Returns null when no annotation is present. Method handles are
+     * resolved once here; binding invokes them without reflective lookup.
+     *
+     * @param element   the annotated record component or field
+     * @param fieldType the declared field type (policy methods resolve against it)
+     * @param mappedType the mapped record/class (for package-access rules and errors)
+     * @param fieldName the field name (for errors)
+     */
+    private static ValueConverter<?> resolveAdapter(java.lang.reflect.AnnotatedElement element,
+            Class<?> fieldType, Class<?> mappedType, String fieldName) {
+        JqAdapter adapter = element.getAnnotation(JqAdapter.class);
+        if (adapter == null) return null;
+        String where = "'" + fieldName + "' of " + mappedType.getName();
+        if (element.getAnnotation(JqConverter.class) != null) {
+            throw new JqMapperException("@JqAdapter and @JqConverter conflict on " + where
+                    + ": delegate statically or convert, not both");
+        }
+        if (adapter.from().isEmpty() || adapter.to().isEmpty()) {
+            throw new JqMapperException("@JqAdapter on " + where
+                    + " must name both from and to methods");
+        }
+        if (fieldType.isPrimitive() || fieldType.isInterface() || fieldType.isAnnotation()) {
+            throw new JqMapperException("@JqAdapter on " + where
+                    + " needs a reference-typed field of a concrete class, record, or enum"
+                    + " (adapter methods resolve against " + fieldType.getName()
+                    + "); use @JqConverter for other shapes");
+        }
+        String ownerPackage = fieldType.getPackageName();
+        String mappedPackage = mappedType.getPackageName();
+        boolean samePackage = ownerPackage.equals(mappedPackage);
+
+        Method fromJq = null, fromString = null, toInstance = null, toStatic = null;
+        for (Method m : fieldType.getDeclaredMethods()) {
+            if (m.isSynthetic() || m.isBridge()) continue;
+            if (m.getName().equals(adapter.from())
+                    && Modifier.isStatic(m.getModifiers())
+                    && m.getParameterCount() == 1
+                    && m.getReturnType() != void.class) {
+                Class<?> param = m.getParameterTypes()[0];
+                if (param == JqValue.class && fromJq == null) fromJq = m;
+                else if (param == String.class && fromString == null) fromString = m;
+            }
+            if (m.getName().equals(adapter.to())) {
+                if (!Modifier.isStatic(m.getModifiers()) && m.getParameterCount() == 0
+                        && m.getReturnType() != void.class && toInstance == null) {
+                    toInstance = m;
+                } else if (Modifier.isStatic(m.getModifiers()) && m.getParameterCount() == 1
+                        && toStatic == null) {
+                    toStatic = m;
+                }
+            }
+        }
+        if (fromJq == null && fromString == null) {
+            throw new JqMapperException("@JqAdapter on " + where + ": no suitable static '"
+                    + adapter.from() + "' on " + fieldType.getName()
+                    + " (static (JqValue)->T or (String)->T)");
+        }
+        Method from = fromJq != null ? fromJq : fromString;
+        boolean fromTakesString = fromJq == null;
+        if (!boxed(fieldType).isAssignableFrom(boxed(from.getReturnType()))) {
+            throw new JqMapperException("@JqAdapter on " + where + ": '" + adapter.from()
+                    + "' returns " + from.getReturnType().getName()
+                    + ", not assignable to " + fieldType.getName());
+        }
+        Method to = toInstance != null ? toInstance : toStatic;
+        if (to == null) {
+            throw new JqMapperException("@JqAdapter on " + where + ": no suitable '"
+                    + adapter.to() + "' on " + fieldType.getName()
+                    + " (instance ()->JqValue/String or static (T)->JqValue/String)");
+        }
+        boolean toIsStatic = to == toStatic;
+        boolean toReturnsString;
+        Class<?> toReturn = to.getReturnType();
+        if (toReturn == String.class) {
+            toReturnsString = true;
+        } else if (JqValue.class.isAssignableFrom(toReturn)) {
+            toReturnsString = false;
+        } else {
+            throw new JqMapperException("@JqAdapter on " + where + ": '" + adapter.to()
+                    + "' must return JqValue or String, not " + toReturn.getName());
+        }
+        if (toIsStatic && !boxed(to.getParameterTypes()[0]).isAssignableFrom(boxed(fieldType))) {
+            throw new JqMapperException("@JqAdapter on " + where + ": '" + adapter.to()
+                    + "' takes " + to.getParameterTypes()[0].getName()
+                    + ", not assignable from " + fieldType.getName());
+        }
+        for (Method m : new Method[]{from, to}) {
+            if (!isAccessibleFrom(m.getModifiers(), samePackage)) {
+                throw new JqMapperException("@JqAdapter on " + where + ": '" + m.getName()
+                        + "' must be public"
+                        + (samePackage ? "" : " (or non-private in " + mappedPackage + ")"));
+            }
+        }
+        final MethodHandle fromHandle;
+        final MethodHandle toHandle;
+        try {
+            MethodHandles.Lookup ownerLookup =
+                    MethodHandles.privateLookupIn(fieldType, MethodHandles.lookup());
+            fromHandle = ownerLookup.unreflect(from).asType(fromTakesString
+                    ? java.lang.invoke.MethodType.methodType(Object.class, String.class)
+                    : java.lang.invoke.MethodType.methodType(Object.class, JqValue.class));
+            toHandle = ownerLookup.unreflect(to).asType(
+                    java.lang.invoke.MethodType.methodType(Object.class, Object.class));
+        } catch (IllegalAccessException | java.lang.invoke.WrongMethodTypeException e) {
+            throw new JqMapperException("@JqAdapter on " + where + ": cannot access adapter methods", e);
+        }
+        final String fieldDesc = fieldType.getSimpleName();
+        return new ValueConverter<Object>() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public Object fromJqValue(JqValue value) {
+                if (value == null || value instanceof JqNull) return null;
+                try {
+                    if (fromTakesString) {
+                        String text;
+                        if (value instanceof JqString s) {
+                            text = s.stringValue();
+                        } else if (!value.isContainer()) {
+                            text = value.asText();
+                        } else {
+                            throw TypeConverter.mismatch(JqValue.Type.STRING,
+                                    "text for " + fieldDesc, value);
+                        }
+                        return fromHandle.invokeExact((String) text);
+                    }
+                    return fromHandle.invokeExact((JqValue) value);
+                } catch (JqMapperException e) {
+                    throw e;
+                } catch (Throwable t) {
+                    throw new JqMapperException("Failed to invoke adapter from method", t);
+                }
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public JqValue toJqValue(Object value) {
+                if (value == null) return JqNull.NULL;
+                try {
+                    Object out = toHandle.invokeExact((Object) value);
+                    if (out == null) return JqNull.NULL;
+                    if (toReturnsString) return JqString.of((String) out);
+                    return (JqValue) out;
+                } catch (JqMapperException e) {
+                    throw e;
+                } catch (Throwable t) {
+                    throw new JqMapperException("Failed to invoke adapter to method", t);
+                }
+            }
+        };
+    }
+
+    /** Boxed equivalent (primitives map to wrappers, references pass through). */
+    private static Class<?> boxed(Class<?> type) {
+        if (!type.isPrimitive()) return type;
+        if (type == boolean.class) return Boolean.class;
+        if (type == byte.class) return Byte.class;
+        if (type == short.class) return Short.class;
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == float.class) return Float.class;
+        if (type == double.class) return Double.class;
+        if (type == char.class) return Character.class;
+        return type;
+    }
+
+    /** Public, or non-private within the same package. */
+    private static boolean isAccessibleFrom(int modifiers, boolean samePackage) {
+        if (Modifier.isPublic(modifiers)) return true;
+        if (Modifier.isPrivate(modifiers)) return false;
+        return samePackage;
     }
 
     Class<T> type() { return type; }

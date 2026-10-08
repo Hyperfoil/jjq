@@ -183,7 +183,7 @@ final class MappingCodeGenerator {
      * Only JqValue-passthrough extractions cannot fail.
      */
     private static boolean isFallibleExtraction(JqMapperProcessor.ComponentInfo comp) {
-        if (comp.converterClass() != null) return true;
+        if (comp.converterClass() != null || comp.adapter() != null) return true;
         String typeName = comp.typeName();
         // JqValue passthrough never throws
         if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
@@ -196,7 +196,7 @@ final class MappingCodeGenerator {
      * Custom converters can throw, like every other non-passthrough extraction.
      */
     private static boolean isFalliblePojoExtraction(JqMapperProcessor.PropertyInfo prop) {
-        if (prop.converterClass() != null) return true;
+        if (prop.converterClass() != null || prop.adapter() != null) return true;
         String typeName = prop.typeName();
         // JqValue passthrough never throws
         if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
@@ -212,6 +212,12 @@ final class MappingCodeGenerator {
         if (comp.converterClass() != null) {
             sb.append("(").append(comp.typeName()).append(") CONV_")
               .append(comp.name().toUpperCase()).append(".fromJqValue(").append(apply).append(")");
+            return;
+        }
+
+        // Static adapter: direct call, null short-circuits without calling (issue #120)
+        if (comp.adapter() != null) {
+            sb.append(adapterExtraction(comp.typeName(), apply, comp.adapter()));
             return;
         }
 
@@ -407,6 +413,12 @@ final class MappingCodeGenerator {
             return;
         }
 
+        // Static adapter: direct call with the shared null contract (issue #120)
+        if (comp.adapter() != null) {
+            sb.append(adapterSerialization(comp.typeName(), accessor, comp.adapter()));
+            return;
+        }
+
         switch (comp.typeName()) {
             case "java.lang.String" ->
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(")");
@@ -535,6 +547,11 @@ final class MappingCodeGenerator {
               .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append("));\n");
             return;
         }
+        if (comp.adapter() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ")
+              .append(adapterSerialization(comp.typeName(), accessor, comp.adapter())).append(");\n");
+            return;
+        }
 
         switch (comp.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
@@ -656,6 +673,11 @@ final class MappingCodeGenerator {
         if (comp.converterClass() != null) {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
               .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append("));\n");
+            return;
+        }
+        if (comp.adapter() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ")
+              .append(adapterSerialization(comp.typeName(), accessor, comp.adapter())).append(");\n");
             return;
         }
 
@@ -797,6 +819,42 @@ final class MappingCodeGenerator {
     /** {@code new TypeToken<T>(){}.getType()} for a parameterized type string. */
     private static String typeTokenExpr(String typeName) {
         return "new io.hyperfoil.tools.jjq.mapper.TypeToken<" + typeName + ">(){}.getType()";
+    }
+
+    /**
+     * Deserialization expression for an adapter field: a direct static call
+     * whose {@code JqNull} input short-circuits to null without calling
+     * (issue #120). {@code from}-String takes scalar text via
+     * {@code requireString} (house scalar leniency, containers fail fast).
+     */
+    private static String adapterExtraction(String typeName, String apply,
+            JqMapperProcessor.AdapterInfo adapter) {
+        String arg = adapter.fromString()
+                ? "requireString(" + apply + ", \"text for " + simpleName(typeName) + "\")"
+                : apply;
+        return apply + " instanceof JqNull ? null : "
+                + typeName + "." + adapter.fromName() + "(" + arg + ")";
+    }
+
+    /**
+     * Serialization value expression for an adapter field: a direct call
+     * (static or instance) that a null field skips without calling, with
+     * {@code String} results wrapped null-safely (issue #120).
+     */
+    private static String adapterSerialization(String typeName, String readExpr,
+            JqMapperProcessor.AdapterInfo adapter) {
+        String call = adapter.toStatic()
+                ? typeName + "." + adapter.toName() + "(" + readExpr + ")"
+                : readExpr + "." + adapter.toName() + "()";
+        if (adapter.toStringForm()) {
+            return "adaptToString(" + readExpr + " == null ? null : " + call + ")";
+        }
+        return readExpr + " == null ? JqNull.NULL : " + call;
+    }
+
+    /** Simple name of a (possibly nested) qualified type name. */
+    private static String simpleName(String typeName) {
+        return typeName.substring(typeName.lastIndexOf('.') + 1);
     }
 
     /**
@@ -1184,6 +1242,11 @@ final class MappingCodeGenerator {
               .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append("));\n");
             return;
         }
+        if (prop.adapter() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ")
+              .append(adapterSerialization(prop.typeName(), readExpr, prop.adapter())).append(");\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(");\n");
@@ -1250,6 +1313,11 @@ final class MappingCodeGenerator {
               .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append("));\n");
             return;
         }
+        if (prop.adapter() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ")
+              .append(adapterSerialization(prop.typeName(), readExpr, prop.adapter())).append(");\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(");\n");
@@ -1311,6 +1379,10 @@ final class MappingCodeGenerator {
         if (prop.converterClass() != null) {
             return "(" + prop.typeName() + ") CONV_" + prop.name().toUpperCase()
                     + ".fromJqValue(" + apply + ")";
+        }
+        // Static adapter: direct call, null short-circuits without calling (issue #120)
+        if (prop.adapter() != null) {
+            return adapterExtraction(prop.typeName(), apply, prop.adapter());
         }
         String typeName = prop.typeName();
         return switch (typeName) {
@@ -1413,6 +1485,11 @@ final class MappingCodeGenerator {
         if (prop.converterClass() != null) {
             sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
               .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append(")");
+            return;
+        }
+        // Static adapter: direct call with the shared null contract (issue #120)
+        if (prop.adapter() != null) {
+            sb.append(adapterSerialization(prop.typeName(), readExpr, prop.adapter()));
             return;
         }
         switch (prop.typeName()) {

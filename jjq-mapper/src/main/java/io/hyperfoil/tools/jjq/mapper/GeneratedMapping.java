@@ -138,6 +138,35 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Require a string scalar for adapter {@code from} methods (issue #120):
+     * strings unwrap, other non-container scalars coerce via {@code asText()}
+     * (house scalar leniency), containers fail fast. Nulls never reach here —
+     * generated deserializers short-circuit them first.
+     *
+     * @param value  the extracted value (never null from the guarded call sites)
+     * @param target human-readable target description for the error
+     * @return the scalar text
+     * @throws JqMapperException if the value is a container
+     */
+    protected static String requireString(JqValue value, String target) {
+        if (value instanceof io.hyperfoil.tools.jjq.value.JqString s) return s.stringValue();
+        if (value != null && !value.isContainer()) return value.asText();
+        throw TypeConverter.mismatch(JqValue.Type.STRING, target, value);
+    }
+
+    /**
+     * Null-safe wrapper for adapter {@code to} methods returning
+     * {@code String}: null becomes JSON null instead of throwing in
+     * {@code JqString.of} (issue #120).
+     *
+     * @param wire the wire string (may be null)
+     * @return the JSON string value, or null-as-{@code JqNull}
+     */
+    protected static JqValue adaptToString(String wire) {
+        return wire == null ? io.hyperfoil.tools.jjq.value.JqNull.NULL : io.hyperfoil.tools.jjq.value.JqString.of(wire);
+    }
+
+    /**
      * Read a field through a {@code setAccessible(true)} handle — the
      * generated-code counterpart of the reflection path's field fallback
      * (issue #104). Emitted only for private fields with no usable getter;

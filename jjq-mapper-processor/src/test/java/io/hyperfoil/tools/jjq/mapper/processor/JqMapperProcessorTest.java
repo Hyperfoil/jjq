@@ -2193,6 +2193,164 @@ class JqMapperProcessorTest {
         assertEquals(r, back);
     }
 
+    @Test
+    void generatedMapping_adapterEnumCase() throws Exception {
+        // Issue #120: the delegate-only shape — no converter class, no
+        // JqValue coupling (from-String + instance-String-to).
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAdapter;
+                import io.hyperfoil.tools.jjq.mapper.JqAdapter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record WithAccount(String name,
+                        @JqAdapter(from = "fromWire", to = "wireName") AccountType account) {
+                    public enum AccountType {
+                        API_KEY, OAUTH;
+
+                        public static AccountType fromWire(String wire) {
+                            for (AccountType t : values()) {
+                                if (t.wireName().equals(wire)) return t;
+                            }
+                            throw new IllegalArgumentException("unknown: " + wire);
+                        }
+
+                        public String wireName() {
+                            return name().toLowerCase().replace('_', '-');
+                        }
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.WithAccount", source);
+        Class<?> accountType = Class.forName("test.WithAccount$AccountType", true,
+                recordClass.getClassLoader());
+        JqMapper mapper = JqMapper.create();
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        Object apiKey = Enum.valueOf((Class<Enum>) accountType, "API_KEY");
+        Object r = recordClass.getDeclaredConstructor(String.class, accountType)
+                .newInstance("t", apiKey);
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"account\":\"api-key\""), out);
+        assertEquals(out, mapper.toJson(r));
+
+        Object back = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"account\":\"oauth\"}"),
+                recordClass);
+        assertEquals("OAUTH", recordClass.getMethod("account").invoke(back).toString());
+    }
+
+    @Test
+    void generatedMapping_adapterStaticCalls() throws Exception {
+        // from-JqValue + static to-JqValue emission shapes.
+        String boxSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.value.JqString;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+
+                public class Box {
+                    public final String v;
+
+                    public Box(String v) { this.v = v; }
+
+                    public static Box fromJson(JqValue jv) {
+                        return new Box(jv.asText("?"));
+                    }
+
+                    public static JqValue toJson(Box box) {
+                        return JqString.of(box.v);
+                    }
+                }
+                """;
+        String recordSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAdapter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record StaticAdapted(@JqAdapter(from = "fromJson", to = "toJson") Box box) {}
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.Box", "test.StaticAdapted"},
+                new String[]{boxSource, recordSource});
+        Class<?> recordClass = Class.forName("test.StaticAdapted", true, loader);
+        Class<?> boxClass = Class.forName("test.Box", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        Object box = boxClass.getDeclaredConstructor(String.class).newInstance("x");
+        Object r = recordClass.getDeclaredConstructor(boxClass).newInstance(box);
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"box\":\"x\""), out);
+        assertEquals(out, mapper.toJson(r));
+
+        Object back = mapper.fromJqValue(JqValues.parse("{\"box\":\"y\"}"), recordClass);
+        Object backBox = recordClass.getMethod("box").invoke(back);
+        assertEquals("y", boxClass.getDeclaredField("v").get(backBox));
+    }
+
+    @Test
+    void generatedMapping_adapterUnknownMethodFails() throws Exception {
+        javax.tools.JavaFileObject source = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.BadAdapter", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.JqAdapter;
+                        import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                        @JqMapped
+                        public record BadAdapter(@JqAdapter(from = "nope", to = "nope") String f) {}
+                        """);
+        com.google.testing.compile.Compilation compilation = com.google.testing.compile.Compiler.javac()
+                .withProcessors(new JqMapperProcessor())
+                .compile(source);
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+        com.google.testing.compile.CompilationSubject.assertThat(compilation)
+                .hadErrorContaining("no suitable static 'nope'");
+    }
+
+    @Test
+    void generatedMapping_adapterConflictsWithConverter() throws Exception {
+        javax.tools.JavaFileObject converter = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.PassConv", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                        import io.hyperfoil.tools.jjq.value.JqString;
+                        import io.hyperfoil.tools.jjq.value.JqValue;
+
+                        public class PassConv implements ValueConverter<String> {
+                            @Override
+                            public String fromJqValue(JqValue value) { return value.stringValue(); }
+
+                            @Override
+                            public JqValue toJqValue(String value) { return JqString.of(value); }
+                        }
+                        """);
+        javax.tools.JavaFileObject record = com.google.testing.compile.JavaFileObjects
+                .forSourceString("test.Conflicting", """
+                        package test;
+
+                        import io.hyperfoil.tools.jjq.mapper.JqAdapter;
+                        import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                        import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                        @JqMapped
+                        public record Conflicting(
+                                @JqAdapter(from = "a", to = "b") @JqConverter(PassConv.class) String f) {}
+                        """);
+        com.google.testing.compile.Compilation compilation = com.google.testing.compile.Compiler.javac()
+                .withProcessors(new JqMapperProcessor())
+                .compile(converter, record);
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+        com.google.testing.compile.CompilationSubject.assertThat(compilation)
+                .hadErrorContaining("conflict");
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
