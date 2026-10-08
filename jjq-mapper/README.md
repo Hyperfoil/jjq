@@ -279,6 +279,24 @@ over bridge annotations over defaults. Bridges are consulted in registration ord
 the first non-null answer wins.
 See [jjq-mapper-jackson](../jjq-mapper-jackson/README.md) and [jjq-mapper-jsonb](../jjq-mapper-jsonb/README.md).
 
+### Coming from Jackson?
+
+Native equivalents for the common Jackson annotations (same names would collide
+with `com.fasterxml.jackson.annotation` in mixed files, and subtly differ in
+semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
+
+| Jackson | jjq native | Notes |
+|---|---|---|
+| `@JsonProperty("x")` | `@JqName("x")` | Key rename with direct lookup |
+| `@JsonProperty(access = …)` | `@JqAccess(…)` | Same `READ_ONLY`/`WRITE_ONLY` names |
+| `@JsonIgnore` | `@JqIgnore` | jjq's is always bidirectional |
+| `@JsonInclude` | `@JqInclude` | Same strategy names |
+| `@JsonAutoDetect` | `@JqVisibility` | Getter axes only; fields always bind |
+| `@JsonAnyGetter` / `@JsonAnySetter` | `@JqAnyGetter` / `@JqAnySetter` | Same method-form contract |
+| `@JsonValue` / `@JsonCreator` on enums | `@JqName` on constants | Strict exact mapping; leniency via `@JqConverter` |
+| `@JsonNaming` | `@JqNaming` | Strategy-based, fewer strategies |
+| `TypeReference<T>` | `TypeToken<T>` | Anonymous-subclass capture, same idiom |
+
 ### Custom `AnnotationBridge` implementations
 
 Implement `AnnotationBridge` to read a third framework's annotations. All methods

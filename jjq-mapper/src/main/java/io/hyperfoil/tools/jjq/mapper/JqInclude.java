@@ -37,6 +37,8 @@ import java.lang.annotation.Target;
  *
  * @see JqMapped
  * @see JqIgnore
+ *
+ * <p>Jackson equivalent: {@code @JsonInclude} (same strategy names).</p>
  */
 @Target({ElementType.TYPE, ElementType.RECORD_COMPONENT, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)

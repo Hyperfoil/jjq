@@ -21,6 +21,8 @@ import java.lang.annotation.Target;
  *
  * @see JqField
  * @see JqMapper
+ *
+ * <p>Jackson equivalent: {@code @JsonIgnore} (note jjq's is always bidirectional).</p>
  */
 @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)

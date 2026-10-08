@@ -36,6 +36,8 @@ import java.lang.annotation.Target;
  * @see JqField
  * @see JqNaming
  * @see JqMapped
+ *
+ * <p>Jackson equivalent: {@code @JsonProperty("x")} (rename only).</p>
  */
 @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)

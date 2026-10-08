@@ -35,6 +35,8 @@ import java.lang.annotation.Target;
  * binding).</p>
  *
  * @see JqMapped
+ *
+ * <p>Jackson equivalent: {@code @JsonAutoDetect} (getter axes only).</p>
  */
 @Target({ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)

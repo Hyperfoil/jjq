@@ -24,6 +24,8 @@ import java.lang.annotation.Target;
  *
  * @see JqAnySetter
  * @see JqMapper
+ *
+ * <p>Jackson equivalent: {@code @JsonAnyGetter} (same method-form contract).</p>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)

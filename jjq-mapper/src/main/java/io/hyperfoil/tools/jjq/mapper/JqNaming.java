@@ -35,6 +35,8 @@ import java.lang.annotation.Target;
  *
  * @see JqMapped
  * @see JqField
+ *
+ * <p>Jackson equivalent: {@code @JsonNaming} (strategy-based, fewer strategies).</p>
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

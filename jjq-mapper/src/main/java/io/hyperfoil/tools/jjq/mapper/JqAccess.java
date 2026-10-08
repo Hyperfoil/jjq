@@ -30,6 +30,8 @@ import java.lang.annotation.Target;
  * @see JqIgnore
  * @see JqName
  * @see JqMapped
+ *
+ * <p>Jackson equivalent: {@code @JsonProperty(access = ...)} (same value names).</p>
  */
 @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)
