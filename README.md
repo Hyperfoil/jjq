@@ -12,8 +12,8 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 - **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing, field name interning with hash mixing. 1.5-2.3x faster than Jackson 3 on 1MB inputs; 1.5x faster on 14MB production data
 - **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
-- **YAML support** — `jjq-yaml` parses and emits YAML with a dependency-free native parser, with optional `jjq-mapper` integration for YAML → POJO mapping
-- **Record and POJO data binding** — `jjq-mapper` maps `JqValue` to/from Java types with `@JqInclude`, `@JqNaming`, `@JqConverter`, and Jackson/JSON-B annotation bridges
+- **YAML support** — `jjq-yaml` parses and emits YAML with a dependency-free native parser, with optional `jjq-mapper` integration for YAML → POJO mapping via the `YamlMapper` facade
+- **Record and POJO data binding** — `jjq-mapper` maps `JqValue` to/from Java types with `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqInclude`, `@JqNaming`, `@JqConverter`, `@JqAdapter`, `@JqEnum`, and Jackson/JSON-B annotation bridges
 - **Jakarta EE integration** — `jjq-jakarta` module provides Hibernate persistence (BYTEA + JSONB), JPA `AttributeConverter`, JAX-RS body/param providers, and JSON-B serializers
 - **Jackson Module** — `jjq-jackson` includes `JqValueModule` for native `JqValue` serialization in POJOs via `ObjectMapper`
 - **Jackson migration compat** — `path()`, `isMissingNode()`, `asText(default)` aliases; nested builders (`putObject`/`putArray`); annotation bridges for transparent adoption
@@ -28,8 +28,8 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jackson` | Jackson integration — `JsonNode` ↔ `JqValue` conversion, `JqValueModule` for native POJO serialization |
 | `jjq-fastjson2` | fastjson2 adapter with lazy conversion and streaming APIs |
 | `jjq-jakarta` | Hibernate persistence, JPA `AttributeConverter`, JAX-RS providers, `ParamConverter`, and JSON-B serializers |
-| `jjq-mapper` | Record and POJO data binding — map `JqValue` to/from Java types with `@JqField`, `@JqInclude`, `@JqNaming`, `@JqConverter` |
-| `jjq-mapper-processor` | Compile-time annotation processor for `jjq-mapper` — generates optimized mappings (6-11x faster than Jackson 3) |
+| `jjq-mapper` | Record and POJO data binding — map `JqValue` to/from Java types with `@JqField`, `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqInclude`, `@JqNaming`, `@JqConverter`, `@JqAdapter`, `@JqEnum` |
+| `jjq-mapper-processor` | Compile-time annotation processor for `jjq-mapper` — generates optimized mappings (~28x faster than Jackson 3 on pre-parsed records) |
 | `jjq-mapper-jackson` | Bridges Jackson 2 annotations (`@JsonProperty`, `@JsonIgnore`, `@JsonInclude`) into jjq-mapper |
 | `jjq-mapper-jsonb` | Bridges JSON-B annotations (`@JsonbProperty`, `@JsonbTransient`, `@JsonbNillable`) into jjq-mapper |
 | `jjq-yaml` | Dependency-free native YAML parsing into `JqValue` trees plus block-style emission — enables jq queries over YAML documents |
@@ -47,28 +47,28 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-core</artifactId>
-    <version>0.1.12-SNAPSHOT</version>
+    <version>0.1.13-SNAPSHOT</version>
 </dependency>
 
 <!-- For Jackson integration -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jackson</artifactId>
-    <version>0.1.12-SNAPSHOT</version>
+    <version>0.1.13-SNAPSHOT</version>
 </dependency>
 
 <!-- For Hibernate/JAX-RS integration -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jakarta</artifactId>
-    <version>0.1.12-SNAPSHOT</version>
+    <version>0.1.13-SNAPSHOT</version>
 </dependency>
 
 <!-- For JSONata support -->
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-jsonata</artifactId>
-    <version>0.1.12-SNAPSHOT</version>
+    <version>0.1.13-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -248,6 +248,13 @@ String pretty = JqValues.toPrettyJsonString(value);
 //   "name": "Alice",
 //   "age": 30
 // }
+
+// Jackson INDENT_OUTPUT spacing + terminal-safe escaping
+String jacksonStyle = JqValues.toPrettyJsonString(value, PrettyPrintOptions.JACKSON);
+String strict = JqValues.toPrettyJsonString(value, new PrettyPrintOptions(
+    PrettyPrintOptions.Separator.SPACED,
+    PrettyPrintOptions.ArrayStyle.FLOW,
+    PrettyPrintOptions.Escaping.STRICT));  // DEL/C1/bidi controls -> \uXXXX
 ```
 
 ### Convert between JqValue and Java types
@@ -568,22 +575,22 @@ Five of the ten production benchmarks above achieve **zero allocation per query*
 
 ### Record Data Binding: jjq-mapper vs Jackson 3
 
-Deserialization from pre-parsed tree to Java records (ns/op, lower is better). JMH, 3 forks, 5+5 iterations, JDK 25.0.2 Temurin.
+Deserialization from pre-parsed tree to Java records (ns/op, lower is better). JMH, 3 forks, 5+5 iterations, JDK 25.0.4 Temurin.
 
 | Record type | jjq generated | jjq reflection | Jackson 3 | gen vs Jackson |
 |------------|--------------|----------------|-----------|----------------|
-| simple (5 fields) | **20 ns** | 39 ns | 227 ns | **11.4x** |
-| nested (record in record) | **25 ns** | 51 ns | 364 ns | **14.6x** |
+| simple (5 fields) | **8 ns** | 37 ns | 228 ns | **28.1x** |
+| nested (record in record) | **12 ns** | 53 ns | 342 ns | **28.7x** |
 
 End-to-end deserialization from `byte[]` to Java records:
 
 | Record type | jjq (fromBytes) | Jackson 3 (fromBytes) | jjq speedup |
 |------------|-----------------|----------------------|-------------|
-| simple | **158 ns** | 362 ns | **2.3x** |
-| nested | **202 ns** | 475 ns | **2.4x** |
-| list | **826 ns** | 976 ns | **1.2x** |
+| simple | **155 ns** | 363 ns | **2.3x** |
+| nested | **202 ns** | 470 ns | **2.3x** |
+| list | **474 ns** | 940 ns | **2.0x** |
 
-The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct constructor and accessor calls, avoiding reflection and lambda overhead. The generated mappings maintain a **11-15x advantage** over Jackson 3 on pre-parsed data, narrowing to ~2x at 20 fields. Even the reflection-based mapper (no annotation processor) is **5-7x faster** than Jackson 3 thanks to pre-cached method handles and positional field matching.
+The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct constructor and accessor calls, avoiding reflection and lambda overhead. The generated mappings maintain a **~28x advantage** over Jackson 3 on pre-parsed data, narrowing to ~2x at 20 fields. Even the reflection-based mapper (no annotation processor) is **~6x faster** than Jackson 3 thanks to pre-cached method handles, single-lookup `tryGet`, and positional field matching.
 
 ### JSON Serialization: jjq vs Jackson 3
 
@@ -684,13 +691,13 @@ mvn package -pl jjq-core,jjq-cli -Pnative -DskipTests
 
 # Run benchmarks
 mvn package -pl jjq-core,jjq-jackson,jjq-fastjson2,jjq-benchmark -DskipTests
-java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.12-SNAPSHOT.jar
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.13-SNAPSHOT.jar
 
 # Run specific benchmark class
 ./scripts/run-benchmarks.sh JsonParseComparisonBenchmark
 
 # Run with allocation profiling
-java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.12-SNAPSHOT.jar \
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.13-SNAPSHOT.jar \
   JsonProductionBenchmark -prof gc -rf json -rff results.json
 ```
 

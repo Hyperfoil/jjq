@@ -1,5 +1,63 @@
 # Changelog
 
+## [Unreleased] - 0.2
+
+65 commits since 0.1.12. Headline: `jjq-yaml` goes zero-dependency with a
+native byte parser (roughly 2-3x faster than SnakeYAML, ~4x less
+allocation, 92% suite conformance), the mapper/processor backlog is
+cleared with native replacements for the remaining Jackson annotations,
+and a deserialization perf round cuts shaped-data binding up to ~7x.
+
+### YAML (jjq-yaml): native parser, zero dependencies
+
+- Hand-rolled byte parser (block/flow/scalars/anchors/multi-doc, #92):
+  roughly 2-3x faster than SnakeYAML with ~4x less allocation
+- YAMLTestSuite conformance 48% -> 92% (371/402, #93)
+- SnakeYAML dropped to test scope; native block-style emitter (#94)
+- Allocation follow-ups: byte spans + deferred scalars (#96), scan/strip
+  reductions (#98), shared map-key arrays + deferred seq/doc values
+  behind a JSON-clean gate (~43% lower B/op, #99)
+- Explicit `?` block mapping keys (#97)
+- New `YamlMapper` facade: checked-exception YAML <-> POJO databind (#117)
+
+### Data binding backlog (jjq-mapper, jjq-mapper-processor, #100-#122)
+
+- `@JqConverter` mirror resolution + POJO converter codegen (#100);
+  `TypeToken` for generic fields incl. typed Map values (#101); `SET`
+  binding mirroring `LIST` (#102); bridge renames + quoted extraction
+  programs (#103); private-field fallback (#104); bridge method-form
+  any-getter/setter (#105); `Object` fields via `toJavaObject` (#106);
+  inherited any-methods (#107); guard fixes (#108, #109); converter
+  constructibility validation (#110)
+- Native Jackson replacements: `@JqName` on fields and enum constants
+  (#111, #112), `@JqAccess` bind direction (#113), `@JqVisibility`
+  getter control (#114), `@JqEnum` lenient parsing (#121),
+  `@JqAdapter` static-method converters (#120)
+- 0.2 scope: boxed NON_DEFAULT parity, HashSet fidelity, interface
+  any-methods, sorted/enum sets; guard-read hoisting (#115); shared
+  converter instances (#116)
+- Jackson Rosetta mapping table + javadoc cross-references
+
+### Deserialization performance
+
+- Generated pre-parsed binding now ~28x Jackson 3 (simple record 8 vs
+  228 ns, nested 12 vs 342 ns); end-to-end `byte[]` binding up to 2x
+  (list 474 vs 940 ns). JMH, 3 forks, JDK 25.0.4 Temurin.
+- Single-lookup `tryGet` POJO deserialization in codegen (~2x)
+- Positional fast paths on shaped data: records 4-8x, POJOs ~7x
+- Single-entry last-hit mapping cache: same-type 10-field -16%,
+  20-field -5%, skewed 3:1 mix -5% (strict alternation +5%, pathological)
+- Lazy builtin instantiation: 195 -> 0 hidden classes on the
+  builtin-free path, no throughput regression
+- Identity-first key lookups with canonicalization
+
+### New public APIs
+
+- `JqValue` opt accessors `pathText`/`pathBoolean`/`pathLong`/`pathInt` (#118)
+- `JqValue.asDisplayText`/`size()` defaults (#119)
+- `PrettyPrintOptions` for `toPrettyJsonString`: Jackson `INDENT_OUTPUT`
+  spacing preset plus terminal-safe `STRICT` escaping (#123)
+
 ## [0.1.12] - 2026-09-14
 
 62 commits since 0.1.11. Headline: generated data binding is 11-15x faster
