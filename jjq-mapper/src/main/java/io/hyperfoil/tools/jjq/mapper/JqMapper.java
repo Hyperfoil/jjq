@@ -68,7 +68,20 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class JqMapper {
 
-    private final ConcurrentHashMap<Class<?>, Mapping<?>> cache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Class<?>, LastHit> cache = new ConcurrentHashMap<>();
+    // Single-entry memo for the last resolved mapping: repeated binds of one
+    // type (record arrays, repeated config loads) skip the map lookup with one
+    // volatile read + ref compare. The holder lives in the map, so misses
+    // publish without allocating; the immutable holder publishes atomically,
+    // so races are benign (last writer wins with an always-valid pair).
+    // Single-entry memo for the last resolved mapping: repeated binds of one
+    // type (record arrays, repeated config loads) skip the map lookup with one
+    // volatile read + ref compare. Immutable holder publishes atomically, so
+    // races are benign (last writer wins with an always-valid pair).
+    private volatile LastHit lastHit;
+
+    /** Immutable (type, mapping) pair for {@link #lastHit}. */
+    private record LastHit(Class<?> type, Mapping<?> mapping) {}
     private final List<AnnotationBridge> bridges;
     // Resolved @JsonValue/@JsonCreator handlers per enum class (empty = none present).
     private final ConcurrentHashMap<Class<?>, Optional<TypeConverter.EnumHandlers>> enumHandlers =
@@ -194,7 +207,7 @@ public final class JqMapper {
         public JqMapper build() {
             JqMapper mapper = new JqMapper(List.copyOf(bridges));
             for (var m : mappings) {
-                mapper.cache.put(m.type(), m);
+                mapper.cache.put(m.type(), new LastHit(m.type(), m));
             }
             return mapper;
         }
@@ -393,9 +406,18 @@ public final class JqMapper {
 
     @SuppressWarnings("unchecked")
     private <T> Mapping<T> getMapping(Class<T> type) {
-        Mapping<?> mapping = cache.get(type);
-        if (mapping != null) return (Mapping<T>) mapping;
-        return (Mapping<T>) cache.computeIfAbsent(type, this::createMapping);
+        LastHit hit = lastHit;
+        if (hit != null && hit.type() == type) return (Mapping<T>) hit.mapping();
+        LastHit resolved = cache.get(type);
+        if (resolved == null) {
+            resolved = cache.computeIfAbsent(type, t -> new LastHit(t, createMapping(t)));
+        }
+        // Always publish: adaptivity (phase changes re-cache in one miss) beats
+        // the alternative — fill-once sticks with setup order and can miss
+        // forever (measured: worse than baseline). Strict alternation pays one
+        // volatile write per op; every repeating shape wins.
+        lastHit = resolved;
+        return (Mapping<T>) resolved.mapping();
     }
 
     private <T> Mapping<T> createMapping(Class<T> type) {
