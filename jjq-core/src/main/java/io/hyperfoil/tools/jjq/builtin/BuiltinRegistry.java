@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -20,7 +21,7 @@ public final class BuiltinRegistry {
 
     private static volatile BuiltinRegistry defaultInstance;
 
-    private final Map<String, BuiltinFunction> builtins = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, BuiltinFunction> builtins = new ConcurrentHashMap<>();
 
     /** Require the input to be a JqArray, throwing a descriptive error if not. */
     private static JqArray requireArray(JqValue input, String operation) {
