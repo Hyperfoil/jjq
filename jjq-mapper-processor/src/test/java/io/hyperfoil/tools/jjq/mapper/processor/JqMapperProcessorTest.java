@@ -2580,6 +2580,87 @@ class JqMapperProcessorTest {
         assertEquals(1, reads.getInt(null));
     }
 
+    @Test
+    void generatedMapping_positionalPathAttributesFailures() throws Exception {
+        // Positional fast path must attribute conversion failures exactly:
+        // a shape mismatch in the second field reports its path, not a bare error.
+        String toolSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Tool(String name) {}
+                """;
+        String bundleSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+
+                @JqMapped
+                public record Bundle(String id, List<Tool> tools) {}
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.Tool", "test.Bundle"},
+                new String[]{toolSource, bundleSource});
+        Class<?> bundleClass = Class.forName("test.Bundle", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        // Ordered document takes the positional path; element failure keeps its path
+        JqValue bad = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(bad, bundleClass));
+        assertTrue(e.getMessage().contains("tools"), e.getMessage());
+        assertTrue(e.getMessage().contains("[1]"), e.getMessage());
+        assertTrue(e instanceof io.hyperfoil.tools.jjq.mapper.ShapeMismatchException);
+        assertEquals("$.tools[1]",
+                ((io.hyperfoil.tools.jjq.mapper.ShapeMismatchException) e).path());
+    }
+
+    @Test
+    void generatedMapping_positionalFallbackMatchesSlowPath() throws Exception {
+        // Out-of-order, extra, missing, and explicit-null documents must bind
+        // identically whether or not the positional guard matches.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Triple(String a, int b, boolean c) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Triple", source);
+        JqMapper mapper = JqMapper.create();
+        var ctor = recordClass.getDeclaredConstructor(String.class, int.class, boolean.class);
+
+        Object ordered = mapper.fromJqValue(
+                JqValues.parse("{\"a\":\"x\",\"b\":2,\"c\":true}"), recordClass);
+        assertEquals(ctor.newInstance("x", 2, true), ordered);
+
+        // Out-of-order takes the fallback with the same result
+        Object shuffled = mapper.fromJqValue(
+                JqValues.parse("{\"c\":true,\"a\":\"x\",\"b\":2}"), recordClass);
+        assertEquals(ordered, shuffled);
+
+        // Extra keys are ignored with the same result
+        Object extra = mapper.fromJqValue(
+                JqValues.parse("{\"a\":\"x\",\"b\":2,\"c\":true,\"z\":9}"), recordClass);
+        assertEquals(ordered, extra);
+
+        // Missing keys default identically
+        Object missing = mapper.fromJqValue(JqValues.parse("{\"a\":\"x\"}"), recordClass);
+        assertEquals(ctor.newInstance("x", 0, false), missing);
+
+        // Explicit nulls still bind as null/defaults identically
+        Object nulled = mapper.fromJqValue(
+                JqValues.parse("{\"a\":null,\"b\":2,\"c\":true}"), recordClass);
+        assertEquals(ctor.newInstance(null, 2, true), nulled);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

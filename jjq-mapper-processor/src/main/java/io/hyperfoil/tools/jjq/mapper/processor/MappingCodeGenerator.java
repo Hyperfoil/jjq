@@ -64,6 +64,25 @@ final class MappingCodeGenerator {
                   .append("\");\n");
             }
         }
+        // Positional fast path (record deser without key hashing/comparison):
+        // eligible when every non-ignored component binds directly. Bindable
+        // fields (direct, deserialized) match doc positions by key identity.
+        boolean positionalEligible = components.stream()
+                .filter(c -> !c.ignored())
+                .allMatch(c -> !c.hasJqField());
+        java.util.List<JqMapperProcessor.ComponentInfo> positional = positionalEligible
+                ? components.stream()
+                    .filter(c -> !c.ignored() && !c.skipDeserialize())
+                    .toList()
+                : java.util.List.of();
+        // Interned key constants for the positional checks (identity compares)
+        for (var comp : positional) {
+            sb.append("    private static final String K_")
+              .append(comp.name().toUpperCase())
+              .append(" = JqValues.internFieldName(\"")
+              .append(escapeJava(comp.jsonName()))
+              .append("\");\n");
+        }
         // Static converter fields for @JqConverter annotations
         var emittedConverters = new java.util.HashSet<String>();
         for (var comp : components) {
@@ -83,7 +102,7 @@ final class MappingCodeGenerator {
         sb.append("\n");
 
         // fromJqValue method
-        generateFromJqValue(sb, recordSimpleName, components, anyInfo);
+        generateFromJqValue(sb, recordSimpleName, components, anyInfo, positional);
 
         // toJqValue method
         generateToJqValue(sb, recordSimpleName, components, anyInfo);
@@ -129,9 +148,44 @@ final class MappingCodeGenerator {
 
     private static void generateFromJqValue(StringBuilder sb, String recordSimpleName,
                                              List<JqMapperProcessor.ComponentInfo> components,
-                                             JqMapperProcessor.AnyInfo anyInfo) {
+                                             JqMapperProcessor.AnyInfo anyInfo,
+                                             List<JqMapperProcessor.ComponentInfo> positional) {
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
+
+        if (!positional.isEmpty()) {
+            // Positional fast path: an ordered doc with exactly the bindable keys
+            // binds by index — pointer compares only, no hashing or equals.
+            // Anything else (reordered/extra/missing keys, non-objects) falls
+            // through to the slow path, which also re-attributes failures.
+            sb.append("        if (input instanceof JqObject _o && _o.size() == ")
+              .append(positional.size());
+            for (int j = 0; j < positional.size(); j++) {
+                var comp = positional.get(j);
+                sb.append("\n                && _o.keyAt(").append(j).append(") == K_")
+                  .append(comp.name().toUpperCase());
+            }
+            sb.append(") {\n");
+            sb.append("            try {\n");
+            sb.append("                return new ").append(recordSimpleName).append("(\n");
+            int slot = 0;
+            for (int i = 0; i < components.size(); i++) {
+                var comp = components.get(i);
+                sb.append("                    ");
+                if (comp.ignored() || comp.skipDeserialize()) {
+                    sb.append(defaultLiteral(comp.typeName()));
+                } else {
+                    generateExtraction(sb, comp, "_o.valueAt(" + (slot++) + ")");
+                }
+                if (i < components.size() - 1) sb.append(",");
+                sb.append("\n");
+            }
+            sb.append("                );\n");
+            sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+            sb.append("                // Fall through for precise failure paths\n");
+            sb.append("            }\n");
+            sb.append("        }\n");
+        }
 
         // Hoist fallible conversions (containers, nested types, custom converters)
         // into locals with path tracking. Scalar extractions cannot fail and stay inline.
@@ -141,7 +195,7 @@ final class MappingCodeGenerator {
             sb.append("        ").append(comp.typeName()).append(" _c").append(i).append(";\n");
             sb.append("        try {\n");
             sb.append("            _c").append(i).append(" = ");
-            generateExtraction(sb, comp);
+            generateExtraction(sb, comp, "P_" + comp.name().toUpperCase() + ".apply(input)");
             sb.append(";\n");
             sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
             sb.append("            throw _e.prependPath(\"").append(escapeJava(comp.jsonName())).append("\");\n");
@@ -163,7 +217,7 @@ final class MappingCodeGenerator {
             } else if (isFallibleExtraction(comp)) {
                 sb.append("_c").append(i);
             } else {
-                generateExtraction(sb, comp);
+                generateExtraction(sb, comp, "P_" + comp.name().toUpperCase() + ".apply(input)");
             }
             if (i < components.size() - 1) sb.append(",");
             sb.append("\n");
@@ -206,10 +260,8 @@ final class MappingCodeGenerator {
         return true;
     }
 
-    private static void generateExtraction(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
-        String program = "P_" + comp.name().toUpperCase();
-        String apply = program + ".apply(input)";
-
+    private static void generateExtraction(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
+                                             String apply) {
         // Custom converter takes priority
         if (comp.converterClass() != null) {
             sb.append("(").append(comp.typeName()).append(") ")
