@@ -21,6 +21,10 @@ public sealed interface JqExpr {
     record CommaExpr(JqExpr left, JqExpr right) implements JqExpr {}
 
     record DotFieldExpr(String field, SourceLocation loc) implements JqExpr {
+        public DotFieldExpr {
+            // Canonicalize so lookups hit key identity against parsed docs
+            field = io.hyperfoil.tools.jjq.value.JqValues.internFieldName(field);
+        }
         public DotFieldExpr(String field) { this(field, SourceLocation.UNKNOWN); }
         @Override public SourceLocation location() { return loc; }
     }

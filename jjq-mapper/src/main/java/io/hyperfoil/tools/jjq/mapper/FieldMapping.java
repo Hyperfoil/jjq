@@ -79,7 +79,8 @@ final class FieldMapping {
     JqValue extract(JqValue input) {
         if (ignored || skipDeserialize) return null;
         if (directFieldName != null) {
-            // Direct field access — bypass JqProgram entirely
+            // Direct field access, bypassing JqProgram entirely. The name is
+            // interned at mapping creation, so identity lookup applies.
             if (input instanceof JqObject obj) return obj.get(directFieldName);
             return JqNull.NULL;
         }

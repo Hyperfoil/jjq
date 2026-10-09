@@ -752,13 +752,14 @@ final class MappingCodeGenerator {
     /**
      * Emit the known-field-name set backing unknown-key forwarding (issue #87).
      * Mirrors the runtime rule: every non-program key, including ignored ones
-     * (ignored keys are skipped entirely, never forwarded).
+     * (ignored keys are skipped entirely, never forwarded). Names are interned
+     * so lookups hit key identity against parsed docs.
      */
     private static void generateAnyKnownSet(StringBuilder sb, java.util.List<String> knownNames) {
         sb.append("    private static final java.util.Set<String> _ANY_KNOWN = java.util.Set.of(");
         for (int i = 0; i < knownNames.size(); i++) {
             if (i > 0) sb.append(", ");
-            sb.append("\"").append(escapeJava(knownNames.get(i))).append("\"");
+            sb.append("JqValues.internFieldName(\"").append(escapeJava(knownNames.get(i))).append("\")");
         }
         sb.append(");\n");
     }
@@ -970,6 +971,17 @@ final class MappingCodeGenerator {
                   .append("\");\n");
             }
         }
+        // Interned key constants for direct tryGet lookups: canonical instances
+        // hit the JqObject identity fast path against parsed docs
+        for (var prop : properties) {
+            if (!prop.ignored() && !prop.skipDeserialize() && !prop.hasJqField()) {
+                sb.append("    private static final String K_")
+                  .append(prop.name().toUpperCase())
+                  .append(" = JqValues.internFieldName(\"")
+                  .append(escapeJava(prop.jsonName()))
+                  .append("\");\n");
+            }
+        }
         // Static converter fields for @JqConverter annotations (mirrors record path)
         var emittedPojoConverters = new java.util.HashSet<String>();
         for (var prop : properties) {
@@ -1024,10 +1036,11 @@ final class MappingCodeGenerator {
                 optVar = null;
             } else {
                 // Single lookup: tryGet distinguishes absent keys (skip, keep
-                // field initializers) from explicit nulls (write) with one probe
+                // field initializers) from explicit nulls (write) with one probe.
+                // K_ holds the interned key, so no equals runs at all.
                 optVar = "_v_" + prop.name();
-                sb.append("        var ").append(optVar).append(" = input.tryGet(\"")
-                  .append(escapeJava(prop.jsonName())).append("\");\n");
+                sb.append("        var ").append(optVar).append(" = input.tryGet(K_")
+                  .append(prop.name().toUpperCase()).append(");\n");
                 writeExpr = buildExtraction(prop, optVar + ".get()");
             }
 

@@ -171,6 +171,10 @@ final class ClassMapping<T> implements Mapping<T> {
                 directFieldName = jsonName;
                 program = null;
             }
+            // Canonicalize for the JqObject identity fast path: same content,
+            // shared instance with parsed docs and compiled programs
+            jsonName = JqValues.internFieldName(jsonName);
+            if (directFieldName != null) directFieldName = jsonName;
 
             // Resolve field-level @JqInclude, then bridge inclusion
             JqInclude fieldInclude = rc.getAnnotation(JqInclude.class);
@@ -362,6 +366,10 @@ final class ClassMapping<T> implements Mapping<T> {
                 directFieldName = jsonName;
                 program = null;
             }
+            // Canonicalize for the JqObject identity fast path: same content,
+            // shared instance with parsed docs and compiled programs
+            jsonName = JqValues.internFieldName(jsonName);
+            if (directFieldName != null) directFieldName = jsonName;
 
             // Resolve getter and setter using priority: public field → getter/setter → setAccessible
             MethodHandle getter = null;

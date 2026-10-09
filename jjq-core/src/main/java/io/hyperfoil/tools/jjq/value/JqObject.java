@@ -598,6 +598,8 @@ public final class JqObject implements JqValue {
         return mv;
     }
 
+
+
     /**
      * Get a field value by key. Returns {@link JqNull#NULL} for missing keys.
      *
@@ -609,10 +611,12 @@ public final class JqObject implements JqValue {
      * <p>Lookup strategy (following SwissTable/IndexMap patterns):</p>
      * <ul>
      *   <li>Size 0: immediate return</li>
-     *   <li>Size 1: direct equals check (no loop, no hash)</li>
-     *   <li>Size 2-{@value #HASH_THRESHOLD}: linear scan with String.equals</li>
+     *   <li>Size 1: direct identity-then-equals check (no loop, no hash)</li>
+     *   <li>Size 2-{@value #HASH_THRESHOLD}: linear scan with identity-then-equals</li>
      *   <li>Size &gt; {@value #HASH_THRESHOLD}: open-addressing hash index (int[] with linear probing)</li>
      * </ul>
+     * Identity is checked before equality throughout, so canonical keys
+     * (see {@link JqValues#internFieldName}) skip character comparison.
      */
     public JqValue get(String key) {
         if (externalMap != null) {
@@ -620,10 +624,10 @@ public final class JqObject implements JqValue {
             return v != null ? v : JqNull.NULL;
         }
         if (size == 0) return JqNull.NULL;
-        if (size == 1) return key.equals(keys[0]) ? values[0] : JqNull.NULL;
+        if (size == 1) return key == keys[0] || key.equals(keys[0]) ? values[0] : JqNull.NULL;
         if (size <= HASH_THRESHOLD) {
             for (int i = 0; i < size; i++) {
-                if (key.equals(keys[i])) return values[i];
+                if (key == keys[i] || key.equals(keys[i])) return values[i];
             }
             return JqNull.NULL;
         }
@@ -653,10 +657,10 @@ public final class JqObject implements JqValue {
             return v != null ? Optional.of(v) : Optional.empty();
         }
         if (size == 0) return Optional.empty();
-        if (size == 1) return key.equals(keys[0]) ? Optional.of(values[0]) : Optional.empty();
+        if (size == 1) return key == keys[0] || key.equals(keys[0]) ? Optional.of(values[0]) : Optional.empty();
         if (size <= HASH_THRESHOLD) {
             for (int i = 0; i < size; i++) {
-                if (key.equals(keys[i])) return Optional.of(values[i]);
+                if (key == keys[i] || key.equals(keys[i])) return Optional.of(values[i]);
             }
             return Optional.empty();
         }
@@ -664,18 +668,20 @@ public final class JqObject implements JqValue {
         return idx >= 0 ? Optional.of(values[idx]) : Optional.empty();
     }
 
+
     public boolean has(String key) {
         if (externalMap != null) return externalMap.containsKey(key);
         if (size == 0) return false;
-        if (size == 1) return key.equals(keys[0]);
+        if (size == 1) return key == keys[0] || key.equals(keys[0]);
         if (size <= HASH_THRESHOLD) {
             for (int i = 0; i < size; i++) {
-                if (key.equals(keys[i])) return true;
+                if (key == keys[i] || key.equals(keys[i])) return true;
             }
             return false;
         }
         return hashLookup(key) >= 0;
     }
+
 
     /**
      * Look up a key in the hash index. Returns the index into keys[]/values[],
@@ -702,7 +708,7 @@ public final class JqObject implements JqValue {
         while (true) {
             int idx = slots[slot];
             if (idx < 0) return -1; // empty slot
-            if (key.equals(keys[idx])) return idx;
+            if (key == keys[idx] || key.equals(keys[idx])) return idx;
             slot = (slot + 1) & mask; // linear probe
         }
     }

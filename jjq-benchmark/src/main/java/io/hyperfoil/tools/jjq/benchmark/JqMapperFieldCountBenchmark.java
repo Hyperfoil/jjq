@@ -86,6 +86,29 @@ public class JqMapperFieldCountBenchmark {
         JACKSON.treeToValue(jn5, FieldCountRecords.Gen5.class);
         JACKSON.treeToValue(jn10, FieldCountRecords.Gen10.class);
         JACKSON.treeToValue(jn20, FieldCountRecords.Gen20.class);
+
+        // Guard against silent fallback: without generated mappings these
+        // benchmarks measure reflection twice under different names.
+        assertGenerated(FieldCountRecords.Gen5.class);
+        assertGenerated(FieldCountRecords.Gen10.class);
+        assertGenerated(FieldCountRecords.Gen20.class);
+    }
+
+    private static void assertGenerated(Class<?> type) {
+        // Mirrors the processor's naming: source-level name with dots, nesting
+        // with underscores, plus _JqMapping (getName's $ separators differ)
+        String canonical = type.getCanonicalName();
+        String mappingName = type.getPackageName() + "."
+                + canonical.substring(type.getPackageName().length() + 1).replace('.', '_')
+                + "_JqMapping";
+        try {
+            Class.forName(mappingName, false, type.getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException(
+                    "No generated mapping " + mappingName
+                            + " — rebuild the benchmark module so the processor runs",
+                    e);
+        }
     }
 
     // ========================================================================
