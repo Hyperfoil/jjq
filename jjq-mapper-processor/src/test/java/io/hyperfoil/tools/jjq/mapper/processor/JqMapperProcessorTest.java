@@ -2661,6 +2661,151 @@ class JqMapperProcessorTest {
         assertEquals(ctor.newInstance(null, 2, true), nulled);
     }
 
+    @Test
+    void generatedMapping_positionalPathAttributesFailuresPojo() throws Exception {
+        // Positional fast path must attribute conversion failures exactly.
+        String toolSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Tool(String name) {}
+                """;
+        String bundleSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+
+                @JqMapped
+                public class ToolBundle {
+                    public String id;
+                    public List<Tool> tools;
+
+                    public ToolBundle() {}
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.Tool", "test.ToolBundle"},
+                new String[]{toolSource, bundleSource});
+        Class<?> bundleClass = Class.forName("test.ToolBundle", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue bad = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(bad, bundleClass));
+        assertTrue(e.getMessage().contains("tools"), e.getMessage());
+        assertTrue(e.getMessage().contains("[1]"), e.getMessage());
+        assertEquals("$.tools[1]",
+                ((io.hyperfoil.tools.jjq.mapper.ShapeMismatchException) e).path());
+    }
+
+    @Test
+    void generatedMapping_positionalFallbackMatchesSlowPathPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class PosPojo {
+                    public String a;
+                    public int b = 7;
+                    public boolean c;
+                    private String priv;
+
+                    public PosPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.PosPojo", source);
+        JqMapper mapper = JqMapper.create();
+        var privField = pojoClass.getDeclaredField("priv");
+        privField.setAccessible(true);
+
+        JqValue orderedJson = JqValues.parse("{\"a\":\"x\",\"b\":2,\"c\":true,\"priv\":\"s\"}");
+        Object ordered = mapper.fromJqValue(orderedJson, pojoClass);
+        assertEquals("x", pojoClass.getField("a").get(ordered));
+        assertEquals(2, pojoClass.getField("b").get(ordered));
+        assertEquals(true, pojoClass.getField("c").get(ordered));
+        assertEquals("s", privField.get(ordered));
+
+        // Out-of-order takes the fallback with the same result
+        Object shuffled = mapper.fromJqValue(
+                JqValues.parse("{\"priv\":\"s\",\"c\":true,\"a\":\"x\",\"b\":2}"), pojoClass);
+        assertEquals("x", pojoClass.getField("a").get(shuffled));
+        assertEquals(2, pojoClass.getField("b").get(shuffled));
+        assertEquals(true, pojoClass.getField("c").get(shuffled));
+        assertEquals("s", privField.get(shuffled));
+
+        // Extra keys are ignored with the same result
+        Object extra = mapper.fromJqValue(
+                JqValues.parse("{\"a\":\"x\",\"b\":2,\"c\":true,\"priv\":\"s\",\"z\":9}"), pojoClass);
+        assertEquals("s", privField.get(extra));
+
+        // Absent keys keep initializers; explicit nulls still write
+        Object missing = mapper.fromJqValue(JqValues.parse("{\"a\":\"x\"}"), pojoClass);
+        assertEquals(7, pojoClass.getField("b").get(missing));
+        assertEquals(false, pojoClass.getField("c").get(missing));
+        assertNull(privField.get(missing));
+
+        Object nulled = mapper.fromJqValue(
+                JqValues.parse("{\"a\":null,\"b\":2,\"c\":true,\"priv\":null}"), pojoClass);
+        assertNull(pojoClass.getField("a").get(nulled));
+        assertNull(privField.get(nulled));
+    }
+
+    @Test
+    void generatedMapping_positionalSkipsAnySetterForwarding() throws Exception {
+        // Exact-key docs take the fast path: no unknown keys exist, so the
+        // forward is correctly skipped; unknown keys still forward via fallback.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
+                import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+
+                @JqMapped
+                public class PosExtras {
+                    public String name;
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    public PosExtras() {}
+
+                    @JqAnySetter
+                    public void setExtra(String key, JqValue value) { extras.put(key, value); }
+
+                    @JqAnyGetter
+                    public Map<String, JqValue> getExtras() { return extras; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.PosExtras", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object exact = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\"}"), pojoClass);
+        assertEquals("t", pojoClass.getField("name").get(exact));
+        Object extras = pojoClass.getMethod("getExtras").invoke(exact);
+        assertTrue(((java.util.Map<?, ?>) extras).isEmpty());
+
+        Object withUnknown = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"mystery\":{\"a\":1}}"), pojoClass);
+        Object extras2 = pojoClass.getMethod("getExtras").invoke(withUnknown);
+        assertEquals(1L, ((JqValue) ((java.util.Map<?, ?>) extras2).get("mystery"))
+                .getField("a").longValue());
+
+        String out = mapper.toJson(withUnknown);
+        assertTrue(out.contains("\"mystery\""), out);
+        assertFalse(out.contains("\"extras\""), out);
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================

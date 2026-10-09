@@ -1072,10 +1072,51 @@ final class MappingCodeGenerator {
         }
         sb.append("\n");
 
+        // Positional fast path (same eligibility rule as records): every
+        // non-ignored property binds directly, so an ordered doc with exactly
+        // the bindable keys skips all lookups — pointer compares only.
+        boolean pojoPositionalEligible = properties.stream()
+                .filter(p -> !p.ignored())
+                .allMatch(p -> !p.hasJqField());
+        java.util.List<JqMapperProcessor.PropertyInfo> pojoPositional = pojoPositionalEligible
+                ? properties.stream()
+                    .filter(p -> !p.ignored() && !p.skipDeserialize()
+                        && pojoWriteStatement(p, "null") != null)
+                    .toList()
+                : java.util.List.of();
+
         // fromJqValue: no-arg constructor + setters
         sb.append("    @Override\n");
         sb.append("    public ").append(classSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
         sb.append("        ").append(classSimpleName).append(" instance = new ").append(classSimpleName).append("();\n");
+
+        if (!pojoPositional.isEmpty()) {
+            // Ordered docs with exactly the bindable keys bind by index.
+            // Anything else (reordered/extra/missing keys, non-objects) falls
+            // through to the slow path, which also re-attributes failures.
+            // Exact keys mean no unknown keys exist, so the any-setter forward
+            // (a proven no-op here) is correctly skipped.
+            sb.append("        if (input instanceof JqObject _o && _o.size() == ")
+              .append(pojoPositional.size());
+            for (int j = 0; j < pojoPositional.size(); j++) {
+                var prop = pojoPositional.get(j);
+                sb.append("\n                && _o.keyAt(").append(j).append(") == K_")
+                  .append(prop.name().toUpperCase());
+            }
+            sb.append(") {\n");
+            sb.append("            try {\n");
+            int slot = 0;
+            for (var prop : pojoPositional) {
+                String statement = pojoWriteStatement(prop,
+                        buildExtraction(prop, "_o.valueAt(" + (slot++) + ")"));
+                sb.append("                ").append(statement).append("\n");
+            }
+            sb.append("                return instance;\n");
+            sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+            sb.append("                // Fall through for precise failure paths\n");
+            sb.append("            }\n");
+            sb.append("        }\n");
+        }
 
         for (var prop : properties) {
             if (prop.ignored() || prop.skipDeserialize()) continue;
@@ -1096,23 +1137,8 @@ final class MappingCodeGenerator {
                 writeExpr = buildExtraction(prop, optVar + ".get()");
             }
 
-            String statement;
-            if (prop.isPublicField() && prop.setterName() == null) {
-                // Direct public field write
-                statement = "instance." + prop.name() + " = " + writeExpr + ";";
-            } else if (prop.setterName() != null) {
-                // Setter method
-                statement = "instance." + prop.setterName() + "(" + writeExpr + ");";
-            } else if (!prop.privateField()) {
-                // Same-package field (package-private/protected): direct write
-                // is legal (mirrors the read fallback in resolvePojoReadExpr)
-                statement = "instance." + prop.name() + " = " + writeExpr + ";";
-            } else if (!prop.finalField()) {
-                // Private non-final field: cached reflection handle, same
-                // setAccessible semantics as the reflection path (issue #104)
-                statement = "writeField(F_" + prop.name().toUpperCase() + ", instance, "
-                        + writeExpr + ");";
-            } else {
+            String statement = pojoWriteStatement(prop, writeExpr);
+            if (statement == null) {
                 // Private final field — read-only (the runtime path skips it too)
                 continue;
             }
@@ -1507,6 +1533,32 @@ final class MappingCodeGenerator {
                 yield "mapper.fromJqValue(" + apply + ", " + typeLiteral(typeName) + ")";
             }
         };
+    }
+
+    /**
+     * Write statement for a POJO property given the value expression, or null
+     * when the property is read-only (private final with no setter — the
+     * runtime path skips it too). Shared by the slow loop and the positional
+     * fast path.
+     */
+    private static String pojoWriteStatement(JqMapperProcessor.PropertyInfo prop, String writeExpr) {
+        if (prop.isPublicField() && prop.setterName() == null) {
+            // Direct public field write
+            return "instance." + prop.name() + " = " + writeExpr + ";";
+        } else if (prop.setterName() != null) {
+            // Setter method
+            return "instance." + prop.setterName() + "(" + writeExpr + ");";
+        } else if (!prop.privateField()) {
+            // Same-package field (package-private/protected): direct write
+            // is legal (mirrors the read fallback in resolvePojoReadExpr)
+            return "instance." + prop.name() + " = " + writeExpr + ";";
+        } else if (!prop.finalField()) {
+            // Private non-final field: cached reflection handle, same
+            // setAccessible semantics as the reflection path (issue #104)
+            return "writeField(F_" + prop.name().toUpperCase() + ", instance, "
+                    + writeExpr + ");";
+        }
+        return null;
     }
 
     /**
