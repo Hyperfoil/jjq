@@ -1247,6 +1247,110 @@ class JqValueTest {
         assertEquals("[]", JqValues.toPrettyJsonString(JqArray.EMPTY));
     }
 
+    @Test
+    void testPrettyPrintJacksonStyle() {
+        var json = JqValues.parse("{\"users\":[{\"name\":\"Alice\"},{\"name\":\"Bob\"}],\"empty\":[]}");
+        String pretty = JqValues.toPrettyJsonString(json, PrettyPrintOptions.JACKSON);
+        assertEquals("""
+                {
+                  "users" : [ {
+                      "name" : "Alice"
+                    }, {
+                      "name" : "Bob"
+                    } ],
+                  "empty" : [ ]
+                }""", pretty);
+    }
+
+    @Test
+    void testPrettyPrintJacksonEmptyObject() {
+        var json = JqValues.parse("{\"nothing\":{}}");
+        assertEquals("""
+                {
+                  "nothing" : { }
+                }""", JqValues.toPrettyJsonString(json, PrettyPrintOptions.JACKSON));
+    }
+
+    @Test
+    void testPrettyPrintSpacedSeparatorBlockArrays() {
+        // Separator and array style are independent knobs
+        var json = JqValues.parse("{\"tags\":[\"a\",\"b\"]}");
+        var options = new PrettyPrintOptions(
+                PrettyPrintOptions.Separator.SPACED,
+                PrettyPrintOptions.ArrayStyle.BLOCK,
+                PrettyPrintOptions.Escaping.STANDARD);
+        assertEquals("""
+                {
+                  "tags" : [
+                    "a",
+                    "b"
+                  ]
+                }""", JqValues.toPrettyJsonString(json, options));
+    }
+
+    @Test
+    void testPrettyPrintStrictEscaping() {
+        // DEL, C1, U+2028, bidi controls escape as uppercase U+XXXX escapes;
+        // short escapes are kept
+        String raw = "a\u007Fb\u0085c\u2028d\u2066e\nf";
+        var json = JqObject.builder().put("k", raw).build();
+        var strict = new PrettyPrintOptions(
+                PrettyPrintOptions.Separator.COMPACT,
+                PrettyPrintOptions.ArrayStyle.BLOCK,
+                PrettyPrintOptions.Escaping.STRICT);
+        assertEquals("""
+                {
+                  "k": "a\\u007Fb\\u0085c\\u2028d\\u2066e\\nf"
+                }""", JqValues.toPrettyJsonString(json, strict));
+    }
+
+    @Test
+    void testPrettyPrintStrictEscapesKeys() {
+        var json = JqObject.builder().put("a\u202Eb", 1).build();
+        var strict = new PrettyPrintOptions(
+                PrettyPrintOptions.Separator.COMPACT,
+                PrettyPrintOptions.ArrayStyle.BLOCK,
+                PrettyPrintOptions.Escaping.STRICT);
+        assertEquals("""
+                {
+                  "a\\u202Eb": 1
+                }""", JqValues.toPrettyJsonString(json, strict));
+    }
+
+    @Test
+    void testPrettyPrintStandardPassesControlsRaw() {
+        // Defaults unchanged: DEL/C1/U+2028 pass through raw
+        String raw = "a\u007Fb";
+        var json = JqObject.builder().put("k", raw).build();
+        String pretty = JqValues.toPrettyJsonString(json);
+        assertTrue(pretty.contains(raw), pretty);
+    }
+
+    @Test
+    void testPrettyPrintDefaultOptionEqualsNoArg() {
+        var json = JqValues.parse("{\"users\":[{\"name\":\"Alice\"}],\"empty\":{}}");
+        assertEquals(JqValues.toPrettyJsonString(json),
+                JqValues.toPrettyJsonString(json, PrettyPrintOptions.DEFAULT));
+    }
+
+    @Test
+    void testPrettyPrintRoundTrip() {
+        var json = JqValues.parse("{\"users\":[{\"name\":\"Alice\"},{\"name\":\"Bob\"}],\"empty\":[]}");
+        String pretty = JqValues.toPrettyJsonString(json, PrettyPrintOptions.JACKSON);
+        assertEquals(json.toJsonString(), JqValues.parse(pretty).toJsonString());
+    }
+
+    @Test
+    void testPrettyPrintStrictTopLevelScalar() {
+        var strict = new PrettyPrintOptions(
+                PrettyPrintOptions.Separator.COMPACT,
+                PrettyPrintOptions.ArrayStyle.BLOCK,
+                PrettyPrintOptions.Escaping.STRICT);
+        assertEquals("\"a\\u007Fb\"", JqValues.toPrettyJsonString(JqString.of("a\u007Fb"), strict));
+        // Standard top-level scalars keep compact behavior
+        assertEquals("\"hi\"", JqValues.toPrettyJsonString(JqString.of("hi")));
+    }
+
     // ========================================================================
     //  JqNumber.of(Number) tests
     // ========================================================================
@@ -2768,7 +2872,7 @@ class JqValueTest {
 
     @Test
     void testEstimatedSizeBytesProgrammaticObject() {
-        JqObject obj = JqObject.builder().put("a", 1).build();
+        JqObject obj = JqObject.builder().put("a\u202Eb", 1).build();
         assertEquals(1, obj.estimatedSizeInBytes(),
                 "Programmatic values should return 1 (default)");
     }

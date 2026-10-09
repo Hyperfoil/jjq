@@ -810,10 +810,33 @@ public final class JqValues {
      * For performance-sensitive serialization, use {@link JqValue#toJsonString()} instead.</p>
      */
     public static String toPrettyJsonString(JqValue value) {
-        if (value.isScalar()) return value.toJsonString();
+        return toPrettyJsonString(value, PrettyPrintOptions.DEFAULT);
+    }
+
+    /**
+     * Serialize a JqValue to an indented, human-readable JSON string with explicit style control.
+     *
+     * @param value   the JqValue to serialize
+     * @param options the output style (separator, array layout, escaping policy)
+     * @return the formatted JSON string
+     * @see PrettyPrintOptions
+     */
+    public static String toPrettyJsonString(JqValue value, PrettyPrintOptions options) {
+        java.util.Objects.requireNonNull(options, "options");
+        if (value.isScalar()) {
+            if (value instanceof JqString s
+                    && options.escaping() == PrettyPrintOptions.Escaping.STRICT) {
+                StringBuilder sb = new StringBuilder(s.stringValue().length() + 16);
+                sb.append('"');
+                JqString.escapeJson(s.stringValue(), sb, options.escaping());
+                sb.append('"');
+                return sb.toString();
+            }
+            return value.toJsonString();
+        }
         StringBuilder sb = SERIALIZER_BUFFER.get();
         sb.setLength(0);
-        appendPretty(value, sb, 0);
+        appendPretty(value, sb, 0, options);
         String result = sb.toString();
         if (sb.capacity() > SERIALIZE_BUFFER_MAX_RETAINED) {
             SERIALIZER_BUFFER.set(new StringBuilder(SERIALIZE_BUFFER_INIT));
@@ -821,10 +844,10 @@ public final class JqValues {
         return result;
     }
 
-    private static void appendPretty(JqValue value, StringBuilder sb, int depth) {
+    private static void appendPretty(JqValue value, StringBuilder sb, int depth, PrettyPrintOptions options) {
         switch (value) {
             case JqObject obj -> {
-                if (obj.size() == 0) { sb.append("{}"); return; }
+                if (obj.size() == 0) { sb.append(options.emptyObject()); return; }
                 sb.append("{\n");
                 boolean first = true;
                 for (var entry : obj.objectValue().entrySet()) {
@@ -832,25 +855,40 @@ public final class JqValues {
                     first = false;
                     appendIndent(sb, depth + 1);
                     sb.append('"');
-                    JqString.escapeJson(entry.getKey(), sb);
-                    sb.append("\": ");
-                    appendPretty(entry.getValue(), sb, depth + 1);
+                    JqString.escapeJson(entry.getKey(), sb, options.escaping());
+                    sb.append('"');
+                    sb.append(options.separator().text());
+                    appendPretty(entry.getValue(), sb, depth + 1, options);
                 }
                 sb.append('\n');
                 appendIndent(sb, depth);
                 sb.append('}');
             }
             case JqArray arr -> {
-                if (arr.size() == 0) { sb.append("[]"); return; }
+                if (arr.size() == 0) { sb.append(options.emptyArray()); return; }
+                if (options.arrayStyle() == PrettyPrintOptions.ArrayStyle.FLOW) {
+                    sb.append("[ ");
+                    for (int i = 0; i < arr.size(); i++) {
+                        if (i > 0) sb.append(", ");
+                        appendPretty(arr.get(i), sb, depth + 1, options);
+                    }
+                    sb.append(" ]");
+                    return;
+                }
                 sb.append("[\n");
                 for (int i = 0; i < arr.size(); i++) {
                     if (i > 0) sb.append(",\n");
                     appendIndent(sb, depth + 1);
-                    appendPretty(arr.get(i), sb, depth + 1);
+                    appendPretty(arr.get(i), sb, depth + 1, options);
                 }
                 sb.append('\n');
                 appendIndent(sb, depth);
                 sb.append(']');
+            }
+            case JqString s -> {
+                sb.append('"');
+                JqString.escapeJson(s.stringValue(), sb, options.escaping());
+                sb.append('"');
             }
             default -> value.appendTo(sb);
         }

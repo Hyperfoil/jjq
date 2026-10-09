@@ -167,6 +167,64 @@ public final class JqString implements JqValue {
         if (start < len) sb.append(s, start, len);
     }
 
+    /** Uppercase hex digits for {@code \\uXXXX} escapes. */
+    private static final char[] HEX_DIGITS = "0123456789ABCDEF".toCharArray();
+
+    /**
+     * Escape a string with an explicit policy.
+     *
+     * @param s      the string content (without surrounding quotes)
+     * @param sb     the buffer to append the escaped content to
+     * @param policy {@code STANDARD} behaves exactly like {@link #escapeJson(String, StringBuilder)};
+     *               {@code STRICT} additionally emits every other
+     *               {@link Character#isISOControl} character (DEL, C1) plus
+     *               U+2028–U+202E and U+2066–U+2069 as uppercase
+     *               {@code \\uXXXX}, keeping short escapes ({@code \n} etc.).
+     *               Lone surrogates and supplementary characters pass through
+     *               in both policies.
+     */
+    public static void escapeJson(String s, StringBuilder sb, PrettyPrintOptions.Escaping policy) {
+        if (policy == PrettyPrintOptions.Escaping.STANDARD) {
+            escapeJson(s, sb);
+            return;
+        }
+        final int len = s.length();
+        int start = 0; // start of current clean segment
+        for (int i = 0; i < len; i++) {
+            char c = s.charAt(i);
+            if (!needsStrictEscape(c)) continue; // common case: no escaping needed
+            // Flush the clean segment before this character
+            if (i > start) sb.append(s, start, i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    sb.append("\\u");
+                    sb.append(HEX_DIGITS[(c >> 12) & 0xF]);
+                    sb.append(HEX_DIGITS[(c >> 8) & 0xF]);
+                    sb.append(HEX_DIGITS[(c >> 4) & 0xF]);
+                    sb.append(HEX_DIGITS[c & 0xF]);
+                }
+            }
+            start = i + 1;
+        }
+        // Flush remaining clean segment
+        if (start < len) sb.append(s, start, len);
+    }
+
+    /** True when {@code STRICT} escaping must escape the character. */
+    private static boolean needsStrictEscape(char c) {
+        if (c == '"' || c == '\\') return true;
+        if (Character.isISOControl(c)) return true;
+        if (c >= 0x2028 && c <= 0x202E) return true;
+        return c >= 0x2066 && c <= 0x2069;
+    }
+
     /**
      * Format a string for jq error messages: uses JSON-style escaping for
      * control characters, matching jq's error message convention.
