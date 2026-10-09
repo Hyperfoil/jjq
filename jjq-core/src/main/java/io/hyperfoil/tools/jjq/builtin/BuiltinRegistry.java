@@ -11,9 +11,16 @@ import io.hyperfoil.tools.jjq.value.*;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class BuiltinRegistry {
@@ -84,7 +91,7 @@ public final class BuiltinRegistry {
      */
     /** All default builtin keys ({@code name/arity}), without loading any. */
     /** All default builtin keys ({@code name/arity}), without loading any. */
-    private static final java.util.Set<String> DEFAULT_KEYS = java.util.Set.of(
+    private static final Set<String> DEFAULT_KEYS = Set.of(
             "length/0",
             "utf8bytelength/0",
             "keys/0",
@@ -293,7 +300,7 @@ public final class BuiltinRegistry {
             case "utf8bytelength/0" -> (input, args, env, eval, out) -> {
 
             if (input instanceof JqString s) {
-                out.accept(JqNumber.of(s.stringValue().getBytes(java.nio.charset.StandardCharsets.UTF_8).length));
+                out.accept(JqNumber.of(s.stringValue().getBytes(StandardCharsets.UTF_8).length));
             } else {
                 throw new JqException(input.type().jqName() + " (" + input.toJsonString() + ") only strings have UTF-8 byte length");
             }
@@ -983,7 +990,7 @@ public final class BuiltinRegistry {
             var matcher = Pattern.compile(regex).matcher(s.stringValue());
             if (matcher.find()) {
                 String replacement = eval.eval(args.get(1), JqString.of(matcher.group()), env).getFirst().stringValue();
-                out.accept(JqString.of(matcher.replaceFirst(java.util.regex.Matcher.quoteReplacement(replacement))));
+                out.accept(JqString.of(matcher.replaceFirst(Matcher.quoteReplacement(replacement))));
             } else {
                 out.accept(input);
             }
@@ -996,7 +1003,7 @@ public final class BuiltinRegistry {
             var sb = new StringBuilder();
             while (matcher.find()) {
                 String replacement = eval.eval(args.get(1), JqString.of(matcher.group()), env).getFirst().stringValue();
-                matcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(replacement));
+                matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
             }
             matcher.appendTail(sb);
             out.accept(JqString.of(sb.toString()));
@@ -1484,7 +1491,7 @@ public final class BuiltinRegistry {
             if (allFlat) {
                 JqArray arr = (JqArray) input;
                 int len = arr.arrayValue().size();
-                var toRemove = new java.util.TreeSet<Integer>();
+                var toRemove = new TreeSet<Integer>();
                 for (JqExpr sub : subExprs) {
                     if (sub instanceof JqExpr.IndexExpr idx) {
                         for (JqValue index : eval.eval(idx.index(), input, env)) {
@@ -1659,13 +1666,13 @@ public final class BuiltinRegistry {
             case "todate/0" -> (input, args, env, eval, out) -> {
 
             long epoch = input.longValue();
-            var instant = java.time.Instant.ofEpochSecond(epoch);
-            out.accept(JqString.of(java.time.format.DateTimeFormatter.ISO_INSTANT.format(instant)));
+            var instant = Instant.ofEpochSecond(epoch);
+            out.accept(JqString.of(DateTimeFormatter.ISO_INSTANT.format(instant)));
         };
             case "fromdate/0" -> (input, args, env, eval, out) -> {
 
             if (!(input instanceof JqString s)) throw new JqException("fromdate requires string input");
-            var instant = java.time.Instant.parse(s.stringValue());
+            var instant = Instant.parse(s.stringValue());
             out.accept(JqNumber.of(instant.getEpochSecond()));
         };
             case "strftime/1" -> (input, args, env, eval, out) -> {
@@ -1673,10 +1680,10 @@ public final class BuiltinRegistry {
             JqValue fmtVal = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(fmtVal instanceof JqString)) throw new JqException("strftime/1 requires a string format");
             String format = fmtVal.stringValue();
-            java.time.ZonedDateTime zdt;
+            ZonedDateTime zdt;
             if (input instanceof JqNumber n) {
-                zdt = java.time.ZonedDateTime.ofInstant(
-                        java.time.Instant.ofEpochSecond(n.longValue()), java.time.ZoneOffset.UTC);
+                zdt = ZonedDateTime.ofInstant(
+                        Instant.ofEpochSecond(n.longValue()), ZoneOffset.UTC);
             } else if (input instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
                 for (int i = 0; i < arr.arrayValue().size(); i++) {
                     if (!(arr.arrayValue().get(i) instanceof JqNumber)) {
@@ -1687,7 +1694,7 @@ public final class BuiltinRegistry {
             } else {
                 throw new JqException("strftime/1 requires parsed datetime inputs");
             }
-            var formatter = java.time.format.DateTimeFormatter.ofPattern(
+            var formatter = DateTimeFormatter.ofPattern(
                     jqFormatToJava(format));
             out.accept(JqString.of(formatter.format(zdt)));
         };
@@ -1696,8 +1703,8 @@ public final class BuiltinRegistry {
             double epochDouble = input.doubleValue();
             long epochSec = (long) Math.floor(epochDouble);
             double frac = epochDouble - epochSec;
-            var instant = java.time.Instant.ofEpochSecond(epochSec);
-            var zdt = java.time.ZonedDateTime.ofInstant(instant, java.time.ZoneOffset.UTC);
+            var instant = Instant.ofEpochSecond(epochSec);
+            var zdt = ZonedDateTime.ofInstant(instant, ZoneOffset.UTC);
             JqValue seconds = frac != 0.0
                     ? JqNumber.of(zdt.getSecond() + frac)
                     : JqNumber.of(zdt.getSecond());
@@ -1730,10 +1737,10 @@ public final class BuiltinRegistry {
             String unit = eval.eval(args.get(0), input, env).getFirst().stringValue();
             long amount = eval.eval(args.get(1), input, env).getFirst().longValue();
             long epoch = input.longValue();
-            var instant = java.time.Instant.ofEpochSecond(epoch);
+            var instant = Instant.ofEpochSecond(epoch);
             instant = switch (unit) {
-                case "years" -> instant.atZone(java.time.ZoneOffset.UTC).plusYears(amount).toInstant();
-                case "months" -> instant.atZone(java.time.ZoneOffset.UTC).plusMonths(amount).toInstant();
+                case "years" -> instant.atZone(ZoneOffset.UTC).plusYears(amount).toInstant();
+                case "months" -> instant.atZone(ZoneOffset.UTC).plusMonths(amount).toInstant();
                 case "days" -> instant.plusSeconds(amount * 86400);
                 case "hours" -> instant.plusSeconds(amount * 3600);
                 case "minutes" -> instant.plusSeconds(amount * 60);
@@ -1747,10 +1754,10 @@ public final class BuiltinRegistry {
             String unit = eval.eval(args.get(0), input, env).getFirst().stringValue();
             long amount = eval.eval(args.get(1), input, env).getFirst().longValue();
             long epoch = input.longValue();
-            var instant = java.time.Instant.ofEpochSecond(epoch);
+            var instant = Instant.ofEpochSecond(epoch);
             instant = switch (unit) {
-                case "years" -> instant.atZone(java.time.ZoneOffset.UTC).minusYears(amount).toInstant();
-                case "months" -> instant.atZone(java.time.ZoneOffset.UTC).minusMonths(amount).toInstant();
+                case "years" -> instant.atZone(ZoneOffset.UTC).minusYears(amount).toInstant();
+                case "months" -> instant.atZone(ZoneOffset.UTC).minusMonths(amount).toInstant();
                 case "days" -> instant.minusSeconds(amount * 86400);
                 case "hours" -> instant.minusSeconds(amount * 3600);
                 case "minutes" -> instant.minusSeconds(amount * 60);
@@ -1765,10 +1772,10 @@ public final class BuiltinRegistry {
             eval.eval(args.getFirst(), input, env, fmtVal -> {
             if (!(fmtVal instanceof JqString)) throw new JqException("strflocaltime/1 requires a string format");
             String format = fmtVal.stringValue();
-            java.time.ZonedDateTime zdt;
+            ZonedDateTime zdt;
             if (input instanceof JqNumber n) {
-                zdt = java.time.ZonedDateTime.ofInstant(
-                        java.time.Instant.ofEpochSecond(n.longValue()), java.time.ZoneOffset.UTC);
+                zdt = ZonedDateTime.ofInstant(
+                        Instant.ofEpochSecond(n.longValue()), ZoneOffset.UTC);
             } else if (input instanceof JqArray arr && !arr.arrayValue().isEmpty()) {
                 for (int i = 0; i < arr.arrayValue().size(); i++) {
                     if (!(arr.arrayValue().get(i) instanceof JqNumber)) {
@@ -1779,7 +1786,7 @@ public final class BuiltinRegistry {
             } else {
                 throw new JqException("strflocaltime/1 requires parsed datetime inputs");
             }
-            var formatter = java.time.format.DateTimeFormatter.ofPattern(jqFormatToJava(format));
+            var formatter = DateTimeFormatter.ofPattern(jqFormatToJava(format));
             out.accept(JqString.of(formatter.format(zdt)));
             });
         };
@@ -1790,9 +1797,9 @@ public final class BuiltinRegistry {
             JqValue fmtVal = eval.eval(args.getFirst(), input, env).getFirst();
             if (!(fmtVal instanceof JqString)) throw new JqException("strptime/1 requires a string format");
             String format = fmtVal.stringValue();
-            var formatter = java.time.format.DateTimeFormatter.ofPattern(jqFormatToJava(format));
-            var parsed = java.time.LocalDateTime.parse(s.stringValue(), formatter);
-            var zdt = parsed.atZone(java.time.ZoneOffset.UTC);
+            var formatter = DateTimeFormatter.ofPattern(jqFormatToJava(format));
+            var parsed = LocalDateTime.parse(s.stringValue(), formatter);
+            var zdt = parsed.atZone(ZoneOffset.UTC);
             out.accept(JqArray.of(List.of(
                     JqNumber.of(zdt.getYear()),
                     JqNumber.of(zdt.getMonthValue() - 1),
@@ -2211,7 +2218,7 @@ public final class BuiltinRegistry {
 
             // IN(stream; filter) — check if any output of stream is in filter's outputs
             var filterOutputs = eval.eval(args.get(1), input, env);
-            var filterSet = new java.util.HashSet<>(filterOutputs);
+            var filterSet = new HashSet<>(filterOutputs);
             var streamOutputs = eval.eval(args.get(0), input, env);
             boolean found = false;
             for (JqValue v : streamOutputs) {
@@ -2224,11 +2231,11 @@ public final class BuiltinRegistry {
 
             JqValue idx = eval.eval(args.get(0), input, env).getFirst();
             JqArray arr = requireArray(input, "JOIN");
-            var results = new java.util.ArrayList<JqValue>();
+            var results = new ArrayList<JqValue>();
             for (JqValue elem : arr.arrayValue()) {
                 JqValue key = eval.eval(args.get(1), elem, env).getFirst();
                 JqValue looked = (idx instanceof JqObject obj) ? obj.objectValue().get(key.stringValue()) : null;
-                results.add(JqArray.of(java.util.List.of(elem, looked != null ? looked : JqNull.NULL)));
+                results.add(JqArray.of(List.of(elem, looked != null ? looked : JqNull.NULL)));
             }
             out.accept(JqArray.of(results));
         };
@@ -2316,9 +2323,9 @@ public final class BuiltinRegistry {
     }
 
     public Set<String> keySet() {
-        var all = new java.util.LinkedHashSet<>(DEFAULT_KEYS);
+        var all = new LinkedHashSet<>(DEFAULT_KEYS);
         all.addAll(builtins.keySet());
-        return java.util.Collections.unmodifiableSet(all);
+        return Collections.unmodifiableSet(all);
     }
 
     // Helper methods
@@ -2414,8 +2421,8 @@ public final class BuiltinRegistry {
 
     private void flattenArray(JqArray arr, List<JqValue> result, int depth) {
         // Iterative flattening to avoid stack overflow on deeply nested arrays
-        record Frame(java.util.Iterator<JqValue> iter, int depth) {}
-        var stack = new java.util.ArrayDeque<Frame>();
+        record Frame(Iterator<JqValue> iter, int depth) {}
+        var stack = new ArrayDeque<Frame>();
         stack.push(new Frame(arr.arrayValue().iterator(), depth));
         while (!stack.isEmpty()) {
             var frame = stack.peek();
@@ -2636,7 +2643,7 @@ public final class BuiltinRegistry {
         return result;
     }
 
-    private JqValue buildMatchResult(java.util.regex.Matcher matcher) {
+    private JqValue buildMatchResult(Matcher matcher) {
         var map = new LinkedHashMap<String, JqValue>();
         map.put("offset", JqNumber.of(matcher.start()));
         map.put("length", JqNumber.of(matcher.end() - matcher.start()));
@@ -2947,7 +2954,7 @@ public final class BuiltinRegistry {
         }
     }
 
-    private java.time.ZonedDateTime brokenDownTimeToZdt(JqArray arr) {
+    private ZonedDateTime brokenDownTimeToZdt(JqArray arr) {
         var items = arr.arrayValue();
         int year = items.size() > 0 ? (int) items.get(0).longValue() : 1970;
         int month = items.size() > 1 ? (int) items.get(1).longValue() + 1 : 1;
@@ -2955,8 +2962,8 @@ public final class BuiltinRegistry {
         int hour = items.size() > 3 ? (int) items.get(3).longValue() : 0;
         int minute = items.size() > 4 ? (int) items.get(4).longValue() : 0;
         int second = items.size() > 5 ? (int) items.get(5).longValue() : 0;
-        return java.time.ZonedDateTime.of(year, month, day, hour, minute, second, 0,
-                java.time.ZoneOffset.UTC);
+        return ZonedDateTime.of(year, month, day, hour, minute, second, 0,
+                ZoneOffset.UTC);
     }
 
     private String jqFormatToJava(String format) {
