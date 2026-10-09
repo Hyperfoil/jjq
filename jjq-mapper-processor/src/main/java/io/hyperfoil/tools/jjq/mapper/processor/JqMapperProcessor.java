@@ -99,6 +99,9 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         // Collect record component metadata
         List<ComponentInfo> components = new ArrayList<>();
+        // Shared CONV_ field names per converter class (issue #116)
+        var convFields = new java.util.LinkedHashMap<String, String>();
+        var usedConvNames = new java.util.HashSet<String>();
         for (Element enclosed : recordType.getEnclosedElements()) {
             if (enclosed instanceof RecordComponentElement rc) {
                 String name = rc.getSimpleName().toString();
@@ -161,6 +164,9 @@ public class JqMapperProcessor extends AbstractProcessor {
                 String serName = (jqField != null) ? name : jsonName; // @JqField overrides naming
                 String converterClass = resolveConverterClass(rc);
                 if (converterClass != null && !validateConverter(rc, mappingPackage)) return null;
+                String converterField = converterClass != null && !ignored
+                        ? converterFieldFor(convFields, usedConvNames, converterClass)
+                        : null;
 
                 // Native @JqAccess wins over the bridged access (issue #113)
                 String rcAccess = nativeAccess(rc);
@@ -169,7 +175,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                 if (adapter == null && rc.getAnnotation(JqAdapter.class) != null) return null;
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
-                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter));
+                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField));
             }
         }
 
@@ -232,6 +238,9 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();
+        // Shared CONV_ field names per converter class (issue #116)
+        var convFields = new java.util.LinkedHashMap<String, String>();
+        var usedConvNames = new java.util.HashSet<String>();
         // Collect method names for getter/setter resolution (+ Elements for annotation reads)
         var methods = new java.util.HashSet<String>();
         var methodElements = new java.util.HashMap<String, Element>();
@@ -346,10 +355,13 @@ public class JqMapperProcessor extends AbstractProcessor {
                     || hasJacksonJsonIgnore(methodElements.get(setterName));
             AdapterInfo adapter = resolveAdapterInfo(field, field.asType(), mappingPackage);
             if (adapter == null && field.getAnnotation(JqAdapter.class) != null) return null;
+            String converterField = converterClass != null && !ignored
+                    ? converterFieldFor(convFields, usedConvNames, converterClass)
+                    : null;
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
-                    skipSer, skipDeser, isPrivate, isFinal, adapter));
+                    skipSer, skipDeser, isPrivate, isFinal, adapter, converterField));
         }
 
         // Generate the mapping class
@@ -893,14 +905,35 @@ public class JqMapperProcessor extends AbstractProcessor {
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                          String inclusion, String converterClass, boolean nestedRecord,
-                         boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter) {}
+                         boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter,
+                         String converterField) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
                         String converterClass, boolean nestedRecord,
                         boolean skipSerialize, boolean skipDeserialize,
-                        boolean privateField, boolean finalField, AdapterInfo adapter) {}
+                        boolean privateField, boolean finalField, AdapterInfo adapter,
+                        String converterField) {}
+
+    /**
+     * Shared {@code CONV_} field name per converter class, first-seen order
+     * (issue #116): fields sharing a class share one static instance.
+     * Colliding simple names disambiguate with a counter suffix.
+     *
+     * @return the full field name (including the {@code CONV_} prefix)
+     */
+    private static String converterFieldFor(java.util.Map<String, String> assigned,
+            java.util.Set<String> used, String converterClass) {
+        return assigned.computeIfAbsent(converterClass, cls -> {
+            String base = "CONV_" + cls.substring(cls.lastIndexOf('.') + 1)
+                    .toUpperCase(java.util.Locale.ROOT);
+            String name = base;
+            for (int i = 2; used.contains(name); i++) name = base + "_" + i;
+            used.add(name);
+            return name;
+        });
+    }
 
     /**
      * Compile-time adapter descriptor: resolved method names plus call shapes

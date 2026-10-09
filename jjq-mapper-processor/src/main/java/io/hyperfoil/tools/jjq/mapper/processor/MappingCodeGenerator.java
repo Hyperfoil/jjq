@@ -65,10 +65,12 @@ final class MappingCodeGenerator {
             }
         }
         // Static converter fields for @JqConverter annotations
+        var emittedConverters = new java.util.HashSet<String>();
         for (var comp : components) {
-            if (!comp.ignored() && comp.converterClass() != null) {
-                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> CONV_")
-                  .append(comp.name().toUpperCase())
+            if (!comp.ignored() && comp.converterClass() != null
+                    && emittedConverters.add(comp.converterField())) {
+                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> ")
+                  .append(comp.converterField())
                   .append(" = new ").append(comp.converterClass()).append("();\n");
             }
         }
@@ -210,8 +212,8 @@ final class MappingCodeGenerator {
 
         // Custom converter takes priority
         if (comp.converterClass() != null) {
-            sb.append("(").append(comp.typeName()).append(") CONV_")
-              .append(comp.name().toUpperCase()).append(".fromJqValue(").append(apply).append(")");
+            sb.append("(").append(comp.typeName()).append(") ")
+              .append(comp.converterField()).append(".fromJqValue(").append(apply).append(")");
             return;
         }
 
@@ -408,8 +410,8 @@ final class MappingCodeGenerator {
 
         // Custom converter takes priority
         if (comp.converterClass() != null) {
-            sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append(")");
+            sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
+              .append(comp.converterField()).append(").toJqValue(").append(accessor).append(")");
             return;
         }
 
@@ -543,8 +545,8 @@ final class MappingCodeGenerator {
     private static void appendJsonValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (comp.converterClass() != null) {
-            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append("));\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
+              .append(comp.converterField()).append(").toJqValue(").append(accessor).append("));\n");
             return;
         }
         if (comp.adapter() != null) {
@@ -671,8 +673,8 @@ final class MappingCodeGenerator {
     private static void appendJsonBytesValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (comp.converterClass() != null) {
-            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(comp.name().toUpperCase()).append(").toJqValue(").append(accessor).append("));\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
+              .append(comp.converterField()).append(").toJqValue(").append(accessor).append("));\n");
             return;
         }
         if (comp.adapter() != null) {
@@ -963,10 +965,12 @@ final class MappingCodeGenerator {
             }
         }
         // Static converter fields for @JqConverter annotations (mirrors record path)
+        var emittedPojoConverters = new java.util.HashSet<String>();
         for (var prop : properties) {
-            if (!prop.ignored() && prop.converterClass() != null) {
-                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> CONV_")
-                  .append(prop.name().toUpperCase())
+            if (!prop.ignored() && prop.converterClass() != null
+                    && emittedPojoConverters.add(prop.converterField())) {
+                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> ")
+                  .append(prop.converterField())
                   .append(" = new ").append(prop.converterClass()).append("();\n");
             }
         }
@@ -1238,8 +1242,8 @@ final class MappingCodeGenerator {
                                                      JqMapperProcessor.PropertyInfo prop, String readExpr) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (prop.converterClass() != null) {
-            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append("));\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
+              .append(prop.converterField()).append(").toJqValue(").append(readExpr).append("));\n");
             return;
         }
         if (prop.adapter() != null) {
@@ -1309,8 +1313,8 @@ final class MappingCodeGenerator {
                                                 JqMapperProcessor.PropertyInfo prop, String readExpr) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (prop.converterClass() != null) {
-            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append("));\n");
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
+              .append(prop.converterField()).append(").toJqValue(").append(readExpr).append("));\n");
             return;
         }
         if (prop.adapter() != null) {
@@ -1377,7 +1381,7 @@ final class MappingCodeGenerator {
     private static String buildExtraction(JqMapperProcessor.PropertyInfo prop, String apply) {
         // Custom converter takes priority (mirrors record generateExtraction)
         if (prop.converterClass() != null) {
-            return "(" + prop.typeName() + ") CONV_" + prop.name().toUpperCase()
+            return "(" + prop.typeName() + ") " + prop.converterField()
                     + ".fromJqValue(" + apply + ")";
         }
         // Static adapter: direct call, null short-circuits without calling (issue #120)
@@ -1483,8 +1487,8 @@ final class MappingCodeGenerator {
                                                            JqMapperProcessor.PropertyInfo prop, String readExpr) {
         // Custom converter takes priority (mirrors record path)
         if (prop.converterClass() != null) {
-            sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) CONV_")
-              .append(prop.name().toUpperCase()).append(").toJqValue(").append(readExpr).append(")");
+            sb.append("((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
+              .append(prop.converterField()).append(").toJqValue(").append(readExpr).append(")");
             return;
         }
         // Static adapter: direct call with the shared null contract (issue #120)

@@ -2391,6 +2391,117 @@ class JqMapperProcessorTest {
         assertTrue(out.contains("\"kind\":\"fast\""), out);
     }
 
+    @Test
+    void generatedMapping_sharedConverterInstance() throws Exception {
+        // Issue #116: fields sharing a converter class share one instance.
+        String converterSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                import io.hyperfoil.tools.jjq.value.JqString;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+
+                public class UpperConverter implements ValueConverter<String> {
+                    @Override
+                    public String fromJqValue(JqValue value) {
+                        return value.isNull() ? null : value.stringValue().toUpperCase();
+                    }
+
+                    @Override
+                    public JqValue toJqValue(String value) {
+                        return value == null ? io.hyperfoil.tools.jjq.value.JqNull.NULL : JqString.of(value.toLowerCase());
+                    }
+                }
+                """;
+        String recordSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record TwoStrings(@JqConverter(UpperConverter.class) String first,
+                        @JqConverter(UpperConverter.class) String second) {}
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.UpperConverter", "test.TwoStrings"},
+                new String[]{converterSource, recordSource});
+        Class<?> recordClass = Class.forName("test.TwoStrings", true, loader);
+        Class<?> mappingClass = Class.forName("test.TwoStrings_JqMapping", true, loader);
+
+        long instances = java.util.Arrays.stream(mappingClass.getDeclaredFields())
+                .filter(f -> io.hyperfoil.tools.jjq.mapper.ValueConverter.class
+                        .isAssignableFrom(f.getType()))
+                .count();
+        assertEquals(1, instances);
+
+        JqMapper mapper = JqMapper.create();
+        JqValue json = JqValues.parse("{\"first\":\"a\",\"second\":\"b\"}");
+        Object r = mapper.fromJqValue(json, recordClass);
+        assertEquals("A", recordClass.getMethod("first").invoke(r));
+        assertEquals("B", recordClass.getMethod("second").invoke(r));
+        JqValue back = mapper.toJqValue(r);
+        assertEquals("a", back.getField("first").stringValue());
+        assertEquals("b", back.getField("second").stringValue());
+    }
+
+    @Test
+    void generatedMapping_sharedConverterInstancePojo() throws Exception {
+        String converterSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.ValueConverter;
+                import io.hyperfoil.tools.jjq.value.JqString;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+
+                public class LowerConverter implements ValueConverter<String> {
+                    @Override
+                    public String fromJqValue(JqValue value) {
+                        return value.isNull() ? null : value.stringValue().toLowerCase();
+                    }
+
+                    @Override
+                    public JqValue toJqValue(String value) {
+                        return value == null ? io.hyperfoil.tools.jjq.value.JqNull.NULL : JqString.of(value.toUpperCase());
+                    }
+                }
+                """;
+        String pojoSource = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqConverter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class TwoFields {
+                    @JqConverter(LowerConverter.class)
+                    public String first;
+                    @JqConverter(LowerConverter.class)
+                    public String second;
+
+                    public TwoFields() {}
+                }
+                """;
+
+        URLClassLoader loader = compileSources(
+                new String[]{"test.LowerConverter", "test.TwoFields"},
+                new String[]{converterSource, pojoSource});
+        Class<?> pojoClass = Class.forName("test.TwoFields", true, loader);
+        Class<?> mappingClass = Class.forName("test.TwoFields_JqMapping", true, loader);
+
+        long instances = java.util.Arrays.stream(mappingClass.getDeclaredFields())
+                .filter(f -> io.hyperfoil.tools.jjq.mapper.ValueConverter.class
+                        .isAssignableFrom(f.getType()))
+                .count();
+        assertEquals(1, instances);
+
+        JqMapper mapper = JqMapper.create();
+        Object p = mapper.fromJqValue(JqValues.parse("{\"first\":\"A\",\"second\":\"B\"}"), pojoClass);
+        assertEquals("a", pojoClass.getField("first").get(p));
+        assertEquals("b", pojoClass.getField("second").get(p));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
