@@ -943,8 +943,9 @@ final class MappingCodeGenerator {
             sb.append("package ").append(packageName).append(";\n\n");
         }
 
-        // POJOs always use JqProgram for field access (interning advantage, see issue #76)
-        boolean needsJqProgram = properties.stream().anyMatch(p -> !p.ignored());
+        // POJOs use JqProgram only for custom @JqField expressions now;
+        // direct fields go through tryGet (single lookup, interned literal keys)
+        boolean needsJqProgram = properties.stream().anyMatch(p -> !p.ignored() && p.hasJqField());
 
         if (needsJqProgram) sb.append("import io.hyperfoil.tools.jjq.JqProgram;\n");
         sb.append("import io.hyperfoil.tools.jjq.mapper.GeneratedMapping;\n");
@@ -958,9 +959,10 @@ final class MappingCodeGenerator {
         sb.append("public final class ").append(mappingClassName);
         sb.append(" extends GeneratedMapping<").append(classSimpleName).append("> {\n\n");
 
-        // Static JqProgram fields for all non-ignored fields (interning advantage)
+        // Static JqProgram fields for custom @JqField expressions only;
+        // direct fields use tryGet with interned literal keys (no program needed)
         for (var prop : properties) {
-            if (!prop.ignored()) {
+            if (!prop.ignored() && prop.hasJqField()) {
                 sb.append("    private static final JqProgram P_")
                   .append(prop.name().toUpperCase())
                   .append(" = JqProgram.compile(\"")
@@ -1013,8 +1015,21 @@ final class MappingCodeGenerator {
 
         for (var prop : properties) {
             if (prop.ignored() || prop.skipDeserialize()) continue;
-            String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
-            String writeExpr = buildExtraction(prop, apply);
+            String writeExpr;
+            String optVar;
+            if (prop.hasJqField()) {
+                // Custom @JqField expression: absence is unprovable, keep the program
+                String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
+                writeExpr = buildExtraction(prop, apply);
+                optVar = null;
+            } else {
+                // Single lookup: tryGet distinguishes absent keys (skip, keep
+                // field initializers) from explicit nulls (write) with one probe
+                optVar = "_v_" + prop.name();
+                sb.append("        var ").append(optVar).append(" = input.tryGet(\"")
+                  .append(escapeJava(prop.jsonName())).append("\");\n");
+                writeExpr = buildExtraction(prop, optVar + ".get()");
+            }
 
             String statement;
             if (prop.isPublicField() && prop.setterName() == null) {
@@ -1041,7 +1056,7 @@ final class MappingCodeGenerator {
                 sb.append("        ").append(statement).append("\n");
             } else if (isFalliblePojoExtraction(prop)) {
                 // Fallible conversion: track the field in the failure path (issue #84)
-                sb.append("        if (input.has(\"").append(escapeJava(prop.jsonName())).append("\")) {\n");
+                sb.append("        if (").append(optVar).append(".isPresent()) {\n");
                 sb.append("            try {\n");
                 sb.append("                ").append(statement).append("\n");
                 sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
@@ -1050,8 +1065,8 @@ final class MappingCodeGenerator {
                 sb.append("        }\n");
             } else {
                 // Absent keys leave field initializers in place (issue #82).
-                // Explicit nulls still take the write path. has() is null-safe.
-                sb.append("        if (input.has(\"").append(escapeJava(prop.jsonName())).append("\")) ")
+                // Explicit nulls still take the write path.
+                sb.append("        if (").append(optVar).append(".isPresent()) ")
                         .append(statement).append("\n");
             }
         }
