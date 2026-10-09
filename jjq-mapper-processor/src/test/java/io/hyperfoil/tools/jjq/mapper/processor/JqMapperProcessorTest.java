@@ -2502,6 +2502,84 @@ class JqMapperProcessorTest {
         assertEquals("b", pojoClass.getField("second").get(p));
     }
 
+    @Test
+    void generatedMapping_guardedReadsEvaluateOncePojo() throws Exception {
+        // Issue #115: inclusion guards evaluated the read 3x (null check,
+        // emptiness check, value). A local per guarded field reads once.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class CountingPojo {
+                    public static int reads;
+                    @JqInclude(JqInclude.Include.NON_EMPTY)
+                    private String name;
+
+                    public CountingPojo() {}
+
+                    public void setName(String name) { this.name = name; }
+
+                    public String getName() { reads++; return name; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.CountingPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getMethod("setName", String.class).invoke(p, "hello");
+
+        pojoClass.getField("reads").setInt(null, 0);
+        String out = mapper.toJqValue(p).toJsonString();
+        assertTrue(out.contains("\"name\":\"hello\""), out);
+        assertEquals(1, pojoClass.getField("reads").getInt(null));
+
+        pojoClass.getField("reads").setInt(null, 0);
+        assertEquals(out, mapper.toJson(p));
+        assertEquals(1, pojoClass.getField("reads").getInt(null));
+
+        pojoClass.getField("reads").setInt(null, 0);
+        assertEquals(out, new String(mapper.toJsonBytes(p),
+                java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(1, pojoClass.getField("reads").getInt(null));
+    }
+
+    @Test
+    void generatedMapping_guardedReadsEvaluateOnceRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqInclude;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JqInclude(JqInclude.Include.NON_EMPTY)
+                public record CountingRec(String name) {
+                    public static int reads;
+
+                    public String name() { reads++; return this.name; }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.CountingRec", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object r = recordClass.getDeclaredConstructor(String.class).newInstance("hello");
+        var reads = recordClass.getField("reads");
+
+        reads.setInt(null, 0);
+        String out = mapper.toJqValue(r).toJsonString();
+        assertTrue(out.contains("\"name\":\"hello\""), out);
+        assertEquals(1, reads.getInt(null));
+
+        reads.setInt(null, 0);
+        assertEquals(out, mapper.toJson(r));
+        assertEquals(1, reads.getInt(null));
+    }
+
     // ========================================================================
     //  Helpers
     // ========================================================================
