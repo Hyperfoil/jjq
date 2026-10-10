@@ -181,20 +181,28 @@ jobs:
   # release commits, and profile-gated modules (benchmark, examples) drift
   # silently while their deps resolve stale ~/.m2 artifacts instead of
   # reactor code (seen after both 0.1.12 and 0.2). This job always runs
-  # after the release and fails loudly on drift so it gets a same-day
-  # parent-bump commit instead of a weeks-later mystery.
+  # after the release: on drift it bumps the parents itself and pushes,
+  # so the outcome is a same-day fix commit, not a weeks-later mystery.
+  # The modules stay OUT of the release reactor deliberately (their
+  # artifacts must never reach Central); this bump is the cost of that.
   verify-alignment:
     name: Module versions aligned
     needs: [build]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: main
-      - name: Check all module parents match root version
+      - name: Align profile-gated module parents
         run: |
+          git config user.email "rhappservicesperf@gmail.com"
+          git config user.name "rh-appservices-perf"
+          BEFORE=$(git rev-parse HEAD)
           python3 - <<'EOF'
+          import re
           import subprocess
           import xml.dom.minidom as x
           root = x.parse('pom.xml').getElementsByTagName('project')[0]
@@ -208,10 +216,31 @@ jobs:
               if par:
                   pver = par[0].getElementsByTagName('version')[0].firstChild.data
                   if pver != root_ver:
-                      bad.append(f'{f}: parent={pver} root={root_ver}')
-          if bad:
-              print('Version drift detected (profile-gated modules need a parent bump):')
-              print('\n'.join(bad))
-              raise SystemExit(1)
-          print(f'All module parents match root {root_ver}')
+                      bad.append(f)
+          if not bad:
+              print(f'All module parents match root {root_ver}')
+          else:
+              print('Version drift detected, bumping to root %s:' % root_ver)
+              for f in bad:
+                  print('  ' + f)
+                  text = open(f).read()
+                  head, sep, tail = text.partition('<parent>')
+                  block, sep2, rest = tail.partition('</parent>')
+                  block = re.sub(r'<version>[^<]*</version>',
+                                 '<version>%s</version>' % root_ver, block, count=1)
+                  open(f, 'w').write(head + sep + block + sep2 + rest)
+              subprocess.run(['git', 'add'] + bad, check=True)
+              subprocess.run(['git', 'commit', '-m',
+                              'Align profile-gated module parents with root %s' % root_ver],
+                             check=True)
           EOF
+          if ! git diff --quiet HEAD; then
+              echo "Uncommitted changes after alignment (unexpected), aborting push"
+              exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$BEFORE" ]; then
+              echo "Pushing parent-bump commit"
+              git push origin HEAD:main
+          else
+              echo "No drift, nothing to push"
+          fi
