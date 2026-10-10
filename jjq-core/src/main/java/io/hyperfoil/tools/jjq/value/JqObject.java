@@ -361,6 +361,12 @@ public final class JqObject implements JqValue {
         private String[] keys;
         private JqValue[] values;
         private int size;
+        // Duplicate-check index (key -> position), created lazily once the
+        // builder outgrows linear-scan range. Null for small builders — the
+        // common case — so they pay no allocation. Threshold mirrors the
+        // lookup cutoff: linear scan at or below 32 keys, hash above.
+        private HashMap<String, Integer> index;
+        private static final int INDEX_THRESHOLD = 32;
 
         Builder(int expectedSize) {
             keys = new String[Math.max(expectedSize, 4)];
@@ -371,11 +377,23 @@ public final class JqObject implements JqValue {
         public Builder put(String key, JqValue value) {
             Objects.requireNonNull(key, "key");
             if (value == null) value = JqNull.NULL;
-            // Scan for existing key (replace in place)
-            for (int i = 0; i < size; i++) {
-                if (key.equals(keys[i])) {
-                    values[i] = value;
+            if (index != null) {
+                Integer pos = index.get(key);
+                if (pos != null) {
+                    values[pos] = value;
                     return this;
+                }
+            } else {
+                // Scan for existing key (replace in place)
+                for (int i = 0; i < size; i++) {
+                    if (key.equals(keys[i])) {
+                        values[i] = value;
+                        return this;
+                    }
+                }
+                if (size >= INDEX_THRESHOLD) {
+                    index = new HashMap<>(size * 2);
+                    for (int i = 0; i < size; i++) index.put(keys[i], i);
                 }
             }
             // New key: append
@@ -383,6 +401,7 @@ public final class JqObject implements JqValue {
                 keys = Arrays.copyOf(keys, keys.length * 2);
                 values = Arrays.copyOf(values, values.length * 2);
             }
+            if (index != null) index.put(key, size);
             keys[size] = key;
             values[size] = value;
             size++;
@@ -416,6 +435,9 @@ public final class JqObject implements JqValue {
                 keys = Arrays.copyOf(keys, keys.length * 2);
                 values = Arrays.copyOf(values, values.length * 2);
             }
+            // The contract guarantees absence, but the index (if live) must
+            // still learn the key so a later put() finds it for replace.
+            if (index != null) index.put(key, size);
             keys[size] = key;
             values[size] = value;
             size++;

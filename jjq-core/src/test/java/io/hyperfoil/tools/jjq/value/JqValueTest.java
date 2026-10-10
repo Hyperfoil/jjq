@@ -241,6 +241,45 @@ class JqValueTest {
         assertEquals(JqNumber.of(20), obj.get("b"));
     }
 
+    @Test
+    void testBuilderLargeWithDuplicates() {
+        // Past the indexed range: interleaved duplicates still replace in
+        // place (last wins), size counts unique keys, order is first insertion
+        var b = JqObject.builder();
+        for (int i = 0; i < 100; i++) b.put("k" + (i % 50), (long) i);
+        var obj = b.build();
+        assertEquals(50, obj.size());
+        for (int k = 0; k < 50; k++) {
+            assertEquals(JqNumber.of(k + 50), obj.get("k" + k));
+            assertEquals("k" + k, obj.keyAt(k));
+        }
+    }
+
+    @Test
+    void testBuilderUncheckedThenPutInterop() {
+        // putUnchecked past the indexed range, then put() must still find
+        // unchecked keys for replace and count new keys correctly
+        var b = JqObject.builder();
+        for (int i = 0; i < 40; i++) b.putUnchecked("u" + i, (long) i);
+        b.put("u7", 700L);
+        b.put("fresh", 1L);
+        var obj = b.build();
+        assertEquals(41, obj.size());
+        assertEquals(JqNumber.of(700), obj.get("u7"));
+        assertEquals(JqNumber.of(1), obj.get("fresh"));
+        assertEquals(JqNumber.of(39), obj.get("u39"));
+    }
+
+    @Test
+    void testBuilderPutAllLarge() {
+        var map = new java.util.LinkedHashMap<String, JqValue>();
+        for (int i = 0; i < 100; i++) map.put("m" + i, JqNumber.of(i));
+        var obj = JqObject.builder().put("m0", 999L).putAll(map).build();
+        assertEquals(100, obj.size());
+        assertEquals(JqNumber.of(0), obj.get("m0"));
+        assertEquals(JqNumber.of(99), obj.get("m99"));
+    }
+
     // ========================================================================
     //  JqObject.Builder putObject/putArray tests
     // ========================================================================
