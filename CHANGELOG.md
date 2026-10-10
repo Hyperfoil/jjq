@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased] - 0.2.1
+
+Follow-up fixes since 0.2: Jackson parity for FLOW arrays, two missing
+YAML escapes, and a construction quadratic for wide objects.
+
+### Correctness
+
+- FLOW arrays render elements at the array's depth, not depth+1
+  (Jackson `INDENT_OUTPUT` parity, #124)
+- YAML double-quoted `\L`/`\P` escapes (U+2028/U+2029, #125)
+
+### Performance
+
+- `JqObject.Builder` duplicate check goes hash-indexed past 32 keys:
+  50K-key builds 1.8s -> 9ms; wide-doc YAML parse 2.5s -> 16ms
+
+### Build and docs
+
+- Width-coverage benchmarks: `JqObjectBuildBenchmark` (100-50K widths),
+  `wide-*.json` fixtures in the parse comparison
+- Profile-gated modules (benchmark, examples) re-aligned to the root
+  version, plus a post-release alignment check in `release.yml`
+  (release pushes never trigger CI, so the ci.yml guard is blind to them)
+
 ## [0.2] - 2026-10-10
 
 65 commits since 0.1.12. Headline: `jjq-yaml` goes zero-dependency with a
