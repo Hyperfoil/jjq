@@ -43,7 +43,7 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class JsonParseComparisonBenchmark {
 
-    @Param({"flat", "strings", "numbers", "nested"})
+    @Param({"flat", "strings", "numbers", "nested", "wide"})
     String structure;
 
     @Param({"1kb", "10kb", "100kb", "1mb"})
