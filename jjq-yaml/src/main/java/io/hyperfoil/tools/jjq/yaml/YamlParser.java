@@ -2748,6 +2748,8 @@ final class YamlParser {
                 case '/' -> '/';
                 case 'N' -> '\u0085';
                 case '_' -> '\u00A0';
+                case 'L' -> '\u2028';
+                case 'P' -> '\u2029';
                 case '0' -> '\0';
                 default -> throw new YamlParseException("invalid escape '\\" + c + "'", line);
             };
@@ -2983,6 +2985,8 @@ final class YamlParser {
                     case '/' -> sb.append('/');
                     case 'N' -> sb.append('\u0085');
                     case '_' -> sb.append('\u00A0');
+                    case 'L' -> sb.append('\u2028');
+                    case 'P' -> sb.append('\u2029');
                     case '0' -> sb.append('\0');
                     case 'x' -> {
                         sb.append((char) Integer.parseInt(inner.substring(k + 1, k + 3), 16));

@@ -20,6 +20,27 @@ class JqYamlTest {
     }
 
     @Test
+    void doubleQuotedLineAndParagraphSeparators() {
+        // YAML 1.2 §5.7: \L = U+2028, \P = U+2029 (#125)
+        JqValue block = JqYaml.parse("description: \"a\\Lf\\Pb\"");
+        assertEquals("a\u2028f\u2029b", block.getField("description").stringValue());
+        // Flow context exercises the separate flowEscape() switch
+        JqValue flow = JqYaml.parse("[\"a\\Lb\", \"c\\Pd\"]");
+        assertEquals("a\u2028b", flow.getElement(0).stringValue());
+        assertEquals("c\u2029d", flow.getElement(1).stringValue());
+        // Double-quoted flow KEY exercises the separate flowEscape() switch
+        JqValue keyed = JqYaml.parse("{\"a\\Lb\": 1}");
+        assertEquals(1L, keyed.getField("a\u2028b").longValue());
+    }
+
+    @Test
+    void doubleQuotedSpecEscapeAlphabet() {
+        // Full YAML 1.2 §5.7 escape set — locks that no other arm is missing
+        JqValue v = JqYaml.parse("k: \"\\0\\a\\b\\t\\n\\v\\f\\r\\e\\\"\\\\\\ \\/\\N\\_\\L\\P\"");
+        assertEquals("\0\7\b\t\n\13\f\r\33\"\\ /\u0085\u00A0\u2028\u2029", v.getField("k").stringValue());
+    }
+
+    @Test
     void parseNestedMapping() {
         JqValue result = JqYaml.parse("""
                 server:
