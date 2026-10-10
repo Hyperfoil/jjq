@@ -870,7 +870,9 @@ public final class JqValues {
                     sb.append("[ ");
                     for (int i = 0; i < arr.size(); i++) {
                         if (i > 0) sb.append(", ");
-                        appendPretty(arr.get(i), sb, depth + 1, options);
+                        // FLOW arrays are transparent to nesting (Jackson parity):
+                        // elements render at the array's depth, not depth+1.
+                        appendPretty(arr.get(i), sb, depth, options);
                     }
                     sb.append(" ]");
                     return;

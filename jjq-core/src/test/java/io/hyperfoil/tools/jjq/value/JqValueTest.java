@@ -1254,12 +1254,47 @@ class JqValueTest {
         assertEquals("""
                 {
                   "users" : [ {
-                      "name" : "Alice"
-                    }, {
-                      "name" : "Bob"
-                    } ],
+                    "name" : "Alice"
+                  }, {
+                    "name" : "Bob"
+                  } ],
                   "empty" : [ ]
                 }""", pretty);
+    }
+
+    @Test
+    void testPrettyPrintFlowArrayOfObjects() {
+        // Jackson: FLOW arrays are transparent to nesting — elements render
+        // at the array's depth, not depth+1
+        var json = JqValues.parse("[{\"a\":1}]");
+        assertEquals("""
+                [ {
+                  "a" : 1
+                } ]""", JqValues.toPrettyJsonString(json, PrettyPrintOptions.JACKSON));
+    }
+
+    @Test
+    void testPrettyPrintFlowNestedAndMixed() {
+        // Expectations verified byte-for-byte against Jackson INDENT_OUTPUT
+        assertEquals("[ [ 1 ] ]",
+                JqValues.toPrettyJsonString(JqValues.parse("[[1]]"), PrettyPrintOptions.JACKSON));
+        assertEquals("""
+                [ 1, {
+                  "a" : 1
+                } ]""",
+                JqValues.toPrettyJsonString(JqValues.parse("[1,{\"a\":1}]"), PrettyPrintOptions.JACKSON));
+        assertEquals("""
+                {
+                  "k" : [ {
+                    "a" : 1
+                  } ]
+                }""",
+                JqValues.toPrettyJsonString(JqValues.parse("{\"k\":[{\"a\":1}]}"), PrettyPrintOptions.JACKSON));
+        assertEquals("""
+                [ [ {
+                  "a" : 1
+                } ] ]""",
+                JqValues.toPrettyJsonString(JqValues.parse("[[{\"a\":1}]]"), PrettyPrintOptions.JACKSON));
     }
 
     @Test
