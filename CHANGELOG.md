@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - 0.2
+## [0.2] - 2026-10-10
 
 65 commits since 0.1.12. Headline: `jjq-yaml` goes zero-dependency with a
 native byte parser (roughly 2-3x faster than SnakeYAML, ~4x less
