@@ -4,7 +4,7 @@
 
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-parent</artifactId>
-    <version>0.2.3-SNAPSHOT</version>
+    <version>0.2.3</version>
     <packaging>pom</packaging>
 
     <name>jjq</name>
@@ -15,7 +15,7 @@
         <connection>scm:git:https://github.com/Hyperfoil/jjq.git</connection>
         <developerConnection>scm:git:https://github.com/Hyperfoil/jjq.git</developerConnection>
         <url>https://github.com/Hyperfoil/jjq</url>
-        <tag>0.1.11</tag>
+        <tag>0.2.3</tag>
     </scm>
 
     <licenses>
@@ -281,10 +281,9 @@
                                 </goals>
                                 <configuration>
                                     <target>
-                                        <exec executable="sh" osfamily="unix"
-                                                failonerror="false" failifexecutionfails="false">
-                                            <arg value="-c"/>
-                                            <arg value="command -v zip >/dev/null &amp;&amp; zip -q -d ${project.build.directory}/${project.artifactId}-${project.version}-javadoc.jar 'resource-files/fonts/*.woff' 2>/dev/null || true"/>
+                                        <exec executable="sh" osfamily="unix" failonerror="false" failifexecutionfails="false">
+                                            <arg value="-c" />
+                                            <arg value="command -v zip &gt;/dev/null &amp;&amp; zip -q -d ${project.build.directory}/${project.artifactId}-${project.version}-javadoc.jar 'resource-files/fonts/*.woff' 2&gt;/dev/null || true" />
                                         </exec>
                                     </target>
                                 </configuration>
