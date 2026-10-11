@@ -125,7 +125,7 @@ public final class TypeConverter {
                 yield value instanceof JqString s ? s.stringValue() : value.toJsonString();
             }
             case INT -> {
-                yield (int) coerceLong(value, "int");
+                yield coerceInt(value);
             }
             case LONG -> {
                 yield coerceLong(value, "long");
@@ -140,10 +140,10 @@ public final class TypeConverter {
                 yield coerceBoolean(value);
             }
             case SHORT -> {
-                yield (short) coerceLong(value, "short");
+                yield coerceShort(value);
             }
             case BYTE -> {
-                yield (byte) coerceLong(value, "byte");
+                yield coerceByte(value);
             }
             case CHAR -> {
                 yield coerceChar(value);
@@ -346,12 +346,19 @@ public final class TypeConverter {
      * @param value  the value (may be null)
      * @param target human-readable target description for errors
      * @return the long value
-     * @throws ShapeMismatchException for containers, booleans, and non-numeric strings
+     * @throws ShapeMismatchException for containers, booleans, fractions,
+     *         out-of-range values, and non-numeric strings
      */
     static long coerceLong(JqValue value, String target) {
         if (value == null || value instanceof JqNull) return 0L;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, target, value);
-        if (value instanceof JqNumber n) return n.longValue();
+        if (value instanceof JqNumber n) {
+            try {
+                return n.decimalValue().longValueExact();
+            } catch (ArithmeticException e) {
+                throw mismatch(JqValue.Type.NUMBER, target, value);
+            }
+        }
         if (value instanceof JqString s) {
             try {
                 return Long.parseLong(s.stringValue().trim());
@@ -360,6 +367,48 @@ public final class TypeConverter {
             }
         }
         throw mismatch(JqValue.Type.NUMBER, target, value);
+    }
+
+    /**
+     * Range-checked narrowing for {@code int} targets: exact integral values
+     * that fit, anything else (fractions, out-of-range magnitudes) is a
+     * shape mismatch. Shared by {@link #convert} and the generated-code
+     * helper so both paths agree.
+     *
+     * @param value the value (may be null; nulls stay zero)
+     * @return the int value
+     * @throws ShapeMismatchException on lossy conversions
+     */
+    static int coerceInt(JqValue value) {
+        long v = coerceLong(value, "int");
+        if ((int) v != v) throw mismatch(JqValue.Type.NUMBER, "int", value);
+        return (int) v;
+    }
+
+    /**
+     * Range-checked narrowing for {@code short} targets.
+     *
+     * @param value the value (may be null; nulls stay zero)
+     * @return the short value
+     * @throws ShapeMismatchException on lossy conversions
+     */
+    static short coerceShort(JqValue value) {
+        long v = coerceLong(value, "short");
+        if ((short) v != v) throw mismatch(JqValue.Type.NUMBER, "short", value);
+        return (short) v;
+    }
+
+    /**
+     * Range-checked narrowing for {@code byte} targets.
+     *
+     * @param value the value (may be null; nulls stay zero)
+     * @return the byte value
+     * @throws ShapeMismatchException on lossy conversions
+     */
+    static byte coerceByte(JqValue value) {
+        long v = coerceLong(value, "byte");
+        if ((byte) v != v) throw mismatch(JqValue.Type.NUMBER, "byte", value);
+        return (byte) v;
     }
 
     /**

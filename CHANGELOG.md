@@ -4,11 +4,13 @@
 
 - Empty values in sequence items no longer swallow following siblings:
   the nested-block lookup uses the key column, not the outer indent (#134)
-- Scalar↔scalar coercion, jq-leaning on conflict (#135): valid numeric
-  strings bind (`"42"`->42, was 0), garbage throws, booleans throw for
-  numeric targets (jq `tonumber` rejects them), number->char by code
-  point, multi-char->char throws, `BigDecimal` parses strings; unified
-  across reflection and generated paths (empty string throws, documented)
+- Scalar↔scalar coercion, jq-leaning on conflict (#135, #133): valid
+  numeric strings bind (`"42"`->42, was 0), garbage and booleans throw
+  for numeric targets (jq `tonumber` rejects them), fractions and
+  out-of-range magnitudes throw for integral targets (no silent
+  truncation/wrapping), number->char by code point, multi-char->char
+  throws, `BigDecimal` parses strings; unified across reflection and
+  generated paths (empty string throws, documented)
 - Parity policy recorded (mapper Rosetta docs): jq for language behavior,
   Jackson for binding, jq wins on conflict; NaN/Infinity serialize as
   `null` (no jq analog; Jackson literals unreadable here, #136)

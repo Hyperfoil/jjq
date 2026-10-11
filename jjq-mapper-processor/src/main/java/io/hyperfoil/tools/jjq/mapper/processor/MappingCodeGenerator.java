@@ -298,8 +298,8 @@ final class MappingCodeGenerator {
 
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append("asStringChecked(").append(apply).append(")");
-            case "int" -> sb.append("(int) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
-            case "java.lang.Integer" -> sb.append("(int) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
+            case "int" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
+            case "java.lang.Integer" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
             case "long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
             case "java.lang.Long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
             case "double" -> sb.append("asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\"))");
@@ -308,10 +308,10 @@ final class MappingCodeGenerator {
             case "java.lang.Float" -> sb.append("(float) asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\"))");
             case "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
             case "java.lang.Boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
-            case "short" -> sb.append("(short) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
-            case "java.lang.Short" -> sb.append("(short) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
-            case "byte" -> sb.append("(byte) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
-            case "java.lang.Byte" -> sb.append("(byte) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
+            case "short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
+            case "java.lang.Short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
+            case "byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
+            case "java.lang.Byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
             case "char", "java.lang.Character" -> {
                 sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
             }
@@ -376,13 +376,13 @@ final class MappingCodeGenerator {
     private static void generateScalarConversion(StringBuilder sb, String typeName, String apply) {
         switch (typeName) {
             case "java.lang.String", "String" -> sb.append("asStringChecked(").append(apply).append(")");
-            case "java.lang.Integer", "Integer", "int" -> sb.append("(int) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
+            case "java.lang.Integer", "Integer", "int" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
             case "java.lang.Long", "Long", "long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
             case "java.lang.Double", "Double", "double" -> sb.append("asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\"))");
             case "java.lang.Float", "Float", "float" -> sb.append("(float) asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\"))");
             case "java.lang.Boolean", "Boolean", "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
-            case "java.lang.Short", "Short", "short" -> sb.append("(short) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
-            case "java.lang.Byte", "Byte", "byte" -> sb.append("(byte) asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
+            case "java.lang.Short", "Short", "short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
+            case "java.lang.Byte", "Byte", "byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
             case "java.lang.Character", "Character", "char" ->
                 sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
             case "java.math.BigDecimal", "BigDecimal" ->
@@ -1529,13 +1529,13 @@ final class MappingCodeGenerator {
         String typeName = prop.typeName();
         return switch (typeName) {
             case "java.lang.String" -> "asStringChecked(" + apply + ")";
-            case "int", "java.lang.Integer" -> "(int) asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\"))";
+            case "int", "java.lang.Integer" -> "asIntChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\"))";
             case "long", "java.lang.Long" -> "asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"long\"))";
             case "double", "java.lang.Double" -> "asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"double\"))";
             case "float", "java.lang.Float" -> "(float) asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"float\"))";
             case "boolean", "java.lang.Boolean" -> "asBooleanChecked(requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\"))";
-            case "short", "java.lang.Short" -> "(short) asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\"))";
-            case "byte", "java.lang.Byte" -> "(byte) asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\"))";
+            case "short", "java.lang.Short" -> "asShortChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\"))";
+            case "byte", "java.lang.Byte" -> "asByteChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\"))";
             case "char", "java.lang.Character" ->
                 "asCharChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"char\"))";
             case "java.math.BigDecimal" -> "asBigDecimalChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigDecimal\"))";

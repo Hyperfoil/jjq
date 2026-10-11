@@ -133,6 +133,43 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Lenient int coercion mirroring {@code TypeConverter} semantics, with
+     * range checking: exact integral values that fit in 32 bits bind,
+     * fractions and out-of-range magnitudes are shape mismatches.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced int
+     * @throws JqMapperException on lossy conversions
+     */
+    protected static int asIntChecked(JqValue value) {
+        return TypeConverter.coerceInt(value);
+    }
+
+    /**
+     * Lenient short coercion mirroring {@code TypeConverter} semantics, with
+     * range checking.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced short
+     * @throws JqMapperException on lossy conversions
+     */
+    protected static short asShortChecked(JqValue value) {
+        return TypeConverter.coerceShort(value);
+    }
+
+    /**
+     * Lenient byte coercion mirroring {@code TypeConverter} semantics, with
+     * range checking.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced byte
+     * @throws JqMapperException on lossy conversions
+     */
+    protected static byte asByteChecked(JqValue value) {
+        return TypeConverter.coerceByte(value);
+    }
+
+    /**
      * Lenient double coercion mirroring {@code TypeConverter} semantics:
      * numbers widen, booleans follow 0/1, trimmed numeric strings parse,
      * anything else is a shape mismatch; nulls stay zero.

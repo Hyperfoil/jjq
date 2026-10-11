@@ -700,6 +700,45 @@ class JqMapperTest {
                 () -> mapper.fromJqValue(JqValues.parse("{\"i\":0,\"l\":0,\"d\":\"4.5.6\"}"), Nums.class));
     }
 
+    // ---- Range + fraction strictness for integral targets (#133) ----
+
+    @Test
+    void outOfRangeNumbersThrowForInt() {
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":99999999999,\"l\":0,\"d\":0}"), Nums.class));
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":\"99999999999\",\"l\":0,\"d\":0}"), Nums.class));
+    }
+
+    @Test
+    void fractionsThrowForIntegralTargets() {
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":2.5,\"l\":0,\"d\":0}"), Nums.class));
+        assertEquals(JqValue.Type.NUMBER, e.expected());
+        assertEquals("$.i", e.path());
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":0,\"l\":2.5,\"d\":0}"), Nums.class));
+    }
+
+    @Test
+    void wholeDoublesStillBindIntegralTargets() {
+        // No loss: integral values bind regardless of representation
+        Nums r = mapper.fromJqValue(JqValues.parse("{\"i\":4.0,\"l\":4.0,\"d\":4.5}"), Nums.class);
+        assertEquals(4, r.i());
+        assertEquals(4L, r.l());
+        assertEquals(4.5, r.d());
+    }
+
+    @Test
+    void rangeCheckedHelpersMirror() {
+        assertEquals(42, GeneratedMapping.asIntChecked(JqNumber.of(42)));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asIntChecked(JqNumber.of(99999999999L)));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asIntChecked(JqNumber.of(2.5)));
+        assertEquals(4, GeneratedMapping.asIntChecked(JqNumber.of(4.0)));
+    }
+
     @Test
     void booleansThrowForNumbers() {
         // jq's tonumber rejects booleans; Jackson's 0/1 rule loses (policy)
