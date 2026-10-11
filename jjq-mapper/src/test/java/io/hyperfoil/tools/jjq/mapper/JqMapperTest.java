@@ -531,6 +531,8 @@ class JqMapperTest {
 
     record WithType(String type) {}
 
+    record WithAutoClone(@JqName("auto-clone-repos") String autoCloneRepos) {}
+
     @Test
     void fromJqValue_arrayForStringThrows() {
         JqValue json = JqValues.parse("{\"type\":[\"kvm\"]}");
@@ -597,6 +599,79 @@ class JqMapperTest {
         assertEquals(JqValue.Type.STRING, e.expected());
         assertEquals(JqValue.Type.ARRAY, e.actual());
         assertEquals("$.type", e.path());
+    }
+
+    // ---- Structured path segments + display form (issue #128.4) ----
+
+    @Test
+    void pathSegmentsAreStructured() {
+        JqValue json = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, Bundle.class));
+        assertEquals(java.util.List.of("tools", 1), e.pathSegments());
+        assertEquals("$.tools[1]", e.path());
+    }
+
+    @Test
+    void displayPathDropsJqPunctuation() {
+        JqValue json = JqValues.parse("{\"id\":\"b\",\"tools\":[{\"name\":\"ok\"},\"oops\"]}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, Bundle.class));
+        assertEquals("tools[1]", e.displayPath());
+    }
+
+    @Test
+    void displayPathBareSingleNonIdentifier() {
+        JqValue json = JqValues.parse("{\"auto-clone-repos\":[]}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, WithAutoClone.class));
+        assertEquals("$[\"auto-clone-repos\"]", e.path());
+        assertEquals("auto-clone-repos", e.displayPath());
+        assertEquals(java.util.List.of("auto-clone-repos"), e.pathSegments());
+    }
+
+    // ---- Strict boolean coercion (issue #128.2) ----
+
+    record WithGui(String name, boolean gui) {}
+
+    @Test
+    void nonBooleanStringForBooleanThrows() {
+        JqValue json = JqValues.parse("{\"name\":\"t\",\"gui\":\"maybe\"}");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(json, WithGui.class));
+        assertEquals(JqValue.Type.BOOLEAN, e.expected());
+        assertEquals(JqValue.Type.STRING, e.actual());
+        assertEquals("$.gui", e.path());
+    }
+
+    @Test
+    void trueFalseStringsBindBoolean() {
+        // Jackson parity: "true"/"false" in any case bind
+        assertTrue(mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"gui\":\"TRUE\"}"), WithGui.class).gui());
+        assertFalse(mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"gui\":\"False\"}"), WithGui.class).gui());
+    }
+
+    @Test
+    void numbersBindBooleanByZeroRule() {
+        // Jackson parity: 0 is false, anything else is true (both paths unified)
+        assertTrue(mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"gui\":1}"), WithGui.class).gui());
+        assertFalse(mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"gui\":0}"), WithGui.class).gui());
+    }
+
+    @Test
+    void asBooleanCheckedMirrors() {
+        // Generated-mapping path must match TypeConverter BOOLEAN semantics
+        assertTrue(GeneratedMapping.asBooleanChecked(JqBoolean.TRUE));
+        assertTrue(GeneratedMapping.asBooleanChecked(JqString.of("true")));
+        assertFalse(GeneratedMapping.asBooleanChecked(JqString.of("False")));
+        assertTrue(GeneratedMapping.asBooleanChecked(JqNumber.of(2)));
+        assertFalse(GeneratedMapping.asBooleanChecked(JqNumber.of(0)));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asBooleanChecked(JqString.of("maybe")));
     }
 
     @Test

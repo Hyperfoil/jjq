@@ -81,6 +81,48 @@ public class JqMapperException extends RuntimeException {
         return sb.toString();
     }
 
+    /**
+     * The path segments in structured form, outermost first: {@link String}
+     * for object fields, {@link Integer} for collection indexes. Suitable
+     * for callers that render their own diagnostics without parsing
+     * {@link #path()} (issue #128.4).
+     *
+     * @return an unmodifiable copy of the segments, empty if none recorded
+     */
+    public java.util.List<Object> pathSegments() {
+        return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(pathSegments));
+    }
+
+    /**
+     * Render the failure path for user-facing messages: like {@link #path()}
+     * but without the leading {@code $} and quoting only when needed, e.g.
+     * {@code auto-clone-repos} or {@code repos[1].url} (issue #128.4).
+     * Non-identifier fields after the first keep the {@code ["..."]} form.
+     *
+     * @return the display path, or {@code "$"} if no segments were recorded
+     */
+    public String displayPath() {
+        if (pathSegments.isEmpty()) return "$";
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (Object segment : pathSegments) {
+            if (segment instanceof Integer index) {
+                sb.append('[').append(index).append(']');
+            } else {
+                String field = String.valueOf(segment);
+                if (!first && field.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+                    sb.append('.').append(field);
+                } else if (!first) {
+                    sb.append("[\"").append(field.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"]");
+                } else {
+                    sb.append(field);
+                }
+            }
+            first = false;
+        }
+        return sb.toString();
+    }
+
     @Override
     public String getMessage() {
         String base = super.getMessage();

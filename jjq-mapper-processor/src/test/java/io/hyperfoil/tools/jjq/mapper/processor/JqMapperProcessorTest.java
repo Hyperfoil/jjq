@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.ShapeMismatchException;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import org.junit.jupiter.api.Test;
@@ -49,9 +50,9 @@ class JqMapperProcessorTest {
     void generatedMapping_deserializes() throws Exception {
         String source = """
                 package test;
-                
+
                 import io.hyperfoil.tools.jjq.mapper.JqMapped;
-                
+
                 @JqMapped
                 public record Person(String name, int age) {}
                 """;
@@ -70,6 +71,70 @@ class JqMapperProcessorTest {
         var ageMethod = recordClass.getMethod("age");
         assertEquals("Alice", nameMethod.invoke(result));
         assertEquals(30, ageMethod.invoke(result));
+    }
+
+    // ---- Scalar-for-object shape gate, generated path (issue #128.3) ----
+
+    @Test
+    void generatedPojo_scalarInputThrows() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+
+                @JqMapped
+                public class Widget {
+                    private List<String> domains = List.of();
+                    public List<String> getDomains() { return domains; }
+                    public void setDomains(List<String> domains) { this.domains = domains; }
+                }
+                """;
+
+        Class<?> cls = compileAndLoad("test.Widget", source);
+        JqMapper mapper = JqMapper.create();
+        JqValue bad = JqValues.parse("\"x\"");
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(bad, cls));
+        assertEquals(io.hyperfoil.tools.jjq.value.JqValue.Type.OBJECT, e.expected());
+        assertEquals(io.hyperfoil.tools.jjq.value.JqValue.Type.STRING, e.actual());
+    }
+
+    @Test
+    void generatedRecord_scalarInputThrows() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Box(String name) {}
+                """;
+
+        Class<?> cls = compileAndLoad("test.Box", source);
+        JqMapper mapper = JqMapper.create();
+        JqValue bad = JqValues.parse("\"x\"");
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(bad, cls));
+    }
+
+    @Test
+    void generatedMapping_jqFieldProgramStaysLenient() throws Exception {
+        // @JqField programs may legitimately extract from any shape:
+        // the object gate applies only to all-direct mappings (reflection parity)
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqField;
+
+                @JqMapped
+                public record Pick(@JqField(".name") String name) {}
+                """;
+
+        Class<?> cls = compileAndLoad("test.Pick", source);
+        JqMapper mapper = JqMapper.create();
+        Object result = mapper.fromJqValue(JqValues.parse("{\"name\":\"Alice\"}"), cls);
+        assertEquals("Alice", cls.getMethod("name").invoke(result));
     }
 
     @Test

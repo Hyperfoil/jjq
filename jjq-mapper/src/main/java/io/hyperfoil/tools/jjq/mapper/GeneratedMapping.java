@@ -106,6 +106,22 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Lenient boolean coercion mirroring {@code TypeConverter} {@code BOOLEAN}
+     * semantics: booleans pass through, numbers follow the zero rule,
+     * {@code "true"}/{@code "false"} bind case-insensitively, anything else
+     * (including other strings) is a shape mismatch; nulls stay false.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced boolean
+     * @throws JqMapperException if the value is an array, object, or non-boolean string
+     */
+    protected static boolean asBooleanChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return false;
+        if (value.isContainer()) throw TypeConverter.mismatch(JqValue.Type.BOOLEAN, "boolean", value);
+        return TypeConverter.coerceBoolean(value);
+    }
+
+    /**
      * Lenient string coercion mirroring {@code TypeConverter} {@code STRING} semantics:
      * nulls stay null, strings unwrap, scalars with source text keep what was
      * written, other scalars render as JSON text, arrays and objects fail fast.
@@ -121,6 +137,18 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
         String source = value.sourceText();
         if (source != null) return source;
         return value.toJsonString();
+    }
+
+    /**
+     * Object-shape gate failure for generated {@code fromJqValue}: mirrors
+     * the reflection rule (scalar/array documents with only direct lookups).
+     *
+     * @param value      the offending input value
+     * @param simpleName the bound class simple name (for the message)
+     * @return a shape mismatch (always thrown by callers)
+     */
+    protected static ShapeMismatchException mismatchObject(JqValue value, String simpleName) {
+        return TypeConverter.mismatch(JqValue.Type.OBJECT, "object for " + simpleName, value);
     }
 
     /**

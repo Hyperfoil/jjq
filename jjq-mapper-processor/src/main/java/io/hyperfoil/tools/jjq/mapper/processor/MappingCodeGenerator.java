@@ -152,6 +152,9 @@ final class MappingCodeGenerator {
                                              List<JqMapperProcessor.ComponentInfo> positional) {
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
+        emitObjectShapeGate(sb, recordSimpleName, components.stream()
+                .filter(c -> !c.ignored() && !c.skipDeserialize())
+                .anyMatch(JqMapperProcessor.ComponentInfo::hasJqField));
 
         if (!positional.isEmpty()) {
             // Positional fast path: an ordered doc with exactly the bindable keys
@@ -234,6 +237,24 @@ final class MappingCodeGenerator {
     }
 
     /**
+     * Emit the object-shape gate for generated {@code fromJqValue}: scalar or
+     * array documents are shape mismatches when every bound field uses a
+     * direct lookup ({@code @JqField} programs may legitimately extract from
+     * any shape). Mirrors the reflection rule in {@code ClassMapping}
+     * (issue #128.3); null stays lenient on both paths.
+     *
+     * @param sb          the mapping source under construction
+     * @param simpleName  the bound class simple name (for the message)
+     * @param hasPrograms true when any bound field uses a {@code @JqField} program
+     */
+    private static void emitObjectShapeGate(StringBuilder sb, String simpleName, boolean hasPrograms) {
+        if (hasPrograms) return;
+        sb.append("        if (input != null && !(input instanceof JqNull) && !(input instanceof JqObject)) {\n");
+        sb.append("            throw mismatchObject(input, \"").append(simpleName).append("\");\n");
+        sb.append("        }\n");
+    }
+
+    /**
      * True when a component's extraction can throw {@code JqMapperException}
      * (shape mismatches in scalars, containers, and nested types, custom converters).
      * Only JqValue-passthrough extractions cannot fail.
@@ -285,8 +306,8 @@ final class MappingCodeGenerator {
             case "java.lang.Double" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\").asDouble(0.0)");
             case "float" -> sb.append("(float) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\").asDouble(0.0)");
             case "java.lang.Float" -> sb.append("(float) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\").asDouble(0.0)");
-            case "boolean" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)");
-            case "java.lang.Boolean" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)");
+            case "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
+            case "java.lang.Boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
             case "short" -> sb.append("(short) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\").asLong(0)");
             case "java.lang.Short" -> sb.append("(short) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\").asLong(0)");
             case "byte" -> sb.append("(byte) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\").asLong(0)");
@@ -359,7 +380,7 @@ final class MappingCodeGenerator {
             case "java.lang.Long", "Long", "long" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\").asLong(0)");
             case "java.lang.Double", "Double", "double" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\").asDouble(0.0)");
             case "java.lang.Float", "Float", "float" -> sb.append("(float) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\").asDouble(0.0)");
-            case "java.lang.Boolean", "Boolean", "boolean" -> sb.append("requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)");
+            case "java.lang.Boolean", "Boolean", "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
             case "java.lang.Short", "Short", "short" -> sb.append("(short) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\").asLong(0)");
             case "java.lang.Byte", "Byte", "byte" -> sb.append("(byte) requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\").asLong(0)");
             case "java.lang.Character", "Character", "char" ->
@@ -1088,6 +1109,9 @@ final class MappingCodeGenerator {
         // fromJqValue: no-arg constructor + setters
         sb.append("    @Override\n");
         sb.append("    public ").append(classSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
+        emitObjectShapeGate(sb, classSimpleName, properties.stream()
+                .filter(p -> !p.ignored() && !p.skipDeserialize())
+                .anyMatch(JqMapperProcessor.PropertyInfo::hasJqField));
         sb.append("        ").append(classSimpleName).append(" instance = new ").append(classSimpleName).append("();\n");
 
         if (!pojoPositional.isEmpty()) {
@@ -1509,7 +1533,7 @@ final class MappingCodeGenerator {
             case "long", "java.lang.Long" -> "requireScalar(" + apply + ", JqValue.Type.NUMBER, \"long\").asLong(0)";
             case "double", "java.lang.Double" -> "requireScalar(" + apply + ", JqValue.Type.NUMBER, \"double\").asDouble(0.0)";
             case "float", "java.lang.Float" -> "(float) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"float\").asDouble(0.0)";
-            case "boolean", "java.lang.Boolean" -> "requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\").asBoolean(false)";
+            case "boolean", "java.lang.Boolean" -> "asBooleanChecked(requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\"))";
             case "short", "java.lang.Short" -> "(short) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\").asLong(0)";
             case "byte", "java.lang.Byte" -> "(byte) requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\").asLong(0)";
             case "char", "java.lang.Character" ->

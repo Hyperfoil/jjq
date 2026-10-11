@@ -141,8 +141,9 @@ public final class TypeConverter {
                 yield value instanceof JqNumber n ? (float) n.doubleValue() : 0.0f;
             }
             case BOOLEAN -> {
-                if (value != null && value.isContainer()) throw mismatch(JqValue.Type.BOOLEAN, "boolean", value);
-                yield value instanceof JqBoolean b ? b.booleanValue() : (value != null && value.isTruthy());
+                if (value == null || value instanceof JqNull) yield false;
+                if (value.isContainer()) throw mismatch(JqValue.Type.BOOLEAN, "boolean", value);
+                yield coerceBoolean(value);
             }
             case SHORT -> {
                 if (value != null && value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "short", value);
@@ -321,6 +322,28 @@ public final class TypeConverter {
         return new ShapeMismatchException(expectedType,
                 actual == null ? JqValue.Type.NULL : actual.type(),
                 "Cannot bind " + describe(actual) + " to " + expected);
+    }
+
+    /**
+     * Jackson-compatible boolean coercion for scalar values. Callers filter
+     * nulls and containers first: booleans pass through, numbers follow the
+     * zero rule (0 is false), {@code "true"}/{@code "false"} bind
+     * case-insensitively, anything else is a shape mismatch. Shared by
+     * {@link #convert} and the generated-code helper so both paths agree.
+     *
+     * @param value a non-null, non-container scalar
+     * @return the boolean value
+     * @throws ShapeMismatchException for strings other than true/false
+     */
+    static boolean coerceBoolean(JqValue value) {
+        if (value instanceof JqBoolean b) return b.booleanValue();
+        if (value instanceof JqNumber n) return n.doubleValue() != 0;
+        if (value instanceof JqString s) {
+            String text = s.stringValue().trim();
+            if (text.equalsIgnoreCase("true")) return true;
+            if (text.equalsIgnoreCase("false")) return false;
+        }
+        throw mismatch(JqValue.Type.BOOLEAN, "boolean", value);
     }
 
     /** Short human-readable description of a JqValue (strings truncated). */
