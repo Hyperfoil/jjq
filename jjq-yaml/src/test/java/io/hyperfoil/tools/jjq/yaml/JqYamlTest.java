@@ -546,4 +546,50 @@ class JqYamlTest {
         JqValue result = JqYaml.parse(new java.io.ByteArrayInputStream(bytes));
         assertEquals("caf\u00e9 \uD83D\uDE00", result.getField("name").stringValue());
     }
+
+    // ---- Emitter round-trip audit matrix (issue #137) ----
+    // Every shape below must survive emit-parse with identical text: a
+    // failure is by construction a real save-fidelity regression, never a
+    // stale expectation. Runs in milliseconds (tiny docs, no I/O).
+    @Test
+    void toYamlRoundTripAuditMatrix() {
+        List<String> docs = List.of(
+            "{\"auto-clone-repos\":1}", "{\"a b\":1}", "{\"a:b\":1}", "{\"a: b\":1}",
+            "{\"\":1}", "{\"123\":1}", "{\"true\":1}", "{\"null\":1}", "{\"\":1}",
+            "{\" leading\":1}", "{\"trailing \":1}", "{\"a#b\":1}", "{\"a:b\":1}",
+            "{\"[a]\":1}", "{\"{a}\":1}", "{\"*a\":1}", "{\"&a\":1}", "{\"!t\":1}",
+            "{\"|\":1}", "{\">\":1}", "{\"@a\":1}", "{\"`a\":1}", "{\"\u00a9\":1}",
+            "{\"caf\u00e9\":1}",
+            // doc markers / directives as values and keys
+            "{\"k\":\"...\"}", "{\"k\":\"---\"}", "{\"...\":1}", "{\"---\":1}",
+            "{\"k\":\"%foo\"}", "{\"k\":\"#c\"}",
+            // special scalars as strings
+            "{\"k\":\"yes\"}", "{\"k\":\"0o17\"}", "{\"k\":\"0b1\"}", "{\"k\":\".inf\"}",
+            "{\"k\":\".nan\"}", "{\"k\":\"y\"}", "{\"k\":\"n\"}", "{\"k\":\"Yes\"}",
+            "{\"k\":\"ON\"}", "{\"k\":\"off\"}", "{\"k\":\"~\"}", "{\"k\":\"1_000\"}",
+            "{\"k\":\"0x1F\"}", "{\"k\":\"190:20:30\"}", "{\"k\":\"12:30\"}", "{\"k\":\"0\"}",
+            // control chars and unicode in strings
+            "{\"k\":\"a\\u0000b\"}", "{\"k\":\"a\\u0008b\"}", "{\"k\":\"a\\u001bb\"}",
+            "{\"k\":\"a\\u007fb\"}", "{\"k\":\"a\\u0085b\"}", "{\"k\":\"a\\u2028b\"}",
+            "{\"k\":\"a\\u2029b\"}", "{\"k\":\"a\\u00a0b\"}", "{\"k\":\"a\\u0080b\"}",
+            "{\"k\":\"a\\ufeffb\"}", "{\"k\":\"\\ud800\"}",
+            // multiline shapes
+            "{\"k\":\"a\\n\"}", "{\"k\":\"\\n\"}", "{\"k\":\"a\\n\\nb\"}", "{\"k\":\"\\n\\n\"}",
+            "{\"k\":\"a\\r\\nb\"}", "{\"k\":\"a\\tb\"}", "{\"k\":\"\\\\\"}",
+            "{\"k\":\"ends with backslash\\\\\"}",
+            // numbers
+            "{\"n\":-0.0}", "{\"n\":1e30}", "{\"n\":3.14159265358979323846}",
+            "{\"n\":9223372036854775807}", "{\"n\":0.1}", "{\"n\":-5}",
+            // structures
+            "{\"a\":{}}", "{\"a\":[]}", "{\"a\":{\"b\":{}}}", "{\"a\":[[]]}",
+            "{\"a\":null}", "[null]", "{\"a\":[null]}", "{}",
+            "{\"deep\":{\"a\":{\"b\":{\"c\":{\"d\":1}}}}}",
+            "{\"list\":[[1],[2]]}", "{\"m\":[{\"a\":1},{\"b\":2}]}", "\"just a scalar\"", "\"\"", "42", "true", "null"
+        );
+        for (String doc : docs) {
+            JqValue original = JqValues.parse(doc);
+            JqValue back = JqYaml.parse(JqYaml.toYaml(original));
+            assertEquals(original.toJsonString(), back.toJsonString(), "round trip: " + doc);
+        }
+    }
 }
