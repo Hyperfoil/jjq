@@ -140,6 +140,26 @@ class YamlMapperTest {
         assertFalse(e.getMessage().contains("at line"), e.getMessage());
     }
 
+    // ---- Root mismatches carry the first content line (#130 comment) ----
+
+    record Def(String name) {}
+
+    @Test
+    void rootArrayMismatchReportsFirstContentLine() {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        IOException e = assertThrows(IOException.class,
+                () -> mapper.readValue("# note\n- a\n- b\n", Def.class));
+        assertTrue(e.getMessage().contains("at line 2"), e.getMessage());
+    }
+
+    @Test
+    void rootScalarMismatchReportsFirstContentLine() {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        IOException e = assertThrows(IOException.class,
+                () -> mapper.readValue("just text\n", Def.class));
+        assertTrue(e.getMessage().contains("at line 1"), e.getMessage());
+    }
+
     // ---- Malformed UTF-8 handling (issue #131) ----
 
     record Blurb(String name, String desc) {}

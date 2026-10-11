@@ -2,6 +2,8 @@
 
 ## [Unreleased] - 0.2.3
 
+- Root-level binding mismatches (empty path) report the first content
+  line instead of no position (#130 comment)
 - Malformed UTF-8 is rejected with line info on byte entry points (#131):
   new `Utf8.validate` primitive, `parseStrict(byte[])` throws, YAML
   stream/file loading throws naming file and line; lenient `parse`

@@ -28,14 +28,15 @@ final class YamlPathLocator {
 
     /**
      * Locate the 1-based line of the value addressed by path segments
-     * (String fields, Integer indexes, outermost first).
+     * (String fields, Integer indexes, outermost first). An empty path
+     * (root mismatch) resolves to the first content line.
      *
      * @param yaml     the source document (must have parsed successfully)
      * @param segments the failure path segments
      * @return the 1-based line number, or -1 when it cannot be determined
      */
     static int locate(String yaml, List<Object> segments) {
-        if (segments == null || segments.isEmpty()) return -1;
+        if (segments == null) return -1;
         for (Object s : segments) {
             if (!(s instanceof String) && !(s instanceof Integer)) return -1;
         }
@@ -70,6 +71,14 @@ final class YamlPathLocator {
         }
         lines = excludeMultilineQuotes(lines);
         lines = withFlowDepth(lines);
+        if (segments.isEmpty()) {
+            // Root mismatch (path `$`): the offending value starts at the
+            // first content line (#130 comment).
+            for (Line l : lines) {
+                if (indentOf(l.text) >= 0) return l.num;
+            }
+            return -1;
+        }
         int line = resolve(segments, 0, -1, true, lines);
         return line;
     }

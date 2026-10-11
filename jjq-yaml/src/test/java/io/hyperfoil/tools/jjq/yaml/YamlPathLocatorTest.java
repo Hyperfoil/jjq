@@ -99,8 +99,15 @@ class YamlPathLocatorTest {
     }
 
     @Test
-    void emptySegmentsIsUnknown() {
-        assertEquals(-1, YamlPathLocator.locate("a: 1\n", List.of()));
+    void emptySegmentsGivesFirstContentLine() {
+        // Root mismatch (path `$`): the value starts at the first content line
+        assertEquals(1, YamlPathLocator.locate("a: 1\n", List.of()));
+        assertEquals(2, YamlPathLocator.locate("# note\n- a\n- b\n", List.of()));
+        assertEquals(1, YamlPathLocator.locate("just text\n", List.of()));
+        assertEquals(2, YamlPathLocator.locate("---\na: 1\n", List.of()));
+        assertEquals(-1, YamlPathLocator.locate("", List.of()));
+        assertEquals(-1, YamlPathLocator.locate("# only a comment\n", List.of()));
+        assertEquals(-1, YamlPathLocator.locate("a: 1\n", (List<Object>) null));
     }
 
     @Test

@@ -179,7 +179,8 @@ public final class YamlMapper {
         Throwable t = e;
         while (t != null) {
             if (t instanceof io.hyperfoil.tools.jjq.mapper.JqMapperException m
-                    && !m.pathSegments().isEmpty()) {
+                    && (!m.pathSegments().isEmpty()
+                        || t instanceof io.hyperfoil.tools.jjq.mapper.ShapeMismatchException)) {
                 int line = YamlPathLocator.locate(yaml, m.pathSegments());
                 if (line > 0) message += " at line " + line;
                 break;
