@@ -107,6 +107,39 @@ class YamlMapperTest {
         assertInstanceOf(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, e.getCause());
     }
 
+    // ---- Source lines on binding failures (issue #128.1) ----
+
+    record PkgConfig(String name, List<String> packages) {}
+    record Tool(String name) {}
+    record Bundle(String id, List<Tool> tools) {}
+    record Inner(List<String> items) {}
+    record Outer(Inner ref) {}
+
+    @Test
+    void bindingFailureCarriesSourceLine() {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        IOException e = assertThrows(IOException.class,
+                () -> mapper.readValue("name: t\n# comment\npackages: vim\n", PkgConfig.class));
+        assertTrue(e.getMessage().contains("at line 3"), e.getMessage());
+    }
+
+    @Test
+    void nestedBindingFailureCarriesSourceLine() {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        IOException e = assertThrows(IOException.class,
+                () -> mapper.readValue("id: b\ntools:\n  - name: ok\n  - oops\n", Bundle.class));
+        assertTrue(e.getMessage().contains("at line 4"), e.getMessage());
+    }
+
+    @Test
+    void unlocatableFailureHasNoLineSuffix() {
+        // Alias targets cannot be located: no suffix, still a clean error
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        IOException e = assertThrows(IOException.class,
+                () -> mapper.readValue("base: &a {items: s}\nref: *a\n", Outer.class));
+        assertFalse(e.getMessage().contains("at line"), e.getMessage());
+    }
+
     @Test
     void writeValueAsStringRoundTrip() throws Exception {
         var mapper = mapper();

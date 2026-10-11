@@ -20,6 +20,11 @@ import java.util.Objects;
  * with the cause chain preserved, so callers can unwrap causes for friendly
  * error rendering. I/O failures pass through untouched.</p>
  *
+ * <p>Binding failures whose path resolves in the source additionally carry
+ * the 1-based source line ({@code ... at line 3}), located from the failure
+ * path; unlocatable shapes (aliases, flow spanning lines, quoted keys)
+ * omit the suffix rather than guess.</p>
+ *
  * <pre>{@code
  * YamlMapper mapper = new YamlMapper(JqMapper.create());
  * SpawnConfig config = mapper.readValue(configFile, SpawnConfig.class);
@@ -69,7 +74,7 @@ public final class YamlMapper {
         try {
             return mapper.fromJqValue(JqYaml.parse(yaml, options), type);
         } catch (RuntimeException e) {
-            throw readFailure(type.getName(), e);
+            throw readFailure(type.getName(), yaml, e);
         }
     }
 
@@ -87,7 +92,7 @@ public final class YamlMapper {
         try {
             return mapper.fromJqValue(JqYaml.parse(yaml, options), type);
         } catch (RuntimeException e) {
-            throw readFailure(type.getTypeName(), e);
+            throw readFailure(type.getTypeName(), yaml, e);
         }
     }
 
@@ -167,7 +172,20 @@ public final class YamlMapper {
         Files.writeString(file, writeValueAsString(value), StandardCharsets.UTF_8);
     }
 
-    private static IOException readFailure(String target, RuntimeException e) {
-        return new IOException("Failed to bind YAML as " + target + ": " + e.getMessage(), e);
+    private static IOException readFailure(String target, String yaml, RuntimeException e) {
+        String message = "Failed to bind YAML as " + target + ": " + e.getMessage();
+        // Point at the offending line when the failure path resolves in the
+        // source (best-effort; span infrastructure is tracked in #130).
+        Throwable t = e;
+        while (t != null) {
+            if (t instanceof io.hyperfoil.tools.jjq.mapper.JqMapperException m
+                    && !m.pathSegments().isEmpty()) {
+                int line = YamlPathLocator.locate(yaml, m.pathSegments());
+                if (line > 0) message += " at line " + line;
+                break;
+            }
+            t = t.getCause();
+        }
+        return new IOException(message, e);
     }
 }

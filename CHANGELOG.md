@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.2
 
+- Mapper type errors, follow-ups to #84-#86 (incus-spawn adoption, #128):
+  strict boolean coercion unified across paths (`"true"`/`"false"` bind,
+  other strings throw; numbers follow the zero rule), generated
+  record/POJO mappings reject scalar input like the reflection path,
+  structured `pathSegments()` plus user-facing `displayPath()`, and
+  source lines on YAML binding failures (`... at line 3`, best-effort).
+
 - Strict JSON parsing in `parseStrict` (opt-in, #127): rejects trailing
   commas, missing values, truncated input, non-canonical numbers, unknown
   literals (`NaN`/`Infinity`) and invalid string escapes, with line/column
