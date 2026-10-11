@@ -163,6 +163,15 @@ final class YamlEmitter {
                 default -> {
                     if (c < 0x20 || c == 0x7f) {
                         sb.append(String.format("\\x%02x", (int) c));
+                    } else if (Character.isHighSurrogate(c)
+                            && i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1))) {
+                        // Valid astral pair: raw UTF-8 round-trips, escaped form bloats.
+                        sb.append(c);
+                        sb.append(s.charAt(++i));
+                    } else if (Character.isSurrogate(c)) {
+                        // Lone surrogate: raw output cannot survive UTF-8
+                        // encoding (decodes as U+FFFD), so escape it (#138).
+                        sb.append(String.format("\\u%04x", (int) c));
                     } else {
                         sb.append(c);
                     }

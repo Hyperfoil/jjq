@@ -407,6 +407,29 @@ class JqYamlTest {
         assertEquals("a\nb", reparsed.getField("list").getElement(0).stringValue());
     }
 
+    // ---- Float fidelity + surrogate escaping (#138-#140) ----
+
+    @Test
+    void floatPrecisionPreserved() {
+        JqValue v = JqYaml.parse("n: 3.14159265358979323846\n");
+        assertEquals("3.14159265358979323846", v.getField("n").toJsonString());
+        assertEquals(v.getField("n").toJsonString(),
+                JqYaml.parse(JqYaml.toYaml(v)).getField("n").toJsonString());
+    }
+
+    @Test
+    void dotlessExponentStaysFloat() {
+        JqValue v = JqYaml.parse("n: 1E+30\n");
+        assertEquals("1E+30", v.getField("n").toJsonString());
+    }
+
+    @Test
+    void loneSurrogateRoundTrips() {
+        JqValue original = JqValues.parse("{\"k\":\"\\ud800\"}");
+        assertEquals(original.toJsonString(),
+                JqYaml.parse(JqYaml.toYaml(original)).toJsonString());
+    }
+
     @Test
     void toYamlEmptyContainersRoundTrip() {
         JqValue original = JqObject.builder(2)

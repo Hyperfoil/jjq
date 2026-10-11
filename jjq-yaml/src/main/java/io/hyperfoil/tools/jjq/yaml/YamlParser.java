@@ -3083,6 +3083,20 @@ final class YamlParser {
         if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) return false;
         if ("-?:,[]{}#&*!|>'\"%@`".indexOf(first) >= 0 || first == '<') return false;
         if (value.indexOf('#') >= 0) return false;
+        // Lone surrogates cannot survive UTF-8 encoding (they decode as
+        // U+FFFD), so they must go through double-quoted U+XXXX escapes.
+        // Valid astral pairs stay bare: their UTF-8 round-trips exactly.
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                    return false;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(c)) {
+                return false;
+            }
+        }
         try {
             return convertScalar(value, null, -1) instanceof JqString;
         } catch (YamlParseException e) {
@@ -3365,9 +3379,16 @@ final class YamlParser {
         }
         try {
             // Underscores stripped only when present (the common case parses
-            // directly with zero copying).
+            // directly with zero copying). BigDecimal first for exactness
+            // (trailing zeros and long digit runs survive); doubles cannot
+            // hold them, and Double.parseDouble silently truncates.
             String clean = value.indexOf('_') < 0 ? value : value.replace("_", "");
-            return JqNumber.of(Double.parseDouble(clean));
+            try {
+                return JqNumber.of(new java.math.BigDecimal(clean));
+            } catch (NumberFormatException e) {
+                // Forms BigDecimal rejects but doubles accept (trailing dot).
+                return JqNumber.of(Double.parseDouble(clean));
+            }
         } catch (NumberFormatException e) {
             return JqString.of(value); // fallback
         }

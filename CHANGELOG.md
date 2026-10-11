@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.3
 
+- YAML float fidelity (#138-#140, from the emitter round-trip audit):
+  exact decimals via BigDecimal (22-digit precision survives, dotless
+  exponents stay float, trailing forms stable), lone surrogates escape
+  instead of corrupting to replacement characters on reparse
 - Empty values in sequence items no longer swallow following siblings:
   the nested-block lookup uses the key column, not the outer indent (#134)
 - Scalar↔scalar coercion, jq-leaning on conflict (#135, #133): valid
