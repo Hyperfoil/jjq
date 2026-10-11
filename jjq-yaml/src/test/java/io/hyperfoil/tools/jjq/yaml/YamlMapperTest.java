@@ -140,6 +140,40 @@ class YamlMapperTest {
         assertFalse(e.getMessage().contains("at line"), e.getMessage());
     }
 
+    // ---- Malformed UTF-8 handling (issue #131) ----
+
+    record Blurb(String name, String desc) {}
+
+    private static byte[] latin1(String s) {
+        return s.getBytes(java.nio.charset.Charset.forName("ISO-8859-1"));
+    }
+
+    @Test
+    void streamRejectsMalformedUtf8WithLine() {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        var in = new ByteArrayInputStream(latin1("name: ok\ndesc: caf\u00e9\n"));
+        IOException e = assertThrows(IOException.class, () -> mapper.readValue(in, Blurb.class));
+        assertTrue(e.getMessage().contains("line 2"), e.getMessage());
+    }
+
+    @Test
+    void fileRejectsMalformedUtf8WithFileAndLine(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("bad.yaml");
+        Files.write(file, latin1("name: caf\u00e9\n"));
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        IOException e = assertThrows(IOException.class, () -> mapper.readValue(file, Blurb.class));
+        assertTrue(e.getMessage().contains(file.toString()), e.getMessage());
+        assertTrue(e.getMessage().contains("line 1"), e.getMessage());
+    }
+
+    @Test
+    void streamAcceptsValidMultibyte() throws Exception {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        byte[] bytes = "name: caf\u00e9 \uD83D\uDE00\ndesc: ok\n".getBytes(StandardCharsets.UTF_8);
+        Blurb b = mapper.readValue(new ByteArrayInputStream(bytes), Blurb.class);
+        assertEquals("caf\u00e9 \uD83D\uDE00", b.name());
+    }
+
     @Test
     void writeValueAsStringRoundTrip() throws Exception {
         var mapper = mapper();

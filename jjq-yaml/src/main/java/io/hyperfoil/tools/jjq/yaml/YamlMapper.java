@@ -107,7 +107,7 @@ public final class YamlMapper {
      * @throws IOException on I/O failure, or wrapping parse/bind failures
      */
     public <T> T readValue(Path file, Class<T> type) throws IOException {
-        return readValue(Files.readString(file, StandardCharsets.UTF_8), type);
+        return readValue(decodeFile(file), type);
     }
 
     /**
@@ -120,7 +120,7 @@ public final class YamlMapper {
      * @throws IOException on I/O failure, or wrapping parse/bind failures
      */
     public <T> T readValue(Path file, Type type) throws IOException {
-        return readValue(Files.readString(file, StandardCharsets.UTF_8), type);
+        return readValue(decodeFile(file), type);
     }
 
     /**
@@ -133,7 +133,7 @@ public final class YamlMapper {
      * @throws IOException on I/O failure, or wrapping parse/bind failures
      */
     public <T> T readValue(InputStream in, Class<T> type) throws IOException {
-        return readValue(new String(in.readAllBytes(), StandardCharsets.UTF_8), type);
+        return readValue(decodeStream(in, "input"), type);
     }
 
     /**
@@ -146,7 +146,7 @@ public final class YamlMapper {
      * @throws IOException on I/O failure, or wrapping parse/bind failures
      */
     public <T> T readValue(InputStream in, Type type) throws IOException {
-        return readValue(new String(in.readAllBytes(), StandardCharsets.UTF_8), type);
+        return readValue(decodeStream(in, "input"), type);
     }
 
     /**
@@ -187,5 +187,39 @@ public final class YamlMapper {
             t = t.getCause();
         }
         return new IOException(message, e);
+    }
+
+    /**
+     * Read a file as UTF-8, naming the file and the line on malformed input
+     * instead of failing with a bare decoding error (issue #131).
+     */
+    private static String decodeFile(Path file) throws IOException {
+        byte[] bytes;
+        try {
+            bytes = Files.readAllBytes(file);
+        } catch (IOException e) {
+            throw new IOException("Failed to read YAML file " + file + ": " + e.getMessage(), e);
+        }
+        return decode(bytes, "YAML file " + file);
+    }
+
+    /** Decode stream bytes as UTF-8, naming the line on malformed input. */
+    private static String decodeStream(InputStream in, String what) throws IOException {
+        byte[] bytes = in.readAllBytes();
+        return decode(bytes, "YAML " + what);
+    }
+
+    /**
+     * Strict UTF-8 decode: malformed input throws naming the line instead
+     * of silently replacing (issue #131).
+     */
+    private static String decode(byte[] bytes, String what) throws IOException {
+        int bad = io.hyperfoil.tools.jjq.value.Utf8.validate(bytes, 0, bytes.length);
+        if (bad < 0) return new String(bytes, StandardCharsets.UTF_8);
+        int line = 1;
+        for (int i = 0; i < bad; i++) {
+            if (bytes[i] == '\n') line++;
+        }
+        throw new IOException("Failed to read " + what + ": Invalid UTF-8 at line " + line);
     }
 }

@@ -89,6 +89,7 @@ public final class JqYaml {
     public static JqValue parse(InputStream in, YamlOptions options) {
         try {
             byte[] bytes = in.readAllBytes();
+            requireValidUtf8(bytes);
             return YamlParser.parse(bytes, 0, bytes.length, options);
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
@@ -170,6 +171,7 @@ public final class JqYaml {
     public static List<JqValue> parseAll(InputStream in, YamlOptions options) {
         try {
             byte[] bytes = in.readAllBytes();
+            requireValidUtf8(bytes);
             return YamlParser.parseAll(bytes, 0, bytes.length, options);
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
@@ -409,5 +411,23 @@ public final class JqYaml {
     public static <T> T fromYaml(InputStream in, io.hyperfoil.tools.jjq.mapper.JqMapper mapper, java.lang.reflect.Type type,
                                  YamlOptions options) {
         return mapper.fromJqValue(parse(in, options), type);
+    }
+
+    /**
+     * Reject malformed UTF-8 in stream input with a line number instead of
+     * silently replacing (issue #131). Byte-based entries validate; the
+     * parser itself keeps accepting already-decoded text untouched.
+     *
+     * @param bytes the raw input bytes
+     * @throws IllegalArgumentException naming the line on malformed input
+     */
+    private static void requireValidUtf8(byte[] bytes) {
+        int bad = Utf8.validate(bytes, 0, bytes.length);
+        if (bad < 0) return;
+        int line = 1;
+        for (int i = 0; i < bad; i++) {
+            if (bytes[i] == '\n') line++;
+        }
+        throw new IllegalArgumentException("Invalid UTF-8 at line " + line);
     }
 }

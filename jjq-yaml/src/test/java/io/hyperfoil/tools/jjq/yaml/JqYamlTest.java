@@ -474,4 +474,24 @@ class JqYamlTest {
         ServerConfig config = JqYaml.fromYaml("host: a\nport: 1\n", mapper, ServerConfig.class, YamlOptions.STRICT);
         assertEquals("a", config.host());
     }
+
+    // ---- Malformed UTF-8 handling (issue #131) ----
+
+    private static byte[] latin1(String s) {
+        return s.getBytes(java.nio.charset.Charset.forName("ISO-8859-1"));
+    }
+
+    @Test
+    void streamRejectsMalformedUtf8WithLine() {
+        var in = new java.io.ByteArrayInputStream(latin1("name: ok\ndesc: caf\u00e9\n"));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> JqYaml.parse(in));
+        assertTrue(e.getMessage().contains("line 2"), e.getMessage());
+    }
+
+    @Test
+    void streamAcceptsValidMultibyte() {
+        byte[] bytes = "name: caf\u00e9 \uD83D\uDE00\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        JqValue result = JqYaml.parse(new java.io.ByteArrayInputStream(bytes));
+        assertEquals("caf\u00e9 \uD83D\uDE00", result.getField("name").stringValue());
+    }
 }

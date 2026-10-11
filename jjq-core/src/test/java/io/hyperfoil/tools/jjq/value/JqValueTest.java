@@ -1275,6 +1275,43 @@ class JqValueTest {
         assertEquals(JqNull.NULL, JqValues.parseStrict("   "));
     }
 
+    // ---- Malformed UTF-8 handling (issue #131) ----
+
+    private static byte[] latin1(String s) {
+        return s.getBytes(java.nio.charset.Charset.forName("ISO-8859-1"));
+    }
+
+    @Test
+    void testParseStrictBytesRejectsMalformedUtf8() {
+        byte[] bad = latin1("{\"name\":\"caf\u00e9\"}");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(bad));
+        assertTrue(e.getMessage().contains("UTF-8"), e.getMessage());
+        assertTrue(e.getMessage().contains("line 1"), e.getMessage());
+    }
+
+    @Test
+    void testParseStrictBytesReportsSecondLine() {
+        byte[] bad = latin1("{\"a\":1,\n\"b\":\"caf\u00e9\"}");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(bad));
+        assertTrue(e.getMessage().contains("line 2"), e.getMessage());
+    }
+
+    @Test
+    void testParseBytesKeepsReplacementDefault() {
+        // Lenient contract: malformed bytes replace, never throw
+        JqValue v = JqValues.parse(latin1("{\"name\":\"caf\u00e9\"}"));
+        assertEquals("caf\uFFFD", v.getField("name").stringValue());
+    }
+
+    @Test
+    void testParseStrictBytesAcceptsValidMultibyte() {
+        String json = "{\"name\":\"caf\u00e9 \uD83D\uDE00\"}";
+        byte[] bytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(json, JqValues.parseStrict(bytes).toJsonString());
+    }
+
     // ---- Duplicate keys in parseStrict (issue #132) ----
 
     @Test

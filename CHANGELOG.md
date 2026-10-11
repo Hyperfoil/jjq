@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.3
 
+- Malformed UTF-8 is rejected with line info on byte entry points (#131):
+  new `Utf8.validate` primitive, `parseStrict(byte[])` throws, YAML
+  stream/file loading throws naming file and line; lenient `parse`
+  keeps replacement behavior
 - Release profile strips legacy `.woff` fonts from javadoc jars (keep
   `.woff2`): ~4.2MB -> ~1.8MB per module against the Central size limit
 - `parseStrict` rejects duplicate object keys with key and position (#132);

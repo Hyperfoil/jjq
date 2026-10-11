@@ -1230,13 +1230,35 @@ public final class JqValues {
      * a single valid JSON value, with no leniency for trailing commas,
      * missing values, truncated input, non-canonical numbers, unknown
      * literals, or invalid string escapes. See {@link #parseStrict(String)}.
+     * Malformed UTF-8 is rejected (unlike {@link #parse(byte[])}, which
+     * replaces).
      *
      * @param bytes the UTF-8 JSON document
      * @return the parsed value ({@code null} for empty input)
      * @throws IllegalArgumentException with line/column position on malformed input
      */
     public static JqValue parseStrict(byte[] bytes) {
+        int bad = Utf8.validate(bytes, 0, bytes.length);
+        if (bad >= 0) throw utf8Error(bytes, 0, bad);
         return parseStrictBytes(bytes, 0, bytes.length, null);
+    }
+
+    /** Malformed-UTF-8 error with line/column for a byte offset (cold path). */
+    private static IllegalArgumentException utf8Error(byte[] bytes, int base, int badOffset) {
+        StringBuilder sb = new StringBuilder("Invalid UTF-8");
+        appendPosition(sb, bytes, base, badOffset);
+        return new IllegalArgumentException(sb.toString());
+    }
+
+    /** Append ` at line L, column C` for a byte offset into a helper buffer. */
+    private static void appendPosition(StringBuilder sb, byte[] data, int base, int pos) {
+        int line = 1;
+        int lineStart = Math.max(base, 0);
+        int stop = Math.min(pos, data.length);
+        for (int i = lineStart; i < stop; i++) {
+            if (data[i] == '\n') { line++; lineStart = i + 1; }
+        }
+        sb.append(" at line ").append(line).append(", column ").append(stop - lineStart + 1);
     }
 
     /** Byte-based strict parse with trailing content validation. */
@@ -1277,13 +1299,7 @@ public final class JqValues {
 
     /** Append ` at line L, column C` for a byte offset (cold error paths only). */
     private static void appendPosition(StringBuilder sb, JsonByteReader r, int pos) {
-        int line = 1;
-        int lineStart = Math.max(r.base, 0);
-        int stop = Math.min(pos, r.end);
-        for (int i = lineStart; i < stop; i++) {
-            if (r.data[i] == '\n') { line++; lineStart = i + 1; }
-        }
-        sb.append(" at line ").append(line).append(", column ").append(stop - lineStart + 1);
+        appendPosition(sb, r.data, r.base, Math.min(pos, r.end));
     }
 
     /** Duplicate-key error naming the key and its position (strict mode). */
