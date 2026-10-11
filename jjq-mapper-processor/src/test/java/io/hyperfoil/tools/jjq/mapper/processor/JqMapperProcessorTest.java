@@ -119,8 +119,6 @@ class JqMapperProcessorTest {
 
     @Test
     void generatedMapping_jqFieldProgramStaysLenient() throws Exception {
-        // @JqField programs may legitimately extract from any shape:
-        // the object gate applies only to all-direct mappings (reflection parity)
         String source = """
                 package test;
 
@@ -135,6 +133,27 @@ class JqMapperProcessorTest {
         JqMapper mapper = JqMapper.create();
         Object result = mapper.fromJqValue(JqValues.parse("{\"name\":\"Alice\"}"), cls);
         assertEquals("Alice", cls.getMethod("name").invoke(result));
+    }
+
+    @Test
+    void generatedMapping_numericStringCoercion() throws Exception {
+        // End-to-end proof that swapped numeric emissions bind like reflection (#135)
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Nums(int i, double d) {}
+                """;
+
+        Class<?> cls = compileAndLoad("test.Nums", source);
+        JqMapper mapper = JqMapper.create();
+        Object result = mapper.fromJqValue(JqValues.parse("{\"i\":\"42\",\"d\":\"4.5\"}"), cls);
+        assertEquals(42, cls.getMethod("i").invoke(result));
+        assertEquals(4.5, (double) cls.getMethod("d").invoke(result));
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":\"x\",\"d\":0}"), cls));
     }
 
     @Test

@@ -674,6 +674,87 @@ class JqMapperTest {
                 () -> GeneratedMapping.asBooleanChecked(JqString.of("maybe")));
     }
 
+    // ---- Jackson-parity numeric coercion (issue #135) ----
+
+    record Nums(int i, long l, double d) {}
+
+    @Test
+    void numericStringsCoerce() {
+        Nums r = mapper.fromJqValue(
+                JqValues.parse("{\"i\":\"42\",\"l\":\"4200000000\",\"d\":\"4.5\"}"), Nums.class);
+        assertEquals(42, r.i());
+        assertEquals(4200000000L, r.l());
+        assertEquals(4.5, r.d());
+    }
+
+    @Test
+    void garbageStringsThrowForNumbers() {
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":\"x\",\"l\":0,\"d\":0}"), Nums.class));
+        assertEquals(JqValue.Type.NUMBER, e.expected());
+        assertEquals(JqValue.Type.STRING, e.actual());
+        assertEquals("$.i", e.path());
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":0,\"l\":\"\",\"d\":0}"), Nums.class));
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":0,\"l\":0,\"d\":\"4.5.6\"}"), Nums.class));
+    }
+
+    @Test
+    void booleansFollowZeroOneRuleForNumbers() {
+        Nums r = mapper.fromJqValue(JqValues.parse("{\"i\":true,\"l\":false,\"d\":true}"), Nums.class);
+        assertEquals(1, r.i());
+        assertEquals(0L, r.l());
+        assertEquals(1.0, r.d());
+    }
+
+    record Chars(char c) {}
+
+    @Test
+    void numberToCharUsesCodePoint() {
+        assertEquals('A', mapper.fromJqValue(
+                JqValues.parse("{\"c\":65}"), Chars.class).c());
+    }
+
+    @Test
+    void multiCharStringToCharThrows() {
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"c\":\"ab\"}"), Chars.class));
+    }
+
+    @Test
+    void emptyStringToCharStaysNul() {
+        // Jackson parity for the empty corner (unchanged behavior)
+        assertEquals('\0', mapper.fromJqValue(
+                JqValues.parse("{\"c\":\"\"}"), Chars.class).c());
+    }
+
+    record Biggies(java.math.BigDecimal v) {}
+
+    @Test
+    void bigDecimalParsesStrings() {
+        assertEquals(new java.math.BigDecimal("3.14"), mapper.fromJqValue(
+                JqValues.parse("{\"v\":\"3.14\"}"), Biggies.class).v());
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"v\":\"abc\"}"), Biggies.class));
+    }
+
+    @Test
+    void numericCheckedHelpersMirror() {
+        // Generated-mapping path must match TypeConverter numeric semantics
+        assertEquals(42L, GeneratedMapping.asLongChecked(JqString.of("42")));
+        assertEquals(0L, GeneratedMapping.asLongChecked(null));
+        assertEquals(4.5, GeneratedMapping.asDoubleChecked(JqString.of("4.5")));
+        assertEquals('A', GeneratedMapping.asCharChecked(JqNumber.of(65)));
+        assertEquals(new java.math.BigDecimal("3.14"),
+                GeneratedMapping.asBigDecimalChecked(JqString.of("3.14")));
+        assertNull(GeneratedMapping.asBigDecimalChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asLongChecked(JqString.of("abc")));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asCharChecked(JqString.of("ab")));
+    }
+
     @Test
     void nonMismatchErrorsAreNotShapeMismatch() {
         // Constructor failures stay plain JqMapperException (no structured shapes)

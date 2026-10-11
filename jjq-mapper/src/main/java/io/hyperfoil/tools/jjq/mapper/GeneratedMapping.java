@@ -116,9 +116,59 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
      * @throws JqMapperException if the value is an array, object, or non-boolean string
      */
     protected static boolean asBooleanChecked(JqValue value) {
-        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return false;
-        if (value.isContainer()) throw TypeConverter.mismatch(JqValue.Type.BOOLEAN, "boolean", value);
         return TypeConverter.coerceBoolean(value);
+    }
+
+    /**
+     * Lenient long coercion mirroring {@code TypeConverter} integral semantics:
+     * numbers narrow, booleans follow 0/1, trimmed decimal strings parse,
+     * anything else is a shape mismatch; nulls stay zero.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced long
+     * @throws JqMapperException if the value is an array, object, or non-numeric string
+     */
+    protected static long asLongChecked(JqValue value) {
+        return TypeConverter.coerceLong(value, "long");
+    }
+
+    /**
+     * Lenient double coercion mirroring {@code TypeConverter} semantics:
+     * numbers widen, booleans follow 0/1, trimmed numeric strings parse,
+     * anything else is a shape mismatch; nulls stay zero.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced double
+     * @throws JqMapperException if the value is an array, object, or non-numeric string
+     */
+    protected static double asDoubleChecked(JqValue value) {
+        return TypeConverter.coerceDouble(value, "double");
+    }
+
+    /**
+     * Lenient char coercion mirroring {@code TypeConverter} semantics:
+     * single-character strings unwrap, numbers map by code point, anything
+     * else is a shape mismatch; nulls and empty strings stay {@code '\0'}.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced char
+     * @throws JqMapperException if the value is an array, object, multi-character string, or boolean
+     */
+    protected static char asCharChecked(JqValue value) {
+        return TypeConverter.coerceChar(value);
+    }
+
+    /**
+     * Lenient {@code BigDecimal} coercion mirroring {@code TypeConverter}
+     * semantics: numbers convert exactly, booleans map to one/zero, trimmed
+     * decimal strings parse, anything else is a shape mismatch; nulls stay null.
+     *
+     * @param value the extracted value (never null from {@code JqProgram.apply})
+     * @return the coerced decimal, or null for null inputs
+     * @throws JqMapperException if the value is an array, object, or non-numeric string
+     */
+    protected static java.math.BigDecimal asBigDecimalChecked(JqValue value) {
+        return TypeConverter.coerceBigDecimal(value);
     }
 
     /**

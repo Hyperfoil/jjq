@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.3
 
+- Jackson-parity scalar↔scalar coercion (#135): valid numeric strings
+  bind (`"42"`->42, was 0), garbage throws, booleans follow 0/1 both
+  directions, number->char by code point, multi-char->char throws,
+  `BigDecimal` parses strings; unified across reflection and generated
+  paths (empty string throws, documented deviation from Jackson leniency)
 - Root-level binding mismatches (empty path) report the first content
   line instead of no position (#130 comment)
 - Malformed UTF-8 is rejected with line info on byte entry points (#131):
