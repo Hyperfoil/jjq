@@ -1173,6 +1173,9 @@ public final class JqValues {
      *
      * <p>For larger strings, uses the char-based parser directly to avoid
      * allocating a large byte array copy.</p>
+     *
+     * <p>Lenient contract: duplicate object keys are kept as-is.
+     * Use {@link #parseStrict} to reject them.</p>
      */
     public static JqValue parse(String json) {
         if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
@@ -1195,9 +1198,9 @@ public final class JqValues {
      * Unlike {@link #parse(String)}, rejects trailing commas, missing values,
      * truncated input, non-canonical numbers (leading zeros, dangling
      * fraction/exponent parts), unknown literals ({@code NaN},
-     * {@code Infinity}), and invalid string escapes, with line/column
-     * positions. Used by fromjson; suitable for API responses and files
-     * that must fail loudly instead of reading as partial values.
+     * {@code Infinity}), invalid string escapes, and duplicate object keys,
+     * with line/column positions. Used by fromjson; suitable for API responses
+     * and files that must fail loudly instead of reading as partial values.
      * Empty input still yields null, matching {@code parse}.
      */
     public static JqValue parseStrict(String json) {
@@ -1267,13 +1270,29 @@ public final class JqValues {
      * scan costs nothing measurable next to exception construction.
      */
     private static IllegalArgumentException strictError(JsonByteReader r, String msg) {
+        StringBuilder sb = new StringBuilder(msg);
+        appendPosition(sb, r, r.pos);
+        return new IllegalArgumentException(sb.toString());
+    }
+
+    /** Append ` at line L, column C` for a byte offset (cold error paths only). */
+    private static void appendPosition(StringBuilder sb, JsonByteReader r, int pos) {
         int line = 1;
         int lineStart = Math.max(r.base, 0);
-        int stop = Math.min(r.pos, r.end);
+        int stop = Math.min(pos, r.end);
         for (int i = lineStart; i < stop; i++) {
             if (r.data[i] == '\n') { line++; lineStart = i + 1; }
         }
-        return new IllegalArgumentException(msg + " at line " + line + ", column " + (stop - lineStart + 1));
+        sb.append(" at line ").append(line).append(", column ").append(stop - lineStart + 1);
+    }
+
+    /** Duplicate-key error naming the key and its position (strict mode). */
+    private static IllegalArgumentException duplicateKeyError(JsonByteReader r, String key, int keyStart) {
+        StringBuilder sb = new StringBuilder("Duplicate key \"");
+        sb.append(key.replace("\\", "\\\\").replace("\"", "\\\""));
+        sb.append('"');
+        appendPosition(sb, r, keyStart);
+        return new IllegalArgumentException(sb.toString());
     }
 
     /** Require an exact literal at the reader position (strict mode). */
@@ -2142,6 +2161,9 @@ public final class JqValues {
         String[] keys = new String[8];
         JqValue[] values = new JqValue[8];
         int count = 0;
+        // Strict duplicate tracking: per-object set, allocated only in
+        // strict mode so lenient parsing pays one predictable branch per key.
+        java.util.Set<String> seen = r.strict ? new java.util.HashSet<>() : null;
         while (true) {
             r.skipWs();
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') {
@@ -2152,8 +2174,12 @@ public final class JqValues {
                 keys = r.growKeys(depth, keys, count);
                 values = r.growValues(depth, values, count);
             }
+            int keyStart = r.pos;
             // Keys interned for deduplication and reference equality in JqObject.get()
             keys[count] = parseAndInternKeyBytes(r);
+            if (seen != null && !seen.add(keys[count])) {
+                throw duplicateKeyError(r, keys[count], keyStart);
+            }
             r.skipWs();
             if (r.strict && (r.pos >= r.end || (r.data[r.pos] & 0xFF) != ':')) {
                 throw strictError(r, "Expected ':' in object");

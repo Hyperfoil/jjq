@@ -1,6 +1,13 @@
 # Changelog
 
-## [Unreleased] - 0.2.2
+## [Unreleased] - 0.2.3
+
+- Release profile strips legacy `.woff` fonts from javadoc jars (keep
+  `.woff2`): ~4.2MB -> ~1.8MB per module against the Central size limit
+- `parseStrict` rejects duplicate object keys with key and position (#132);
+  lenient `parse` keeps both entries (documented)
+
+## [0.2.2] - 2026-10-11
 
 - Mapper type errors, follow-ups to #84-#86 (incus-spawn adoption, #128):
   strict boolean coercion unified across paths (`"true"`/`"false"` bind,

@@ -1275,6 +1275,40 @@ class JqValueTest {
         assertEquals(JqNull.NULL, JqValues.parseStrict("   "));
     }
 
+    // ---- Duplicate keys in parseStrict (issue #132) ----
+
+    @Test
+    void testParseStrictRejectsDuplicateKeys() {
+        String[] bad = {"{\"status\":\"Running\",\"status\":\"Frozen\"}",
+                "{\"a\":{\"x\":1,\"x\":2}}",
+                "{\"a\":1,\"b\":2,\"a\":3}"};
+        for (String s : bad) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parseStrict(s), "strict accepted dups: " + s);
+            assertTrue(e.getMessage().contains("uplicate key"), e.getMessage());
+            assertTrue(e.getMessage().contains("column"), e.getMessage());
+            assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parseStrict(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                    "strict bytes accepted dups: " + s);
+        }
+    }
+
+    @Test
+    void testParseStrictDuplicateKeyPosition() {
+        // Second "status" starts at column 21 (1-based)
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"status\":\"Running\",\"status\":\"Frozen\"}"));
+        assertTrue(e.getMessage().contains("\"status\""), e.getMessage());
+        assertTrue(e.getMessage().contains("column 21"), e.getMessage());
+    }
+
+    @Test
+    void testParseLenientKeepsDuplicateKeys() {
+        // Unchanged contract: lenient parse keeps both entries (documented)
+        assertEquals("{\"status\":\"Running\",\"status\":\"Frozen\"}",
+                JqValues.parse("{\"status\":\"Running\",\"status\":\"Frozen\"}").toJsonString());
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================
