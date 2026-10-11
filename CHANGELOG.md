@@ -2,6 +2,8 @@
 
 ## [Unreleased] - 0.2.3
 
+- Empty values in sequence items no longer swallow following siblings:
+  the nested-block lookup uses the key column, not the outer indent (#134)
 - Scalar↔scalar coercion, jq-leaning on conflict (#135): valid numeric
   strings bind (`"42"`->42, was 0), garbage throws, booleans throw for
   numeric targets (jq `tonumber` rejects them), number->char by code

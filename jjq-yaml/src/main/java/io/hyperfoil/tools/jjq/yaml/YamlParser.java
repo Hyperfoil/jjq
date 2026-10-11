@@ -1233,10 +1233,15 @@ final class YamlParser {
      * A value inside an inline (`- key: ...`) mapping. Block scalar headers use
      * the key column as their indent base (explicit `|2` counts from the keys,
      * suite 4WA9 parity); everything else uses the outer indent.
+     * An empty value looks for nested blocks at the key column, so following
+     * keys at the same column stay siblings instead of nesting (issue #134).
      */
     private JqValue parseInlineMapValue(String inline, int keyCol, int parentIndent, boolean commented) {
         if (!inline.isEmpty() && isBlockScalarHeader(inline)) {
             return parseInlineValue(inline, keyCol, true, true);
+        }
+        if (inline.isEmpty()) {
+            return nestedBlockOrNull(keyCol, true);
         }
         return parseMapValue(inline, parentIndent, commented);
     }

@@ -65,6 +65,35 @@ class JqYamlTest {
         assertEquals("one", items.getElement(0).stringValue());
     }
 
+    // ---- Empty values in sequence items stay null (issue #134) ----
+
+    @Test
+    void emptyValueInSeqItemKeepsSiblings() {
+        JqValue result = JqYaml.parse("- n: 1\n  a:\n  b: 1\n");
+        assertEquals("{\"n\":1,\"a\":null,\"b\":1}", result.getElement(0).toJsonString());
+    }
+
+    @Test
+    void emptyValueInNestedSeqItemKeepsSiblings() {
+        JqValue result = JqYaml.parse("x:\n  - n: 1\n    a:\n    b: 1\n    c: 2\n");
+        assertEquals("{\"n\":1,\"a\":null,\"b\":1,\"c\":2}",
+                result.getField("x").getElement(0).toJsonString());
+    }
+
+    @Test
+    void emptyValueDoesNotSwallowNextItem() {
+        JqValue result = JqYaml.parse("- n: 1\n  a:\n- n: 2\n");
+        assertEquals(2, ((JqArray) result).size());
+        assertEquals("{\"n\":1,\"a\":null}", result.getElement(0).toJsonString());
+        assertEquals("{\"n\":2}", result.getElement(1).toJsonString());
+    }
+
+    @Test
+    void emptyFirstValueInSeqItemKeepsSiblings() {
+        JqValue result = JqYaml.parse("- a:\n  b: 1\n");
+        assertEquals("{\"a\":null,\"b\":1}", result.getElement(0).toJsonString());
+    }
+
     @Test
     void parseScalarTypes() {
         JqValue result = JqYaml.parse("""
