@@ -1192,7 +1192,13 @@ public final class JqValues {
 
     /**
      * Strict parse: requires the entire string to be a single valid JSON value.
-     * Used by fromjson to reject trailing content like "NaN1".
+     * Unlike {@link #parse(String)}, rejects trailing commas, missing values,
+     * truncated input, non-canonical numbers (leading zeros, dangling
+     * fraction/exponent parts), unknown literals ({@code NaN},
+     * {@code Infinity}), and invalid string escapes, with line/column
+     * positions. Used by fromjson; suitable for API responses and files
+     * that must fail loudly instead of reading as partial values.
+     * Empty input still yields null, matching {@code parse}.
      */
     public static JqValue parseStrict(String json) {
         if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
@@ -1216,6 +1222,20 @@ public final class JqValues {
         return result;
     }
 
+    /**
+     * Strict parse of a UTF-8 JSON document: requires the entire input to be
+     * a single valid JSON value, with no leniency for trailing commas,
+     * missing values, truncated input, non-canonical numbers, unknown
+     * literals, or invalid string escapes. See {@link #parseStrict(String)}.
+     *
+     * @param bytes the UTF-8 JSON document
+     * @return the parsed value ({@code null} for empty input)
+     * @throws IllegalArgumentException with line/column position on malformed input
+     */
+    public static JqValue parseStrict(byte[] bytes) {
+        return parseStrictBytes(bytes, 0, bytes.length, null);
+    }
+
     /** Byte-based strict parse with trailing content validation. */
     private static JqValue parseStrictBytes(byte[] bytes, int offset, int length, String originalForError) {
         int end = offset + length;
@@ -1228,6 +1248,8 @@ public final class JqValues {
         }
         if (offset >= end) return JqNull.NULL;
         var reader = new JsonByteReader(bytes, offset, end);
+        reader.strict = true;
+        reader.base = offset;
         JqValue result = parseValueBytes(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.end) {
@@ -1237,6 +1259,59 @@ public final class JqValues {
                             + " (while parsing '" + input + "')");
         }
         return result;
+    }
+
+    /**
+     * Build a strict-mode parse error with line/column position.
+     * Cold path only (throwing already allocates); the backward newline
+     * scan costs nothing measurable next to exception construction.
+     */
+    private static IllegalArgumentException strictError(JsonByteReader r, String msg) {
+        int line = 1;
+        int lineStart = Math.max(r.base, 0);
+        int stop = Math.min(r.pos, r.end);
+        for (int i = lineStart; i < stop; i++) {
+            if (r.data[i] == '\n') { line++; lineStart = i + 1; }
+        }
+        return new IllegalArgumentException(msg + " at line " + line + ", column " + (stop - lineStart + 1));
+    }
+
+    /** Require an exact literal at the reader position (strict mode). */
+    private static void expectLiteral(JsonByteReader r, String literal) {
+        for (int i = 0; i < literal.length(); i++) {
+            if (r.pos + i >= r.end || (r.data[r.pos + i] & 0xFF) != literal.charAt(i)) {
+                throw strictError(r, "Invalid literal, expected '" + literal + "'");
+            }
+        }
+        r.pos += literal.length();
+    }
+
+    private static boolean isHexByte(int b) {
+        return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F');
+    }
+
+    /**
+     * Validate one escape sequence with the reader positioned at the escape
+     * character (backslash already consumed). Advances past the sequence,
+     * mirroring the lenient path's landing positions on valid input.
+     */
+    private static void validateEscapeBytes(JsonByteReader r) {
+        if (r.pos >= r.end) throw strictError(r, "Unterminated escape sequence");
+        int e = r.data[r.pos] & 0xFF;
+        // Simple escapes: validate only. The caller advances past the escape
+        // character with its shared increment (mirrors the lenient landing).
+        switch (e) {
+            case '"', '\\', '/', 'b', 'f', 'n', 'r', 't' -> { }
+            case 'u' -> {
+                for (int i = 1; i <= 4; i++) {
+                    if (r.pos + i >= r.end || !isHexByte(r.data[r.pos + i] & 0xFF)) {
+                        throw strictError(r, "Invalid \\u escape sequence");
+                    }
+                }
+                r.pos += 4;
+            }
+            default -> throw strictError(r, "Invalid escape '\\" + (char) e + "'");
+        }
     }
 
     /**
@@ -1747,6 +1822,13 @@ public final class JqValues {
         final byte[] data;
         final int end;
         int pos;
+        // Document start for error positions (strict mode); reader pos may
+        // begin past leading whitespace/BOM skipping.
+        int base;
+        // Strict mode (parseStrict): reject malformed input instead of
+        // tolerating it. Off for parse/parseAll: zero behavior change there
+        // beyond one predictable branch per check site.
+        boolean strict;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -1927,15 +2009,30 @@ public final class JqValues {
 
     private static JqValue parseValueBytes(JsonByteReader r, int depth) {
         r.skipWs();
-        if (r.pos >= r.end) return JqNull.NULL;
+        if (r.pos >= r.end) {
+            if (r.strict) throw strictError(r, "Unexpected end of input");
+            return JqNull.NULL;
+        }
         int b = r.data[r.pos] & 0xFF;
         return switch (b) {
             case '{' -> parseObjectBytes(r, depth + 1);
             case '[' -> parseArrayBytes(r, depth);
             case '"' -> parseStringBytes(r);
-            case 't' -> { r.pos += 4; yield JqBoolean.TRUE; }
-            case 'f' -> { r.pos += 5; yield JqBoolean.FALSE; }
+            case 't' -> {
+                if (r.strict) expectLiteral(r, "true");
+                else r.pos += 4;
+                yield JqBoolean.TRUE;
+            }
+            case 'f' -> {
+                if (r.strict) expectLiteral(r, "false");
+                else r.pos += 5;
+                yield JqBoolean.FALSE;
+            }
             case 'n' -> {
+                if (r.strict) {
+                    expectLiteral(r, "null");
+                    yield JqNull.NULL;
+                }
                 if (r.pos + 2 < r.end && r.data[r.pos + 1] == 'a' && r.data[r.pos + 2] == 'n') {
                     r.pos += 3;
                     yield JqNumber.of(Double.NaN);
@@ -1943,8 +2040,18 @@ public final class JqValues {
                 r.pos += 4;
                 yield JqNull.NULL;
             }
-            case 'I' -> { r.pos += 8; yield JqNumber.of(Double.POSITIVE_INFINITY); }
-            case 'N' -> { r.pos += 3; yield JqNumber.of(Double.NaN); }
+            case 'I' -> {
+                // Infinity is not valid JSON; the lenient arm below stays for parse().
+                if (r.strict) throw strictError(r, "Infinity is not valid JSON");
+                r.pos += 8;
+                yield JqNumber.of(Double.POSITIVE_INFINITY);
+            }
+            case 'N' -> {
+                // NaN is not valid JSON; the lenient arm below stays for parse().
+                if (r.strict) throw strictError(r, "NaN is not valid JSON");
+                r.pos += 3;
+                yield JqNumber.of(Double.NaN);
+            }
             default -> parseNumberBytes(r);
         };
     }
@@ -1979,12 +2086,17 @@ public final class JqValues {
         elems[count++] = parseValueBytes(r, depth);
         r.skipWs();
         while (r.pos < r.end && (r.data[r.pos] & 0xFF) != ']') {
+            if (r.strict && (r.data[r.pos] & 0xFF) != ',') {
+                throw strictError(r, "Expected ',' or ']' in array");
+            }
             r.pos++;
             if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
             elems[count++] = parseValueBytes(r, depth);
             r.skipWs();
         }
-        if (r.pos < r.end) r.pos++;
+        if (r.pos >= r.end) {
+            if (r.strict) throw strictError(r, "Unterminated array");
+        } else r.pos++;
         JqValue result = JqArray.ofTrusted(elems, count);
         return unwindArrayStackBytes(stack, stackCounts, stackDepth, result, r, depth);
     }
@@ -2002,12 +2114,17 @@ public final class JqValues {
             elems[count++] = result;
             r.skipWs();
             while (r.pos < r.end && (r.data[r.pos] & 0xFF) != ']') {
+                if (r.strict && (r.data[r.pos] & 0xFF) != ',') {
+                    throw strictError(r, "Expected ',' or ']' in array");
+                }
                 r.pos++;
                 if (count >= elems.length) elems = java.util.Arrays.copyOf(elems, elems.length * 2);
                 elems[count++] = parseValueBytes(r, depth);
                 r.skipWs();
             }
-            if (r.pos < r.end) r.pos++;
+            if (r.pos >= r.end) {
+                if (r.strict) throw strictError(r, "Unterminated array");
+            } else r.pos++;
             result = JqArray.ofTrusted(elems, count);
         }
         return result;
@@ -2035,11 +2152,21 @@ public final class JqValues {
             // Keys interned for deduplication and reference equality in JqObject.get()
             keys[count] = parseAndInternKeyBytes(r);
             r.skipWs();
+            if (r.strict && (r.pos >= r.end || (r.data[r.pos] & 0xFF) != ':')) {
+                throw strictError(r, "Expected ':' in object");
+            }
             r.pos++; // skip :
             values[count] = parseValueBytes(r, depth);
             count++;
             r.skipWs();
-            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) == '}') { r.pos++; break; }
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) == '}') {
+                if (r.pos >= r.end && r.strict) throw strictError(r, "Unterminated object");
+                r.pos++;
+                break;
+            }
+            if (r.strict && (r.data[r.pos] & 0xFF) != ',') {
+                throw strictError(r, "Expected ',' or '}' in object");
+            }
             r.pos++; // skip ,
         }
         // Objects that overflowed into the scratch buffers get exact-size arrays; small
@@ -2112,7 +2239,8 @@ public final class JqValues {
             }
             if (b == '\\') {
                 r.pos++; // skip backslash
-                if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
+                if (r.strict) validateEscapeBytes(r);
+                else if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
             }
             r.pos++;
         }
@@ -2270,7 +2398,8 @@ public final class JqValues {
             if (b == '"') break;
             if (b == '\\') {
                 r.pos++;
-                if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
+                if (r.strict) validateEscapeBytes(r);
+                else if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
             }
             r.pos++;
         }
@@ -2288,8 +2417,16 @@ public final class JqValues {
             negative = true;
             r.pos++;
             if (r.pos < r.end) {
-                if ((r.data[r.pos] & 0xFF) == 'I') { r.pos += 8; return JqNumber.of(Double.NEGATIVE_INFINITY); }
-                if ((r.data[r.pos] & 0xFF) == 'N') { r.pos += 3; return JqNumber.of(Double.NaN); }
+                if ((r.data[r.pos] & 0xFF) == 'I') {
+                    if (r.strict) throw strictError(r, "Infinity is not valid JSON");
+                    r.pos += 8;
+                    return JqNumber.of(Double.NEGATIVE_INFINITY);
+                }
+                if ((r.data[r.pos] & 0xFF) == 'N') {
+                    if (r.strict) throw strictError(r, "NaN is not valid JSON");
+                    r.pos += 3;
+                    return JqNumber.of(Double.NaN);
+                }
             }
         }
 
@@ -2320,9 +2457,11 @@ public final class JqValues {
                 if (fracCount < 18) { fracPart = fracPart * 10 + d; fracCount++; }
                 r.pos++;
             }
+            if (r.strict && fracCount == 0) throw strictError(r, "Invalid number");
         }
 
         int expValue = 0;
+        int expCount = 0;
         if (r.pos < r.end && ((r.data[r.pos] & 0xFF) == 'e' || (r.data[r.pos] & 0xFF) == 'E')) {
             isDecimal = true;
             r.pos++;
@@ -2333,9 +2472,17 @@ public final class JqValues {
                 int d = (r.data[r.pos] & 0xFF) - '0';
                 if (d < 0 || d > 9) break;
                 expValue = expValue * 10 + d;
+                expCount++;
                 r.pos++;
             }
+            if (r.strict && expCount == 0) throw strictError(r, "Invalid number");
             if (expNegative) expValue = -expValue;
+        }
+
+        // Single branch when off: canonical numbers short-circuit before any load.
+        if (r.strict && (intDigitCount == 0 || (intDigitCount > 1
+                && (r.data[negative ? start + 1 : start] & 0xFF) == '0'))) {
+            throw strictError(r, "Invalid number");
         }
 
         if (!isDecimal && !overflow && intDigitCount <= 18) {

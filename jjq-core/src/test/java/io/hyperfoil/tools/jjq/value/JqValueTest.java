@@ -1217,6 +1217,65 @@ class JqValueTest {
     }
 
     // ========================================================================
+    //  JqValues.parseStrict() tests (issue #127)
+    // ========================================================================
+
+    @Test
+    void testParseStrictRejectsMalformed() {
+        String[] bad = {"[1,]", "[1,,2]", "[,]", "<html>502 Bad Gateway</html>", "not json at all",
+                "{\"items\":[{\"name\":\"a\"},{\"name\":\"b\"}", "{\"items\":[{\"name\":\"a\"},",
+                "{\"a\":", "tru", "nul", "nan", "-", "01", "NaN", "Infinity", "-Infinity",
+                "{\"a\":1}}", "[1 2]", "{\"a\" 1}", "\"\\x\"", "\"\\u12\"", "1.", ".5", "1e", "[1,2"};
+        for (String s : bad) {
+            assertThrows(IllegalArgumentException.class, () -> JqValues.parseStrict(s), "strict accepted: " + s);
+            assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parseStrict(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                    "strict bytes accepted: " + s);
+        }
+    }
+
+    @Test
+    void testParseStrictAcceptsValidEdgeCases() {
+        String[] good = {"0", "-0", "0.5", "3.14", "-2.5e3", "1E+3", "[]", "{}", "  [1, 2]  ",
+                "\"\\u0041\"", "\"\\\\\\/\\b\\f\\n\\r\\t\\\"\"", "true", "false", "null",
+                "9223372036854775807", "{\"a\":1}"};
+        for (String s : good) {
+            String expected = JqValues.parse(s).toJsonString();
+            assertEquals(expected, JqValues.parseStrict(s).toJsonString(), "strict diverged: " + s);
+            assertEquals(expected, JqValues.parseStrict(
+                    s.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toJsonString(),
+                    "strict bytes diverged: " + s);
+        }
+    }
+
+    @Test
+    void testParseStaysLenient() {
+        // parse() keeps its lenient contract; strictness is opt-in via parseStrict
+        assertEquals("[1,0]", JqValues.parse("[1,]").toJsonString());
+        assertEquals("0", JqValues.parse("<html>").toJsonString());
+        assertEquals(JqNull.NULL, JqValues.parse("not json"));
+        assertEquals(1L, JqValues.parse("01").longValue());
+        assertEquals("{\"a\":null}", JqValues.parse("{\"a\":").toJsonString());
+    }
+
+    @Test
+    void testParseStrictErrorCarriesPosition() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("[1,]"));
+        assertTrue(e.getMessage().contains("column 4"), e.getMessage());
+        IllegalArgumentException e2 = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"a\":1}}"));
+        assertTrue(e2.getMessage().contains("column"), e2.getMessage());
+    }
+
+    @Test
+    void testParseStrictEmptyStaysNull() {
+        // Unchanged contract (fromjson compat): empty input is null, not an error
+        assertEquals(JqNull.NULL, JqValues.parseStrict(""));
+        assertEquals(JqNull.NULL, JqValues.parseStrict("   "));
+    }
+
+    // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================
 
