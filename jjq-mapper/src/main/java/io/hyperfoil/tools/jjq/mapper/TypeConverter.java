@@ -120,6 +120,8 @@ public final class TypeConverter {
             case STRING -> {
                 if (value == null || value instanceof JqNull) yield null;
                 if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "String", value);
+                String source = value.sourceText();
+                if (source != null) yield source;
                 yield value instanceof JqString s ? s.stringValue() : value.toJsonString();
             }
             case INT -> {

@@ -107,8 +107,8 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
 
     /**
      * Lenient string coercion mirroring {@code TypeConverter} {@code STRING} semantics:
-     * nulls stay null, strings unwrap, other scalars render as JSON text,
-     * arrays and objects fail fast.
+     * nulls stay null, strings unwrap, scalars with source text keep what was
+     * written, other scalars render as JSON text, arrays and objects fail fast.
      *
      * @param value the extracted value (never null from {@code JqProgram.apply})
      * @return the coerced string, or null for null inputs
@@ -118,6 +118,8 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
         if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
         if (value instanceof io.hyperfoil.tools.jjq.value.JqString s) return s.stringValue();
         if (value.isContainer()) throw TypeConverter.mismatch(JqValue.Type.STRING, "String", value);
+        String source = value.sourceText();
+        if (source != null) return source;
         return value.toJsonString();
     }
 

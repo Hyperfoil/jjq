@@ -7,9 +7,20 @@ public final class JqBoolean implements JqValue {
     public static final JqBoolean FALSE = new JqBoolean(false);
 
     private final boolean value;
+    // Original source text when it differs from the typed rendering (e.g. YAML
+    // `yes` resolving to true). Null on the singletons. Used only for String
+    // binding; ignored by serialization, equality, and queries. Note: Java
+    // serialization collapses instances to the singletons via readResolve,
+    // dropping source text.
+    private final String sourceText;
 
     private JqBoolean(boolean value) {
+        this(value, null);
+    }
+
+    private JqBoolean(boolean value, String sourceText) {
         this.value = value;
+        this.sourceText = sourceText;
     }
 
     /** Preserve singleton identity across serialization. */
@@ -18,6 +29,22 @@ public final class JqBoolean implements JqValue {
     public static JqBoolean of(boolean value) {
         return value ? TRUE : FALSE;
     }
+
+    /**
+     * Copy this boolean preserving its value, attaching source text
+     * (see {@link JqValue#sourceText()}). Always returns a fresh instance,
+     * leaving the singletons canonical and source-free.
+     *
+     * @param sourceText the original source text (may be null to clear)
+     * @return a boolean equal to this one, carrying {@code sourceText}
+     */
+    public JqBoolean withSourceText(String sourceText) {
+        if (sourceText == this.sourceText) return this;
+        return new JqBoolean(value, sourceText);
+    }
+
+    @Override
+    public String sourceText() { return sourceText; }
 
     @Override
     public Type type() { return Type.BOOLEAN; }

@@ -62,6 +62,44 @@ class YamlMapperTest {
         assertInstanceOf(JqYamlException.class, e.getCause());
     }
 
+    record Env(String name, String value) {}
+
+    @Test
+    void plainScalarsKeepSourceTextForStringFields() throws Exception {
+        // YAML 1.1 resolution types the tree (18, 3.1, true...) but a
+        // String target receives the scalar's source text (#126)
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        var cases = new String[][]{
+                {"0022", "0022"}, {"3.10", "3.10"}, {"yes", "yes"},
+                {"0x1F", "0x1F"}, {"1_000", "1_000"}, {"190:20:30", "190:20:30"},
+        };
+        for (var c : cases) {
+            Env env = mapper.readValue("name: X\nvalue: " + c[0] + "\n", Env.class);
+            assertEquals(c[1], env.value(), "source text lost for `" + c[0] + "`");
+        }
+    }
+
+    @Test
+    void treeStaysTypedWhenStringsKeepSourceText() {
+        // Only binding changes: the parsed tree keeps YAML 1.1 types
+        var tree = JqYaml.parse("value: 0022\n");
+        assertEquals(18L, tree.getField("value").longValue());
+    }
+
+    @Test
+    void explicitTagsAndQuotedFormsUnaffected() throws Exception {
+        var mapper = new YamlMapper(JqMapper.create(), YamlOptions.STRICT);
+        // Explicit tag means typed: renders, not source text (Jackson parity)
+        Env tagged = mapper.readValue("name: X\nvalue: !!int 0022\n", Env.class);
+        assertEquals("18", tagged.value());
+        // Quoted scalars were always strings
+        Env quoted = mapper.readValue("name: X\nvalue: \"0022\"\n", Env.class);
+        assertEquals("0022", quoted.value());
+        // Null stays null for String targets
+        Env nulled = mapper.readValue("name: X\nvalue: ~\n", Env.class);
+        assertNull(nulled.value());
+    }
+
     @Test
     void shapeMismatchWrapsMapperException() {
         IOException e = assertThrows(IOException.class,

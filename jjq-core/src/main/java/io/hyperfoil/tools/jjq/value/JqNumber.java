@@ -11,7 +11,7 @@ public final class JqNumber implements JqValue {
     private static final JqNumber[] CACHE = new JqNumber[CACHE_HIGH - CACHE_LOW + 1];
     static {
         for (int i = 0; i < CACHE.length; i++) {
-            CACHE[i] = new JqNumber(i + CACHE_LOW, null, 0, true);
+            CACHE[i] = new JqNumber(i + CACHE_LOW, null, 0, true, null);
         }
     }
 
@@ -20,30 +20,49 @@ public final class JqNumber implements JqValue {
     private final double rawDouble; // used for NaN/Infinity
     private final boolean isLong;
     private transient BigDecimal cachedDecimal; // lazy cache for long-backed numbers
+    // Original source text when it differs from the typed rendering (e.g. YAML
+    // `0022` resolving to 18). Null for canonical values. Used only for String
+    // binding; ignored by serialization, equality, and queries.
+    private final String sourceText;
 
-    private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong) {
+    private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong, String sourceText) {
         this.longVal = longVal;
         this.decimalVal = decimalVal;
         this.rawDouble = rawDouble;
         this.isLong = isLong;
+        this.sourceText = sourceText;
     }
+
+    /**
+     * Copy this number preserving its exact representation, attaching source text.
+     *
+     * @param sourceText the original source text (may be null to clear)
+     * @return a number equal to this one, carrying {@code sourceText}
+     */
+    public JqNumber withSourceText(String sourceText) {
+        if (sourceText == this.sourceText) return this;
+        return new JqNumber(longVal, decimalVal, rawDouble, isLong, sourceText);
+    }
+
+    @Override
+    public String sourceText() { return sourceText; }
 
     public static JqNumber of(long value) {
         if (value >= CACHE_LOW && value <= CACHE_HIGH) {
             return CACHE[(int) value - CACHE_LOW];
         }
-        return new JqNumber(value, null, 0, true);
+        return new JqNumber(value, null, 0, true, null);
     }
 
     public static JqNumber of(double value) {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
-            return new JqNumber(0, null, value, false);
+            return new JqNumber(0, null, value, false, null);
         }
         if (value == Math.floor(value) && value >= Long.MIN_VALUE && value <= Long.MAX_VALUE) {
             return of((long) value);
         }
         // Store double directly, defer BigDecimal construction until needed
-        return new JqNumber(0, null, value, false);
+        return new JqNumber(0, null, value, false, null);
     }
 
     /**
@@ -90,7 +109,7 @@ public final class JqNumber implements JqValue {
                 return of(value.longValueExact()); // guaranteed no exception
             }
             // Too large for long — keep as BigDecimal
-            return new JqNumber(0, value, value.doubleValue(), false);
+            return new JqNumber(0, value, value.doubleValue(), false, null);
         }
         // Positive scale — has fractional digits. Strip trailing zeros first
         // to handle cases like 3.00 which should be treated as integer 3.
@@ -100,7 +119,7 @@ public final class JqNumber implements JqValue {
             return of(stripped.longValueExact()); // guaranteed no exception
         }
         // Genuinely non-integer — store as BigDecimal
-        return new JqNumber(0, value, value.doubleValue(), false);
+        return new JqNumber(0, value, value.doubleValue(), false, null);
     }
 
     /**

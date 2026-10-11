@@ -170,6 +170,20 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
     }
 
     /**
+     * The original source text of this scalar, when it differs from the
+     * typed rendering. The YAML parser attaches it to numbers and booleans
+     * whose source form does not round-trip (e.g. {@code 0022}, {@code 3.10},
+     * {@code yes}), so data binding to {@code String} can preserve what was
+     * written instead of the resolved rendering ({@code "18"}, {@code "3.1"},
+     * {@code "true"}). Null when absent: canonical scalars and every
+     * JSON-sourced value carry no source text. Serialization, equality, and
+     * queries always use the typed value and ignore this.
+     *
+     * @return the source text, or {@code null} when absent
+     */
+    default String sourceText() { return null; }
+
+    /**
      * Return the int value, narrowing from long.
      * @return the int value
      * @throws JqTypeError if this value is not a number

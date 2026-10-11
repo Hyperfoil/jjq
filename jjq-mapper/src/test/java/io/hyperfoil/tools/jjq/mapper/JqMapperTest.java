@@ -43,6 +43,51 @@ class JqMapperTest {
         assertFalse(result.getField("active").booleanValue());
     }
 
+    // ---- Source text for String binding (issue #126) ----
+
+    record StringHolder(String value) {}
+
+    @Test
+    void sourcedScalarsBindSourceTextToString() {
+        assertEquals("0022", mapper.fromJqValue(
+                JqObject.builder().put("value", JqNumber.of(18).withSourceText("0022")).build(),
+                StringHolder.class).value());
+        assertEquals("no", mapper.fromJqValue(
+                JqObject.builder().put("value", JqBoolean.FALSE.withSourceText("no")).build(),
+                StringHolder.class).value());
+    }
+
+    @Test
+    void canonicalScalarsRenderAsJsonForString() {
+        // No source attached: behavior unchanged
+        assertEquals("18", mapper.fromJqValue(
+                JqObject.builder().put("value", JqNumber.of(18)).build(),
+                StringHolder.class).value());
+        assertEquals("false", mapper.fromJqValue(
+                JqObject.builder().put("value", JqBoolean.FALSE).build(),
+                StringHolder.class).value());
+    }
+
+    @Test
+    void asStringCheckedMirrorsSourceText() {
+        // Generated-mapping path must match TypeConverter STRING semantics
+        assertEquals("0022", GeneratedMapping.asStringChecked(JqNumber.of(18).withSourceText("0022")));
+        assertEquals("18", GeneratedMapping.asStringChecked(JqNumber.of(18)));
+        assertEquals("Alice", GeneratedMapping.asStringChecked(JqString.of("Alice")));
+    }
+
+    @Test
+    void sourceTextPreservesTypedSemantics() {
+        JqNumber n = JqNumber.of(18).withSourceText("0022");
+        assertEquals("0022", n.sourceText());
+        assertEquals("18", n.toJsonString());
+        assertEquals(JqNumber.of(18), n);
+        assertEquals(JqNumber.of(18).hashCode(), n.hashCode());
+        assertNull(JqNumber.of(18).sourceText());
+        assertNull(JqBoolean.TRUE.sourceText());
+        assertSame(JqBoolean.TRUE, JqBoolean.of(true));
+    }
+
     // ---- Java-only fields are invisible (issue #95.2, Jackson parity) ----
 
     static class WithCodeOnlyFlag {

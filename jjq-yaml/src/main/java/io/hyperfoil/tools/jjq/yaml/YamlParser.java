@@ -3132,15 +3132,30 @@ final class YamlParser {
             return JqNull.NULL;
         }
         if (isBoolWord(value)) {
-            return JqBoolean.of(isTrueWord(value));
+            return withSourceText(JqBoolean.of(isTrueWord(value)), value);
         }
         if (isIntegerShape(value)) {
-            return convertInteger(value);
+            return withSourceText(convertInteger(value), value);
         }
         if (isFloatShape(value) || isSpecialFloat(value)) {
-            return convertFloat(value);
+            return withSourceText(convertFloat(value), value);
         }
         return JqString.of(value);
+    }
+
+    /**
+     * Attach source text to a resolved scalar when its rendering diverges
+     * (e.g. {@code 0022} resolving to {@code 18}): String binding then
+     * preserves what was written (Jackson parity, issue #126). Canonical
+     * scalars ({@code 30}, {@code true}) render identically and carry
+     * nothing; strings and nulls need no source. Explicitly tagged values
+     * never reach here, so tags keep typed-rendering semantics.
+     */
+    private static JqValue withSourceText(JqValue resolved, String source) {
+        if (!(resolved instanceof JqNumber) && !(resolved instanceof JqBoolean)) return resolved;
+        if (resolved.toJsonString().equals(source)) return resolved;
+        if (resolved instanceof JqNumber n) return n.withSourceText(source);
+        return ((JqBoolean) resolved).withSourceText(source);
     }
 
     private static boolean isSpecialFloat(String value) {
