@@ -337,21 +337,21 @@ public final class TypeConverter {
     }
 
     /**
-     * Jackson-compatible integral coercion: numbers narrow, booleans follow
-     * 0/1, trimmed decimal strings parse, anything else (including the empty
-     * string) is a shape mismatch; nulls stay zero. Shared by
-     * {@link #convert} and the generated-code helper so both paths agree.
+     * Jackson-compatible integral coercion: numbers narrow, trimmed decimal
+     * strings parse, anything else (including booleans — jq's
+     * {@code tonumber} rejects them — and the empty string) is a shape
+     * mismatch; nulls stay zero. Shared by {@link #convert} and the
+     * generated-code helper so both paths agree.
      *
      * @param value  the value (may be null)
      * @param target human-readable target description for errors
      * @return the long value
-     * @throws ShapeMismatchException for containers and non-numeric strings
+     * @throws ShapeMismatchException for containers, booleans, and non-numeric strings
      */
     static long coerceLong(JqValue value, String target) {
         if (value == null || value instanceof JqNull) return 0L;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, target, value);
         if (value instanceof JqNumber n) return n.longValue();
-        if (value instanceof JqBoolean b) return b.booleanValue() ? 1L : 0L;
         if (value instanceof JqString s) {
             try {
                 return Long.parseLong(s.stringValue().trim());
@@ -363,21 +363,21 @@ public final class TypeConverter {
     }
 
     /**
-     * Jackson-compatible floating-point coercion: numbers widen, booleans
-     * follow 0/1, trimmed numeric strings (including exponents) parse,
-     * anything else is a shape mismatch; nulls stay zero. Shared by
-     * {@link #convert} and the generated-code helper so both paths agree.
+     * Jackson-compatible floating-point coercion: numbers widen, trimmed
+     * numeric strings (including exponents) parse, anything else (including
+     * booleans — jq's {@code tonumber} rejects them) is a shape mismatch;
+     * nulls stay zero. Shared by {@link #convert} and the generated-code
+     * helper so both paths agree.
      *
      * @param value  the value (may be null)
      * @param target human-readable target description for errors
      * @return the double value
-     * @throws ShapeMismatchException for containers and non-numeric strings
+     * @throws ShapeMismatchException for containers, booleans, and non-numeric strings
      */
     static double coerceDouble(JqValue value, String target) {
         if (value == null || value instanceof JqNull) return 0.0;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, target, value);
         if (value instanceof JqNumber n) return n.doubleValue();
-        if (value instanceof JqBoolean b) return b.booleanValue() ? 1.0 : 0.0;
         if (value instanceof JqString s) {
             try {
                 return Double.parseDouble(s.stringValue().trim());
@@ -414,19 +414,19 @@ public final class TypeConverter {
 
     /**
      * Jackson-compatible {@code BigDecimal} coercion: numbers convert
-     * exactly, booleans map to one/zero, trimmed decimal strings parse,
-     * anything else is a shape mismatch; nulls stay null. Shared by
-     * {@link #convert} and the generated-code helper so both paths agree.
+     * exactly, trimmed decimal strings parse, anything else (including
+     * booleans — jq's {@code tonumber} rejects them) is a shape mismatch;
+     * nulls stay null. Shared by {@link #convert} and the generated-code
+     * helper so both paths agree.
      *
      * @param value the value (may be null)
      * @return the decimal value, or null for null inputs
-     * @throws ShapeMismatchException for containers and non-numeric strings
+     * @throws ShapeMismatchException for containers, booleans, and non-numeric strings
      */
     static BigDecimal coerceBigDecimal(JqValue value) {
         if (value == null || value instanceof JqNull) return null;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "BigDecimal", value);
         if (value instanceof JqNumber n) return n.decimalValue();
-        if (value instanceof JqBoolean b) return b.booleanValue() ? BigDecimal.ONE : BigDecimal.ZERO;
         if (value instanceof JqString s) {
             try {
                 return new BigDecimal(s.stringValue().trim());

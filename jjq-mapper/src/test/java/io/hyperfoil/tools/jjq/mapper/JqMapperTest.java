@@ -701,11 +701,19 @@ class JqMapperTest {
     }
 
     @Test
-    void booleansFollowZeroOneRuleForNumbers() {
-        Nums r = mapper.fromJqValue(JqValues.parse("{\"i\":true,\"l\":false,\"d\":true}"), Nums.class);
-        assertEquals(1, r.i());
-        assertEquals(0L, r.l());
-        assertEquals(1.0, r.d());
+    void booleansThrowForNumbers() {
+        // jq's tonumber rejects booleans; Jackson's 0/1 rule loses (policy)
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":true,\"l\":0,\"d\":0}"), Nums.class));
+        assertEquals(JqValue.Type.NUMBER, e.expected());
+        assertEquals(JqValue.Type.BOOLEAN, e.actual());
+        assertEquals("$.i", e.path());
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":0,\"l\":false,\"d\":0}"), Nums.class));
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"i\":0,\"l\":0,\"d\":true}"), Nums.class));
+        assertThrows(ShapeMismatchException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"v\":true}"), Biggies.class));
     }
 
     record Chars(char c) {}
@@ -751,6 +759,12 @@ class JqMapperTest {
         assertNull(GeneratedMapping.asBigDecimalChecked(null));
         assertThrows(ShapeMismatchException.class,
                 () -> GeneratedMapping.asLongChecked(JqString.of("abc")));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asLongChecked(JqBoolean.TRUE));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asDoubleChecked(JqBoolean.FALSE));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asBigDecimalChecked(JqBoolean.TRUE));
         assertThrows(ShapeMismatchException.class,
                 () -> GeneratedMapping.asCharChecked(JqString.of("ab")));
     }

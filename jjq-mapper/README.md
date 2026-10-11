@@ -328,6 +328,22 @@ semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
 | `@JsonNaming` | `@JqNaming` | Strategy-based, fewer strategies |
 | `TypeReference<T>` | `TypeToken<T>` | Anonymous-subclass capture, same idiom |
 
+### Parity policy: jq wins on conflict
+
+Two references guide behavior, split by layer:
+
+- **jq** for language behavior — parsing, serialization text, and value
+  conversions (`tonumber`/`tostring` semantics, truthiness). Verified
+  against jq 1.8.1, not from memory.
+- **Jackson databind** for Java binding — POJO mapping has no jq analog,
+  and migrators compare against a Jackson baseline.
+
+When they conflict, jq wins. Example: Jackson coerces booleans to
+numbers (0/1), but jq's `tonumber` rejects them — so binding a boolean
+to a numeric field throws `ShapeMismatchException`. The boundary: null
+handling follows Java/Jackson (explicit nulls widen to defaults), since
+jq's error-on-null has no Java expression for primitives.
+
 ### Custom `AnnotationBridge` implementations
 
 Implement `AnnotationBridge` to read a third framework's annotations. All methods

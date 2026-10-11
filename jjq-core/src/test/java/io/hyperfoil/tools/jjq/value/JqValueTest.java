@@ -47,6 +47,15 @@ class JqValueTest {
     }
 
     @Test
+    void testNonFiniteNumbersSerializeAsNull() {
+        // Deliberate contract (issue #136): jq has no NaN/Infinity and
+        // Jackson's unquoted literals are unreadable here; null round-trips.
+        assertEquals("null", JqNumber.of(Double.NaN).toJsonString());
+        assertEquals("null", JqNumber.of(Double.POSITIVE_INFINITY).toJsonString());
+        assertEquals("null", JqNumber.of(Double.NEGATIVE_INFINITY).toJsonString());
+    }
+
+    @Test
     void testString() {
         var s = JqString.of("hello");
         assertEquals("hello", s.stringValue());
