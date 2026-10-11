@@ -42,6 +42,9 @@ YAML escapes, and a construction quadratic for wide objects.
 - Profile-gated modules (benchmark, examples) re-aligned to the root
   version, plus a post-release alignment check in `release.yml`
   (release pushes never trigger CI, so the ci.yml guard is blind to them)
+- Release profile strips legacy `.woff` fonts from javadoc jars (keep
+  `.woff2`): ~4.2MB -> ~1.8MB per module, ~28MB saved per release against
+  the Central publishing size limit
 
 ## [0.2] - 2026-10-10
 

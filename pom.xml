@@ -71,6 +71,7 @@
         <version.maven.source>3.3.1</version.maven.source>
         <version.maven.javadoc>3.11.2</version.maven.javadoc>
         <version.maven.gpg>3.2.7</version.maven.gpg>
+        <version.maven.antrun>3.1.0</version.maven.antrun>
     </properties>
 
     <dependencyManagement>
@@ -256,6 +257,37 @@
                                 <goals>
                                     <goal>jar</goal>
                                 </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>${version.maven.antrun}</version>
+                        <executions>
+                            <execution>
+                                <id>strip-javadoc-fonts</id>
+                                <!-- After attach-javadocs (declaration order),
+                                     before GPG signing (verify phase): signatures
+                                     must cover the stripped jars. Removes legacy
+                                     .woff fonts (~2MB/module); .woff2 stays so
+                                     docs render identically. Ubuntu-only zip CLI
+                                     (the release runs on ubuntu-latest); skipped
+                                     silently elsewhere, and a no-op where no
+                                     javadoc jar exists (e.g. pom packaging). -->
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <exec executable="sh" osfamily="unix"
+                                                failonerror="false" failifexecutionfails="false">
+                                            <arg value="-c"/>
+                                            <arg value="command -v zip >/dev/null &amp;&amp; zip -q -d ${project.build.directory}/${project.artifactId}-${project.version}-javadoc.jar 'resource-files/fonts/*.woff' 2>/dev/null || true"/>
+                                        </exec>
+                                    </target>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>
