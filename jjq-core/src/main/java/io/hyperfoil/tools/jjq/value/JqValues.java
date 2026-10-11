@@ -2009,30 +2009,20 @@ public final class JqValues {
 
     private static JqValue parseValueBytes(JsonByteReader r, int depth) {
         r.skipWs();
-        if (r.pos >= r.end) {
-            if (r.strict) throw strictError(r, "Unexpected end of input");
-            return JqNull.NULL;
-        }
+        // Single diversion keeps this hot dispatch at baseline size: the JIT
+        // inlines it at element sites (hot budget 325 bytes), which the
+        // inline strict arms broke (+99 bytes). Strict bodies live in the
+        // cold parseValueStrict below, never on the lenient path.
+        if (r.strict) return parseValueStrict(r, depth);
+        if (r.pos >= r.end) return JqNull.NULL;
         int b = r.data[r.pos] & 0xFF;
         return switch (b) {
             case '{' -> parseObjectBytes(r, depth + 1);
             case '[' -> parseArrayBytes(r, depth);
             case '"' -> parseStringBytes(r);
-            case 't' -> {
-                if (r.strict) expectLiteral(r, "true");
-                else r.pos += 4;
-                yield JqBoolean.TRUE;
-            }
-            case 'f' -> {
-                if (r.strict) expectLiteral(r, "false");
-                else r.pos += 5;
-                yield JqBoolean.FALSE;
-            }
+            case 't' -> { r.pos += 4; yield JqBoolean.TRUE; }
+            case 'f' -> { r.pos += 5; yield JqBoolean.FALSE; }
             case 'n' -> {
-                if (r.strict) {
-                    expectLiteral(r, "null");
-                    yield JqNull.NULL;
-                }
                 if (r.pos + 2 < r.end && r.data[r.pos + 1] == 'a' && r.data[r.pos + 2] == 'n') {
                     r.pos += 3;
                     yield JqNumber.of(Double.NaN);
@@ -2040,18 +2030,31 @@ public final class JqValues {
                 r.pos += 4;
                 yield JqNull.NULL;
             }
-            case 'I' -> {
-                // Infinity is not valid JSON; the lenient arm below stays for parse().
-                if (r.strict) throw strictError(r, "Infinity is not valid JSON");
-                r.pos += 8;
-                yield JqNumber.of(Double.POSITIVE_INFINITY);
-            }
-            case 'N' -> {
-                // NaN is not valid JSON; the lenient arm below stays for parse().
-                if (r.strict) throw strictError(r, "NaN is not valid JSON");
-                r.pos += 3;
-                yield JqNumber.of(Double.NaN);
-            }
+            case 'I' -> { r.pos += 8; yield JqNumber.of(Double.POSITIVE_INFINITY); }
+            case 'N' -> { r.pos += 3; yield JqNumber.of(Double.NaN); }
+            default -> parseNumberBytes(r);
+        };
+    }
+
+    /**
+     * Strict value dispatch (cold; only reachable with {@code strict} set).
+     * Always-strict, so no flag branches inside: literals verified exactly,
+     * {@code NaN}/{@code Infinity} rejected, and structural characters or
+     * missing digits fall into {@link #parseNumberBytes}, whose digit-count
+     * check rejects them.
+     */
+    private static JqValue parseValueStrict(JsonByteReader r, int depth) {
+        if (r.pos >= r.end) throw strictError(r, "Unexpected end of input");
+        int b = r.data[r.pos] & 0xFF;
+        return switch (b) {
+            case '{' -> parseObjectBytes(r, depth + 1);
+            case '[' -> parseArrayBytes(r, depth);
+            case '"' -> parseStringBytes(r);
+            case 't' -> { expectLiteral(r, "true"); yield JqBoolean.TRUE; }
+            case 'f' -> { expectLiteral(r, "false"); yield JqBoolean.FALSE; }
+            case 'n' -> { expectLiteral(r, "null"); yield JqNull.NULL; }
+            case 'N' -> throw strictError(r, "NaN is not valid JSON");
+            case 'I' -> throw strictError(r, "Infinity is not valid JSON");
             default -> parseNumberBytes(r);
         };
     }

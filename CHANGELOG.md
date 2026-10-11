@@ -1,6 +1,18 @@
 # Changelog
 
-## [Unreleased] - 0.2.1
+## [Unreleased] - 0.2.2
+
+- Strict JSON parsing in `parseStrict` (opt-in, #127): rejects trailing
+  commas, missing values, truncated input, non-canonical numbers, unknown
+  literals (`NaN`/`Infinity`) and invalid string escapes, with line/column
+  positions; `parse` keeps its lenient contract byte-identical (verified by
+  A/B: no hot-path regression). New `parseStrict(byte[])` overload.
+- YAML binding keeps plain-scalar source text for `String` targets
+  (`0022` stays `"0022"`, #126); the tree stays typed.
+- Release workflow heals profile-gated module version drift itself
+  (release pushes never trigger CI, so the ci.yml guard is blind to them).
+
+## [0.2.1] - 2026-10-10
 
 Follow-up fixes since 0.2: Jackson parity for FLOW arrays, two missing
 YAML escapes, and a construction quadratic for wide objects.
