@@ -14,6 +14,8 @@
 
     <properties>
         <jmh.version>1.37</jmh.version>
+        <!-- Jackson 3 baseline for the comparison benchmarks; bump together. -->
+        <jackson3.version>3.2.3</jackson3.version>
     </properties>
 
     <dependencies>
@@ -28,7 +30,7 @@
         <dependency>
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>3.2.2</version>
+            <version>${jackson3.version}</version>
         </dependency>
         <dependency>
             <groupId>io.hyperfoil.tools</groupId>
@@ -41,7 +43,7 @@
         <dependency>
             <groupId>tools.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
-            <version>3.2.2</version>
+            <version>${jackson3.version}</version>
         </dependency>
         <dependency>
             <groupId>org.yaml</groupId>
