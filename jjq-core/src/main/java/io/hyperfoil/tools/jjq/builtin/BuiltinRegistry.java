@@ -1202,15 +1202,22 @@ public final class BuiltinRegistry {
 // Math builtins
             case "floor/0" -> (input, args, env, eval, out) -> {
 
-            out.accept(JqNumber.of((long) Math.floor(input.doubleValue())));
+            // No long cast: JqNumber.of routes whole doubles back to long
+            // itself, while huge-finite doubles and non-finites pass through
+            // exactly instead of saturating (issue #142).
+            out.accept(JqNumber.of(Math.floor(input.doubleValue())));
         };
             case "ceil/0" -> (input, args, env, eval, out) -> {
 
-            out.accept(JqNumber.of((long) Math.ceil(input.doubleValue())));
+            out.accept(JqNumber.of(Math.ceil(input.doubleValue())));
         };
             case "round/0" -> (input, args, env, eval, out) -> {
 
-            out.accept(JqNumber.of(Math.round(input.doubleValue())));
+            if (input instanceof JqNumber n && (n.isNaN() || n.isInfinite())) {
+                out.accept(input);
+            } else {
+                out.accept(JqNumber.of(Math.round(input.doubleValue())));
+            }
         };
             case "sqrt/0" -> (input, args, env, eval, out) -> {
 

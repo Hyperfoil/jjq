@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased] - 0.2.3
+## [Unreleased] - 0.2.4
+
+- `floor`/`ceil`/`round` preserve non-finite (and huge finite) doubles
+  instead of saturating through a `long` cast (#142)
+
+## [0.2.3] - 2026-10-11
 
 - Non-finite coherence (follow-up to the incus-spawn report): `abs`
   and `divide` route through exact double arithmetic, Jackson/fastjson2

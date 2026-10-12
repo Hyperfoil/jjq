@@ -68,4 +68,48 @@ class BuiltinRegistryTest {
             assertNotNull(registry.get(parts[0], Integer.parseInt(parts[1])), key);
         }
     }
+
+    // ---- floor/ceil/round preserve non-finite values (issue #142) ----
+
+    private static io.hyperfoil.tools.jjq.value.JqValue applyMath(
+            BuiltinRegistry registry, String name, io.hyperfoil.tools.jjq.value.JqValue input) {
+        var fn = registry.get(name, 0);
+        assertNotNull(fn, name);
+        var out = new java.util.ArrayList<io.hyperfoil.tools.jjq.value.JqValue>();
+        fn.apply(input, java.util.List.of(), null, null, out::add);
+        assertEquals(1, out.size(), name);
+        return out.get(0);
+    }
+
+    @Test
+    void floorCeilRoundPreserveNonFinite() {
+        var registry = new BuiltinRegistry();
+        var inf = io.hyperfoil.tools.jjq.value.JqNumber.of(Double.POSITIVE_INFINITY);
+        var nan = io.hyperfoil.tools.jjq.value.JqNumber.of(Double.NaN);
+        assertEquals(inf, applyMath(registry, "floor", inf));
+        assertEquals(inf, applyMath(registry, "ceil", inf));
+        assertEquals(inf, applyMath(registry, "round", inf));
+        assertTrue(applyMath(registry, "floor", nan)
+                instanceof io.hyperfoil.tools.jjq.value.JqNumber n && Double.isNaN(n.doubleValue()));
+        assertTrue(applyMath(registry, "ceil", nan)
+                instanceof io.hyperfoil.tools.jjq.value.JqNumber n && Double.isNaN(n.doubleValue()));
+        assertTrue(applyMath(registry, "round", nan)
+                instanceof io.hyperfoil.tools.jjq.value.JqNumber n && Double.isNaN(n.doubleValue()));
+    }
+
+    @Test
+    void floorCeilRoundUnchangedForFinite() {
+        // The cast removal must not change any finite behavior
+        var registry = new BuiltinRegistry();
+        assertEquals(io.hyperfoil.tools.jjq.value.JqNumber.of(3),
+                applyMath(registry, "floor", io.hyperfoil.tools.jjq.value.JqNumber.of(3.7)));
+        assertEquals(io.hyperfoil.tools.jjq.value.JqNumber.of(-4),
+                applyMath(registry, "floor", io.hyperfoil.tools.jjq.value.JqNumber.of(-3.2)));
+        assertEquals(io.hyperfoil.tools.jjq.value.JqNumber.of(4),
+                applyMath(registry, "ceil", io.hyperfoil.tools.jjq.value.JqNumber.of(3.2)));
+        assertEquals(io.hyperfoil.tools.jjq.value.JqNumber.of(3),
+                applyMath(registry, "round", io.hyperfoil.tools.jjq.value.JqNumber.of(2.5)));
+        assertEquals(io.hyperfoil.tools.jjq.value.JqNumber.of(1000000),
+                applyMath(registry, "floor", io.hyperfoil.tools.jjq.value.JqNumber.of(1000000.0)));
+    }
 }
