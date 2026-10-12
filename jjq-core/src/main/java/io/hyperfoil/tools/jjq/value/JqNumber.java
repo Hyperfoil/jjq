@@ -195,6 +195,12 @@ public final class JqNumber implements JqValue {
 
     @Override
     public BigDecimal decimalValue() {
+        if (isSpecial()) {
+            // NaN/Infinity have no BigDecimal form; the old ZERO fallback was
+            // a silent wrong value (engine paths route around this; direct
+            // callers get a loud error instead).
+            throw new JqTypeError("Cannot represent " + toJsonString() + " as BigDecimal");
+        }
         if (isLong) {
             BigDecimal cached = cachedDecimal;
             if (cached == null) {
@@ -204,17 +210,13 @@ public final class JqNumber implements JqValue {
             return cached;
         }
         if (decimalVal != null) return decimalVal;
-        if (!isSpecial()) {
-            // double-backed, not NaN/Infinity -- lazy construct
-            BigDecimal cached = cachedDecimal;
-            if (cached == null) {
-                cached = BigDecimal.valueOf(rawDouble);
-                cachedDecimal = cached;
-            }
-            return cached;
+        // Double-backed (specials already rejected above): lazy construct.
+        BigDecimal cached = cachedDecimal;
+        if (cached == null) {
+            cached = BigDecimal.valueOf(rawDouble);
+            cachedDecimal = cached;
         }
-        // NaN/Infinity can't be BigDecimal - return 0 as fallback
-        return BigDecimal.ZERO;
+        return cached;
     }
 
     @Override

@@ -39,6 +39,23 @@ class BuiltinRegistryTest {
     }
 
     @Test
+    void absPreservesNonFinite() {
+        // Direct registry invocation (pins the evaluator path, not the VM fast path)
+        var registry = new BuiltinRegistry();
+        var fn = registry.get("abs", 0);
+        assertNotNull(fn);
+        var out = new java.util.ArrayList<io.hyperfoil.tools.jjq.value.JqValue>();
+        fn.apply(io.hyperfoil.tools.jjq.value.JqNumber.of(Double.POSITIVE_INFINITY),
+                java.util.List.of(), null, null, out::add);
+        assertEquals(io.hyperfoil.tools.jjq.value.JqNumber.of(Double.POSITIVE_INFINITY), out.get(0));
+        out.clear();
+        fn.apply(io.hyperfoil.tools.jjq.value.JqNumber.of(Double.NaN),
+                java.util.List.of(), null, null, out::add);
+        var nan = out.get(0);
+        assertTrue(nan instanceof io.hyperfoil.tools.jjq.value.JqNumber n && Double.isNaN(n.doubleValue()));
+    }
+
+    @Test
     void keySetListsAllDefaultsWithoutLoading() {
         var registry = new BuiltinRegistry();
         var keys = registry.keySet();

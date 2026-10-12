@@ -726,6 +726,13 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
             if (m.isIntegral() && m.longValue() == 0) {
                 throw divisionByZero(n);
             }
+            if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
+                // IEEE semantics via doubles: inf/2=inf, 1/inf=0, nan propagates
+                // (BigDecimal cannot represent these; decimal fallback would lie).
+                double d = m.doubleValue();
+                if (d == 0.0) throw divisionByZero(n);
+                return JqNumber.of(n.doubleValue() / d);
+            }
             return JqNumber.of(n.decimalValue().divide(m.decimalValue(), java.math.MathContext.DECIMAL128));
         }
         if (this instanceof JqString s && other instanceof JqString sep) {

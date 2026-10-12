@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.3
 
+- Non-finite coherence (follow-up to the incus-spawn report): `abs`
+  and `divide` route through exact double arithmetic, Jackson/fastjson2
+  conversions preserve via `Double`, and `decimalValue()` throws instead
+  of silently yielding zero (audited: every other engine caller already
+  special-cased); engine semantics otherwise unchanged
 - Non-finite numbers mismatch for integral and decimal targets instead
   of silently binding 0 (jq never holds such values); doubles pass
   through exact, `null` serialization unchanged

@@ -245,7 +245,8 @@ public final class FastjsonEngine {
         return switch (value) {
             case JqNull ignored -> null;
             case JqBoolean b -> b.booleanValue();
-            case JqNumber n -> n.isIntegral() ? n.longValue() : n.decimalValue();
+            case JqNumber n -> n.isIntegral() ? n.longValue()
+                    : (n.isNaN() || n.isInfinite()) ? (Object) n.doubleValue() : n.decimalValue();
             case JqString s -> s.stringValue();
             case JqArray a -> {
                 var arr = new JSONArray();

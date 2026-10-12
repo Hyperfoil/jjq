@@ -74,6 +74,15 @@ class FastjsonEngineTest {
     }
 
     @Test
+    void testToFastjsonPreservesNonFinite() {
+        // Doubles preserve non-finites exactly; BigDecimal cannot hold them
+        assertEquals(Double.POSITIVE_INFINITY,
+                FastjsonEngine.toFastjson(JqNumber.of(Double.POSITIVE_INFINITY)));
+        Object nan = FastjsonEngine.toFastjson(JqNumber.of(Double.NaN));
+        assertTrue(nan instanceof Double d && Double.isNaN(d));
+    }
+
+    @Test
     void testComplexQuery() {
         String json = """
                 {

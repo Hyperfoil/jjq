@@ -1899,7 +1899,7 @@ public final class BuiltinRegistry {
             case "abs/0" -> (input, args, env, eval, out) -> {
 
             if (input instanceof JqNumber n) {
-                out.accept(JqNumber.of(n.decimalValue().abs()));
+                out.accept((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
             } else if (input instanceof JqNull) {
                 out.accept(JqNull.NULL);
             } else {

@@ -138,6 +138,12 @@ public final class JacksonConverter {
     }
 
     private static JsonNode numberToNode(JqNumber n) {
+        // Non-finites go through Jackson's native DoubleNode: the BigDecimal
+        // path below cannot hold them (NumberFormatException), and they must
+        // not become DecimalNode(0).
+        if (n.isNaN() || n.isInfinite()) {
+            return DoubleNode.valueOf(n.doubleValue());
+        }
         if (n.isIntegral()) {
             long l = n.longValue();
             if (l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) {

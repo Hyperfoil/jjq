@@ -61,6 +61,15 @@ class JacksonConverterTest {
     }
 
     @Test
+    void nonFiniteToDoubleNode() {
+        // BigDecimal cannot hold these; Jackson's native DoubleNode preserves them
+        JsonNode inf = JacksonConverter.toJsonNode(JqNumber.of(Double.POSITIVE_INFINITY));
+        assertTrue(inf.isDouble() && Double.isInfinite(inf.doubleValue()));
+        JsonNode nan = JacksonConverter.toJsonNode(JqNumber.of(Double.NaN));
+        assertTrue(nan.isDouble() && Double.isNaN(nan.doubleValue()));
+    }
+
+    @Test
     void arrayNode() throws Exception {
         JsonNode node = MAPPER.readTree("[1, \"two\", true, null]");
         JqValue result = JacksonConverter.fromJsonNode(node);

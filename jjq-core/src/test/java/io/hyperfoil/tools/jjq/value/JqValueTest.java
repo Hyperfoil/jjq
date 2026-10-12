@@ -125,6 +125,27 @@ class JqValueTest {
     }
 
     @Test
+    void testDivideSpecials() {
+        // IEEE via doubles: inf/2=inf, 1/inf=0, nan propagates
+        assertEquals(JqNumber.of(Double.POSITIVE_INFINITY),
+                JqNumber.of(Double.POSITIVE_INFINITY).divide(JqNumber.of(2)));
+        assertEquals(JqNumber.of(0), JqNumber.of(1).divide(JqNumber.of(Double.POSITIVE_INFINITY)));
+        var nan = JqNumber.of(Double.NaN).divide(JqNumber.of(2));
+        assertTrue(nan instanceof JqNumber n && Double.isNaN(n.doubleValue()));
+        // Double zero divisor fails like integral zero (was raw ArithmeticException)
+        assertThrows(JqTypeError.class, () -> JqNumber.of(1).divide(JqNumber.of(0.0)));
+    }
+
+    @Test
+    void testDecimalValueRejectsSpecials() {
+        // BigDecimal cannot represent these; the old ZERO fallback was a
+        // silent wrong value (audit follow-up to the incus-spawn report)
+        assertThrows(JqTypeError.class, () -> JqNumber.of(Double.NaN).decimalValue());
+        assertThrows(JqTypeError.class, () -> JqNumber.of(Double.POSITIVE_INFINITY).decimalValue());
+        assertEquals(java.math.BigDecimal.valueOf(3), JqNumber.of(3).decimalValue());
+    }
+
+    @Test
     void testNegate() {
         assertEquals(JqNumber.of(-5), JqNumber.of(5).negate());
         assertEquals(JqNumber.of(5), JqNumber.of(-5).negate());
