@@ -2,7 +2,7 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.3x faster than Jackson 3**, and serializes **1.1-1.8x faster** (1.78x on 14MB production data).
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.2x faster than Jackson 3**, and serializes **1.1-1.5x faster** (1.23x on 14MB production data).
 
 ## Features
 
@@ -37,7 +37,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 127/558 conformance |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
 | `jjq-test-suite` | 466 conformance tests + 525 upstream jq tests (96.0% passing) |
-| `jjq-benchmark` | JMH benchmarks vs Jackson 3.2.2: parsing, serialization, mapper, allocation profiling |
+| `jjq-benchmark` | JMH benchmarks vs Jackson 3.2.3: parsing, serialization, mapper, allocation profiling |
 
 ## Quick Start
 
@@ -542,17 +542,17 @@ printf '{"name":"Alice"}\n{"name":"Bob"}\n' | jjq '.name'
 
 ### JSON Parsing: jjq vs Jackson 3
 
-Parsing throughput on `byte[]` inputs (ms/op, lower is better). Measured with JMH, 3 forks, 5+5 iterations, JDK 25.0.2 Temurin. Jackson version: 3.2.2.
+Parsing throughput on `byte[]` inputs (ms/op, lower is better). Measured with JMH, 3 forks, 5+5 iterations, JDK 25.0.4 Temurin. Jackson version: 3.2.3.
 
 | Input | jjq (byte[]) | Jackson 3 (byte[]) | jjq speedup |
 |-------|-------------|-------------------|-------------|
-| flat 1MB | **1.57 ms** | 2.72 ms | **1.7x** |
-| strings 1MB | **0.81 ms** | 1.83 ms | **2.3x** |
-| numbers 1MB | **1.84 ms** | 3.30 ms | **1.8x** |
-| nested 1MB | **1.70 ms** | 2.66 ms | **1.6x** |
-| **Production 14MB** | **14.2 ms** | **21.0 ms** | **1.5x** |
+| flat 1MB | **1.68 ms** | 2.73 ms | **1.6x** |
+| strings 1MB | **0.82 ms** | 1.84 ms | **2.2x** |
+| numbers 1MB | **1.84 ms** | 3.24 ms | **1.8x** |
+| nested 1MB | **1.70 ms** | 2.61 ms | **1.5x** |
+| **Production 14MB** | **14.2 ms** | **21.6 ms** | **1.5x** |
 
-jjq's byte[] parser is **1.5-2.3x faster than Jackson 3** across all input types. The biggest win is on string-heavy JSON (2.3x) where deferred string construction avoids allocating Java Strings for untouched values. Field name interning with hash mixing enables zero-allocation queries on the parsed document.
+jjq's byte[] parser is **1.5-2.2x faster than Jackson 3** across all input types. The biggest win is on string-heavy JSON (2.2x) where deferred string construction avoids allocating Java Strings for untouched values. Field name interning with hash mixing enables zero-allocation queries on the parsed document.
 
 ### Production Query Execution on 14MB Document
 
@@ -579,32 +579,32 @@ Deserialization from pre-parsed tree to Java records (ns/op, lower is better). J
 
 | Record type | jjq generated | jjq reflection | Jackson 3 | gen vs Jackson |
 |------------|--------------|----------------|-----------|----------------|
-| simple (5 fields) | **8 ns** | 37 ns | 228 ns | **28.1x** |
-| nested (record in record) | **12 ns** | 53 ns | 342 ns | **28.7x** |
+| simple (5 fields) | **6 ns** | 39 ns | 223 ns | **34.9x** |
+| nested (record in record) | **14 ns** | 53 ns | 368 ns | **26.6x** |
 
 End-to-end deserialization from `byte[]` to Java records:
 
 | Record type | jjq (fromBytes) | Jackson 3 (fromBytes) | jjq speedup |
 |------------|-----------------|----------------------|-------------|
-| simple | **155 ns** | 363 ns | **2.3x** |
-| nested | **202 ns** | 470 ns | **2.3x** |
-| list | **474 ns** | 940 ns | **2.0x** |
+| simple | **158 ns** | 363 ns | **2.3x** |
+| nested | **205 ns** | 468 ns | **2.3x** |
+| list | **477 ns** | 954 ns | **2.0x** |
 
-The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct constructor and accessor calls, avoiding reflection and lambda overhead. The generated mappings maintain a **~28x advantage** over Jackson 3 on pre-parsed data, narrowing to ~2x at 20 fields. Even the reflection-based mapper (no annotation processor) is **~6x faster** than Jackson 3 thanks to pre-cached method handles, single-lookup `tryGet`, and positional field matching.
+The compile-time annotation processor (`jjq-mapper-processor`) generates `_JqMapping` classes that map fields via direct constructor and accessor calls, avoiding reflection and lambda overhead. The generated mappings maintain a **25-35x advantage** over Jackson 3 on small pre-parsed records (34.9x simple, 26.6x nested, JMH 3 forks, JDK 25.0.4 Temurin, Jackson 3.2.3), narrowing to ~2x at 20 fields. Even the reflection-based mapper (no annotation processor) is **~6x faster** than Jackson 3 thanks to pre-cached method handles, single-lookup `tryGet`, and positional field matching.
 
 ### JSON Serialization: jjq vs Jackson 3
 
-Serialization throughput (ms/op, lower is better). JMH, 3 forks, 5+5 iterations, JDK 25.0.2 Temurin.
+Serialization throughput (ms/op, lower is better). JMH, 3 forks, 5+5 iterations, JDK 25.0.4 Temurin. Jackson version: 3.2.3.
 
 | Input | jjq | Jackson 3 | jjq speedup |
 |-------|-----|-----------|-------------|
-| **Production 14MB** | **10.3 ms** | 18.4 ms | **1.78x** |
-| flat 1MB | **1.79 ms** | 2.05 ms | **1.14x** |
-| strings 1MB | **0.88 ms** | 1.57 ms | **1.77x** |
-| numbers 1MB | **2.08 ms** | 2.87 ms | **1.38x** |
-| nested 1MB | **1.47 ms** | 2.38 ms | **1.61x** |
+| **Production 14MB** | **15.9 ms** | 19.6 ms | **1.23x** |
+| flat 1MB | **1.87 ms** | 2.08 ms | **1.11x** |
+| strings 1MB | **1.16 ms** | 1.56 ms | **1.34x** |
+| numbers 1MB | **2.11 ms** | 2.89 ms | **1.37x** |
+| nested 1MB | **1.62 ms** | 2.39 ms | **1.47x** |
 
-jjq serializes **1.1-1.8x faster than Jackson 3** across all inputs. The speedup comes from pre-computed JSON key forms for interned field names (no escape scanning), type-specialized `appendTo` dispatch, and pre-sized StringBuilder buffers based on the source byte length (eliminates repeated buffer doubling for large documents).
+jjq serializes **1.1-1.5x faster than Jackson 3** across all inputs. The speedup comes from pre-computed JSON key forms for interned field names (no escape scanning), type-specialized `appendTo` dispatch, and pre-sized StringBuilder buffers based on the source byte length (eliminates repeated buffer doubling for large documents).
 
 ### CLI Performance: jjq native-image vs jq 1.8.1
 
