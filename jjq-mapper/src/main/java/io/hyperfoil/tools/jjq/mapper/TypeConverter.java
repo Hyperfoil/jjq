@@ -353,6 +353,9 @@ public final class TypeConverter {
         if (value == null || value instanceof JqNull) return 0L;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, target, value);
         if (value instanceof JqNumber n) {
+            // Non-finite values have no integral form (jq never holds them);
+            // silently yielding 0 would be a wrong value, so they mismatch.
+            if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, target, value);
             try {
                 return n.decimalValue().longValueExact();
             } catch (ArithmeticException e) {
@@ -475,7 +478,12 @@ public final class TypeConverter {
     static BigDecimal coerceBigDecimal(JqValue value) {
         if (value == null || value instanceof JqNull) return null;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "BigDecimal", value);
-        if (value instanceof JqNumber n) return n.decimalValue();
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) {
+                throw mismatch(JqValue.Type.NUMBER, "BigDecimal", value);
+            }
+            return n.decimalValue();
+        }
         if (value instanceof JqString s) {
             try {
                 return new BigDecimal(s.stringValue().trim());

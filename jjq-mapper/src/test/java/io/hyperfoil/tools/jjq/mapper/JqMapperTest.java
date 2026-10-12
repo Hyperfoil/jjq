@@ -739,6 +739,39 @@ class JqMapperTest {
         assertEquals(4, GeneratedMapping.asIntChecked(JqNumber.of(4.0)));
     }
 
+    // ---- Non-finite values have no integral/decimal form (#131 follow-up) ----
+
+    @Test
+    void nonFiniteNumbersThrowForIntegralAndDecimalTargets() {
+        // jq never holds non-finite values (clamps or nulls them); binding
+        // them as 0 would be a silent wrong value, so they mismatch instead
+        for (double special : new double[]{Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
+            JqValue v = JqNumber.of(special);
+            assertThrows(ShapeMismatchException.class,
+                    () -> mapper.fromJqValue(JqObject.builder().put("v", v).build(), Biggies.class));
+            assertThrows(ShapeMismatchException.class,
+                    () -> mapper.fromJqValue(JqObject.builder().put("i", v).put("l", 0L).put("d", 0.0).build(), Nums.class));
+        }
+    }
+
+    @Test
+    void nonFiniteNumbersStayExactForDoubleTargets() {
+        // No conversion involved: doubles pass through untouched
+        assertTrue(Double.isNaN(mapper.fromJqValue(
+                JqObject.builder().put("i", 0).put("l", 0L).put("d", JqNumber.of(Double.NaN)).build(), Nums.class).d()));
+        assertTrue(Double.isInfinite(mapper.fromJqValue(
+                JqObject.builder().put("i", 0).put("l", 0L).put("d", JqNumber.of(Double.POSITIVE_INFINITY)).build(), Nums.class).d()));
+    }
+
+    @Test
+    void nonFiniteCheckedHelpersMirror() {
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asBigDecimalChecked(JqNumber.of(Double.NaN)));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asLongChecked(JqNumber.of(Double.POSITIVE_INFINITY)));
+        assertEquals(Double.NaN, GeneratedMapping.asDoubleChecked(JqNumber.of(Double.NaN)));
+    }
+
     @Test
     void booleansThrowForNumbers() {
         // jq's tonumber rejects booleans; Jackson's 0/1 rule loses (policy)

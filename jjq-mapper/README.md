@@ -344,6 +344,21 @@ to a numeric field throws `ShapeMismatchException`. The boundary: null
 handling follows Java/Jackson (explicit nulls widen to defaults), since
 jq's error-on-null has no Java expression for primitives.
 
+### Deliberate divergences from Jackson
+
+Behavior that differs by design, not by accident. Everything below is
+pinned by tests:
+
+| Area | Jackson | jjq | Why |
+|---|---|---|---|
+| Boolean → number | 0/1 | throws | jq `tonumber` rejects booleans; jq wins |
+| `""` → number | 0 (primitives) | throws | fail-fast consistency (`"maybe"` throws too) |
+| Fraction → integral | truncates | throws | no silent loss (reporter preference) |
+| `NaN`/`Infinity` serialization | unquoted literals | `null` | no jq analog; the literals are unreadable here (#136) |
+| Unknown keys | fail by default | ignored | forward compatibility (see `@JqAnySetter`) |
+| Duplicate JSON keys (lenient) | last wins | both kept | documented on `parse`; `parseStrict` rejects |
+| Trailing commas etc. (lenient) | fail | tolerated | documented on `parse`; `parseStrict` rejects |
+
 ### Custom `AnnotationBridge` implementations
 
 Implement `AnnotationBridge` to read a third framework's annotations. All methods

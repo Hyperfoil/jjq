@@ -2,6 +2,9 @@
 
 ## [Unreleased] - 0.2.3
 
+- Non-finite numbers mismatch for integral and decimal targets instead
+  of silently binding 0 (jq never holds such values); doubles pass
+  through exact, `null` serialization unchanged
 - YAML float fidelity (#138-#140, from the emitter round-trip audit):
   exact decimals via BigDecimal (22-digit precision survives, dotless
   exponents stay float, trailing forms stable), lone surrogates escape
