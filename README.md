@@ -2,7 +2,7 @@
 
 High-performance pure Java [jq](https://jqlang.github.io/jq/) implementation with a bytecode-compiled VM, deferred string parsing, and zero-allocation query execution on large documents.
 
-jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.2x faster than Jackson 3**, and serializes **1.1-1.5x faster** (1.23x on 14MB production data).
+jjq provides a complete jq filter engine with zero native dependencies, making it portable across all JVM platforms. It executes field access queries in **3 nanoseconds with zero allocation** on a 14MB production document, parses **1.5-2.2x faster than Jackson 3**, and serializes **1.1-1.8x faster** (1.50x on 14MB production data).
 
 ## Features
 
@@ -598,13 +598,13 @@ Serialization throughput (ms/op, lower is better). JMH, 3 forks, 5+5 iterations,
 
 | Input | jjq | Jackson 3 | jjq speedup |
 |-------|-----|-----------|-------------|
-| **Production 14MB** | **15.9 ms** | 19.6 ms | **1.23x** |
-| flat 1MB | **1.87 ms** | 2.08 ms | **1.11x** |
-| strings 1MB | **1.16 ms** | 1.56 ms | **1.34x** |
-| numbers 1MB | **2.11 ms** | 2.89 ms | **1.37x** |
-| nested 1MB | **1.62 ms** | 2.39 ms | **1.47x** |
+| **Production 14MB** | **12.2 ms** | 18.2 ms | **1.50x** |
+| flat 1MB | **1.77 ms** | 2.00 ms | **1.13x** |
+| strings 1MB | **0.88 ms** | 1.55 ms | **1.76x** |
+| numbers 1MB | **2.09 ms** | 2.92 ms | **1.40x** |
+| nested 1MB | **1.61 ms** | 2.37 ms | **1.47x** |
 
-jjq serializes **1.1-1.5x faster than Jackson 3** across all inputs. The speedup comes from pre-computed JSON key forms for interned field names (no escape scanning), type-specialized `appendTo` dispatch, and pre-sized StringBuilder buffers based on the source byte length (eliminates repeated buffer doubling for large documents).
+jjq serializes **1.1-1.8x faster than Jackson 3** across all inputs. The speedup comes from pre-computed JSON key forms for interned field names (no escape scanning), type-specialized `appendTo` dispatch, and pre-sized StringBuilder buffers based on the source byte length (eliminates repeated buffer doubling for large documents).
 
 ### CLI Performance: jjq native-image vs jq 1.8.1
 
