@@ -744,6 +744,26 @@ jq's internal `_strindices` function is not implemented (2 skipped tests).
 
 `fromjson` parse errors report a different column number than jq for certain invalid JSON (1 skipped test).
 
+### Non-finite numbers (NaN/Infinity)
+
+jq has no non-finite values (it clamps or maps them away); YAML and
+lenient JSON can still put them in a tree, so their handling is defined
+here rather than left implicit:
+
+| Stage | Behavior |
+|---|---|
+| Parse (`value: .inf`) | typed non-finite node (`JqNumber`) |
+| Queries | exact IEEE arithmetic (`inf + 1` is `inf`); `abs`, comparisons, `isnan` work |
+| JSON output | `null` (jq-compatible; Jackson's unquoted literals are unreadable here) |
+| YAML output | `.inf` / `-.inf` / `.nan` (round-trips) |
+| Bind `double` | exact value |
+| Bind `String` | source text (`".inf"`) |
+| Bind `int` / `long` / `BigDecimal` | `ShapeMismatchException` (no silent zero) |
+
+Note: values *display* as `null` (that is the JSON rendering above),
+but the tree holds real non-finites — check with a `double` binding or
+`isnan`, not printed output.
+
 ## Documentation
 
 - [User Guide](docs/guide.md) — CLI usage, Java API, integration patterns
