@@ -24,6 +24,12 @@ public final class JqString implements JqValue {
     private final int start;          // content start offset (after opening ")
     private final int end;            // content end offset (before closing ")
     private final boolean hasEscapes; // whether source range contains backslash escapes
+    // Memoized output-cleanliness: 0 = unknown, 1 = needs no JSON escaping,
+    // 2 = needs escaping. Computed once via needsEscaping on first output of
+    // a materialized value, then skips the rescan on every later serialize.
+    // Fits existing field padding (object stays 32 bytes). Benign races:
+    // idempotent verdicts, worst case a repeated scan.
+    private byte cleanMemo;
 
     private JqString(String value, Object source, int start, int end, boolean hasEscapes) {
         this.value = value;
@@ -90,6 +96,13 @@ public final class JqString implements JqValue {
             return hasEscapes ? unescapeJson(raw, 0, raw.length()) : raw;
         }
         throw new IllegalStateException("Deferred JqString with no source");
+    }
+
+    /** Check output-cleanliness once and remember the verdict (cold path). */
+    private byte checkAndMemoClean(String v) {
+        byte m = needsEscaping(v) ? (byte) 2 : (byte) 1;
+        cleanMemo = m;
+        return m;
     }
 
     /**
@@ -292,8 +305,12 @@ public final class JqString implements JqValue {
         sb.append('"');
         String v = value;
         if (v != null) {
-            // Materialized (eager or already accessed deferred) -- standard path
-            escapeJson(v, sb);
+            // Materialized (eager or already accessed deferred): skip the
+            // rescan when a previous output proved the value clean.
+            byte m = cleanMemo;
+            if (m == 0) m = checkAndMemoClean(v);
+            if (m == 1) sb.append(v);
+            else escapeJson(v, sb);
         } else if (source instanceof String s && !hasEscapes) {
             // Deferred from String, no escapes -- ZERO-COPY: write source directly
             // Source content between quotes is already valid JSON (no escape sequences)
@@ -318,8 +335,12 @@ public final class JqString implements JqValue {
         out.writeByte('"');
         String v = value;
         if (v != null) {
-            // Materialized (eager or already accessed deferred) — escape + encode to bytes
-            out.escapeJsonToBytes(v);
+            // Materialized — encode directly when a previous output proved
+            // the value clean, else escape (same memo as appendTo).
+            byte m = cleanMemo;
+            if (m == 0) m = checkAndMemoClean(v);
+            if (m == 1) out.writeUTF8(v);
+            else out.escapeJsonToBytes(v);
         } else if (source instanceof byte[] bytes && !hasEscapes) {
             // Deferred from bytes, no escapes — ZERO-COPY: raw byte copy
             // Source bytes are already valid UTF-8 JSON content (no escape sequences).

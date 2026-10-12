@@ -2,6 +2,9 @@
 
 ## [Unreleased] - 0.2.4
 
+- Memoized output-cleanliness in `JqString`: repeated serialization
+  skips the escape rescan for proven-clean strings (strings-1mb
+  `toJsonString` -24%, flat -7%; object stays 32 bytes)
 - `floor`/`ceil`/`round` preserve non-finite (and huge finite) doubles
   instead of saturating through a `long` cast (#142)
 
