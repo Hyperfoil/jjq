@@ -708,6 +708,50 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_jdkValueTypes_roundTrip() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.math.BigInteger;
+                import java.util.UUID;
+                import java.net.URI;
+                import java.net.URL;
+
+                @JqMapped
+                public record Ids(BigInteger n, UUID id, URI uri, URL url) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Ids", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(
+                java.math.BigInteger.class, java.util.UUID.class, java.net.URI.class, java.net.URL.class);
+        java.util.UUID uuid = java.util.UUID.randomUUID();
+        Object original = ctor.newInstance(
+                new java.math.BigInteger("12345678901234567890123"),
+                uuid,
+                new java.net.URI("https://example.com/a"),
+                new java.net.URI("https://example.com/b").toURL());
+
+        // Tree, String, and bytes paths agree (covers all 5 record codegen sites)
+        String viaToJson = mapper.toJson(original);
+        String viaJqValue = mapper.toJqValue(original).toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(original)), mapper.toJsonBytes(original));
+
+        // Deser binds through the generated extraction (record + Optional-inner sites)
+        Object back = mapper.fromJqValue(mapper.toJqValue(original), recordClass);
+        assertEquals(original, back);
+
+        // Nulls stay null on every path (boxed/reference ternary rule)
+        Object withNulls = ctor.newInstance(null, null, null, null);
+        String nullJson = mapper.toJson(withNulls);
+        assertEquals("{\"n\":null,\"id\":null,\"uri\":null,\"url\":null}", nullJson);
+        assertEquals(withNulls, mapper.fromJqValue(mapper.toJqValue(withNulls), recordClass));
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;

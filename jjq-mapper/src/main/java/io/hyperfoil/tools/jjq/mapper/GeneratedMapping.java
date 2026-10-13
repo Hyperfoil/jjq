@@ -209,6 +209,58 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Exact {@code BigInteger} coercion mirroring {@code TypeConverter}
+     * semantics: integral numbers of any magnitude bind, fractions and
+     * non-finite values mismatch, trimmed integer strings parse; nulls
+     * stay null.
+     *
+     * @param value the extracted value (may be null)
+     * @return the coerced integer, or null for null inputs
+     * @throws JqMapperException if the value is an array, object, boolean,
+     *         fraction, or non-numeric string
+     */
+    protected static java.math.BigInteger asBigIntegerChecked(JqValue value) {
+        return TypeConverter.coerceBigInteger(value);
+    }
+
+    /**
+     * {@code UUID} coercion mirroring {@code TypeConverter} semantics:
+     * canonical strings parse, anything else mismatches; nulls stay null.
+     *
+     * @param value the extracted value (may be null)
+     * @return the UUID, or null for null inputs
+     * @throws JqMapperException if the value is not a well-formed UUID string
+     */
+    protected static java.util.UUID asUuidChecked(JqValue value) {
+        return TypeConverter.coerceUuid(value);
+    }
+
+    /**
+     * {@code URI} coercion mirroring {@code TypeConverter} semantics:
+     * strings parse (relative references bind), anything else mismatches;
+     * nulls stay null.
+     *
+     * @param value the extracted value (may be null)
+     * @return the URI, or null for null inputs
+     * @throws JqMapperException if the value is not a well-formed URI string
+     */
+    protected static java.net.URI asUriChecked(JqValue value) {
+        return TypeConverter.coerceUri(value);
+    }
+
+    /**
+     * {@code URL} coercion mirroring {@code TypeConverter} semantics:
+     * absolute URL strings parse, relative references mismatch; nulls stay null.
+     *
+     * @param value the extracted value (may be null)
+     * @return the URL, or null for null inputs
+     * @throws JqMapperException if the value is not a well-formed absolute URL string
+     */
+    protected static java.net.URL asUrlChecked(JqValue value) {
+        return TypeConverter.coerceUrl(value);
+    }
+
+    /**
      * Lenient string coercion mirroring {@code TypeConverter} {@code STRING} semantics:
      * nulls stay null, strings unwrap, scalars with source text keep what was
      * written, other scalars render as JSON text, arrays and objects fail fast.

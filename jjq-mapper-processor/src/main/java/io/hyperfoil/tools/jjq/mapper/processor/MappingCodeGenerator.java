@@ -318,6 +318,18 @@ final class MappingCodeGenerator {
             case "java.math.BigDecimal" -> {
                 sb.append("asBigDecimalChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\"))");
             }
+            case "java.math.BigInteger" -> {
+                sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
+            }
+            case "java.util.UUID" -> {
+                sb.append("asUuidChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"UUID\"))");
+            }
+            case "java.net.URI" -> {
+                sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
+            }
+            case "java.net.URL" -> {
+                sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
+            }
             default -> {
                 String typeName = comp.typeName();
                 // JqValue or subtypes — passthrough
@@ -387,6 +399,14 @@ final class MappingCodeGenerator {
                 sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
             case "java.math.BigDecimal", "BigDecimal" ->
                 sb.append("asBigDecimalChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\"))");
+            case "java.math.BigInteger", "BigInteger" ->
+                sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
+            case "java.util.UUID", "UUID" ->
+                sb.append("asUuidChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"UUID\"))");
+            case "java.net.URI", "URI" ->
+                sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
+            case "java.net.URL", "URL" ->
+                sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
             default -> {
                 // Nested record/enum/POJO: bind structurally (fail-fast on shape
                 // mismatch, mirroring the reflection path). A parameterized type
@@ -520,6 +540,10 @@ final class MappingCodeGenerator {
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(String.valueOf(").append(accessor).append("))");
             case "java.math.BigDecimal" ->
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of(").append(accessor).append(")");
+            case "java.math.BigInteger" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of(new java.math.BigDecimal(").append(accessor).append("))");
+            case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(".toString())");
             default -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -645,6 +669,11 @@ final class MappingCodeGenerator {
                 sb.append("        _sb.append(").append(accessor).append(");\n");
             case "java.math.BigDecimal" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_sb, ").append(accessor).append(");\n");
+            case "java.math.BigInteger" ->
+                // Plain integer rendering; StringBuilder.append(Object) is null-safe (writes "null").
+                sb.append("        _sb.append(").append(accessor).append(");\n");
+            case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -777,6 +806,11 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonBoolean(_out, ").append(accessor).append(");\n");
             case "java.math.BigDecimal" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_out, ").append(accessor).append(");\n");
+            case "java.math.BigInteger" -> {
+                sb.append("        if (").append(accessor).append(" == null) _out.writeNull(); else _out.writeAsciiString(").append(accessor).append(".toString());\n");
+            }
+            case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -986,6 +1020,8 @@ final class MappingCodeGenerator {
                     case "java.lang.Character" -> expr + " != null && (char) " + expr + " != '\\0'";
                     case "java.math.BigDecimal" ->
                         expr + " != null && " + expr + ".doubleValue() != 0.0";
+                    case "java.math.BigInteger" ->
+                        expr + " != null && " + expr + ".signum() != 0";
                     default -> expr + " != null";
                 };
             }
@@ -1402,6 +1438,11 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonBoolean(_out, ").append(readExpr).append(");\n");
             case "java.math.BigDecimal" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_out, ").append(readExpr).append(");\n");
+            case "java.math.BigInteger" -> {
+                sb.append("        if (").append(readExpr).append(" == null) _out.writeNull(); else _out.writeAsciiString(").append(readExpr).append(".toString());\n");
+            }
+            case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -1475,6 +1516,11 @@ final class MappingCodeGenerator {
                 sb.append("        _sb.append(").append(readExpr).append(");\n");
             case "java.math.BigDecimal" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonDecimal(_sb, ").append(readExpr).append(");\n");
+            case "java.math.BigInteger" ->
+                // Plain integer rendering; StringBuilder.append(Object) is null-safe (writes "null").
+                sb.append("        _sb.append(").append(readExpr).append(");\n");
+            case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -1539,6 +1585,10 @@ final class MappingCodeGenerator {
             case "char", "java.lang.Character" ->
                 "asCharChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"char\"))";
             case "java.math.BigDecimal" -> "asBigDecimalChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigDecimal\"))";
+            case "java.math.BigInteger" -> "asBigIntegerChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigInteger\"))";
+            case "java.util.UUID" -> "asUuidChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"UUID\"))";
+            case "java.net.URI" -> "asUriChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"URI\"))";
+            case "java.net.URL" -> "asUrlChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"URL\"))";
             default -> {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
@@ -1691,6 +1741,10 @@ final class MappingCodeGenerator {
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(String.valueOf(").append(readExpr).append("))");
             case "java.math.BigDecimal" ->
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of(").append(readExpr).append(")");
+            case "java.math.BigInteger" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of(new java.math.BigDecimal(").append(readExpr).append("))");
+            case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(".toString())");
             default -> sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                          .append(readExpr).append(", mapper)");
         }

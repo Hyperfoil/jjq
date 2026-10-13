@@ -42,6 +42,14 @@ public final class TypeConverter {
         CHAR,
         /** Target is {@link java.math.BigDecimal}. */
         BIG_DECIMAL,
+        /** Target is {@link java.math.BigInteger}. */
+        BIG_INTEGER,
+        /** Target is {@link java.util.UUID} (string wire form). */
+        UUID,
+        /** Target is {@link java.net.URI} (string wire form). */
+        URI,
+        /** Target is {@link java.net.URL} (string wire form, absolute only). */
+        URL,
         /** Target is {@link java.util.Optional}. */
         OPTIONAL,
         /** Target is {@link java.util.List}. */
@@ -84,6 +92,10 @@ public final class TypeConverter {
         if (targetType == byte.class || targetType == Byte.class) return Kind.BYTE;
         if (targetType == char.class || targetType == Character.class) return Kind.CHAR;
         if (targetType == BigDecimal.class) return Kind.BIG_DECIMAL;
+        if (targetType == java.math.BigInteger.class) return Kind.BIG_INTEGER;
+        if (targetType == java.util.UUID.class) return Kind.UUID;
+        if (targetType == java.net.URI.class) return Kind.URI;
+        if (targetType == java.net.URL.class) return Kind.URL;
         if (targetType == List.class || targetType == ArrayList.class) return Kind.LIST;
         if (targetType == Set.class || targetType == HashSet.class
                 || targetType == LinkedHashSet.class || targetType == SortedSet.class
@@ -150,6 +162,18 @@ public final class TypeConverter {
             }
             case BIG_DECIMAL -> {
                 yield coerceBigDecimal(value);
+            }
+            case BIG_INTEGER -> {
+                yield coerceBigInteger(value);
+            }
+            case UUID -> {
+                yield coerceUuid(value);
+            }
+            case URI -> {
+                yield coerceUri(value);
+            }
+            case URL -> {
+                yield coerceUrl(value);
             }
             case LIST -> {
                 if (value == null || value instanceof JqNull) yield List.of();
@@ -501,6 +525,113 @@ public final class TypeConverter {
         throw mismatch(JqValue.Type.NUMBER, "BigDecimal", value);
     }
 
+    /**
+     * Exact {@code BigInteger} coercion: numbers convert without loss
+     * (integral values of any magnitude, including {@code 3.0}), trimmed
+     * integer strings parse, anything else (fractions, non-finite values,
+     * booleans — jq's {@code tonumber} rejects them) is a shape mismatch;
+     * nulls stay null. Shared by {@link #convert} and the generated-code
+     * helper so both paths agree.
+     *
+     * @param value the value (may be null)
+     * @return the integer value, or null for null inputs
+     * @throws ShapeMismatchException for containers, booleans, fractions,
+     *         non-finite values, and non-numeric strings
+     */
+    static java.math.BigInteger coerceBigInteger(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, "BigInteger", value);
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) {
+                throw mismatch(JqValue.Type.NUMBER, "BigInteger", value);
+            }
+            try {
+                return n.decimalValue().toBigIntegerExact();
+            } catch (ArithmeticException e) {
+                throw mismatch(JqValue.Type.NUMBER, "BigInteger", value);
+            }
+        }
+        if (value instanceof JqString s) {
+            try {
+                return new java.math.BigInteger(s.stringValue().trim());
+            } catch (NumberFormatException e) {
+                throw mismatch(JqValue.Type.NUMBER, "BigInteger", value);
+            }
+        }
+        throw mismatch(JqValue.Type.NUMBER, "BigInteger", value);
+    }
+
+    /**
+     * {@code UUID} coercion from its canonical string form: strings parse
+     * (trimmed), anything else (numbers, booleans, containers) is a shape
+     * mismatch; nulls stay null. Shared by {@link #convert} and the
+     * generated-code helper so both paths agree.
+     *
+     * @param value the value (may be null)
+     * @return the UUID, or null for null inputs
+     * @throws ShapeMismatchException for non-string scalars and malformed text
+     */
+    static java.util.UUID coerceUuid(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "UUID", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.util.UUID.fromString(s.stringValue().trim());
+            } catch (IllegalArgumentException e) {
+                throw mismatch(JqValue.Type.STRING, "UUID", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "UUID", value);
+    }
+
+    /**
+     * {@code URI} coercion from its string form (relative references bind,
+     * like Jackson): strings parse (trimmed), anything else is a shape
+     * mismatch; nulls stay null. Shared by {@link #convert} and the
+     * generated-code helper so both paths agree.
+     *
+     * @param value the value (may be null)
+     * @return the URI, or null for null inputs
+     * @throws ShapeMismatchException for non-string scalars and malformed text
+     */
+    static java.net.URI coerceUri(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "URI", value);
+        if (value instanceof JqString s) {
+            try {
+                return new java.net.URI(s.stringValue().trim());
+            } catch (java.net.URISyntaxException e) {
+                throw mismatch(JqValue.Type.STRING, "URI", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "URI", value);
+    }
+
+    /**
+     * {@code URL} coercion from its string form (absolute URLs only —
+     * relative references are shape mismatches, like Jackson): strings
+     * parse (trimmed), anything else is a shape mismatch; nulls stay null.
+     * Shared by {@link #convert} and the generated-code helper so both
+     * paths agree.
+     *
+     * @param value the value (may be null)
+     * @return the URL, or null for null inputs
+     * @throws ShapeMismatchException for non-string scalars and malformed text
+     */
+    static java.net.URL coerceUrl(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "URL", value);
+        if (value instanceof JqString s) {
+            try {
+                return new java.net.URI(s.stringValue().trim()).toURL();
+            } catch (java.net.URISyntaxException | java.net.MalformedURLException
+                    | IllegalArgumentException e) {
+                throw mismatch(JqValue.Type.STRING, "URL", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "URL", value);
+    }
+
     /** Short human-readable description of a JqValue (strings truncated). */
     private static String describe(JqValue value) {
         if (value == null || value instanceof JqNull) return "null";
@@ -573,9 +704,15 @@ public final class TypeConverter {
         if (value == null) return JqNull.NULL;
         if (value instanceof JqValue jv) return jv;
         if (value instanceof String s) return JqString.of(s);
+        // BigInteger before Number: the generic Number path narrows via
+        // longValue() and would silently truncate huge magnitudes.
+        if (value instanceof java.math.BigInteger bi) return JqNumber.of(new BigDecimal(bi));
         if (value instanceof Number n) return JqNumber.of(n);
         if (value instanceof Boolean b) return JqBoolean.of(b);
         if (value instanceof Character c) return JqString.of(String.valueOf(c));
+        if (value instanceof java.util.UUID u) return JqString.of(u.toString());
+        if (value instanceof java.net.URL url) return JqString.of(url.toString());
+        if (value instanceof java.net.URI uri) return JqString.of(uri.toString());
         if (value instanceof Optional<?> opt) {
             return opt.map(v -> toJqValue(v, mapper)).orElse(JqNull.NULL);
         }

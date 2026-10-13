@@ -410,6 +410,8 @@ for `ServiceLoader` discovery.
 | `byte` / `Byte` | number | |
 | `char` / `Character` | string | Single-character strings; `'\0'` for missing |
 | `BigDecimal` | number | Preserves precision |
+| `BigInteger` | number | Exact, any magnitude; fractions/non-finite mismatch |
+| `UUID` / `URI` / `URL` | string | Strict parse; relative refs bind `URI` but mismatch `URL` |
 | `List<T>` | array | Recursive element mapping |
 | `Map<String, V>` | object | Recursive value mapping |
 | `Optional<T>` | value / null | `Optional.empty()` for null/missing |

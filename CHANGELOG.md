@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- JDK value types in the mapper: `BigInteger` (exact numbers of any
+  magnitude, fractions/non-finite mismatch), `UUID`/`URI`/`URL`
+  (strict string forms; relative refs bind `URI` but mismatch `URL`),
+  on all paths — reflection, generated code (all 9 sites), `Optional`
+  inners, `toJson`/`toJsonBytes` parity, null ternaries throughout
 - Sealed polymorphism: `@JqType` on a sealed type dispatches deser on a
   discriminator property (default `"type"`, fail-fast on missing/unknown)
   and injects it on ser (values default to simple class names, `@JqName`

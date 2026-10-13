@@ -849,6 +849,114 @@ class JqMapperTest {
         assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
     }
 
+    // ---- BigInteger / UUID / URI / URL (JDK value types) ----
+
+    record BigIntHolder(java.math.BigInteger v) {}
+    record UuidHolder(java.util.UUID id) {}
+    record UriHolder(java.net.URI uri) {}
+    record UrlHolder(java.net.URL url) {}
+    record MixedIds(java.util.UUID id, java.net.URI uri, java.math.BigInteger n) {}
+    record OptUuid(java.util.Optional<java.util.UUID> id) {}
+
+    @Test
+    void bigIntegerBindsNumbersExactly() {
+        assertEquals(java.math.BigInteger.valueOf(42), mapper.fromJqValue(
+                JqValues.parse("{\"v\":42}"), BigIntHolder.class).v());
+        assertEquals(new java.math.BigInteger("9223372036854775808"), mapper.fromJqValue(
+                JqValues.parse("{\"v\":9223372036854775808}"), BigIntHolder.class).v());
+        assertEquals(java.math.BigInteger.valueOf(3), mapper.fromJqValue(
+                JqValues.parse("{\"v\":3.0}"), BigIntHolder.class).v());
+        assertEquals(new java.math.BigInteger("42"), mapper.fromJqValue(
+                JqValues.parse("{\"v\":\"42\"}"), BigIntHolder.class).v());
+        assertNull(mapper.fromJqValue(JqValues.parse("{\"v\":null}"), BigIntHolder.class).v());
+    }
+
+    @Test
+    void bigIntegerRejectsLossyShapes() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"v\":3.5}"), BigIntHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"v\":\"abc\"}"), BigIntHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"v\":true}"), BigIntHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"v\":[1]}"), BigIntHolder.class));
+    }
+
+    @Test
+    void uuidBindsStrings() {
+        java.util.UUID id = java.util.UUID.randomUUID();
+        assertEquals(id, mapper.fromJqValue(
+                JqValues.parse("{\"id\":\"" + id + "\"}"), UuidHolder.class).id());
+        assertNull(mapper.fromJqValue(JqValues.parse("{\"id\":null}"), UuidHolder.class).id());
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"id\":\"not-a-uuid\"}"), UuidHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"id\":42}"), UuidHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"id\":true}"), UuidHolder.class));
+    }
+
+    @Test
+    void uriBindsStrings() throws Exception {
+        assertEquals(new java.net.URI("https://example.com/x?q=1"), mapper.fromJqValue(
+                JqValues.parse("{\"uri\":\"https://example.com/x?q=1\"}"), UriHolder.class).uri());
+        assertEquals(new java.net.URI("path/relative"), mapper.fromJqValue(
+                JqValues.parse("{\"uri\":\"path/relative\"}"), UriHolder.class).uri());
+        assertNull(mapper.fromJqValue(JqValues.parse("{\"uri\":null}"), UriHolder.class).uri());
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"uri\":\"http://exa mple.com\"}"), UriHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"uri\":42}"), UriHolder.class));
+    }
+
+    @Test
+    void urlBindsAbsoluteStrings() throws Exception {
+        assertEquals(new java.net.URI("https://example.com/").toURL(), mapper.fromJqValue(
+                JqValues.parse("{\"url\":\"https://example.com/\"}"), UrlHolder.class).url());
+        assertNull(mapper.fromJqValue(JqValues.parse("{\"url\":null}"), UrlHolder.class).url());
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"url\":\"path/relative\"}"), UrlHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"url\":\"not a url\"}"), UrlHolder.class));
+    }
+
+    @Test
+    void jdkValueTypesRoundTrip() throws Exception {
+        MixedIds original = new MixedIds(java.util.UUID.randomUUID(),
+                new java.net.URI("https://example.com/a"), new java.math.BigInteger("12345678901234567890123"));
+        assertEquals(original, mapper.fromJqValue(mapper.toJqValue(original), MixedIds.class));
+        assertEquals(mapper.toJqValue(original).toJsonString(), mapper.toJson(original));
+        assertBytesMatch(original);
+    }
+
+    @Test
+    void optionalUuidBinds() {
+        java.util.UUID id = java.util.UUID.randomUUID();
+        assertEquals(java.util.Optional.of(id), mapper.fromJqValue(
+                JqValues.parse("{\"id\":\"" + id + "\"}"), OptUuid.class).id());
+        assertEquals(java.util.Optional.empty(), mapper.fromJqValue(
+                JqValues.parse("{\"id\":null}"), OptUuid.class).id());
+    }
+
+    @Test
+    void jdkCheckedHelpersMirror() {
+        assertEquals(new java.math.BigInteger("42"),
+                GeneratedMapping.asBigIntegerChecked(JqString.of("42")));
+        assertNull(GeneratedMapping.asBigIntegerChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asBigIntegerChecked(JqString.of("abc")));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asBigIntegerChecked(JqBoolean.TRUE));
+        java.util.UUID id = java.util.UUID.randomUUID();
+        assertEquals(id, GeneratedMapping.asUuidChecked(JqString.of(id.toString())));
+        assertNull(GeneratedMapping.asUuidChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asUuidChecked(JqString.of("nope")));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asUuidChecked(JqNumber.of(42)));
+    }
+
     // ---- Any-setter / any-getter (issue #87) ----
 
     static class ExtrasPojo {
