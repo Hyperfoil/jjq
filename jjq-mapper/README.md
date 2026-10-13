@@ -119,7 +119,24 @@ Unlike `@JqField` (which replaces extraction with a jq program), a renamed
 field keeps direct key lookup. Explicit names win over the naming strategy
 and bridge renames; combining `@JqName` with `@JqField` on one element is an
 error. On enum constants it sets the wire form both directions; see
-`@JqEnum` for lenient parsing.
+`@JqEnum` for lenient parsing. On a type declaration it sets the
+polymorphic discriminator value inside a `@JqType` family (default: the
+simple class name).
+
+### `@JqType` — sealed polymorphism
+
+```java
+@JqType
+sealed interface Shape permits Circle, Rectangle {}
+record Circle(double radius) implements Shape {}
+// {"type":"Circle","radius":1.5} binds Circle; ser injects "type" back
+```
+
+The discriminator property defaults to `"type"` (`@JqType(discriminator = "kind")`
+renames it). Deser fails fast on missing, non-string, or unknown values;
+direct binding to a subtype stays lenient. Jackson interop: `@JsonTypeInfo`
+(`PROPERTY` + `NAME`, with `@JsonSubTypes`/`@JsonTypeName`) works through the
+bridge; native `@JqType` wins when both are present.
 
 ### `@JqEnum` — lenient enum parsing
 
@@ -224,7 +241,9 @@ Records ignore it (canonical accessors, no `getX()` binding).
 
 POJOs with a no-arg constructor and getters/setters are supported alongside records.
 Property discovery priority: public fields → getters/setters → `setAccessible` fallback.
-Boolean getters (`isActive()`) are detected automatically.
+Boolean getters (`isActive()`) are detected automatically. Fields are discovered
+along the superclass chain (subclass first — a subclass field shadows an inherited
+one of the same name); static/synthetic/transient members are skipped at every level.
 
 ```java
 @JqMapped
@@ -305,7 +324,7 @@ JqMapper mapper = JqMapper.create(); // auto-discovers bridge via ServiceLoader
 User user = mapper.fromJqValue(json, User.class);
 ```
 
-Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqNaming`, `@JqConverter`, `@JqAdapter`)
+Priority: jjq annotations (`@JqField`, `@JqIgnore`, `@JqInclude`, `@JqName`, `@JqAccess`, `@JqVisibility`, `@JqNaming`, `@JqConverter`, `@JqAdapter`, `@JqType`)
 over bridge annotations over defaults. Bridges are consulted in registration order;
 the first non-null answer wins.
 See [jjq-mapper-jackson](../jjq-mapper-jackson/README.md) and [jjq-mapper-jsonb](../jjq-mapper-jsonb/README.md).
@@ -325,6 +344,7 @@ semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
 | `@JsonAutoDetect` | `@JqVisibility` | Getter axes only; fields always bind |
 | `@JsonAnyGetter` / `@JsonAnySetter` | `@JqAnyGetter` / `@JqAnySetter` | Same method-form contract |
 | `@JsonValue` / `@JsonCreator` on enums | `@JqName` on constants (+ `@JqEnum` for leniency) | Strict exact mapping; leniency via `@JqEnum`, custom policy via `@JqConverter` |
+| `@JsonTypeInfo` + `@JsonSubTypes` (`PROPERTY`+`NAME`) | `@JqType` (sealed) | Discriminator property + simple-name values (overridable via `@JqName` on the subtype); native wins over bridge; full `JsonTypeInfo` matrix out of scope |
 | `@JsonNaming` | `@JqNaming` | Strategy-based, fewer strategies |
 | `TypeReference<T>` | `TypeToken<T>` | Anonymous-subclass capture, same idiom |
 

@@ -33,13 +33,16 @@ import java.lang.annotation.Target;
  * still fail), winning over bridge constant renames. Lenient parsing
  * (normalization, unknown-to-null) stays a hand-written {@code @JqConverter}.</p>
  *
+ * <p>On a type declaration, sets the polymorphic discriminator value for
+ * that type inside a {@link JqType} family (default: the simple class name).</p>
+ *
  * @see JqField
  * @see JqNaming
  * @see JqMapped
  *
  * <p>Jackson equivalent: {@code @JsonProperty("x")} (rename only).</p>
  */
-@Target({ElementType.RECORD_COMPONENT, ElementType.FIELD})
+@Target({ElementType.TYPE, ElementType.RECORD_COMPONENT, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface JqName {
     /**

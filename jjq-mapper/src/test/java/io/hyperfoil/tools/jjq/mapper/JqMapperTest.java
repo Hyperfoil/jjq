@@ -3060,4 +3060,210 @@ class JqMapperTest {
         assertBytesMatch(new WithOptional("Alice", Optional.of("a@b.c")));
         assertBytesMatch(new WithOptional("Bob", Optional.empty()));
     }
+
+    // ---- Sealed polymorphism (@JqType) ----
+
+    @JqType
+    sealed interface Shape permits Circle, Rectangle {}
+
+    record Circle(double radius) implements Shape {}
+
+    @JqName("rect")
+    record Rectangle(double width, double height) implements Shape {}
+
+    @JqType(discriminator = "kind")
+    sealed interface KindedShape permits KindedCircle {}
+
+    record KindedCircle(double radius) implements KindedShape {}
+
+    @JqType
+    static class NotSealedBase {
+        String a;
+    }
+
+    record Drawing(Shape shape, String name) {}
+
+    @Test
+    void polyDeserSelectsSubtype() {
+        Shape s = mapper.fromJqValue(JqValues.parse("{\"type\":\"Circle\",\"radius\":1.5}"), Shape.class);
+        assertEquals(new Circle(1.5), s);
+    }
+
+    @Test
+    void polyDeserUsesJqNameWireValue() {
+        Shape s = mapper.fromJqValue(
+                JqValues.parse("{\"type\":\"rect\",\"width\":2.0,\"height\":3.0}"), Shape.class);
+        assertEquals(new Rectangle(2.0, 3.0), s);
+    }
+
+    @Test
+    void polyDeserUnknownTypeFails() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"type\":\"Triangle\",\"a\":1}"), Shape.class));
+    }
+
+    @Test
+    void polyDeserMissingDiscriminatorFails() {
+        assertThrows(ShapeMismatchException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"radius\":1.5}"), Shape.class));
+    }
+
+    @Test
+    void polyDeserScalarFails() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(JqValues.parse("42"), Shape.class));
+    }
+
+    @Test
+    void polyDeserNullYieldsNull() {
+        assertNull(mapper.fromJqValue(JqNull.NULL, Shape.class));
+    }
+
+    @Test
+    void polySerInjectsDiscriminator() {
+        JqValue tree = mapper.toJqValue(new Circle(1.5));
+        assertEquals("Circle", tree.getField("type").stringValue());
+        assertEquals(1.5, tree.getField("radius").doubleValue());
+        JqValue rect = mapper.toJqValue(new Rectangle(2.0, 3.0));
+        assertEquals("rect", rect.getField("type").stringValue());
+    }
+
+    @Test
+    void polyRoundTrip() {
+        for (Shape s : List.of(new Circle(1.5), new Rectangle(2.0, 3.0))) {
+            assertEquals(s, mapper.fromJqValue(mapper.toJqValue(s), Shape.class));
+        }
+    }
+
+    @Test
+    void polyNestedField() {
+        Drawing d = mapper.fromJqValue(
+                JqValues.parse("{\"shape\":{\"type\":\"Circle\",\"radius\":1.5},\"name\":\"sketch\"}"),
+                Drawing.class);
+        assertEquals(new Drawing(new Circle(1.5), "sketch"), d);
+        assertEquals("Circle",
+                mapper.toJqValue(d).getField("shape").getField("type").stringValue());
+    }
+
+    @Test
+    void polyHeterogeneousList() {
+        JqValue json = JqValues.parse(
+                "[{\"type\":\"Circle\",\"radius\":1.5},{\"type\":\"rect\",\"width\":2.0,\"height\":3.0}]");
+        java.lang.reflect.Type listType = new TypeToken<List<Shape>>(){}.getType();
+        List<Shape> shapes = mapper.fromJqValue(json, listType);
+        assertEquals(List.of(new Circle(1.5), new Rectangle(2.0, 3.0)), shapes);
+    }
+
+    @Test
+    void polyCustomDiscriminator() {
+        KindedShape s = mapper.fromJqValue(
+                JqValues.parse("{\"kind\":\"KindedCircle\",\"radius\":4.0}"), KindedShape.class);
+        assertEquals(new KindedCircle(4.0), s);
+        assertEquals("KindedCircle", mapper.toJqValue(s).getField("kind").stringValue());
+    }
+
+    @Test
+    void polyDirectSubtypeIgnoresDiscriminator() {
+        // Binding straight to the subtype stays lenient: the discriminator
+        // reads as an unknown key, fields bind normally.
+        Circle c = mapper.fromJqValue(
+                JqValues.parse("{\"type\":\"Circle\",\"radius\":1.5}"), Circle.class);
+        assertEquals(new Circle(1.5), c);
+    }
+
+    @Test
+    void polyNonSealedBaseFailsFast() {
+        assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"a\":\"x\"}"), NotSealedBase.class));
+    }
+
+    static class CircleStubMapping extends GeneratedMapping<Circle> {
+        boolean usedFrom;
+        boolean usedTo;
+
+        @Override
+        public Class<Circle> type() { return Circle.class; }
+
+        @Override
+        public Circle fromJqValue(JqValue input, JqMapper mapper) {
+            usedFrom = true;
+            return new Circle(input.getField("radius").doubleValue());
+        }
+
+        @Override
+        public JqValue toJqValue(Circle instance, JqMapper mapper) {
+            usedTo = true;
+            return JqObject.builder(1).put("radius", instance.radius()).build();
+        }
+    }
+
+    @Test
+    void polyDeserDelegatesToRegisteredGeneratedMapping() {
+        var stub = new CircleStubMapping();
+        JqMapper m = JqMapper.builder().register(stub).build();
+        Shape s = m.fromJqValue(JqValues.parse("{\"type\":\"Circle\",\"radius\":2.5}"), Shape.class);
+        assertTrue(stub.usedFrom, "poly dispatch should delegate to the subtype mapping");
+        assertEquals(new Circle(2.5), s);
+    }
+
+    @Test
+    void polySerWrapsRegisteredGeneratedMapping() {
+        var stub = new CircleStubMapping();
+        JqMapper m = JqMapper.builder().register(stub).build();
+        JqValue tree = m.toJqValue(new Circle(2.5));
+        assertTrue(stub.usedTo, "ser should go through the subtype mapping");
+        assertEquals("Circle", tree.getField("type").stringValue());
+        assertEquals(2.5, tree.getField("radius").doubleValue());
+    }
+
+    @Test
+    void polySerDirectAppendJsonMatchesTree() {
+        // Reflection path: appendJson defaults to toJqValue().appendTo(),
+        // so the injected discriminator rides along identically.
+        String viaTree = mapper.toJqValue(new Circle(1.5)).toJsonString();
+        StringBuilder sb = new StringBuilder();
+        mapper.appendJson(new Circle(1.5), sb);
+        assertEquals(viaTree, sb.toString());
+    }
+
+    // ---- POJO field inheritance ----
+
+    static class Animal {
+        public String name;
+    }
+
+    static class Dog extends Animal {
+        public boolean good;
+    }
+
+    static class BaseWithTag {
+        public String tag = "base";
+    }
+
+    static class SubWithTag extends BaseWithTag {
+        public String tag = "sub";
+    }
+
+    @Test
+    void pojoSubclassBindsInheritedFields() {
+        Dog d = mapper.fromJqValue(JqValues.parse("{\"name\":\"Rex\",\"good\":true}"), Dog.class);
+        assertEquals("Rex", d.name);
+        assertTrue(d.good);
+    }
+
+    @Test
+    void pojoSubclassSerializesInheritedFields() {
+        Dog d = new Dog();
+        d.name = "Rex";
+        d.good = true;
+        JqValue tree = mapper.toJqValue(d);
+        assertEquals("Rex", tree.getField("name").stringValue());
+        assertTrue(tree.getField("good").booleanValue());
+    }
+
+    @Test
+    void pojoSubclassFieldShadowsSuperclass() {
+        SubWithTag s = mapper.fromJqValue(JqValues.parse("{\"tag\":\"x\"}"), SubWithTag.class);
+        assertEquals("x", ((SubWithTag) s).tag);
+        assertEquals("x", mapper.toJqValue(s).getField("tag").stringValue());
+    }
 }

@@ -2,6 +2,15 @@
 
 ## [Unreleased] - 0.2.4
 
+- Sealed polymorphism: `@JqType` on a sealed type dispatches deser on a
+  discriminator property (default `"type"`, fail-fast on missing/unknown)
+  and injects it on ser (values default to simple class names, `@JqName`
+  on the subtype overrides); Jackson `@JsonTypeInfo` (`PROPERTY`+`NAME`)
+  with `@JsonSubTypes`/`@JsonTypeName` works through the bridge with
+  native winning; `List<Shape>` binds heterogeneously via `TypeToken`
+- POJO field inheritance: `forClass` walks the superclass chain
+  (subclass fields shadow inherited ones), closing the gap where
+  subclass mappings silently dropped inherited fields
 - Second-sighting key admission in the YAML parser: plain mapping keys
   reach the shared intern table only on repeat sighting (lookup-only
   byte probe plus a fixed lossy set, zero per-key allocation), so

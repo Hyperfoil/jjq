@@ -207,9 +207,21 @@ public final class JqMapper {
         public JqMapper build() {
             JqMapper mapper = new JqMapper(List.copyOf(bridges));
             for (var m : mappings) {
-                mapper.cache.put(m.type(), new LastHit(m.type(), m));
+                mapper.cache.put(m.type(), new LastHit(m.type(), wrapPoly(m, mapper.bridges)));
             }
             return mapper;
+        }
+
+        /**
+         * Wrap a pre-registered generated mapping for polymorphic family
+         * membership (same rule as discovery-time wrapping, so both paths
+         * agree regardless of registration order).
+         */
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private static GeneratedMapping<?> wrapPoly(GeneratedMapping<?> mapping, List<AnnotationBridge> bridges) {
+            PolySerInfo serInfo = PolyMapping.resolvePolyMember(mapping.type(), bridges);
+            if (serInfo == null) return mapping;
+            return new PolyGeneratedWrapper<>((GeneratedMapping<Object>) mapping, serInfo);
         }
     }
 
@@ -421,12 +433,19 @@ public final class JqMapper {
     }
 
     private <T> Mapping<T> createMapping(Class<T> type) {
+        // Polymorphic families dispatch before anything else: a @JqType (or
+        // bridge-declared) base never binds directly.
+        PolyConfig poly = PolyMapping.resolvePolyConfig(type, bridges);
+        if (poly != null) return new PolyMapping<>(type, poly);
+        PolySerInfo serInfo = PolyMapping.resolvePolyMember(type, bridges);
         // Try generated mapping first (from jjq-mapper-processor)
         GeneratedMapping<T> generated = loadGenerated(type);
-        if (generated != null) return generated;
+        if (generated != null) {
+            return serInfo == null ? generated : new PolyGeneratedWrapper<>(generated, serInfo);
+        }
         // Fall back to reflection-based mapping
-        if (type.isRecord()) return ClassMapping.forRecord(type, bridges);
-        return ClassMapping.forClass(type, bridges);
+        if (type.isRecord()) return ClassMapping.forRecord(type, bridges, serInfo);
+        return ClassMapping.forClass(type, bridges, serInfo);
     }
 
     /**

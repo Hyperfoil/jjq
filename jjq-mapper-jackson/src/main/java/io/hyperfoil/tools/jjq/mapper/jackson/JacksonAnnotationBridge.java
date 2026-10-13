@@ -164,6 +164,38 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
     }
 
     @Override
+    public io.hyperfoil.tools.jjq.mapper.PolyConfig resolvePolymorphism(Class<?> type) {
+        // Supported subset only: As.PROPERTY with Id.NAME. Anything else
+        // (WRAPPER_OBJECT, CLASS ids, missing subtypes) returns null and
+        // keeps today's behavior.
+        com.fasterxml.jackson.annotation.JsonTypeInfo info =
+                type.getAnnotation(com.fasterxml.jackson.annotation.JsonTypeInfo.class);
+        if (info == null) return null;
+        if (info.use() != com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME) return null;
+        if (info.include() != com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY) return null;
+        String property = info.property();
+        if (property == null || property.isEmpty()) property = "type";
+        com.fasterxml.jackson.annotation.JsonSubTypes subs =
+                type.getAnnotation(com.fasterxml.jackson.annotation.JsonSubTypes.class);
+        if (subs == null || subs.value().length == 0) return null;
+        var wireToSub = new java.util.LinkedHashMap<String, Class<?>>();
+        for (var sub : subs.value()) {
+            String wire = sub.name();
+            if (wire == null || wire.isEmpty()) {
+                com.fasterxml.jackson.annotation.JsonTypeName typeName =
+                        sub.value().getAnnotation(com.fasterxml.jackson.annotation.JsonTypeName.class);
+                wire = (typeName != null && !typeName.value().isEmpty())
+                        ? typeName.value() : sub.value().getSimpleName();
+            }
+            if (wireToSub.putIfAbsent(wire, sub.value()) != null) {
+                throw new io.hyperfoil.tools.jjq.mapper.JqMapperException("@JsonSubTypes on "
+                        + type.getName() + ": duplicate type name '" + wire + "'");
+            }
+        }
+        return new io.hyperfoil.tools.jjq.mapper.PolyConfig(property, wireToSub);
+    }
+
+    @Override
     public java.lang.reflect.Method resolveAnySetter(Class<?> type) {
         for (java.lang.reflect.Method m : type.getMethods()) {
             if (m.isAnnotationPresent(JsonAnySetter.class)

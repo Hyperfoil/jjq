@@ -269,6 +269,13 @@ public final class TypeConverter {
         if (kind != Kind.DEFAULT) {
             return convert(value, kind, targetType, genericType, mapper);
         }
+        // Polymorphic abstract/interface targets dispatch on the discriminator
+        // (heterogeneous lists via TypeToken); anything else keeps leniency.
+        if (targetType.isInterface() || java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())) {
+            if (PolyMapping.resolvePolyConfig(targetType, mapper.bridges()) != null) {
+                return mapper.fromJqValue(value, targetType);
+            }
+        }
         // True fallback — unknown type
         if (value == null || value instanceof JqNull) return defaultValue(targetType);
         if (targetType == Object.class) return value.toJavaObject();

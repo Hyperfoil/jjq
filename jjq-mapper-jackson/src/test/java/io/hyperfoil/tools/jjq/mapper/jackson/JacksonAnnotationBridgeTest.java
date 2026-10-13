@@ -411,4 +411,96 @@ class JacksonAnnotationBridgeTest {
         String out = mapper.toJqValue(p).toJsonString();
         assertTrue(out.contains("\"token\":\"k\""), out);
     }
+
+    // ---- @JsonTypeInfo polymorphism (PROPERTY + NAME subset) ----
+
+    @com.fasterxml.jackson.annotation.JsonTypeInfo(
+            use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME,
+            include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY,
+            property = "type")
+    @com.fasterxml.jackson.annotation.JsonSubTypes({
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = JackCircle.class, name = "circle"),
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = JackRect.class),
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = JackSquare.class)
+    })
+    interface JackShape {}
+
+    record JackCircle(double radius) implements JackShape {}
+
+    record JackRect(double w, double h) implements JackShape {}
+
+    @com.fasterxml.jackson.annotation.JsonTypeName("sq")
+    record JackSquare(double side) implements JackShape {}
+
+    @Test
+    void jsonTypeInfo_selectsByExplicitName() {
+        JackShape s = mapper.fromJqValue(JqValues.parse("{\"type\":\"circle\",\"radius\":1.5}"), JackShape.class);
+        assertEquals(new JackCircle(1.5), s);
+    }
+
+    @Test
+    void jsonTypeInfo_defaultsToSimpleName() {
+        JackShape s = mapper.fromJqValue(
+                JqValues.parse("{\"type\":\"JackRect\",\"w\":2.0,\"h\":3.0}"), JackShape.class);
+        assertEquals(new JackRect(2.0, 3.0), s);
+    }
+
+    @Test
+    void jsonTypeInfo_honorsJsonTypeName() {
+        JackShape s = mapper.fromJqValue(JqValues.parse("{\"type\":\"sq\",\"side\":4.0}"), JackShape.class);
+        assertEquals(new JackSquare(4.0), s);
+    }
+
+    @Test
+    void jsonTypeInfo_serializesDiscriminator() {
+        String out = mapper.toJqValue(new JackCircle(1.5)).toJsonString();
+        assertTrue(out.contains("\"type\":\"circle\""), out);
+        String out2 = mapper.toJqValue(new JackSquare(4.0)).toJsonString();
+        assertTrue(out2.contains("\"type\":\"sq\""), out2);
+    }
+
+    @Test
+    void jsonTypeInfo_roundTrip() {
+        for (JackShape s : java.util.List.of(new JackCircle(1.5), new JackRect(2.0, 3.0))) {
+            assertEquals(s, mapper.fromJqValue(mapper.toJqValue(s), JackShape.class));
+        }
+    }
+
+    @io.hyperfoil.tools.jjq.mapper.JqType(discriminator = "kind")
+    @com.fasterxml.jackson.annotation.JsonTypeInfo(
+            use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME,
+            include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY,
+            property = "type")
+    @com.fasterxml.jackson.annotation.JsonSubTypes({
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = NativeWinsCircle.class, name = "circle")
+    })
+    sealed interface NativeWins permits NativeWinsCircle {}
+
+    record NativeWinsCircle(double radius) implements NativeWins {}
+
+    @Test
+    void nativeJqTypeWinsOverJsonTypeInfo() {
+        NativeWins s = mapper.fromJqValue(
+                JqValues.parse("{\"kind\":\"NativeWinsCircle\",\"radius\":1.5}"), NativeWins.class);
+        assertEquals(new NativeWinsCircle(1.5), s);
+        assertTrue(mapper.toJqValue(s).toJsonString().contains("\"kind\":\"NativeWinsCircle\""));
+    }
+
+    @com.fasterxml.jackson.annotation.JsonTypeInfo(
+            use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME,
+            include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.WRAPPER_OBJECT)
+    @com.fasterxml.jackson.annotation.JsonSubTypes({
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = WrappedCircle.class, name = "circle")
+    })
+    interface WrappedShape {}
+
+    record WrappedCircle(double radius) implements WrappedShape {}
+
+    @Test
+    void unsupportedTypeInfoFallsBackToUnannotated() {
+        // WRAPPER_OBJECT is out of the supported subset: behaves as if
+        // unannotated (interfaces cannot bind → fail fast as today).
+        assertThrows(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"circle\":{\"radius\":1.5}}"), WrappedShape.class));
+    }
 }

@@ -49,6 +49,9 @@ final class ClassMapping<T> implements Mapping<T> {
     // Unknown-key capture / extra-field emission (null when no any-setter/getter present).
     // Gated checks keep the zero-cost profile for classes without them.
     private final AnyHandlers anyHandlers;
+    // Polymorphic family membership for serialization: injects the discriminator
+    // (null for standalone types — one predictable branch, no per-call lookup).
+    private final PolySerInfo polySer;
 
     /**
      * Cached any-setter/any-getter handles plus the known-field names used to
@@ -61,7 +64,7 @@ final class ClassMapping<T> implements Mapping<T> {
     private ClassMapping(Class<T> type, FieldMapping[] fields, MethodHandle constructor,
                          MethodHandle spreadConstructor,
                          Map<String, Integer> nameToIndex, boolean useForEachFastPath,
-                         AnyHandlers anyHandlers) {
+                         AnyHandlers anyHandlers, PolySerInfo polySer) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
@@ -69,6 +72,7 @@ final class ClassMapping<T> implements Mapping<T> {
         this.nameToIndex = nameToIndex;
         this.useForEachFastPath = useForEachFastPath;
         this.anyHandlers = anyHandlers;
+        this.polySer = polySer;
     }
 
     /**
@@ -77,7 +81,7 @@ final class ClassMapping<T> implements Mapping<T> {
      * @throws JqMapperException if the class is not a record or introspection fails
      */
     @SuppressWarnings("unchecked")
-    static <T> ClassMapping<T> forRecord(Class<T> type, List<AnnotationBridge> bridges) {
+    static <T> ClassMapping<T> forRecord(Class<T> type, List<AnnotationBridge> bridges, PolySerInfo polySer) {
         if (!type.isRecord()) {
             throw new JqMapperException("Only record types are supported: " + type.getName());
         }
@@ -236,9 +240,19 @@ final class ClassMapping<T> implements Mapping<T> {
             nameMap.put(fields[i].jsonName(), i);
         }
 
+        if (polySer != null) {
+            for (FieldMapping field : fields) {
+                if (!field.isIgnored() && field.jsonName().equals(polySer.discriminator())) {
+                    throw new JqMapperException("Field '" + field.jsonName() + "' of " + type.getName()
+                            + " collides with the polymorphic discriminator '"
+                            + polySer.discriminator() + "': rename the field");
+                }
+            }
+        }
+
         return new ClassMapping<>(type, fields, ctor, spread,
                 canUseFastPath ? nameMap : null, canUseFastPath,
-                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup));
+                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer);
     }
 
     /**
@@ -259,13 +273,17 @@ final class ClassMapping<T> implements Mapping<T> {
      * @throws JqMapperException if the class has no no-arg constructor or introspection fails
      */
     @SuppressWarnings("unchecked")
-    static <T> ClassMapping<T> forClass(Class<T> type, List<AnnotationBridge> bridges) {
-        MethodHandles.Lookup lookup;
-        try {
-            lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
-        } catch (IllegalAccessException e) {
-            throw new JqMapperException("Cannot create private lookup for " + type.getName(), e);
-        }
+    static <T> ClassMapping<T> forClass(Class<T> type, List<AnnotationBridge> bridges, PolySerInfo polySer) {
+        Map<Class<?>, MethodHandles.Lookup> lookups = new HashMap<>();
+        java.util.function.Function<Class<?>, MethodHandles.Lookup> lookupFor = c ->
+                lookups.computeIfAbsent(c, k -> {
+                    try {
+                        return MethodHandles.privateLookupIn(k, MethodHandles.lookup());
+                    } catch (IllegalAccessException e) {
+                        throw new JqMapperException("Cannot create private lookup for " + k.getName(), e);
+                    }
+                });
+        MethodHandles.Lookup lookup = lookupFor.apply(type);
 
         // Find no-arg constructor
         MethodHandle ctor;
@@ -310,11 +328,16 @@ final class ClassMapping<T> implements Mapping<T> {
             if (useIsGetters && !bridge.includeIsGetters(type)) useIsGetters = false;
         }
 
-        // Discover fields (declared only, skip static/synthetic/transient)
+        // Discover fields along the superclass chain (subclass first; a
+        // subclass field shadows an inherited one of the same name).
+        // Declared-only per level, skip static/synthetic/transient.
         var fieldMappings = new ArrayList<FieldMapping>();
-        for (Field field : type.getDeclaredFields()) {
+        var seenFieldNames = new java.util.HashSet<String>();
+        for (Class<?> level = type; level != null && level != Object.class; level = level.getSuperclass()) {
+        for (Field field : level.getDeclaredFields()) {
             int mods = field.getModifiers();
             if (Modifier.isStatic(mods) || field.isSynthetic() || Modifier.isTransient(mods)) continue;
+            if (!seenFieldNames.add(field.getName())) continue; // shadowed by subclass
 
             String name = field.getName();
             Class<?> fieldType = field.getType();
@@ -379,9 +402,10 @@ final class ClassMapping<T> implements Mapping<T> {
             if (isPublic) {
                 // Public field — direct access
                 try {
-                    getter = lookup.unreflectGetter(field);
+                    MethodHandles.Lookup fieldLookup = lookupFor.apply(field.getDeclaringClass());
+                    getter = fieldLookup.unreflectGetter(field);
                     if (!Modifier.isFinal(mods)) {
-                        setter = lookup.unreflectSetter(field);
+                        setter = fieldLookup.unreflectSetter(field);
                     }
                 } catch (IllegalAccessException e) {
                     throw new JqMapperException("Cannot access public field " + name, e);
@@ -409,7 +433,7 @@ final class ClassMapping<T> implements Mapping<T> {
             if (getter == null) {
                 try {
                     field.setAccessible(true);
-                    getter = lookup.unreflectGetter(field);
+                    getter = lookupFor.apply(field.getDeclaringClass()).unreflectGetter(field);
                 } catch (Exception e) {
                     throw new JqMapperException("Cannot access field '" + name + "' on " + type.getName()
                             + ". Add a public getter, make the field public, or use --add-opens.", e);
@@ -418,7 +442,7 @@ final class ClassMapping<T> implements Mapping<T> {
             if (setter == null && !Modifier.isFinal(mods)) {
                 try {
                     field.setAccessible(true);
-                    setter = lookup.unreflectSetter(field);
+                    setter = lookupFor.apply(field.getDeclaringClass()).unreflectSetter(field);
                 } catch (Exception e) {
                     // Setter is optional — field may be read-only for serialization
                 }
@@ -453,6 +477,7 @@ final class ClassMapping<T> implements Mapping<T> {
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
                     fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser));
         }
+        }
 
         FieldMapping[] fields = fieldMappings.toArray(new FieldMapping[0]);
 
@@ -467,9 +492,19 @@ final class ClassMapping<T> implements Mapping<T> {
             nameMap.put(fields[i].jsonName(), i);
         }
 
+        if (polySer != null) {
+            for (FieldMapping field : fields) {
+                if (!field.isIgnored() && field.jsonName().equals(polySer.discriminator())) {
+                    throw new JqMapperException("Field '" + field.jsonName() + "' of " + type.getName()
+                            + " collides with the polymorphic discriminator '"
+                            + polySer.discriminator() + "': rename the field");
+                }
+            }
+        }
+
         return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath,
-                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup));
+                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer);
     }
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. Returns the Method (unreflect at site). */
@@ -805,7 +840,7 @@ final class ClassMapping<T> implements Mapping<T> {
      */
     @Override
     public JqValue toJqValue(T instance, JqMapper mapper) {
-        var builder = JqObject.builder(fields.length);
+        var builder = JqObject.builder(polySer != null ? fields.length + 1 : fields.length);
         for (FieldMapping field : fields) {
             if (field.isIgnored() || field.skipSerialize()) continue;
             Object value = field.readValue(instance);
@@ -815,6 +850,11 @@ final class ClassMapping<T> implements Mapping<T> {
         }
         // Extra catch-all entries after mapped fields (extras win on collision)
         emitAnyGetter(builder, instance, mapper);
+        if (polySer != null) {
+            // Polymorphic member: the discriminator reflects the runtime type
+            // and deterministically replaces any colliding catch-all entry.
+            builder.put(polySer.discriminator(), JqString.of(polySer.wireValue()));
+        }
         return builder.build();
     }
 

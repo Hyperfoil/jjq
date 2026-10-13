@@ -189,4 +189,21 @@ public interface AnnotationBridge {
     default java.lang.reflect.Executable resolveJsonCreator(Class<?> type) {
         return null;
     }
+
+    /**
+     * Resolve framework-declared polymorphism for a base type (e.g. Jackson
+     * {@code @JsonTypeInfo}). Only called when no native {@link JqType} is
+     * present — native wins.
+     *
+     * <p>The default implementation returns {@code null} (not supported);
+     * bridges override it when their annotations are present. Returning
+     * {@code null} for incomplete or unsupported combinations (missing
+     * subtypes, non-property inclusion) leaves today's behavior unchanged.</p>
+     *
+     * @param type the base class to inspect
+     * @return the polymorphism configuration, or {@code null} if not present
+     */
+    default io.hyperfoil.tools.jjq.mapper.PolyConfig resolvePolymorphism(Class<?> type) {
+        return null;
+    }
 }
