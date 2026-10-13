@@ -849,6 +849,108 @@ class JqMapperTest {
         assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
     }
 
+    // ---- Arrays and wider collections ----
+
+    record ArrayHolder(String[] names, int[] counts, long[] big, double[] scores, boolean[] flags) {}
+    record BoxedArrayHolder(Integer[] nums, java.util.UUID[] ids) {}
+    record BigIntArrayHolder(java.math.BigInteger[] values) {}
+    record RecordArrayHolder(Address[] addresses) {}
+    record LinkedHolder(java.util.LinkedList<String> items) {}
+    record CollectionHolder(java.util.Collection<String> items) {}
+    record QueueHolder(java.util.Queue<String> items) {}
+    record SortedMapHolder(java.util.TreeMap<String, Integer> counts) {}
+    record SortedMapIfaceHolder(java.util.SortedMap<String, Integer> counts) {}
+
+    @Test
+    void arraysBindNatively() {
+        ArrayHolder h = mapper.fromJqValue(JqValues.parse(
+                "{\"names\":[\"a\",\"b\"],\"counts\":[1,2,3],\"big\":[9223372036854775807],"
+                + "\"scores\":[1.5,2.5],\"flags\":[true,false]}"), ArrayHolder.class);
+        assertArrayEquals(new String[]{"a", "b"}, h.names());
+        assertArrayEquals(new int[]{1, 2, 3}, h.counts());
+        assertArrayEquals(new long[]{9223372036854775807L}, h.big());
+        assertArrayEquals(new double[]{1.5, 2.5}, h.scores());
+        assertArrayEquals(new boolean[]{true, false}, h.flags());
+    }
+
+    @Test
+    void arraysRejectNonArraysAndLossy() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"names\":\"ab\"}"), ArrayHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"counts\":[1.5]}"), ArrayHolder.class));
+    }
+
+    @Test
+    void arrayNullStaysNull() {
+        ArrayHolder h = mapper.fromJqValue(JqValues.parse(
+                "{\"names\":null,\"counts\":null,\"big\":null,\"scores\":null,\"flags\":null}"),
+                ArrayHolder.class);
+        assertNull(h.names());
+        assertNull(h.counts());
+    }
+
+    @Test
+    void boxedAndNestedArraysBind() {
+        java.util.UUID id = java.util.UUID.randomUUID();
+        BoxedArrayHolder h = mapper.fromJqValue(JqValues.parse(
+                "{\"nums\":[1,null,3],\"ids\":[\"" + id + "\"]}"), BoxedArrayHolder.class);
+        // Null elements follow the same leniency as List<Integer> (nulls stay zero)
+        assertArrayEquals(new Integer[]{1, 0, 3}, h.nums());
+        assertArrayEquals(new java.util.UUID[]{id}, h.ids());
+        BigIntArrayHolder b = mapper.fromJqValue(JqValues.parse(
+                "{\"values\":[12345678901234567890123]}"), BigIntArrayHolder.class);
+        assertArrayEquals(new java.math.BigInteger[]{new java.math.BigInteger("12345678901234567890123")},
+                b.values());
+        RecordArrayHolder r = mapper.fromJqValue(JqValues.parse(
+                "{\"addresses\":[{\"city\":\"NYC\",\"zip\":\"10001\"}]}"), RecordArrayHolder.class);
+        assertEquals(1, r.addresses().length);
+        assertEquals("NYC", r.addresses()[0].city());
+    }
+
+    @Test
+    void arraysRoundTrip() {
+        ArrayHolder original = new ArrayHolder(new String[]{"a"}, new int[]{1},
+                new long[]{2L}, new double[]{3.0}, new boolean[]{true});
+        // Records hold arrays by identity: compare component-wise, not by equals
+        ArrayHolder back = mapper.fromJqValue(mapper.toJqValue(original), ArrayHolder.class);
+        assertArrayEquals(original.names(), back.names());
+        assertArrayEquals(original.counts(), back.counts());
+        assertArrayEquals(original.big(), back.big());
+        assertArrayEquals(original.scores(), back.scores());
+        assertArrayEquals(original.flags(), back.flags());
+        assertEquals(mapper.toJqValue(original).toJsonString(), mapper.toJson(original));
+        assertBytesMatch(original);
+        // Top-level arrays serialize without a mapping
+        assertEquals("[1,2,3]", mapper.toJson(new int[]{1, 2, 3}));
+        assertEquals("[\"a\",\"b\"]", mapper.toJson(new String[]{"a", "b"}));
+    }
+
+    @Test
+    void widerCollectionsBind() {
+        LinkedHolder l = mapper.fromJqValue(JqValues.parse("{\"items\":[\"a\",\"b\"]}"), LinkedHolder.class);
+        assertEquals(new java.util.LinkedList<>(List.of("a", "b")), l.items());
+        CollectionHolder c = mapper.fromJqValue(JqValues.parse("{\"items\":[\"a\"]}"), CollectionHolder.class);
+        assertEquals(List.of("a"), List.copyOf(c.items()));
+        QueueHolder q = mapper.fromJqValue(JqValues.parse("{\"items\":[\"a\",\"b\"]}"), QueueHolder.class);
+        assertEquals(List.of("a", "b"), List.copyOf(q.items()));
+        SortedMapHolder s = mapper.fromJqValue(
+                JqValues.parse("{\"counts\":{\"b\":2,\"a\":1}}"), SortedMapHolder.class);
+        assertEquals(new java.util.TreeMap<>(Map.of("b", 2, "a", 1)), s.counts());
+        assertEquals(List.of("a", "b"), List.copyOf(s.counts().keySet()));
+        SortedMapIfaceHolder si = mapper.fromJqValue(
+                JqValues.parse("{\"counts\":{\"a\":1}}"), SortedMapIfaceHolder.class);
+        assertEquals(Map.of("a", 1), si.counts());
+    }
+
+    @Test
+    void widerCollectionsRejectNonArrays() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"items\":\"ab\"}"), LinkedHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"counts\":[1]}"), SortedMapHolder.class));
+    }
+
     // ---- BigInteger / UUID / URI / URL (JDK value types) ----
 
     record BigIntHolder(java.math.BigInteger v) {}

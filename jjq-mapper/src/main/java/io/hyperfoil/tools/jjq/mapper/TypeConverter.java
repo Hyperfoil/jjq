@@ -58,6 +58,8 @@ public final class TypeConverter {
         SET,
         /** Target is {@link java.util.Map}. */
         MAP,
+        /** Target is a Java array (reference or primitive component). */
+        ARRAY,
         /** Target is an {@code enum} type. */
         ENUM,
         /** Target is a record or {@code @JqMapped} POJO. */
@@ -81,6 +83,7 @@ public final class TypeConverter {
      */
     public static Kind resolveKind(Class<?> targetType, Type genericType) {
         if (targetType == Optional.class) return Kind.OPTIONAL;
+        if (targetType.isArray()) return Kind.ARRAY;
         if (JqValue.class.isAssignableFrom(targetType)) return Kind.JQ_VALUE;
         if (targetType == String.class) return Kind.STRING;
         if (targetType == int.class || targetType == Integer.class) return Kind.INT;
@@ -96,11 +99,19 @@ public final class TypeConverter {
         if (targetType == java.util.UUID.class) return Kind.UUID;
         if (targetType == java.net.URI.class) return Kind.URI;
         if (targetType == java.net.URL.class) return Kind.URL;
-        if (targetType == List.class || targetType == ArrayList.class) return Kind.LIST;
+        if (targetType == List.class || targetType == ArrayList.class
+                || targetType == java.util.Collection.class || targetType == Iterable.class
+                || List.class.isAssignableFrom(targetType)
+                || java.util.Queue.class.isAssignableFrom(targetType)) return Kind.LIST;
         if (targetType == Set.class || targetType == HashSet.class
                 || targetType == LinkedHashSet.class || targetType == SortedSet.class
-                || targetType == TreeSet.class || targetType == EnumSet.class) return Kind.SET;
-        if (targetType == Map.class || targetType == LinkedHashMap.class || targetType == HashMap.class) return Kind.MAP;
+                || targetType == TreeSet.class || targetType == EnumSet.class
+                || targetType == java.util.NavigableSet.class
+                || Set.class.isAssignableFrom(targetType)) return Kind.SET;
+        if (targetType == Map.class || targetType == LinkedHashMap.class || targetType == HashMap.class
+                || targetType == java.util.TreeMap.class || targetType == java.util.SortedMap.class
+                || targetType == java.util.NavigableMap.class
+                || Map.class.isAssignableFrom(targetType)) return Kind.MAP;
         if (targetType.isEnum()) return Kind.ENUM;
         if (targetType.isRecord()) return Kind.RECORD;
         if (targetType.isAnnotationPresent(JqMapped.class)) return Kind.RECORD; // POJOs with @JqMapped use the mapper
@@ -176,22 +187,22 @@ public final class TypeConverter {
                 yield coerceUrl(value);
             }
             case LIST -> {
-                if (value == null || value instanceof JqNull) yield List.of();
+                if (value == null || value instanceof JqNull) yield newListFor(targetType, 0);
                 if (!(value instanceof JqArray arr)) {
                     throw mismatch(JqValue.Type.ARRAY, "array for " + listTarget(targetType, genericType), value);
                 }
                 Type elementType = extractTypeArgument(genericType, 0);
                 Class<?> elementClass = rawClass(elementType);
                 Kind innerKind = resolveKind(elementClass, elementType);
-                var list = new ArrayList<>(arr.size());
+                java.util.Collection<Object> out = newListFor(targetType, arr.size());
                 for (int i = 0; i < arr.size(); i++) {
                     try {
-                        list.add(convert(arr.get(i), innerKind, elementClass, elementType, mapper));
+                        out.add(convert(arr.get(i), innerKind, elementClass, elementType, mapper));
                     } catch (JqMapperException e) {
                         throw e.prependPath(i);
                     }
                 }
-                yield list;
+                yield out;
             }
             case SET -> {
                 Type elementType = extractTypeArgument(genericType, 0);
@@ -212,7 +223,7 @@ public final class TypeConverter {
                 yield set;
             }
             case MAP -> {
-                if (value == null || value instanceof JqNull) yield Map.of();
+                if (value == null || value instanceof JqNull) yield newMapFor(targetType, 0);
                 if (!(value instanceof JqObject obj)) {
                     throw mismatch(JqValue.Type.OBJECT, "object for " + mapTarget(targetType, genericType), value);
                 }
@@ -220,7 +231,7 @@ public final class TypeConverter {
                 Class<?> valueClass = rawClass(valueType);
                 Kind innerKind = resolveKind(valueClass, valueType);
                 int n = obj.size();
-                var map = new LinkedHashMap<String, Object>(n * 4 / 3 + 1);
+                Map<String, Object> map = newMapFor(targetType, n);
                 for (int i = 0; i < n; i++) {
                     try {
                         map.put(obj.keyAt(i), convert(obj.valueAt(i), innerKind, valueClass, valueType, mapper));
@@ -229,6 +240,27 @@ public final class TypeConverter {
                     }
                 }
                 yield map;
+            }
+            case ARRAY -> {
+                // Null arrays stay null (Jackson default); missing keys bind
+                // null through the record/POJO leniency around this call.
+                if (value == null || value instanceof JqNull) yield null;
+                if (!(value instanceof JqArray arr)) {
+                    throw mismatch(JqValue.Type.ARRAY, "array for " + targetType.getSimpleName(), value);
+                }
+                Class<?> component = targetType.getComponentType();
+                Kind innerKind = resolveKind(component, component);
+                int n = arr.size();
+                Object result = java.lang.reflect.Array.newInstance(component, n);
+                for (int i = 0; i < n; i++) {
+                    try {
+                        java.lang.reflect.Array.set(result, i,
+                                convert(arr.get(i), innerKind, component, component, mapper));
+                    } catch (JqMapperException e) {
+                        throw e.prependPath(i);
+                    }
+                }
+                yield result;
             }
             case ENUM -> {
                 if (value == null || value instanceof JqNull) yield null;
@@ -662,7 +694,13 @@ public final class TypeConverter {
     /** Empty set matching the declared implementation (null inputs). */
     private static Object emptySetFor(Class<?> targetType, Class<?> elementClass) {
         if (targetType == EnumSet.class) return newSetFor(targetType, elementClass, 0);
-        if (targetType == TreeSet.class || targetType == SortedSet.class) return new TreeSet<>();
+        if (targetType == TreeSet.class || targetType == SortedSet.class
+                || targetType == java.util.NavigableSet.class) return new TreeSet<>();
+        if (!targetType.isInterface() && !java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())
+                && targetType != Set.class && targetType != HashSet.class && targetType != LinkedHashSet.class) {
+            Object custom = newNoArg(targetType);
+            if (custom instanceof java.util.Set<?>) return custom;
+        }
         return Set.of();
     }
 
@@ -680,11 +718,87 @@ public final class TypeConverter {
             }
             return (java.util.Set<Object>) (java.util.Set<?>) EnumSet.noneOf((Class) elementClass);
         }
-        if (targetType == TreeSet.class || targetType == SortedSet.class) return new TreeSet<>();
+        if (targetType == TreeSet.class || targetType == SortedSet.class
+                || targetType == java.util.NavigableSet.class) return new TreeSet<>();
         if (targetType == HashSet.class) return new HashSet<>(size * 4 / 3 + 1);
+        if (!targetType.isInterface() && !java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())
+                && targetType != Set.class && targetType != LinkedHashSet.class) {
+            // Custom Set implementation: bind through its no-arg constructor.
+            Object custom = newNoArg(targetType);
+            if (custom instanceof java.util.Set<?> s) {
+                @SuppressWarnings("unchecked")
+                java.util.Set<Object> typed = (java.util.Set<Object>) s;
+                return typed;
+            }
+        }
         return new LinkedHashSet<>(size * 4 / 3 + 1);
     }
 
+    /**
+     * Mutable list matching the declared type: {@code LinkedList} stays one,
+     * queues/deques use {@code ArrayDeque}, everything else an
+     * {@code ArrayList} (covers {@code List}, {@code Collection},
+     * {@code Iterable}, and custom {@code List} implementations by
+     * interface — the constructor adapts, same leniency as before).
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static java.util.Collection<Object> newListFor(Class<?> targetType, int size) {
+        if (targetType == java.util.LinkedList.class) return new java.util.LinkedList<>();
+        if (targetType == java.util.Queue.class || targetType == java.util.Deque.class
+                || targetType == java.util.ArrayDeque.class
+                || (java.util.Queue.class.isAssignableFrom(targetType)
+                    && !List.class.isAssignableFrom(targetType))) {
+            return new java.util.ArrayDeque<>(Math.max(size, 1));
+        }
+        if (!targetType.isInterface() && !java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())
+                && targetType != List.class && targetType != ArrayList.class
+                && targetType != java.util.Collection.class && targetType != Iterable.class) {
+            // Custom List implementation (Vector, Stack, CopyOnWriteArrayList, ...):
+            // bind through its no-arg constructor, ArrayList as fallback.
+            Object custom = newNoArg(targetType);
+            if (custom instanceof java.util.Collection<?> c) return (java.util.Collection<Object>) c;
+        }
+        return new ArrayList<>(size);
+    }
+
+    /**
+     * Mutable map matching the declared type: sorted maps order naturally,
+     * everything else a {@code LinkedHashMap} (insertion order, matching
+     * JSON document order).
+     */
+    private static Map<String, Object> newMapFor(Class<?> targetType, int size) {
+        if (targetType == java.util.TreeMap.class || targetType == java.util.SortedMap.class
+                || targetType == java.util.NavigableMap.class) {
+            return new java.util.TreeMap<>();
+        }
+        if (!targetType.isInterface() && !java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())
+                && targetType != Map.class && targetType != LinkedHashMap.class && targetType != HashMap.class) {
+            // Custom Map implementation (ConcurrentHashMap, ...): bind through
+            // its no-arg constructor, LinkedHashMap as fallback.
+            Object custom = newNoArg(targetType);
+            if (custom instanceof Map<?, ?> m) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) m;
+                return typed;
+            }
+        }
+        return new LinkedHashMap<>(size * 4 / 3 + 1);
+    }
+
+    /**
+     * Best-effort no-arg instantiation for custom collection/map
+     * implementations. Returns null when unavailable (callers fall back to
+     * the interface default).
+     */
+    private static Object newNoArg(Class<?> targetType) {
+        try {
+            var ctor = targetType.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            return ctor.newInstance();
+        } catch (ReflectiveOperationException | SecurityException e) {
+            return null;
+        }
+    }
     /** Target description for Map mismatches, e.g. {@code Map<String, Integer>}. */
     private static String mapTarget(Class<?> targetType, Type genericType) {
         Type valueType = extractTypeArgument(genericType, 1);
@@ -728,6 +842,14 @@ public final class TypeConverter {
             int i = 0;
             for (Object element : set) {
                 elements[i++] = toJqValue(element, mapper);
+            }
+            return JqArray.ofTrusted(elements);
+        }
+        if (value.getClass().isArray()) {
+            int len = java.lang.reflect.Array.getLength(value);
+            JqValue[] elements = new JqValue[len];
+            for (int i = 0; i < len; i++) {
+                elements[i] = toJqValue(java.lang.reflect.Array.get(value, i), mapper);
             }
             return JqArray.ofTrusted(elements);
         }

@@ -752,6 +752,47 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_arraysAndCollections_roundTrip() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.LinkedList;
+                import java.util.TreeMap;
+
+                @JqMapped
+                public record Containers(String[] names, int[] counts, LinkedList<String> items,
+                        TreeMap<String, Integer> index, java.util.List<String> tags) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Containers", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(String[].class, int[].class,
+                java.util.LinkedList.class, java.util.TreeMap.class, java.util.List.class);
+        Object original = ctor.newInstance(new String[]{"a", "b"}, new int[]{1, 2},
+                new java.util.LinkedList<>(java.util.List.of("x")),
+                new java.util.TreeMap<>(java.util.Map.of("k", 1)), java.util.List.of("t"));
+
+        // Tree, String, and bytes paths agree (array/collection fields fall
+        // back to TypeConverter on the fast paths — same output shape)
+        String viaToJson = mapper.toJson(original);
+        String viaJqValue = mapper.toJqValue(original).toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(original)), mapper.toJsonBytes(original));
+
+        // Deser delegates whole fields to the reflection path via Class literals
+        Object back = mapper.fromJqValue(mapper.toJqValue(original), recordClass);
+        assertEquals(mapper.toJqValue(original).toJsonString(), mapper.toJqValue(back).toJsonString());
+
+        // Nulls: arrays stay null, collections stay null on ser (empty
+        // defaults are deser-only leniency)
+        Object withNulls = ctor.newInstance(null, null, null, null, null);
+        String nullJson = mapper.toJson(withNulls);
+        assertEquals("{\"names\":null,\"counts\":null,\"items\":null,\"index\":null,\"tags\":null}", nullJson);
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;

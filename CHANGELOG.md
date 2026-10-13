@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Arrays and wider collections in the mapper: `T[]` (reference and
+  primitive) bind natively with exact element mapping, `LinkedList`,
+  `Collection`/`Iterable`, `Queue`/`Deque`, `SortedMap`/`TreeMap` and
+  custom impls (via no-arg constructor) bind by interface; top-level
+  arrays serialize without a mapping
 - JDK value types in the mapper: `BigInteger` (exact numbers of any
   magnitude, fractions/non-finite mismatch), `UUID`/`URI`/`URL`
   (strict string forms; relative refs bind `URI` but mismatch `URL`),

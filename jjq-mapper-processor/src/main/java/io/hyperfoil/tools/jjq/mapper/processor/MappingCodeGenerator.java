@@ -413,7 +413,11 @@ final class MappingCodeGenerator {
                 // cannot form a .class literal: capture it with a TypeToken
                 // instead (issue #101). JqValue passthrough and java.* types
                 // keep the lenient toJavaObject conversion.
-                if (typeName.contains("<")) {
+                if (typeName.endsWith("[]")) {
+                    // Array inner (Optional<String[]>): array literals are
+                    // valid .class expressions, bound via the reflection path.
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeName).append(".class)");
+                } else if (typeName.contains("<")) {
                     sb.append("mapper.fromJqValue(").append(apply).append(", ")
                       .append(typeTokenExpr(typeName)).append(")");
                 } else if (typeName.contains(".") && !typeName.startsWith("java.")

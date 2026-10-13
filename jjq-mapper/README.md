@@ -412,8 +412,9 @@ for `ServiceLoader` discovery.
 | `BigDecimal` | number | Preserves precision |
 | `BigInteger` | number | Exact, any magnitude; fractions/non-finite mismatch |
 | `UUID` / `URI` / `URL` | string | Strict parse; relative refs bind `URI` but mismatch `URL` |
-| `List<T>` | array | Recursive element mapping |
-| `Map<String, V>` | object | Recursive value mapping |
+| `List<T>` | array | Recursive element mapping (`LinkedList`, `Collection`, `Queue`/`Deque` bind by interface too) |
+| `Map<String, V>` | object | Recursive value mapping (`TreeMap`/`SortedMap` order naturally) |
+| `T[]` (incl. primitives) | array | Exact element mapping; null arrays stay null |
 | `Optional<T>` | value / null | `Optional.empty()` for null/missing |
 | `Enum<E>` | string | Via `Enum.valueOf()` / `.name()` |
 | `JqValue` | any | Passthrough — no conversion |

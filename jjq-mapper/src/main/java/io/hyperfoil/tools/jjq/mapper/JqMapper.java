@@ -346,6 +346,10 @@ public final class JqMapper {
             // apply from any caller (issue #88.4).
             return TypeConverter.toJqValue(value, this);
         }
+        if (value.getClass().isArray()) {
+            // Arrays have no mapping (no no-arg constructor): convert directly.
+            return TypeConverter.toJqValue(value, this);
+        }
         Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
         return mapping.toJqValue(value, this);
     }
@@ -394,6 +398,9 @@ public final class JqMapper {
     @SuppressWarnings("unchecked")
     public void appendJson(Object value, StringBuilder sb) {
         if (value == null) { sb.append("null"); return; }
+        // Arrays have no mapping (no no-arg constructor): render through the
+        // tree like any other unmapped container.
+        if (value.getClass().isArray()) { toJqValue(value).appendTo(sb); return; }
         Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
         mapping.appendJson(value, sb, this);
     }
@@ -412,6 +419,9 @@ public final class JqMapper {
     @SuppressWarnings("unchecked")
     public void appendJsonBytes(Object value, BytOutput out) {
         if (value == null) { out.writeNull(); return; }
+        // Arrays have no mapping (no no-arg constructor): render through the
+        // tree like any other unmapped container.
+        if (value.getClass().isArray()) { toJqValue(value).appendToBytes(out); return; }
         Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
         mapping.appendJsonBytes(value, out, this);
     }
@@ -433,6 +443,9 @@ public final class JqMapper {
     }
 
     private <T> Mapping<T> createMapping(Class<T> type) {
+        // Arrays have no no-arg constructor: neither reflection field mapping
+        // nor generated mappings apply (privateLookupIn rejects array classes).
+        if (type.isArray()) return new ArrayMapping<>(type);
         // Polymorphic families dispatch before anything else: a @JqType (or
         // bridge-declared) base never binds directly.
         PolyConfig poly = PolyMapping.resolvePolyConfig(type, bridges);
