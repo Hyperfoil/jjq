@@ -736,6 +736,53 @@ public final class JqObject implements JqValue {
     }
 
     /**
+     * Return the positional index of a key (insertion order), or -1 if absent.
+     * Same lookup strategy as {@link #get(String)} but returns the index
+     * instead of the value, enabling resolve-once iteration over uniform
+     * object arrays (see the VM's fused field-collection path).
+     * For map-backed objects this scans in iteration order (O(n)),
+     * consistent with {@link #keyAt(int)} and {@link #valueAt(int)}.
+     */
+    public int indexOfKey(String key) {
+        if (externalMap != null) {
+            int i = 0;
+            for (String k : externalMap.keySet()) {
+                if (key == k || key.equals(k)) return i;
+                i++;
+            }
+            return -1;
+        }
+        if (size == 0) return -1;
+        if (size == 1) return (key == keys[0] || key.equals(keys[0])) ? 0 : -1;
+        if (size <= HASH_THRESHOLD) {
+            for (int i = 0; i < size; i++) {
+                if (key == keys[i] || key.equals(keys[i])) return i;
+            }
+            return -1;
+        }
+        return hashLookup(key);
+    }
+
+    /**
+     * True if this object shares its keys array with another object
+     * (same reference — same layout, so positional indices are interchangeable).
+     * Only array-backed objects with an identical keys reference share;
+     * map-backed objects never share. Used by the VM to skip repeated hash
+     * lookups when iterating uniform object arrays.
+     */
+    public boolean sharesKeysWith(JqObject other) {
+        return this.keys != null && this.keys == other.keys;
+    }
+
+    /**
+     * True if this object is array-backed, meaning positional access via
+     * {@link #valueAt(int)} is O(1).
+     */
+    public boolean isArrayBacked() {
+        return keys != null;
+    }
+
+    /**
      * Build the open-addressing hash index. Uses a power-of-2 sized int[] array
      * with load factor ~50% for fast probing. No Node/Integer allocation —
      * just a flat int array mapping hash slots to key indices.

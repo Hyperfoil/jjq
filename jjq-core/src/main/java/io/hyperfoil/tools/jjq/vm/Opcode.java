@@ -121,7 +121,11 @@ public final class Opcode {
     // String concatenation: STRING_CONCAT arg1=partCount
     public static final int STRING_CONCAT = 73;
 
-    public static final int COUNT = 74;
+    // Fused field collection: [.arr[] | .field] / [.arr[] | .["field"]]
+    // arg1=nameIdx, arg2=0 (dot semantics) or 1 (index semantics for errors)
+    public static final int COLLECT_FIELD = 74;
+
+    public static final int COUNT = 75;
 
     private static final String[] NAMES = new String[COUNT];
     static {
@@ -199,6 +203,7 @@ public final class Opcode {
         NAMES[NOP] = "NOP";
         NAMES[BUILD_OBJECT] = "BUILD_OBJECT";
         NAMES[STRING_CONCAT] = "STRING_CONCAT";
+        NAMES[COLLECT_FIELD] = "COLLECT_FIELD";
     }
 
     public static String name(int op) {

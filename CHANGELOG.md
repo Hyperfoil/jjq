@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Fused field collection (`COLLECT_FIELD`): `[.arr[] | .field]` and
+  `[.arr[] | .["field"]]` resolve the positional index once and reuse
+  it for all elements sharing the same keys array, instead of a full
+  hash lookup per element (production 14MB `extractMetric` -84%,
+  `iterateExtract` -62%, measured A/B 3 forks interleaved)
 - Memoized output-cleanliness in `JqString`: repeated serialization
   skips the escape rescan for proven-clean strings (strings-1mb
   `toJsonString` -24%, flat -7%; object stays 32 bytes)

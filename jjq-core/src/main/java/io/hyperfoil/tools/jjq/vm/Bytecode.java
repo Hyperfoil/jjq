@@ -102,6 +102,8 @@ public final class Bytecode {
                     sb.append("}");
                 }
                 case Opcode.STRING_CONCAT -> sb.append(" parts=").append(inst.arg1());
+                case Opcode.COLLECT_FIELD -> sb.append(" ").append(names[inst.arg1()])
+                        .append(inst.arg2() == 0 ? " (dot)" : " (index)");
                 default -> {}
             }
             sb.append("\n");

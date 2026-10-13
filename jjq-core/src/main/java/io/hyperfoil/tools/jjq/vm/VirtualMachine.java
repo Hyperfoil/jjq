@@ -553,6 +553,22 @@ public final class VirtualMachine {
                         }
                     }
 
+                    // Fused field collection: [.arr[] | .field] / [.arr[] | .["field"]]
+                    // Single field access per element with resolve-once positional lookup
+                    // for uniform object arrays (shared keys[]).
+                    case COLLECT_FIELD -> {
+                        JqValue val = pop(); // the array to iterate
+                        String field = names[arg1s[curPc]];
+                        boolean indexSemantics = arg2s[curPc] != 0;
+                        if (val instanceof JqArray arr) {
+                            push(collectFieldArray(arr, field, indexSemantics));
+                        } else if (val instanceof JqNull) {
+                            push(JqArray.EMPTY);
+                        } else {
+                            throw cannotIterate(val);
+                        }
+                    }
+
                     // Fused collect-select-iterate: [.[] | select(cond) | expr]
                     case COLLECT_SELECT_ITERATE -> {
                         JqValue val = pop();
@@ -1024,6 +1040,51 @@ public final class VirtualMachine {
         sp = savedSp;
         input = savedInput;
         return result;
+    }
+
+    /**
+     * Field collection over an array: one field access per element.
+     * The positional index is resolved once and reused for all elements
+     * sharing the same keys array (the uniform-layout case from key sharing);
+     * elements with a different layout take the full lookup and replace the
+     * cache (always-replace). Map-backed elements always take the slow path.
+     * Error semantics match the unfused body exactly (dot vs index).
+     */
+    private JqArray collectFieldArray(JqArray arr, String field, boolean indexSemantics) {
+        var items = arr.arrayValue();
+        int size = items.size();
+        if (size == 0) return JqArray.EMPTY;
+
+        var result = new JqValue[size];
+        JqObject layoutOwner = null;
+        int idx = -1;
+        boolean haveLayout = false;
+        for (int i = 0; i < size; i++) {
+            JqValue item = items.get(i);
+            if (item instanceof JqObject obj) {
+                if (haveLayout && obj.sharesKeysWith(layoutOwner)) {
+                    result[i] = idx >= 0 ? obj.valueAt(idx) : JqNull.NULL;
+                } else if (obj.isArrayBacked()) {
+                    int found = obj.indexOfKey(field);
+                    layoutOwner = obj;
+                    idx = found;
+                    haveLayout = true;
+                    result[i] = found >= 0 ? obj.valueAt(found) : JqNull.NULL;
+                } else {
+                    result[i] = obj.get(field);
+                    haveLayout = false;
+                }
+            } else if (item instanceof JqNull) {
+                result[i] = JqNull.NULL;
+            } else if (indexSemantics) {
+                // Cold: preserve the exact INDEX error (JqTypeError).
+                result[i] = JqValues.indexValue(item, JqString.of(field));
+            } else {
+                // Cold: preserve the exact DOT_FIELD error (JqException).
+                result[i] = fieldAccess(item, field);
+            }
+        }
+        return JqArray.ofTrusted(result);
     }
 
     private JqArray collectSelectIterateArray(JqArray arr, int bodyStart, int bodyLen) {

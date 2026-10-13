@@ -572,6 +572,23 @@ public final class Compiler {
             if (!isSingleOutputExpr(part)) return false;
         }
 
+        // Single field-access body: [.src[] | .field] or [.src[] | .["field"]]
+        // compiles to COLLECT_FIELD with resolve-once positional access.
+        if (bodyParts.size() == 1) {
+            JqExpr part = bodyParts.getFirst();
+            if (part instanceof DotFieldExpr df) {
+                compileExpr(iterSource);
+                emit(COLLECT_FIELD, addName(df.field()), 0);
+                return true;
+            }
+            if (part instanceof IndexExpr idx && idx.expr() instanceof IdentityExpr
+                    && idx.index() instanceof LiteralExpr lit && lit.value() instanceof JqString s) {
+                compileExpr(iterSource);
+                emit(COLLECT_FIELD, addName(s.stringValue()), 1);
+                return true;
+            }
+        }
+
         // Emit: <source bytecode>, COLLECT_ITERATE <bodyLen>, <body bytecode>
         compileExpr(iterSource);
         int collectPc = currentPc();

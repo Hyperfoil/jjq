@@ -236,6 +236,146 @@ class VirtualMachineTest {
     }
 
     @Nested
+    class CollectField {
+        private String asm(String filter) {
+            return JqProgram.compile(filter).getBytecode().disassemble();
+        }
+
+        private List<JqValue> nums(String filter, String inputJson) {
+            return vm(filter, inputJson);
+        }
+
+        private void assertCollect(String filter, String inputJson, JqValue... expected) {
+            assertEquals(JqArray.of(java.util.List.of(expected)), vmOne(filter, inputJson));
+        }
+
+        @Test void emitsForDotBody() {
+            String dis = asm("[.[] | .b]");
+            assertTrue(dis.contains("COLLECT_FIELD"), "expected COLLECT_FIELD in:\n" + dis);
+        }
+
+        @Test void emitsForBracketStringBody() {
+            String dis = asm("[.[] | .[\"b\"]]");
+            assertTrue(dis.contains("COLLECT_FIELD"), "expected COLLECT_FIELD in:\n" + dis);
+        }
+
+        @Test void emitsForNestedSource() {
+            String dis = asm("[.a[] | .b]");
+            assertTrue(dis.contains("COLLECT_FIELD"), "expected COLLECT_FIELD in:\n" + dis);
+        }
+
+        @Test void keepsGeneralForChainedBody() {
+            String dis = asm("[.[] | .a.b]");
+            assertFalse(dis.contains("COLLECT_FIELD"), "chained body must stay general:\n" + dis);
+            assertTrue(dis.contains("COLLECT_ITERATE"), "expected COLLECT_ITERATE in:\n" + dis);
+        }
+
+        @Test void keepsGeneralForArithBody() {
+            String dis = asm("[.[] | . + 1]");
+            assertFalse(dis.contains("COLLECT_FIELD"), "arith body must stay general:\n" + dis);
+            assertTrue(dis.contains("COLLECT_ITERATE"), "expected COLLECT_ITERATE in:\n" + dis);
+        }
+
+        @Test void keepsGeneralForVariableIndex() {
+            String dis = asm("[.[] | .[$k]]");
+            assertFalse(dis.contains("COLLECT_FIELD"), "variable index must stay general:\n" + dis);
+        }
+
+        @Test void dotUniform() {
+            assertCollect("[.[] | .b]", "[{\"a\":1,\"b\":2},{\"a\":3,\"b\":4}]",
+                    JqNumber.of(2), JqNumber.of(4));
+        }
+
+        @Test void bracketUniform() {
+            assertCollect("[.[] | .[\"b\"]]", "[{\"a\":1,\"b\":2},{\"a\":3,\"b\":4}]",
+                    JqNumber.of(2), JqNumber.of(4));
+        }
+
+        @Test void nestedSource() {
+            assertCollect("[.a[] | .b]", "{\"a\":[{\"b\":1},{\"b\":2}]}",
+                    JqNumber.of(1), JqNumber.of(2));
+        }
+
+        @Test void heterogeneousMissingKeys() {
+            assertCollect("[.[] | .a]", "[{\"a\":1},{\"b\":2},{\"a\":3}]",
+                    JqNumber.of(1), JqNull.NULL, JqNumber.of(3));
+            assertCollect("[.[] | .[\"a\"]]", "[{\"a\":1},{\"b\":2},{\"a\":3}]",
+                    JqNumber.of(1), JqNull.NULL, JqNumber.of(3));
+        }
+
+        @Test void alternatingLayouts() {
+            // Exercises layout-cache replacement: A,B,A with disjoint keys.
+            String in = "[{\"a\":1,\"x\":0},{\"b\":2,\"y\":0},{\"a\":3,\"x\":1}]";
+            assertCollect("[.[] | .a]", in, JqNumber.of(1), JqNull.NULL, JqNumber.of(3));
+            assertCollect("[.[] | .b]", in, JqNull.NULL, JqNumber.of(2), JqNull.NULL);
+        }
+
+        @Test void nullElements() {
+            assertCollect("[.[] | .a]", "[{\"a\":1},null,{\"a\":2}]",
+                    JqNumber.of(1), JqNull.NULL, JqNumber.of(2));
+        }
+
+        @Test void emptyAndNullSource() {
+            assertEquals(JqArray.EMPTY, vmOne("[.[] | .a]", "[]"));
+            assertEquals(JqArray.EMPTY, vmOne("[.[] | .a]", "null"));
+        }
+
+        @Test void wideObjects() {
+            // > HASH_THRESHOLD (32): exercises hash-based positional resolution.
+            var sb = new StringBuilder("[");
+            for (int o = 0; o < 3; o++) {
+                if (o > 0) sb.append(',');
+                sb.append('{');
+                for (int k = 0; k < 40; k++) {
+                    if (k > 0) sb.append(',');
+                    sb.append("\"k%02d\":%d".formatted(k, o * 100 + k));
+                }
+                sb.append('}');
+            }
+            sb.append(']');
+            assertCollect("[.[] | .[\"k39\"]]", sb.toString(),
+                    JqNumber.of(39), JqNumber.of(139), JqNumber.of(239));
+            assertCollect("[.[] | .k00]", sb.toString(),
+                    JqNumber.of(0), JqNumber.of(100), JqNumber.of(200));
+        }
+
+        @Test void mapBackedElements() {
+            // Adapter-wrapped (map-backed) objects take the slow path — must stay correct.
+            // Note: plain Map (not LinkedHashMap) forces external-map mode.
+            var arr = JqArray.of(java.util.List.of(
+                    JqObject.ofTrusted(java.util.Map.of("a", JqNumber.of(1))),
+                    JqObject.ofTrusted(java.util.Map.of("b", JqNumber.of(2)))));
+            var prog = JqProgram.compile("[.[] | .a]");
+            assertEquals(List.of(JqArray.of(java.util.List.of(JqNumber.of(1), JqNull.NULL))),
+                    prog.applyAll((JqValue) arr));
+            var prog2 = JqProgram.compile("[.[] | .[\"b\"]]");
+            assertEquals(List.of(JqArray.of(java.util.List.of(JqNull.NULL, JqNumber.of(2)))),
+                    prog2.applyAll((JqValue) arr));
+        }
+
+        @Test void errorParityDot() {
+            RuntimeException unfused = assertThrows(RuntimeException.class, () -> vm(".b", "1"));
+            RuntimeException fused = assertThrows(RuntimeException.class, () -> vm("[.[] | .b]", "[1]"));
+            assertEquals(unfused.getClass(), fused.getClass());
+            assertEquals(unfused.getMessage(), fused.getMessage());
+        }
+
+        @Test void errorParityBracket() {
+            RuntimeException unfused = assertThrows(RuntimeException.class, () -> vm(".[\"b\"]", "1"));
+            RuntimeException fused = assertThrows(RuntimeException.class, () -> vm("[.[] | .[\"b\"]]", "[1]"));
+            assertEquals(unfused.getClass(), fused.getClass());
+            assertEquals(unfused.getMessage(), fused.getMessage());
+        }
+
+        @Test void errorParityNonArray() {
+            RuntimeException each = assertThrows(RuntimeException.class, () -> vm(".[]", "1"));
+            RuntimeException fused = assertThrows(RuntimeException.class, () -> vm("[.[] | .a]", "1"));
+            assertEquals(each.getClass(), fused.getClass());
+            assertEquals(each.getMessage(), fused.getMessage());
+        }
+    }
+
+    @Nested
     class ConstantFolding {
         @Test void foldArithmetic() {
             // 2 + 3 should be folded to 5 at compile time
