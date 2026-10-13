@@ -384,6 +384,35 @@ class JqProgramTest {
     }
 
     @Test
+    void testIsNan() {
+        assertEquals(JqBoolean.TRUE, first("isnan", JqNumber.of(Double.NaN)));
+        assertEquals(JqBoolean.FALSE, first("isnan", JqNumber.of(42)));
+    }
+
+    @Test
+    void testIsInfinite() {
+        assertEquals(JqBoolean.TRUE, first("isinfinite", JqNumber.of(Double.POSITIVE_INFINITY)));
+        assertEquals(JqBoolean.TRUE, first("isinfinite", JqNumber.of(Double.NEGATIVE_INFINITY)));
+        assertEquals(JqBoolean.FALSE, first("isinfinite", JqNumber.of(42)));
+    }
+
+    @Test
+    void testIsNormal() {
+        assertEquals(JqBoolean.TRUE, first("isnormal", JqNumber.of(42)));
+        assertEquals(JqBoolean.FALSE, first("isnormal", JqNumber.of(0)));
+        assertEquals(JqBoolean.FALSE, first("isnormal", JqNumber.of(Double.NaN)));
+        assertEquals(JqBoolean.FALSE, first("isnormal", JqNumber.of(Double.POSITIVE_INFINITY)));
+        assertEquals(JqBoolean.FALSE, first("isnormal", JqString.of("x")));
+    }
+
+    @Test
+    void testIsFinite() {
+        assertEquals(JqBoolean.TRUE, first("isfinite", JqNumber.of(42)));
+        assertEquals(JqBoolean.FALSE, first("isfinite", JqNumber.of(Double.POSITIVE_INFINITY)));
+        assertEquals(JqBoolean.FALSE, first("isfinite", JqNumber.of(Double.NaN)));
+    }
+
+    @Test
     void testContains() {
         assertEquals(JqBoolean.TRUE, first("contains(\"ell\")", JqString.of("hello")));
         assertEquals(JqBoolean.TRUE, first("contains([2,3])", "[1,2,3,4]"));
