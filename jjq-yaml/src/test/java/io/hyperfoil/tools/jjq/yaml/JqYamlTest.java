@@ -592,4 +592,66 @@ class JqYamlTest {
             assertEquals(original.toJsonString(), back.toJsonString(), "round trip: " + doc);
         }
     }
+
+    // ---- Second-sighting key admission ----
+
+    @Test
+    void uniqueKeysAreNotGloballyInterned() {
+        JqValue v = JqYaml.parse("alpha-1: 1\nalpha-2: 2\n");
+        assertEquals(1L, v.getField("alpha-1").longValue());
+        assertEquals(2L, v.getField("alpha-2").longValue());
+        byte[] a1 = "alpha-1".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertNull(JqValues.probeFieldName(a1, 0, a1.length),
+                "unique keys must not pollute the global intern table");
+        byte[] a2 = "alpha-2".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertNull(JqValues.probeFieldName(a2, 0, a2.length),
+                "unique keys must not pollute the global intern table");
+    }
+
+    @Test
+    void repeatedKeysInternedAndShared() {
+        JqValue v = JqYaml.parse(
+                "- name: a\n  age: 1\n- name: b\n  age: 2\n- name: c\n  age: 3\n- name: d\n  age: 4\n");
+        assertEquals("c", v.getElement(2).getField("name").stringValue());
+        assertEquals(4L, v.getElement(3).getField("age").longValue());
+        // Repeat sightings admit to the global table (reference-identical).
+        String internedName = JqValues.internFieldName("name");
+        assertSame(internedName, ((JqObject) v.getElement(1)).keyAt(0));
+        assertSame(internedName, ((JqObject) v.getElement(2)).keyAt(0));
+        assertSame(internedName, ((JqObject) v.getElement(3)).keyAt(0));
+        // Steady-state sharing still engages (shareKeys self-healing).
+        assertTrue(((JqObject) v.getElement(2)).sharesKeysWith((JqObject) v.getElement(3)));
+    }
+
+    @Test
+    void quotedKeysWork() {
+        // Quoted keys take the slow String path (unquoteKey never interns —
+        // pre-existing scope, out of the byte-path admission gate).
+        JqValue v = JqYaml.parse("- \"qk\": 1\n- \"qk\": 2\n");
+        assertEquals(1L, v.getElement(0).getField("qk").longValue());
+        assertEquals(2L, v.getElement(1).getField("qk").longValue());
+    }
+
+    @Test
+    void duplicateKeysLastWins() {
+        JqValue v = JqYaml.parse("a: 1\na: 2\n");
+        assertEquals(2L, v.getField("a").longValue());
+    }
+
+    @Test
+    void manyUniqueKeysStayOutOfInternTable() {
+        // Saturation regression: a full seen-set must evict (keys stay raw),
+        // never degrade to admit-everything.
+        String tag = "sat-" + System.nanoTime();
+        int n = 9000;
+        var sb = new StringBuilder();
+        for (int i = 0; i < n; i++) sb.append(tag).append('-').append(i).append(": ").append(i).append('\n');
+        JqValue v = JqYaml.parse(sb.toString());
+        assertEquals((long) (n - 1), v.getField(tag + "-" + (n - 1)).longValue());
+        for (int i : new int[]{0, n / 2, n - 1}) {
+            byte[] b = (tag + "-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            assertNull(JqValues.probeFieldName(b, 0, b.length),
+                    "unique key " + i + " must not be interned");
+        }
+    }
 }

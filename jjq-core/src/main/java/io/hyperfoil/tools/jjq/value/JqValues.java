@@ -2391,6 +2391,57 @@ public final class JqValues {
     }
 
     /**
+     * Look up a field name in the intern table by byte range without inserting.
+     * Returns the cached instance on a hit, or null on a miss (including any
+     * range containing non-ASCII bytes, which take the String interning path).
+     * <p>
+     * The lookup mirrors {@link #internKeyWithHash} exactly (same quads, same
+     * L1/L2 probes, L1 promotion on L2 hit) minus the miss-side allocation —
+     * a hit here observes the same instance an interning call would return.
+     * Used for second-sighting admission: callers intern only keys seen more
+     * than once, keeping unique keys out of the shared table.
+     */
+    public static String probeFieldName(byte[] data, int start, int end) {
+        int hash = 0;
+        for (int p = start; p < end; p++) {
+            int b = data[p] & 0xFF;
+            if (b >= 0x80) return null;
+            hash = hash * 31 + b;
+        }
+        int keyLen = end - start;
+        int q1 = keyLen >= 4 ? SwarUtil.loadInt(data, start) : SwarUtil.packPartialQuad(data, start, keyLen);
+        int q2 = keyLen >= 8 ? SwarUtil.loadInt(data, start + 4) : (keyLen > 4 ? SwarUtil.packPartialQuad(data, start + 4, keyLen - 4) : 0);
+        int q3 = keyLen >= 12 ? SwarUtil.loadInt(data, start + 8) : (keyLen > 8 ? SwarUtil.packPartialQuad(data, start + 8, keyLen - 8) : 0);
+
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
+            if (cached != null && cached.hash == hash && cached.qlen == keyLen
+                    && cached.q1 == q1
+                    && (keyLen <= 4 || cached.q2 == q2)
+                    && (keyLen <= 8 || cached.q3 == q3)
+                    && (keyLen <= 12 || matchBytesFrom(cached.keyBytes, data, start, 12, keyLen))) {
+                return cached.key;
+            }
+        }
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (mix(hash) + probe) & INTERN_MASK;
+            InternSlot slot = INTERN_SLOTS[s];
+            if (slot == null) return null;
+            if (slot.hash != hash || slot.qlen != keyLen) continue;
+            if (q1 != slot.q1) continue;
+            if (keyLen > 4 && q2 != slot.q2) continue;
+            if (keyLen > 8 && q3 != slot.q3) continue;
+            if (keyLen > 12) {
+                if (!matchBytesFrom(slot.keyBytes, data, start, 12, keyLen)) continue;
+            }
+            l1[mix(hash) & L1_MASK] = slot; // promote to L1
+            return slot.key;
+        }
+        return null;
+    }
+
+    /**
      * Compare bytes from a given offset (for keys > 12 bytes where quads cover first 12).
      */
     private static boolean matchBytesFrom(byte[] cached, byte[] data, int dataStart, int fromOffset, int totalLen) {

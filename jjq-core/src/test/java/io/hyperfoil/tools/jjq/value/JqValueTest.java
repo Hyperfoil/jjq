@@ -2473,6 +2473,42 @@ class JqValueTest {
     }
 
     @Test
+    void testProbeFieldNameMissThenHit() {
+        String unique = "probe-key-" + System.nanoTime();
+        byte[] b = unique.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertNull(JqValues.probeFieldName(b, 0, b.length), "Uninterned key must probe-miss");
+        String interned = JqValues.internFieldName(unique);
+        assertSame(interned, JqValues.probeFieldName(b, 0, b.length), "Interned key must probe-hit");
+    }
+
+    @Test
+    void testProbeFieldNameOffset() {
+        String unique = "px-name-" + System.nanoTime();
+        String interned = JqValues.internFieldName(unique);
+        byte[] b = ("xx" + unique + "yy").getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertSame(interned, JqValues.probeFieldName(b, 2, 2 + unique.length()));
+    }
+
+    @Test
+    void testProbeFieldNameLongKey() {
+        // > 12 bytes exercises the matchBytesFrom tail in the probe
+        String unique = "probe-long-field-name-" + System.nanoTime();
+        byte[] b = unique.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertNull(JqValues.probeFieldName(b, 0, b.length));
+        String interned = JqValues.internFieldName(b, 0, b.length);
+        assertSame(interned, JqValues.probeFieldName(b, 0, b.length));
+    }
+
+    @Test
+    void testProbeFieldNameNonAscii() {
+        // Non-ASCII byte ranges always miss (admit path handles them via String interning)
+        String k = "caf\u00e9-" + System.nanoTime();
+        JqValues.internFieldName(k);
+        byte[] b = k.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertNull(JqValues.probeFieldName(b, 0, b.length));
+    }
+
+    @Test
     void testInternedJsonKeyWithProbing() {
         // Intern a name, then verify internedJsonKey returns the pre-computed form
         String name = "qtest_" + System.nanoTime();

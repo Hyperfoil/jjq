@@ -48,6 +48,22 @@ final class YamlParser {
      */
     private String[] previousKeys;
     /**
+     * Second-sighting admission for key interning: hashes of plain keys seen
+     * once in this stream. A key is admitted to the shared
+     * {@link JqValues#internFieldName} table only on repeat sighting, so
+     * unique keys (giant flat maps) never allocate intern slots or pollute
+     * the table, while repeated schemas intern from the second object on.
+     * Lossy by design (open addressing with eviction on full windows):
+     * a false positive merely interns a unique key (today's behavior),
+     * never a wrong key — admission only decides <i>whether</i> to intern,
+     * identity comes from the table itself. Zero per-key allocation
+     * (fixed int array).
+     */
+    private final int[] seenKeyHashes = new int[SEEN_KEY_HASHES];
+    private static final int SEEN_KEY_HASHES = 8192;
+    private static final int SEEN_MASK = SEEN_KEY_HASHES - 1;
+    private static final int SEEN_PROBES = 4;
+    /**
      * An anchor from an `&x` + nested-block value is waiting for its node.
      * Another anchor on that same root node is a duplicate (suite 4JVG:
      * `&node2` + `&v2 val2`); anchors on deeper nodes are independent.
@@ -1398,7 +1414,14 @@ final class YamlParser {
         while (vs < ve && (d[vs] == ' ' || d[vs] == '\t')) vs++;
         while (ve > vs && (d[ve - 1] == ' ' || d[ve - 1] == '\t')) ve--;
         if (hasTrailingGap(d, vs, ve)) return false;
-        String key = JqValues.internFieldName(d, ks, ke);
+        // Second-sighting admission: probe the shared table first (repeat
+        // schemas hit with zero allocation, exactly as before); on a miss,
+        // materialize (retained by the document regardless) and intern only
+        // keys already seen once — unique keys never touch the table.
+        String key = JqValues.probeFieldName(d, ks, ke);
+        if (key == null) {
+            key = admitKey(new String(d, ks, ke - ks, java.nio.charset.StandardCharsets.UTF_8));
+        }
         boolean commented = ce < le;
         // Consume the entry line BEFORE parsing the value (nested parsing
         // reports absolute lines, mirroring readLine).
@@ -1633,6 +1656,40 @@ final class YamlParser {
     /** Intern a mapping key through the shared table (reference equality downstream). */
     private static String internKey(String key) {
         return JqValues.internFieldName(key);
+    }
+
+    /**
+     * Admit a materialized plain key to the shared intern table on repeat
+     * sighting (see {@link #seenKeyHashes}). First sightings return the
+     * given string as-is (it is retained by the document regardless, so
+     * nothing is allocated here beyond what the document needs).
+     * A full probe window evicts its last slot (steady-state turnover —
+     * never degrades to admit-everything); evicted keys simply re-enter
+     * as first sightings.
+     */
+    private String admitKey(String raw) {
+        int h = raw.hashCode();
+        int m = (h == 0) ? 1 : h; // reserve 0 as the empty-slot marker
+        int s = mixHash(m) & SEEN_MASK;
+        for (int i = 0; i < SEEN_PROBES; i++) {
+            int slot = (s + i) & SEEN_MASK;
+            int v = seenKeyHashes[slot];
+            if (v == m) return JqValues.internFieldName(raw); // repeat — admit
+            if (v == 0) {
+                seenKeyHashes[slot] = m;
+                return raw;
+            }
+        }
+        // Window full of other keys: evict the last slot and treat as first
+        // sighting (records the key, so a near-term repeat still admits).
+        seenKeyHashes[(s + SEEN_PROBES - 1) & SEEN_MASK] = m;
+        return raw;
+    }
+
+    /** Multiplicative hash spread (same construction as the intern tables). */
+    private static int mixHash(int h) {
+        h *= 0x9E3779B1;
+        return h ^ (h >>> 16);
     }
 
     /**

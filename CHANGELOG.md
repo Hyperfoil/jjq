@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- Second-sighting key admission in the YAML parser: plain mapping keys
+  reach the shared intern table only on repeat sighting (lookup-only
+  byte probe plus a fixed lossy set, zero per-key allocation), so
+  unique keys never allocate intern slots or pollute the table
+  (maps-1mb parse -10%, repeat schemas unchanged, measured A/B 3 forks
+  interleaved)
 - Fused field collection (`COLLECT_FIELD`): `[.arr[] | .field]` and
   `[.arr[] | .["field"]]` resolve the positional index once and reuse
   it for all elements sharing the same keys array, instead of a full
