@@ -839,6 +839,89 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_formatRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqFormat;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.time.LocalDate;
+
+                @JqMapped
+                public record FDay(@JqFormat(pattern = "dd/MM/yyyy") LocalDate day,
+                                   LocalDate plain) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.FDay", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object r = mapper.fromJqValue(
+                JqValues.parse("{\"day\":\"14/10/2026\",\"plain\":\"2026-10-14\"}"), recordClass);
+        assertEquals(java.time.LocalDate.parse("2026-10-14"), recordClass.getMethod("day").invoke(r));
+        assertEquals("{\"day\":\"14/10/2026\",\"plain\":\"2026-10-14\"}",
+                mapper.toJqValue(r).toJsonString());
+        assertEquals(mapper.toJqValue(r).toJsonString(), mapper.toJson(r));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(r)), mapper.toJsonBytes(r));
+        // Unparseable fails as shape mismatch, not DateTimeParseException
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                        mapper.fromJqValue(JqValues.parse("{\"day\":\"yesterday\"}"), recordClass));
+        assertTrue(e instanceof io.hyperfoil.tools.jjq.mapper.ShapeMismatchException, e.getClass().getName());
+    }
+
+    @Test
+    void generatedMapping_formatInvalidFailsFast() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqFormat;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.time.LocalDate;
+
+                @JqMapped
+                public record FBad(@JqFormat(pattern = "not-a-pattern[[[") LocalDate day) {}
+                """;
+
+        com.google.testing.compile.Compilation compilation =
+                com.google.testing.compile.Compiler.javac()
+                        .withProcessors(new JqMapperProcessor())
+                        .compile(com.google.testing.compile.JavaFileObjects.forSourceString(
+                                "test.FBad", source));
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+    }
+
+    @Test
+    void generatedMapping_formatPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqFormat;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.time.LocalDateTime;
+
+                @JqMapped
+                public class FPojo {
+                    @JqFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+                    public LocalDateTime stamp;
+
+                    public FPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.FPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = mapper.fromJqValue(
+                JqValues.parse("{\"stamp\":\"2026-10-14 12:34:56\"}"), pojoClass);
+        assertEquals(java.time.LocalDateTime.parse("2026-10-14T12:34:56"),
+                pojoClass.getField("stamp").get(p));
+        assertEquals("{\"stamp\":\"2026-10-14 12:34:56\"}",
+                mapper.toJqValue(p).toJsonString());
+        assertEquals(mapper.toJqValue(p).toJsonString(), mapper.toJson(p));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(p)), mapper.toJsonBytes(p));
+    }
+
+    @Test
     void generatedMapping_aliasAndOrder() throws Exception {
         String source = """
                 package test;

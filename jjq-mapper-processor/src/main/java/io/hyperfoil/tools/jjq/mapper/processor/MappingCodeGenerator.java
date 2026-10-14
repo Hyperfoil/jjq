@@ -102,6 +102,17 @@ final class MappingCodeGenerator {
               .append(escapeJava(comp.jsonName()))
               .append("\");\n");
         }
+        // Static formatters for @JqFormat fields (shared by deser and ser)
+        for (var comp : components) {
+            if (!comp.ignored() && comp.format() != null) {
+                sb.append("    private static final java.time.format.DateTimeFormatter ")
+                  .append(formatConst(comp.name()))
+                  .append(" = io.hyperfoil.tools.jjq.mapper.TypeConverter.formatterFor(\"")
+                  .append(escapeJava(comp.format().pattern())).append("\", \"")
+                  .append(escapeJava(comp.format().timezone())).append("\", \"")
+                  .append(escapeJava(comp.format().locale())).append("\");\n");
+            }
+        }
         // Static converter fields for @JqConverter annotations (both
         // serialization components and creator params share instances)
         var emittedConverters = new java.util.HashSet<String>();
@@ -202,6 +213,21 @@ final class MappingCodeGenerator {
     }
 
     /**
+     * Class literal for a temporal type name (qualified or simple — all six
+     * live in {@code java.time}).
+     */
+    private static String temporalClass(String typeName) {
+        return typeName.contains(".") ? typeName : "java.time." + typeName;
+    }
+
+    /**
+     * Static formatter constant name for a component or property.
+     */
+    private static String formatConst(String name) {
+        return "FMT_" + name.toUpperCase();
+    }
+
+    /**
      * Deserialization components for a property creator: one direct lookup
      * per parameter (converters honored, programs never — creator params
      * bind by wire name, mirroring the runtime {@code CreatorSpec}).
@@ -214,7 +240,7 @@ final class MappingCodeGenerator {
                     p.name(), p.jsonName(), p.typeName(),
                     JqMapperProcessor.fieldProgram(p.jsonName()),
                     false, false, "ALWAYS", p.converterClass(), false,
-                    false, false, null, p.converterField(), java.util.List.of()));
+                    false, false, null, p.converterField(), java.util.List.of(), null));
         }
         return list;
     }
@@ -441,6 +467,15 @@ final class MappingCodeGenerator {
             return;
         }
 
+        // Custom pattern: strict text binding through the shared helper
+        if (comp.format() != null) {
+            sb.append("(").append(temporalClass(comp.typeName())).append(") ")
+              .append("io.hyperfoil.tools.jjq.mapper.TypeConverter.convertTemporal(")
+              .append(apply).append(", ").append(temporalClass(comp.typeName())).append(".class, ")
+              .append(formatConst(comp.name())).append(")");
+            return;
+        }
+
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append("asStringChecked(").append(apply).append(")");
             case "int" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
@@ -568,14 +603,6 @@ final class MappingCodeGenerator {
                 sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
             case "java.math.BigDecimal", "BigDecimal" ->
                 sb.append("asBigDecimalChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\"))");
-            case "java.math.BigInteger", "BigInteger" ->
-                sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
-            case "java.util.UUID", "UUID" ->
-                sb.append("asUuidChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"UUID\"))");
-            case "java.net.URI", "URI" ->
-                sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
-            case "java.net.URL", "URL" ->
-                sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
             case "java.time.Instant", "Instant" ->
                 sb.append("asInstantChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Instant\"))");
             case "java.time.LocalDate", "LocalDate" ->
@@ -592,6 +619,14 @@ final class MappingCodeGenerator {
                 sb.append("asDurationChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Duration\"))");
             case "java.time.Period", "Period" ->
                 sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
+            case "java.math.BigInteger", "BigInteger" ->
+                sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
+            case "java.util.UUID", "UUID" ->
+                sb.append("asUuidChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"UUID\"))");
+            case "java.net.URI", "URI" ->
+                sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
+            case "java.net.URL", "URL" ->
+                sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
             default -> {
                 // Nested record/enum/POJO: bind structurally (fail-fast on shape
                 // mismatch, mirroring the reflection path). A parameterized type
@@ -697,6 +732,13 @@ final class MappingCodeGenerator {
         // Static adapter: direct call with the shared null contract (issue #120)
         if (comp.adapter() != null) {
             sb.append(adapterSerialization(comp.typeName(), accessor, comp.adapter()));
+            return;
+        }
+
+        // Custom pattern: null stays null, else the pattern rendering
+        if (comp.format() != null) {
+            sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(")
+              .append(formatConst(comp.name())).append(".format(").append(accessor).append("))");
             return;
         }
 
@@ -845,6 +887,14 @@ final class MappingCodeGenerator {
             return;
         }
 
+        // Custom pattern: null-safe rendering through the pattern
+        if (comp.format() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ")
+              .append(accessor).append(" == null ? null : ")
+              .append(formatConst(comp.name())).append(".format(").append(accessor).append("));\n");
+            return;
+        }
+
         switch (comp.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(");\n");
@@ -983,6 +1033,14 @@ final class MappingCodeGenerator {
         if (comp.adapter() != null) {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ")
               .append(adapterSerialization(comp.typeName(), accessor, comp.adapter())).append(");\n");
+            return;
+        }
+
+        // Custom pattern: null-safe rendering through the pattern
+        if (comp.format() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ")
+              .append(accessor).append(" == null ? null : ")
+              .append(formatConst(comp.name())).append(".format(").append(accessor).append("));\n");
             return;
         }
 
@@ -1401,6 +1459,17 @@ final class MappingCodeGenerator {
                 }
             }
         }
+        // Static formatters for @JqFormat properties (shared by deser and ser)
+        for (var prop : properties) {
+            if (!prop.ignored() && prop.format() != null) {
+                sb.append("    private static final java.time.format.DateTimeFormatter ")
+                  .append(formatConst(prop.name()))
+                  .append(" = io.hyperfoil.tools.jjq.mapper.TypeConverter.formatterFor(\"")
+                  .append(escapeJava(prop.format().pattern())).append("\", \"")
+                  .append(escapeJava(prop.format().timezone())).append("\", \"")
+                  .append(escapeJava(prop.format().locale())).append("\");\n");
+            }
+        }
         // Cached field handles for the private-field fallback (issue #104):
         // same setAccessible semantics as the reflection path, resolved once.
         var fallbackProps = properties.stream().filter(MappingCodeGenerator::needsFieldHandle).toList();
@@ -1790,6 +1859,13 @@ final class MappingCodeGenerator {
               .append(adapterSerialization(prop.typeName(), readExpr, prop.adapter())).append(");\n");
             return;
         }
+        // Custom pattern: null-safe rendering through the pattern
+        if (prop.format() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ")
+              .append(readExpr).append(" == null ? null : ")
+              .append(formatConst(prop.name())).append(".format(").append(readExpr).append("));\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(");\n");
@@ -1872,6 +1948,13 @@ final class MappingCodeGenerator {
               .append(adapterSerialization(prop.typeName(), readExpr, prop.adapter())).append(");\n");
             return;
         }
+        // Custom pattern: null-safe rendering through the pattern
+        if (prop.format() != null) {
+            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ")
+              .append(readExpr).append(" == null ? null : ")
+              .append(formatConst(prop.name())).append(".format(").append(readExpr).append("));\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(");\n");
@@ -1949,6 +2032,13 @@ final class MappingCodeGenerator {
         if (prop.adapter() != null) {
             return adapterExtraction(prop.typeName(), apply, prop.adapter());
         }
+        // Custom pattern: strict text binding through the shared helper
+        if (prop.format() != null) {
+            return "(" + temporalClass(prop.typeName()) + ") "
+                    + "io.hyperfoil.tools.jjq.mapper.TypeConverter.convertTemporal("
+                    + apply + ", " + temporalClass(prop.typeName()) + ".class, "
+                    + formatConst(prop.name()) + ")";
+        }
         String typeName = prop.typeName();
         return switch (typeName) {
             case "java.lang.String" -> "asStringChecked(" + apply + ")";
@@ -2005,7 +2095,7 @@ final class MappingCodeGenerator {
         return new JqMapperProcessor.PropertyInfo(
                 p.name(), p.jsonName(), p.typeName(), null, false, false,
                 null, null, false, "ALWAYS", p.converterClass(), false,
-                false, false, false, false, null, p.converterField(), java.util.List.of());
+                false, false, false, false, null, p.converterField(), java.util.List.of(), null);
     }
 
     /**
@@ -2159,6 +2249,12 @@ final class MappingCodeGenerator {
         // Static adapter: direct call with the shared null contract (issue #120)
         if (prop.adapter() != null) {
             sb.append(adapterSerialization(prop.typeName(), readExpr, prop.adapter()));
+            return;
+        }
+        // Custom pattern: null stays null, else the pattern rendering
+        if (prop.format() != null) {
+            sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(")
+              .append(formatConst(prop.name())).append(".format(").append(readExpr).append("))");
             return;
         }
         switch (prop.typeName()) {

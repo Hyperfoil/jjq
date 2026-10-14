@@ -371,6 +371,82 @@ public final class TypeConverter {
     }
 
     /**
+     * Build a {@code DateTimeFormatter} from pattern, locale tag, and zone
+     * id, applying the house defaults (root locale, UTC zone). Invalid
+     * patterns and zones throw {@code IllegalArgumentException} / {@code
+     * DateTimeException} — callers fail fast at mapping creation.
+     *
+     * @param pattern  the pattern text (non-empty)
+     * @param timezone the zone id, or empty for UTC
+     * @param locale   BCP 47 tag, or empty for root
+     * @return the configured formatter
+     */
+    public static java.time.format.DateTimeFormatter formatterFor(String pattern, String timezone,
+                                                                  String locale) {
+        java.util.Locale effectiveLocale =
+                locale == null || locale.isEmpty() ? java.util.Locale.ROOT
+                        : java.util.Locale.forLanguageTag(locale);
+        java.time.ZoneId effectiveZone =
+                timezone == null || timezone.isEmpty() ? java.time.ZoneOffset.UTC
+                        : java.time.ZoneId.of(timezone);
+        return java.time.format.DateTimeFormatter.ofPattern(pattern, effectiveLocale)
+                .withZone(effectiveZone);
+    }
+
+    /** True for the six date/time types supporting custom patterns. */
+    static boolean isTemporalDate(Class<?> targetType) {
+        return targetType == java.time.Instant.class
+                || targetType == java.time.LocalDate.class
+                || targetType == java.time.LocalTime.class
+                || targetType == java.time.LocalDateTime.class
+                || targetType == java.time.OffsetDateTime.class
+                || targetType == java.time.ZonedDateTime.class;
+    }
+
+    /**
+     * Convert a JqValue with an explicit formatter (custom-pattern binding).
+     * Strings parse with the pattern; every other shape mismatches (patterns
+     * are strict text — no epoch fallback); nulls stay null. Shared by the
+     * reflection paths and generated code so both fail identically.
+     *
+     * @param value      the JqValue to convert (may be null)
+     * @param targetType one of the six date/time types
+     * @param formatter  the field formatter
+     * @return the converted value, or null for null inputs
+     */
+    public static Object convertTemporal(JqValue value, Class<?> targetType,
+                                         java.time.format.DateTimeFormatter formatter) {
+        if (value == null || value instanceof JqNull) return null;
+        if (!(value instanceof JqString s)) {
+            throw mismatch(JqValue.Type.STRING, targetType.getSimpleName(), value);
+        }
+        String text = s.stringValue().trim();
+        try {
+            if (targetType == java.time.Instant.class) {
+                return formatter.parse(text, java.time.Instant::from);
+            }
+            if (targetType == java.time.LocalDate.class) {
+                return java.time.LocalDate.parse(text, formatter);
+            }
+            if (targetType == java.time.LocalTime.class) {
+                return java.time.LocalTime.parse(text, formatter);
+            }
+            if (targetType == java.time.LocalDateTime.class) {
+                return java.time.LocalDateTime.parse(text, formatter);
+            }
+            if (targetType == java.time.OffsetDateTime.class) {
+                return java.time.OffsetDateTime.parse(text, formatter);
+            }
+            if (targetType == java.time.ZonedDateTime.class) {
+                return java.time.ZonedDateTime.parse(text, formatter);
+            }
+        } catch (java.time.DateTimeException e) {
+            throw mismatch(JqValue.Type.STRING, targetType.getSimpleName(), value);
+        }
+        throw mismatch(JqValue.Type.STRING, targetType.getSimpleName(), value);
+    }
+
+    /**
      * Whether the element marks a required property: native
      * {@code @JqRequired} first, then bridges in order.
      *

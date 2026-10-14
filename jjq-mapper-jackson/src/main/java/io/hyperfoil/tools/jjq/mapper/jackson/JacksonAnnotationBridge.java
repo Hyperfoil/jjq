@@ -5,12 +5,15 @@ import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
+import io.hyperfoil.tools.jjq.mapper.JqFormat;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
+import io.hyperfoil.tools.jjq.mapper.JqMapperException;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
 import io.hyperfoil.tools.jjq.mapper.JqOrder;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
@@ -134,6 +137,34 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
             case NON_DEFAULT -> JqInclude.Include.NON_DEFAULT;
             default -> null; // NON_ABSENT, CUSTOM, USE_DEFAULTS — not mapped
         };
+    }
+
+    @Override
+    public JqFormat.Spec resolveFormat(AnnotatedElement element) {
+        AnnotatedElement effective = resolveToField(element);
+        JsonFormat format = effective.getAnnotation(JsonFormat.class);
+        if (format == null) return null;
+        if (format.shape() != JsonFormat.Shape.ANY && format.shape() != JsonFormat.Shape.STRING) {
+            throw new JqMapperException("@JsonFormat on " + describe(element)
+                    + ": only string shapes are supported (found " + format.shape() + ")");
+        }
+        String pattern = format.pattern();
+        if (pattern.isEmpty()) return null;
+        String timezone = normalizeDefault(format.timezone());
+        String locale = normalizeDefault(format.locale());
+        return new JqFormat.Spec(pattern, timezone, locale);
+    }
+
+    /** Jackson uses "##default" for unset members; house defaults apply instead. */
+    private static String normalizeDefault(String value) {
+        return (value == null || value.equals("##default")) ? "" : value;
+    }
+
+    /** Short element description for error messages. */
+    private static String describe(AnnotatedElement element) {
+        String name = getFieldName(element);
+        Class<?> declaring = getDeclaringClass(element);
+        return (declaring != null ? declaring.getSimpleName() + "#" : "") + (name != null ? name : element);
     }
 
     @Override

@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Custom date/time patterns: native `@JqFormat` plus Jackson
+  `@JsonFormat` through the bridge — pattern/timezone/locale per field
+  on the six date/time types, root locale and UTC by default; patterns
+  are strings-only, invalid patterns and non-temporal targets fail fast
+  at mapping creation, on reflection and generated paths
 - Naming, aliases, order: all 8 `JqNaming` strategies (existing
   separators normalize), native `@JqAlias` (first present wins, primary
   serializes, strict/any-setter aware) and `@JqOrder` (explicit wires

@@ -165,6 +165,21 @@ construct, setters bind the rest; a creator removes the no-arg requirement).
 Jackson `@JsonCreator` (`DELEGATING`/`PROPERTIES`/default modes,
 `@JsonProperty` params) works through the bridge; native wins.
 
+### `@JqFormat` — custom date/time patterns
+
+```java
+record Event(@JqFormat(pattern = "dd/MM/yyyy") LocalDate day,
+             @JqFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Europe/Oslo") Instant at) {}
+// Binds "14/10/2026" and serializes back identically.
+```
+
+Applies to the six date/time types (durations stay ISO); patterns are
+strings-only (no epoch fallback) with root locale and UTC zone by
+default. Invalid patterns/zones and non-temporal targets fail fast at
+mapping creation; unparseable text fails as shape mismatch. Jackson
+`@JsonFormat(pattern, timezone, locale)` works through the bridge
+(string shapes only).
+
 ### `@JqBuilder` — builder binding
 
 ```java
@@ -553,6 +568,7 @@ The any-getter method itself is never emitted as a bean property (Jackson parity
 | `@JsonAnySetter` / `@JsonAnyGetter` (method form) | Unknown-key capture / extras emission (reflection path) |
 | `@JsonValue` | Enum wire form on ser |
 | `@JsonCreator` (delegating + properties) | Factory/ctor deser; named params via `@JsonProperty` (records + POJOs, reflection + generated) |
+| `@JsonFormat(pattern, timezone, locale)` | Custom date/time strings (string shapes only, reflection + generated) |
 | `@JsonProperty(required = true)` | Absent keys fail (records + POJOs + creator params, reflection + generated) |
 | `@JsonAutoDetect(getterVisibility/isGetterVisibility = NONE)` | Suppress `getX`/`isX` binding; fields read directly (records immune: canonical accessors only) |
 | `@JsonIgnore` on a getter / setter method | Ser-only / deser-only suppression (field-level stays both directions) |

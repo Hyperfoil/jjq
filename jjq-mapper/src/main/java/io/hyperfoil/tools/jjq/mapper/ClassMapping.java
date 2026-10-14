@@ -262,7 +262,9 @@ final class ClassMapping<T> implements Mapping<T> {
             }
 
             fields[i] = new FieldMapping(name, jsonName, directFieldName, program, fieldType, genericType,
-                    getter, null, i, ignored, inclusion, converter, skipSer, skipDeser, aliases);
+                    getter, null, i, ignored, inclusion, converter, skipSer, skipDeser, aliases,
+                    ignored ? null : resolveFormatter(fieldType, rc,
+                            "'" + name + "' of " + type.getName(), bridges));
         }
 
         // Find and cache the canonical constructor + pre-cached spreader
@@ -597,7 +599,9 @@ final class ClassMapping<T> implements Mapping<T> {
             }
 
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
-                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser, aliases));
+                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser, aliases,
+                    ignored ? null : resolveFormatter(fieldType, field,
+                            "'" + name + "' of " + type.getName(), bridges)));
             // Required markers collect here; program combinations are
             // validated after creator resolution below (mirrors forRecord).
             if (!ignored && TypeConverter.isRequired(field, bridges)) {
@@ -1310,6 +1314,52 @@ final class ClassMapping<T> implements Mapping<T> {
             return 0;
         });
         return sorted;
+    }
+
+    /**
+     * Resolve a custom string format for a date/time field (native
+     * {@code @JqFormat} first, then bridges). Null when default ISO handling
+     * applies. Fails fast on invalid patterns/zones and on non-temporal
+     * targets (durations stay ISO, numbers keep their own rules).
+     */
+    private static java.time.format.DateTimeFormatter resolveFormatter(
+            Class<?> fieldType, AnnotatedElement element, String fieldDesc,
+            List<AnnotationBridge> bridges) {
+        String pattern = null;
+        String timezone = "";
+        String locale = "";
+        JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
+        if (nativeAnn != null && !nativeAnn.pattern().isEmpty()) {
+            pattern = nativeAnn.pattern();
+            timezone = nativeAnn.timezone();
+            locale = nativeAnn.locale();
+        } else {
+            for (AnnotationBridge bridge : bridges) {
+                JqFormat.Spec spec = bridge.resolveFormat(element);
+                if (spec != null && !spec.pattern().isEmpty()) {
+                    pattern = spec.pattern();
+                    timezone = spec.timezone();
+                    locale = spec.locale();
+                    break;
+                }
+            }
+        }
+        if (pattern == null) return null;
+        if (fieldType == java.util.Optional.class) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': not supported on Optional (bind the temporal type directly)");
+        }
+        if (!TypeConverter.isTemporalDate(fieldType)) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': patterns need a date/time type (Instant, LocalDate/Time/DateTime,"
+                    + " OffsetDateTime, ZonedDateTime)");
+        }
+        try {
+            return TypeConverter.formatterFor(pattern, timezone, locale);
+        } catch (IllegalArgumentException | java.time.DateTimeException e) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': invalid pattern or zone (" + e.getMessage() + ")", e);
+        }
     }
 
     /** Consult bridges for a field name override. Returns null if no bridge provides one. */

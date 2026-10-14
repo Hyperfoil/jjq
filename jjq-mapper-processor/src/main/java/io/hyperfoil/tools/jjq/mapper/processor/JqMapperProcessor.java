@@ -9,6 +9,7 @@ import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
 import io.hyperfoil.tools.jjq.mapper.JqBuilder;
 import io.hyperfoil.tools.jjq.mapper.JqCreator;
 import io.hyperfoil.tools.jjq.mapper.JqField;
+import io.hyperfoil.tools.jjq.mapper.JqFormat;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
@@ -192,10 +193,13 @@ public class JqMapperProcessor extends AbstractProcessor {
                             rc);
                     return null;
                 }
+                JqFormat.Spec compFormat = resolveFormatSpec(rc, recordType, typeName,
+                        "'" + name + "' of " + recordType.getQualifiedName());
+                if (compFormat == null && hasFormatMarker(rc)) return null;
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
                         "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField,
-                        compAliases));
+                        compAliases, compFormat));
             }
         }
 
@@ -408,10 +412,14 @@ public class JqMapperProcessor extends AbstractProcessor {
                         field);
                 return null;
             }
+            JqFormat.Spec propFormat = resolveFormatSpec(field, null, typeName,
+                    "'" + name + "' of " + classType.getQualifiedName());
+            if (propFormat == null && hasFormatMarker(field)) return null;
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
-                    skipSer, skipDeser, isPrivate, isFinal, adapter, converterField, propAliases));
+                    skipSer, skipDeser, isPrivate, isFinal, adapter, converterField, propAliases,
+                    propFormat));
         }
 
         // Generate the mapping class
@@ -998,6 +1006,137 @@ public class JqMapperProcessor extends AbstractProcessor {
     }
 
     /**
+     * Resolve a custom string format for a date/time element: native
+     * {@code @JqFormat} first, then the bridge {@code @JsonFormat} mirror
+     * (element plus same-named-field fallback for record components,
+     * mirroring {@link #bridgeRenameForRecord}). Null when default ISO
+     * handling applies. Gaps report compile errors (the caller bails when a
+     * marker is present but no spec comes back).
+     */
+    private JqFormat.Spec resolveFormatSpec(Element element, TypeElement enclosing, String typeName,
+                                            String fieldDesc) {
+        String pattern = null;
+        String timezone = "";
+        String locale = "";
+        JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
+        if (nativeAnn != null && !nativeAnn.pattern().isEmpty()) {
+            pattern = nativeAnn.pattern();
+            timezone = nativeAnn.timezone();
+            locale = nativeAnn.locale();
+        } else {
+            Element fallback = element;
+            if (enclosing != null && element instanceof RecordComponentElement rc) {
+                fallback = null;
+                for (Element e : enclosing.getEnclosedElements()) {
+                    if (e.getKind() == ElementKind.FIELD
+                            && e.getSimpleName().contentEquals(rc.getSimpleName())) {
+                        fallback = e;
+                        break;
+                    }
+                }
+            }
+            String bridgedPattern = null;
+            String bridgedTimezone = "";
+            String bridgedLocale = "";
+            Element[] sources = fallback != null && fallback != element
+                    ? new Element[]{element, fallback} : new Element[]{element};
+            for (Element source : sources) {
+                String[] bridged = bridgeFormat(source);
+                if (bridged != null) {
+                    bridgedPattern = bridged[0];
+                    bridgedTimezone = bridged[1];
+                    bridgedLocale = bridged[2];
+                    break;
+                }
+            }
+            if (bridgedPattern != null) {
+                pattern = bridgedPattern;
+                timezone = bridgedTimezone;
+                locale = bridgedLocale;
+            }
+        }
+        if (pattern == null || pattern.isEmpty()) return null;
+        if (!isTemporalDateName(typeName)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "@JqFormat on '" + fieldDesc
+                            + "': patterns need a date/time type (Instant, LocalDate/Time/DateTime,"
+                            + " OffsetDateTime, ZonedDateTime)",
+                    element);
+            return null;
+        }
+        try {
+            io.hyperfoil.tools.jjq.mapper.TypeConverter.formatterFor(pattern, timezone, locale);
+        } catch (IllegalArgumentException | java.time.DateTimeException e) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "@JqFormat on '" + fieldDesc + "': invalid pattern or zone (" + e.getMessage() + ")",
+                    element);
+            return null;
+        }
+        return new JqFormat.Spec(pattern, timezone, locale);
+    }
+
+    /** True for the six date/time types supporting custom patterns. */
+    private static boolean isTemporalDateName(String typeName) {
+        return typeName.equals("java.time.Instant")
+                || typeName.equals("java.time.LocalDate")
+                || typeName.equals("java.time.LocalTime")
+                || typeName.equals("java.time.LocalDateTime")
+                || typeName.equals("java.time.OffsetDateTime")
+                || typeName.equals("java.time.ZonedDateTime");
+    }
+
+    /**
+     * Bridge format reading: Jackson {@code @JsonFormat} mirror as
+     * {@code [pattern, timezone, locale]}, or null when absent. Non-string
+     * shapes report a compile error inline (null comes back and the marker
+     * check bails the caller).
+     */
+    private String[] bridgeFormat(Element element) {
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (!mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonFormat")) continue;
+            String shape = "ANY";
+            String pattern = null;
+            String timezone = "";
+            String locale = "";
+            for (var entry : mirror.getElementValues().entrySet()) {
+                String member = entry.getKey().getSimpleName().toString();
+                Object value = entry.getValue().getValue();
+                if (member.equals("shape") && value instanceof javax.lang.model.element.VariableElement ve) {
+                    shape = ve.getSimpleName().toString();
+                } else if (member.equals("pattern") && value instanceof String s) {
+                    pattern = s;
+                } else if (member.equals("timezone") && value instanceof String s) {
+                    timezone = s.equals("##default") ? "" : s;
+                } else if (member.equals("locale") && value instanceof String s) {
+                    locale = s.equals("##default") ? "" : s;
+                }
+            }
+            if (!shape.equals("ANY") && !shape.equals("STRING")) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JsonFormat: only string shapes are supported (found " + shape + ")",
+                        element);
+                return null;
+            }
+            if (pattern == null || pattern.isEmpty()) return null;
+            return new String[]{pattern, timezone, locale};
+        }
+        return null;
+    }
+
+    /** True when the element carries any format marker (bail check). */
+    private static boolean hasFormatMarker(Element element) {
+        if (element.getAnnotation(JqFormat.class) != null) return true;
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonFormat")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Extraction program for a JSON field name: {@code .name} for plain ASCII
      * identifiers, {@code ."..."} (escaped) otherwise — {@code .host-paths}
      * would parse as a subtraction (issue #103). Both forms compile to
@@ -1581,7 +1720,8 @@ public class JqMapperProcessor extends AbstractProcessor {
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                          String inclusion, String converterClass, boolean nestedRecord,
                          boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter,
-                         String converterField, java.util.List<String> aliases) {}
+                         String converterField, java.util.List<String> aliases,
+                         io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
@@ -1589,7 +1729,8 @@ public class JqMapperProcessor extends AbstractProcessor {
                         String converterClass, boolean nestedRecord,
                         boolean skipSerialize, boolean skipDeserialize,
                         boolean privateField, boolean finalField, AdapterInfo adapter,
-                        String converterField, java.util.List<String> aliases) {}
+                        String converterField, java.util.List<String> aliases,
+                        io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format) {}
 
     /**
      * Shared {@code CONV_} field name per converter class, first-seen order

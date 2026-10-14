@@ -130,6 +130,18 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
                     + ": @JqField programs are not supported on creator parameters"
                     + " (rename with @JqName instead)");
         }
+        if (parameter.isAnnotationPresent(JqFormat.class)) {
+            throw new JqMapperException(label + " on " + type.getName()
+                    + ": @JqFormat is not supported on creator parameters"
+                    + " (bind the ISO form and format afterwards)");
+        }
+        for (AnnotationBridge bridge : bridges) {
+            if (bridge.resolveFormat(parameter) != null) {
+                throw new JqMapperException(label + " on " + type.getName()
+                        + ": @JsonFormat is not supported on creator parameters"
+                        + " (bind the ISO form and format afterwards)");
+            }
+        }
         if (parameter.isAnnotationPresent(JqAdapter.class)) {
             throw new JqMapperException(label + " on " + type.getName()
                     + ": @JqAdapter is not supported on creator parameters"
@@ -163,7 +175,7 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
         }
         String jsonName = name.intern();
         return new FieldMapping(name, jsonName, jsonName, null, paramType, genericType,
-                null, null, index, false, JqInclude.Include.ALWAYS, converter, false, false, null);
+                null, null, index, false, JqInclude.Include.ALWAYS, converter, false, false, null, null);
     }
 
     /**

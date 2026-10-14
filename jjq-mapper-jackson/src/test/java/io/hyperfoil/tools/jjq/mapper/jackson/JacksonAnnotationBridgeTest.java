@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.mapper.jackson;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -599,6 +600,32 @@ class JacksonAnnotationBridgeTest {
         // Deser unaffected
         assertEquals(new OrderedBean("a", "1", 3), mapper.fromJqValue(
                 JqValues.parse("{\"age\":3,\"name\":\"a\",\"id\":\"1\"}"), OrderedBean.class));
+    }
+
+    // ---- @JsonFormat ----
+
+    record FormattedBean(
+            @JsonFormat(pattern = "dd/MM/yyyy") java.time.LocalDate day,
+            @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "UTC") java.time.Instant instant) {
+    }
+
+    @Test
+    void jsonFormatBindsPatterns() {
+        FormattedBean b = mapper.fromJqValue(
+                JqValues.parse("{\"day\":\"14/10/2026\",\"instant\":\"2026-10-14 12:34:56\"}"),
+                FormattedBean.class);
+        assertEquals(java.time.LocalDate.parse("2026-10-14"), b.day());
+        assertEquals(java.time.Instant.parse("2026-10-14T12:34:56Z"), b.instant());
+        assertEquals("{\"day\":\"14/10/2026\",\"instant\":\"2026-10-14 12:34:56\"}",
+                mapper.toJqValue(b).toJsonString());
+    }
+
+    @Test
+    void jsonFormatShapeMismatchFailsFast() {
+        record Shaped(@JsonFormat(shape = JsonFormat.Shape.NUMBER, pattern = "yyyy") java.time.LocalDate day) {
+        }
+        assertThrows(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"day\":\"2026\"}"), Shaped.class));
     }
 
     // ---- @JsonDeserialize(builder) + @JsonPOJOBuilder ----

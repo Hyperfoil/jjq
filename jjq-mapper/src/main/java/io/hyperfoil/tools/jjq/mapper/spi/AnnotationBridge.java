@@ -238,6 +238,22 @@ public interface AnnotationBridge {
     }
 
     /**
+     * Custom string format for a date/time property
+     * ({@code @JsonFormat} equivalent): pattern plus locale and zone.
+     * Only called for date/time target types; anything else keeps default
+     * handling regardless of what this returns.
+     *
+     * <p>The default implementation returns {@code null} (ISO default);
+     * bridges override it when their annotations are present.</p>
+     *
+     * @param element the field or component to inspect
+     * @return the format spec, or {@code null} for the default form
+     */
+    default io.hyperfoil.tools.jjq.mapper.JqFormat.Spec resolveFormat(AnnotatedElement element) {
+        return null;
+    }
+
+    /**
      * Whether the element marks a required property (fail on absence).
      * Only called for direct lookups; program lookups fail fast instead.
      *

@@ -1222,6 +1222,67 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
     }
 
+    // ---- @JqFormat (custom date/time patterns) ----
+
+    record Formatted(java.time.LocalDate day,
+                     @JqFormat(pattern = "dd/MM/yyyy") java.time.LocalDate eu,
+                     @JqFormat(pattern = "HH:mm", timezone = "Europe/Oslo") java.time.LocalTime time,
+                     @JqFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime stamp,
+                     @JqFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.Instant instant) {}
+
+    record BadFormat(@JqFormat(pattern = "not-a-pattern[[[") java.time.LocalDate day) {}
+
+    record FormatMismatch(@JqFormat(pattern = "yyyy") String text) {}
+
+    @Test
+    void formatBindsPatterns() {
+        Formatted f = mapper.fromJqValue(JqValues.parse(
+                "{\"day\":\"2026-10-14\",\"eu\":\"14/10/2026\",\"time\":\"12:34\","
+                + "\"stamp\":\"2026-10-14 12:34:56\",\"instant\":\"2026-10-14 12:34:56\"}"),
+                Formatted.class);
+        assertEquals(java.time.LocalDate.parse("2026-10-14"), f.day());
+        assertEquals(java.time.LocalDate.parse("2026-10-14"), f.eu());
+        assertEquals(java.time.LocalTime.parse("12:34"), f.time());
+        assertEquals(java.time.LocalDateTime.parse("2026-10-14T12:34:56"), f.stamp());
+        assertEquals(java.time.Instant.parse("2026-10-14T12:34:56Z"), f.instant());
+    }
+
+    @Test
+    void formatSerializesPatterns() {
+        Formatted f = new Formatted(java.time.LocalDate.parse("2026-10-14"),
+                java.time.LocalDate.parse("2026-10-14"), java.time.LocalTime.parse("12:34"),
+                java.time.LocalDateTime.parse("2026-10-14T12:34:56"),
+                java.time.Instant.parse("2026-10-14T12:34:56Z"));
+        assertEquals("{\"day\":\"2026-10-14\",\"eu\":\"14/10/2026\",\"time\":\"12:34\","
+                + "\"stamp\":\"2026-10-14 12:34:56\",\"instant\":\"2026-10-14 12:34:56\"}",
+                mapper.toJqValue(f).toJsonString());
+        assertEquals(f, mapper.fromJqValue(mapper.toJqValue(f), Formatted.class));
+        assertBytesMatch(f);
+    }
+
+    @Test
+    void formatRejectsUnparseable() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"day\":\"2026-10-14\",\"eu\":\"yesterday\",\"time\":\"12:34\","
+                        + "\"stamp\":\"2026-10-14 12:34:56\",\"instant\":\"2026-10-14 12:34:56\"}"),
+                Formatted.class));
+        // Patterns are strings-only: no epoch fallback
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"day\":\"2026-10-14\",\"eu\":\"14/10/2026\",\"time\":\"12:34\","
+                        + "\"stamp\":\"2026-10-14 12:34:56\",\"instant\":0}"),
+                Formatted.class));
+    }
+
+    @Test
+    void formatInvalidFailsFast() {
+        JqMapperException bad = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"day\":\"2026-10-14\"}"), BadFormat.class));
+        assertFalse(bad instanceof ShapeMismatchException, bad.getClass().getName());
+        JqMapperException mismatch = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"text\":\"x\"}"), FormatMismatch.class));
+        assertFalse(mismatch instanceof ShapeMismatchException, mismatch.getClass().getName());
+    }
+
     // ---- naming strategies ----
 
     @Test
