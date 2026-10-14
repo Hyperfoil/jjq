@@ -58,6 +58,9 @@ final class ClassMapping<T> implements Mapping<T> {
     // creators bind deserFields like canonical fields; delegating creators
     // take the scalar branch in fromJqValue.
     private final CreatorSpec creator;
+    // Builder binding (null unless configured). POJO-only: records with a
+    // builder fail fast at mapping creation.
+    private final BuilderSpec builder;
     // Fields bound on deserialization: creator params when a property creator
     // is present, else the component/property fields. Serialization always
     // uses {@link #fields}.
@@ -78,7 +81,7 @@ final class ClassMapping<T> implements Mapping<T> {
                          MethodHandle spreadConstructor,
                          Map<String, Integer> nameToIndex, boolean useForEachFastPath,
                          AnyHandlers anyHandlers, PolySerInfo polySer,
-                         CreatorSpec creator, FieldMapping[] deserFields) {
+                         CreatorSpec creator, FieldMapping[] deserFields, BuilderSpec builder) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
@@ -89,6 +92,7 @@ final class ClassMapping<T> implements Mapping<T> {
         this.polySer = polySer;
         this.creator = creator;
         this.deserFields = deserFields;
+        this.builder = builder;
         Set<String> known = new HashSet<>();
         for (FieldMapping field : deserFields) {
             if (!field.usesProgram()) known.add(field.jsonName());
@@ -278,10 +282,25 @@ final class ClassMapping<T> implements Mapping<T> {
             }
         }
 
+        // Builders are POJO-only: records already construct canonically
+        // (or through a creator, resolved above).
+        if (type.isAnnotationPresent(JqBuilder.class)) {
+            throw new JqMapperException("@JqBuilder on " + type.getName()
+                    + " needs a POJO — records construct through their canonical"
+                    + " constructor or a @JqCreator creator");
+        }
+        for (AnnotationBridge bridge : bridges) {
+            if (bridge.resolveBuilder(type) != null) {
+                throw new JqMapperException("Builder configuration on record " + type.getName()
+                        + " needs a POJO — records construct through their canonical"
+                        + " constructor or a @JqCreator creator");
+            }
+        }
+
         return new ClassMapping<>(type, fields, ctor, useSpread,
                 canUseFastPath ? nameMap : null, canUseFastPath,
                 resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
-                creator, deser);
+                creator, deser, null);
     }
 
     /**
@@ -314,19 +333,17 @@ final class ClassMapping<T> implements Mapping<T> {
                 });
         MethodHandles.Lookup lookup = lookupFor.apply(type);
 
-        // Find no-arg constructor (optional when a creator takes over
-        // construction: delegating creators bind scalars, property creators
-        // construct from their params and setters bind the rest).
+        // Find no-arg constructor (optional when a creator or builder takes
+        // over construction; the requirement is enforced after both resolve).
         CreatorSpec creator = CreatorSpec.resolve(type, bridges);
         MethodHandle ctor = null;
+        boolean noArgMissing = false;
         try {
             Constructor<T> noArgCtor = type.getDeclaredConstructor();
             noArgCtor.setAccessible(true);
             ctor = lookup.unreflectConstructor(noArgCtor);
         } catch (NoSuchMethodException e) {
-            if (creator == null) {
-                throw new JqMapperException("POJO " + type.getName() + " requires a no-arg constructor", e);
-            }
+            noArgMissing = true;
         } catch (IllegalAccessException e) {
             throw new JqMapperException("Cannot access no-arg constructor of " + type.getName(), e);
         }
@@ -515,6 +532,19 @@ final class ClassMapping<T> implements Mapping<T> {
 
         FieldMapping[] fields = fieldMappings.toArray(new FieldMapping[0]);
 
+        // Builder binding takes over construction when configured (native
+        // @JqBuilder or bridge pair); at most one construction strategy with
+        // a creator, and a fallback setter path needs its no-arg constructor.
+        BuilderSpec builder = BuilderSpec.resolve(type, fields, bridges);
+        if (creator != null && builder != null) {
+            throw new JqMapperException(type.getName()
+                    + " declares both a creator and a builder: pick one construction strategy");
+        }
+        if (noArgMissing && creator == null && builder == null) {
+            throw new JqMapperException("POJO " + type.getName() + " requires a no-arg constructor"
+                    + " (or a @JqCreator/@JsonCreator creator, or a @JqBuilder builder)");
+        }
+
         // Build fast-path name→index map (same logic as records)
         boolean canUseFastPath = true;
         Map<String, Integer> nameMap = new HashMap<>(fields.length);
@@ -550,7 +580,7 @@ final class ClassMapping<T> implements Mapping<T> {
         return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath,
                 resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
-                creator, deser);
+                creator, deser, builder);
     }
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. Returns the Method (unreflect at site). */
@@ -914,6 +944,63 @@ final class ClassMapping<T> implements Mapping<T> {
         }
     }
 
+    /**
+     * Builder deserialization: instantiate the builder, invoke one binder
+     * per bound property (absent keys keep builder defaults, explicit nulls
+     * still write — same leniency as the setter path), then the terminal
+     * build method. Chained binders thread the builder through; void binders
+     * mutate in place.
+     */
+    @SuppressWarnings("unchecked")
+    private T fromJqValueBuilder(JqValue value, JqMapper mapper) {
+        Object current;
+        try {
+            // Uniform shape: factories and constructors both answer Object
+            // (one tiny argument-array per built object — cold path).
+            current = builder.newBuilder().invokeWithArguments();
+        } catch (Throwable e) {
+            throw new JqMapperException("Failed to create builder for " + type.getName(), e);
+        }
+        for (int i = 0; i < fields.length; i++) {
+            FieldMapping field = fields[i];
+            if (field.isIgnored() || field.skipDeserialize()) continue;
+            if (builder.binders()[i] == null) continue;
+            // Absent keys leave builder defaults in place (same leniency as
+            // the setter path); @JqField programs keep write-always semantics.
+            if (value != null && !field.usesProgram() && !value.has(field.jsonName())) continue;
+            JqValue extracted = field.extract(value);
+            Object converted;
+            try {
+                converted = field.convert(extracted, mapper);
+            } catch (JqMapperException e) {
+                throw e.prependPath(field.jsonName());
+            }
+            try {
+                if (builder.voidBinder()[i]) {
+                    builder.binders()[i].invoke(current, converted);
+                } else {
+                    current = builder.binders()[i].invoke(current, converted);
+                }
+            } catch (JqMapperException e) {
+                throw e.prependPath(field.jsonName());
+            } catch (Throwable e) {
+                throw new JqMapperException("Failed to invoke builder method for '"
+                        + field.jsonName() + "' on " + type.getName(), e)
+                        .prependPath(field.jsonName());
+            }
+        }
+        try {
+            T instance = (T) builder.build().invoke(current);
+            applyAnySetter(instance, value);
+            return instance;
+        } catch (JqMapperException e) {
+            throw e;
+        } catch (Throwable e) {
+            throw new JqMapperException("Failed to invoke " + builder.label()
+                    + " build method for " + type.getName(), e);
+        }
+    }
+
     /** POJO deserialization: no-arg constructor + setter calls. */
     @SuppressWarnings("unchecked")
     private T fromJqValuePojo(JqValue value, JqMapper mapper) {
@@ -941,6 +1028,9 @@ final class ClassMapping<T> implements Mapping<T> {
         if (mapper.isFailOnUnknownProperties() && value instanceof JqObject strictObj
                 && (anyHandlers == null || anyHandlers.setter() == null)) {
             failOnUnknown(strictObj);
+        }
+        if (builder != null) {
+            return fromJqValueBuilder(value, mapper);
         }
         T instance;
         Set<String> creatorCovered = null;

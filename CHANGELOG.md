@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Builder binding: native `@JqBuilder` plus Jackson
+  `@JsonDeserialize(builder)`/`@JsonPOJOBuilder` through the bridge
+  (read reflectively, no new dependency) — Lombok style (empty prefix
+  + factory) and `with`-prefix style, chained or void binders, builder
+  defaults surviving missing keys; gaps fail fast at mapping creation
 - Deserialization creators: native `@JqCreator` plus Jackson
   `@JsonCreator` through the bridge (`DELEGATING`/`PROPERTIES`/default
   modes, `@JsonProperty` params) — single unnamed parameters bind

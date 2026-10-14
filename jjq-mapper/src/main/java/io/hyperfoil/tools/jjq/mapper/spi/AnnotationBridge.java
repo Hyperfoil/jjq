@@ -207,4 +207,33 @@ public interface AnnotationBridge {
     default io.hyperfoil.tools.jjq.mapper.PolyConfig resolvePolymorphism(Class<?> type) {
         return null;
     }
+
+    /**
+     * Normalized builder declaration: which class builds, how to obtain it,
+     * which method prefix binds properties, and which method terminates.
+     *
+     * @param builderClass the builder class
+     * @param factory      static no-arg factory on the value type, or empty
+     *                     for the builder no-arg constructor
+     * @param prefix       builder method prefix ({@code "with"} matches
+     *                     {@code withName(...)}; empty matches {@code name(...)})
+     * @param build        terminal no-arg build method name
+     */
+    record BuilderDecl(Class<?> builderClass, String factory, String prefix, String build) {}
+
+    /**
+     * Resolve framework-declared builder binding for a value type (e.g.
+     * Jackson {@code @JsonDeserialize(builder)} with {@code @JsonPOJOBuilder}).
+     * Only called when no native {@link JqBuilder} is present — native wins.
+     *
+     * <p>The default implementation returns {@code null} (not supported);
+     * bridges override it when their annotations are present. Returning
+     * {@code null} for incomplete combinations keeps today's behavior.</p>
+     *
+     * @param type the value class to inspect
+     * @return the builder declaration, or {@code null} if not present
+     */
+    default BuilderDecl resolveBuilder(Class<?> type) {
+        return null;
+    }
 }

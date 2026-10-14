@@ -196,6 +196,66 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
     }
 
     @Override
+    public io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge.BuilderDecl resolveBuilder(Class<?> type) {
+        // @JsonDeserialize(builder=...) selects the builder class; the
+        // @JsonPOJOBuilder on that class names the terminal method and the
+        // property prefix (Jackson defaults: build/with). Both live in
+        // jackson-databind, which this module deliberately does not depend
+        // on — read reflectively so the bridge stays annotations-only.
+        Class<?> builderClass = reflectJsonDeserializeBuilder(type);
+        if (builderClass == null) return null;
+        String build = "build";
+        String prefix = "with";
+        for (java.lang.annotation.Annotation ann : builderClass.getAnnotations()) {
+            if (ann.annotationType().getSimpleName().equals("JsonPOJOBuilder")) {
+                String buildName = invokeStringMember(ann, "buildMethodName");
+                if (buildName != null && !buildName.isEmpty() && !"<none>".equals(buildName)) {
+                    build = buildName;
+                }
+                String withPrefix = invokeStringMember(ann, "withPrefix");
+                if (withPrefix != null && !withPrefix.isEmpty() && !"<none>".equals(withPrefix)) {
+                    prefix = withPrefix;
+                }
+            }
+        }
+        return new io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge.BuilderDecl(
+                builderClass, "", prefix, build);
+    }
+
+    /** Read {@code @JsonDeserialize(builder)} reflectively (databind optional). */
+    private static Class<?> reflectJsonDeserializeBuilder(Class<?> type) {
+        // Simple-name match covers Jackson 2 (com.fasterxml) and 3 (tools.jackson).
+        for (java.lang.annotation.Annotation ann : type.getAnnotations()) {
+            if (!ann.annotationType().getSimpleName().equals("JsonDeserialize")) continue;
+            java.lang.reflect.Method builderMethod;
+            try {
+                builderMethod = ann.annotationType().getMethod("builder");
+            } catch (NoSuchMethodException e) {
+                continue;
+            }
+            try {
+                Object value = builderMethod.invoke(ann);
+                if (value instanceof Class<?> c && c != Void.class) return c;
+                return null;
+            } catch (ReflectiveOperationException e) {
+                throw new io.hyperfoil.tools.jjq.mapper.JqMapperException(
+                        "Cannot read @JsonDeserialize(builder) on " + type.getName(), e);
+            }
+        }
+        return null;
+    }
+
+    /** Invoke a no-arg String member on a reflectively-read annotation. */
+    private static String invokeStringMember(java.lang.annotation.Annotation ann, String member) {
+        try {
+            Object value = ann.annotationType().getMethod(member).invoke(ann);
+            return value instanceof String s ? s : null;
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    @Override
     public java.lang.reflect.Method resolveAnySetter(Class<?> type) {
         for (java.lang.reflect.Method m : type.getMethods()) {
             if (m.isAnnotationPresent(JsonAnySetter.class)

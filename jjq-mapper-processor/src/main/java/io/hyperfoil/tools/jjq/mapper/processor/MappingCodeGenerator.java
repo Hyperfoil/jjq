@@ -1251,7 +1251,8 @@ final class MappingCodeGenerator {
     static String generateForClass(String packageName, String classSimpleName, String classQualifiedName,
                                     String mappingClassName, List<JqMapperProcessor.PropertyInfo> properties,
                                     JqMapperProcessor.AnyInfo anyInfo,
-                                    JqMapperProcessor.CreatorInfo creator) {
+                                    JqMapperProcessor.CreatorInfo creator,
+                                    JqMapperProcessor.BuilderInfo builder) {
         var sb = new StringBuilder(1024);
 
         if (!packageName.isEmpty()) {
@@ -1416,11 +1417,16 @@ final class MappingCodeGenerator {
             }
             sb.append(");\n");
             emitCreatorCatch(sb, classSimpleName, creator.label());
+        } else if (builder != null) {
+            // Builder binding: instance materializes at the end (see below);
+            // only the builder is constructed here.
+            sb.append("        ").append(builder.builderSourceName()).append(" _b = ")
+              .append(builder.factory()).append(";\n");
         } else {
             sb.append("        ").append(classSimpleName).append(" instance = new ").append(classSimpleName).append("();\n");
         }
 
-        if (!pojoPositional.isEmpty() && creator == null) {
+        if (!pojoPositional.isEmpty() && creator == null && builder == null) {
             // Ordered docs with exactly the bindable keys bind by index.
             // Anything else (reordered/extra/missing keys, non-objects) falls
             // through to the slow path, which also re-attributes failures.
@@ -1453,6 +1459,9 @@ final class MappingCodeGenerator {
         }
 
         for (var prop : properties) {
+            // Builder binding replaces the setter path wholesale (binders
+            // below); skipping here keeps one loop, not two interleaved ones.
+            if (builder != null) break;
             if (prop.ignored() || prop.skipDeserialize()) continue;
             // Creator-bound properties are already set (the creator owns
             // them); setters bind the rest. Mirrors the runtime rule.
@@ -1497,6 +1506,10 @@ final class MappingCodeGenerator {
                 sb.append("        if (").append(optVar).append(".isPresent()) ")
                         .append(statement).append("\n");
             }
+        }
+
+        if (builder != null) {
+            emitPojoBuilderBlock(sb, classSimpleName, properties, builder);
         }
 
         if (anyInfo.hasSetter()) {
@@ -1914,6 +1927,56 @@ final class MappingCodeGenerator {
                 p.name(), p.jsonName(), p.typeName(), null, false, false,
                 null, null, false, "ALWAYS", p.converterClass(), false,
                 false, false, false, false, null, p.converterField());
+    }
+
+    /**
+     * Emit builder binding into POJO {@code fromJqValue}: one chained call
+     * per bound field (absent keys keep builder defaults, explicit nulls
+     * still write — same leniency as the setter path), then the terminal
+     * build call with wrapped failures. Mirrors the runtime builder branch.
+     */
+    private static void emitPojoBuilderBlock(StringBuilder sb, String classSimpleName,
+                                             List<JqMapperProcessor.PropertyInfo> properties,
+                                             JqMapperProcessor.BuilderInfo builder) {
+        var byJson = new java.util.HashMap<String, JqMapperProcessor.BuilderFieldInfo>();
+        for (var b : builder.bound()) byJson.put(b.jsonName(), b);
+        for (var prop : properties) {
+            if (prop.ignored() || prop.skipDeserialize()) continue;
+            var b = byJson.get(prop.jsonName());
+            if (b == null) continue; // cannot happen (fail fast at processing)
+            String writeExpr;
+            String optVar;
+            if (prop.hasJqField()) {
+                String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
+                writeExpr = buildExtraction(prop, apply);
+                optVar = null;
+            } else {
+                optVar = "_v_" + prop.name();
+                sb.append("        var ").append(optVar).append(" = input.tryGet(K_")
+                  .append(prop.name().toUpperCase()).append(");\n");
+                writeExpr = buildExtraction(prop, optVar + ".get()");
+            }
+            String invoke = b.isVoid()
+                    ? "_b." + b.binderName() + "(" + writeExpr + ")"
+                    : "_b = _b." + b.binderName() + "(" + writeExpr + ")";
+            if (prop.hasJqField()) {
+                sb.append("        ").append(invoke).append(";\n");
+            } else if (isFalliblePojoExtraction(prop)) {
+                sb.append("        if (").append(optVar).append(".isPresent()) {\n");
+                sb.append("            try {\n");
+                sb.append("                ").append(invoke).append(";\n");
+                sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+                sb.append("                throw _e.prependPath(\"").append(escapeJava(prop.jsonName())).append("\");\n");
+                sb.append("            }\n");
+                sb.append("        }\n");
+            } else {
+                sb.append("        if (").append(optVar).append(".isPresent()) ").append(invoke).append(";\n");
+            }
+        }
+        sb.append("        ").append(classSimpleName).append(" instance;\n");
+        sb.append("        try {\n");
+        sb.append("            instance = _b.").append(builder.build()).append("();\n");
+        emitCreatorCatch(sb, classSimpleName, builder.label());
     }
 
     /**

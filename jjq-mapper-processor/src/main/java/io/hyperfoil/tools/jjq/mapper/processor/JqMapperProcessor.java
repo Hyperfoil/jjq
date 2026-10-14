@@ -5,6 +5,7 @@ import io.hyperfoil.tools.jjq.mapper.JqAccess;
 import io.hyperfoil.tools.jjq.mapper.JqAdapter;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+import io.hyperfoil.tools.jjq.mapper.JqBuilder;
 import io.hyperfoil.tools.jjq.mapper.JqCreator;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
@@ -199,6 +200,14 @@ public class JqMapperProcessor extends AbstractProcessor {
         CreatorInfo recordCreator = resolveCreatorInfo(recordType, recordSourceName, packageName,
                 convFields, usedConvNames);
         if (recordCreator == null && hasCreatorMarker(recordType)) return null;
+        if (hasBuilderMarker(recordType)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Builder configuration on record " + recordType.getQualifiedName()
+                            + " needs a POJO — records construct through their canonical"
+                            + " constructor or a @JqCreator creator",
+                    recordType);
+            return null;
+        }
         String source = MappingCodeGenerator.generate(
                 packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
                 recordAnyInfo, recordCreator);
@@ -384,9 +393,18 @@ public class JqMapperProcessor extends AbstractProcessor {
         CreatorInfo pojoCreator = resolveCreatorInfo(classType, classSourceName, packageName,
                 convFields, usedConvNames);
         if (pojoCreator == null && hasCreatorMarker(classType)) return null;
+        BuilderInfo pojoBuilder = resolveBuilderInfo(classType, classSourceName, properties);
+        if (pojoBuilder == null && hasBuilderMarker(classType)) return null;
+        if (pojoCreator != null && pojoBuilder != null) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    classType.getQualifiedName()
+                            + " declares both a creator and a builder: pick one construction strategy",
+                    classType);
+            return null;
+        }
         String source = MappingCodeGenerator.generateForClass(
                 packageName, classSourceName, classQualifiedName, mappingClassName, properties,
-                pojoAnyInfo, pojoCreator);
+                pojoAnyInfo, pojoCreator, pojoBuilder);
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -1053,6 +1071,226 @@ public class JqMapperProcessor extends AbstractProcessor {
         return false;
     }
 
+    /** True when the type carries any builder marker (native or bridge). */
+    private static boolean hasBuilderMarker(TypeElement type) {
+        if (type.getAnnotation(JqBuilder.class) != null) return true;
+        for (var mirror : type.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .endsWith(".JsonDeserialize")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Resolve builder binding for a POJO (null when unconfigured). Native
+     * {@code @JqBuilder} wins over the Jackson pair; gaps report compile
+     * errors (the caller bails when a marker is present but no info comes
+     * back). Mirrors the runtime {@code BuilderSpec} rules: one binder per
+     * deserializable field, terminal build method, factory or no-arg
+     * construction.
+     */
+    private BuilderInfo resolveBuilderInfo(TypeElement type, String classSourceName,
+            List<PropertyInfo> properties) {
+        JqBuilder nativeAnn = type.getAnnotation(JqBuilder.class);
+        String builderName = null;
+        String factory = "";
+        String prefix = "with";
+        String build = "build";
+        boolean nativeDecl = nativeAnn != null;
+        if (nativeDecl) {
+            // Class-valued members read via mirrors (direct access throws
+            // MirroredTypeException for same-round classes).
+            for (var mirror : type.getAnnotationMirrors()) {
+                if (!mirror.getAnnotationType().toString()
+                        .equals("io.hyperfoil.tools.jjq.mapper.JqBuilder")) continue;
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    String member = entry.getKey().getSimpleName().toString();
+                    Object value = entry.getValue().getValue();
+                    if (member.equals("value") && value instanceof javax.lang.model.type.TypeMirror tm) {
+                        builderName = tm.toString();
+                    } else if (value instanceof String s) {
+                        if (member.equals("factory")) factory = s;
+                        else if (member.equals("prefix")) prefix = s;
+                        else if (member.equals("build")) build = s;
+                    }
+                }
+            }
+            if (builderName == null) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqBuilder on " + type.getQualifiedName() + " needs a builder class",
+                        type);
+                return null;
+            }
+        } else {
+            for (var mirror : type.getAnnotationMirrors()) {
+                if (!mirror.getAnnotationType().toString().endsWith(".JsonDeserialize")) continue;
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("builder")) {
+                        Object value = entry.getValue().getValue();
+                        if (value instanceof javax.lang.model.type.DeclaredType dt
+                                && dt.asElement() instanceof TypeElement builderType) {
+                            builderName = builderType.getQualifiedName().toString();
+                        }
+                    }
+                }
+            }
+            if (builderName == null) return null;
+            TypeElement builderType =
+                    processingEnv.getElementUtils().getTypeElement(builderName);
+            if (builderType != null) {
+                for (var mirror : builderType.getAnnotationMirrors()) {
+                    if (!mirror.getAnnotationType().toString().endsWith(".JsonPOJOBuilder")) continue;
+                    for (var entry : mirror.getElementValues().entrySet()) {
+                        String member = entry.getKey().getSimpleName().toString();
+                        Object value = entry.getValue().getValue();
+                        if (!(value instanceof String s) || s.isEmpty() || s.equals("<none>")) continue;
+                        if (member.equals("buildMethodName")) build = s;
+                        else if (member.equals("withPrefix")) prefix = s;
+                    }
+                }
+            }
+        }
+        TypeElement builderType = processingEnv.getElementUtils().getTypeElement(builderName);
+        if (builderType == null) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Cannot resolve builder class " + builderName + " for " + type.getQualifiedName(),
+                    type);
+            return null;
+        }
+        String builderSourceName = sourceNameOf(builderType, type);
+        // Factory on the value type, else the builder no-arg constructor.
+        boolean hasFactory = false;
+        if (!factory.isEmpty()) {
+            boolean found = false;
+            for (Element enclosed : type.getEnclosedElements()) {
+                if (enclosed.getKind() == ElementKind.METHOD
+                        && enclosed.getSimpleName().contentEquals(factory)
+                        && enclosed instanceof javax.lang.model.element.ExecutableElement method
+                        && method.getParameters().isEmpty()
+                        && method.getModifiers().contains(Modifier.STATIC)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "Builder factory '" + factory + "' must be a static no-arg method on "
+                                + type.getQualifiedName(),
+                        type);
+                return null;
+            }
+            hasFactory = true;
+        } else {
+            boolean hasCtor = false;
+            for (Element enclosed : builderType.getEnclosedElements()) {
+                if (enclosed.getKind() == ElementKind.CONSTRUCTOR
+                        && enclosed instanceof javax.lang.model.element.ExecutableElement ctor
+                        && ctor.getParameters().isEmpty()) {
+                    hasCtor = true;
+                    break;
+                }
+            }
+            if (!hasCtor) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "Builder " + builderName + " needs a no-arg constructor (or name a factory)",
+                        type);
+                return null;
+            }
+        }
+        // Terminal build method returning the value type.
+        boolean hasBuild = false;
+        for (Element enclosed : builderType.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD
+                    && enclosed.getSimpleName().contentEquals(build)
+                    && enclosed instanceof javax.lang.model.element.ExecutableElement method
+                    && method.getParameters().isEmpty()
+                    && !method.getModifiers().contains(Modifier.STATIC)
+                    && processingEnv.getTypeUtils().isAssignable(method.getReturnType(), type.asType())) {
+                hasBuild = true;
+                break;
+            }
+        }
+        if (!hasBuild) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Builder " + builderName + " has no terminal method '" + build + "()' returning "
+                            + type.getSimpleName(),
+                    type);
+            return null;
+        }
+        // One binder per deserializable field.
+        var bound = new ArrayList<BuilderFieldInfo>();
+        for (PropertyInfo prop : properties) {
+            if (prop.ignored() || prop.skipDeserialize()) continue;
+            String candidate = prefix.isEmpty() ? prop.name()
+                    : prefix + Character.toUpperCase(prop.name().charAt(0)) + prop.name().substring(1);
+            boolean found = false;
+            boolean isVoid = false;
+            for (Element enclosed : builderType.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.METHOD
+                        || !enclosed.getSimpleName().contentEquals(candidate)) continue;
+                if (!(enclosed instanceof javax.lang.model.element.ExecutableElement method)
+                        || method.getParameters().size() != 1
+                        || method.getModifiers().contains(Modifier.STATIC)) continue;
+                String paramType = method.getParameters().get(0).asType().toString();
+                if (!paramType.equals(prop.typeName()) && !boxedEquals(paramType, prop.typeName())) continue;
+                found = true;
+                isVoid = method.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID;
+                break;
+            }
+            if (!found) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "No builder method '" + candidate + "(" + prop.typeName() + ")' on "
+                                + builderName + " for field '" + prop.name() + "'",
+                        type);
+                return null;
+            }
+            bound.add(new BuilderFieldInfo(prop.jsonName(), candidate, isVoid));
+        }
+        String factoryPrefix = hasFactory
+                ? classSourceName + "." + factory + "()"
+                : "new " + builderSourceName + "()";
+        String infoLabel = nativeDecl ? "@JqBuilder" : "@JsonDeserialize";
+        return new BuilderInfo(builderSourceName, factoryPrefix, build, infoLabel, List.copyOf(bound));
+    }
+
+    /** Source-level name of a (possibly nested) type, for generated code. */
+    private static String sourceNameOf(TypeElement builderType, TypeElement context) {
+        String qualified = builderType.getQualifiedName().toString();
+        String pkg = processingPackageOf(context);
+        if (!pkg.isEmpty() && qualified.startsWith(pkg + ".")) {
+            return qualified.substring(pkg.length() + 1);
+        }
+        return qualified;
+    }
+
+    /** Boxed equivalence for binder parameter matching (int ↔ Integer, ...). */
+    private static boolean boxedEquals(String a, String b) {
+        return boxedName(a).equals(boxedName(b));
+    }
+
+    /** Package of a type element (empty for the default package). */
+    private static String processingPackageOf(TypeElement type) {
+        String qualified = type.getQualifiedName().toString();
+        int dot = qualified.lastIndexOf('.');
+        String simple = type.getSimpleName().toString();
+        if (dot < 0) return "";
+        String pkg = qualified.substring(0, dot);
+        // Strip nesting (Outer.Inner -> package of Outer).
+        Element enclosing = type.getEnclosingElement();
+        while (enclosing != null
+                && (enclosing.getKind() == ElementKind.CLASS
+                    || enclosing.getKind() == ElementKind.RECORD
+                    || enclosing.getKind() == ElementKind.INTERFACE
+                    || enclosing.getKind() == ElementKind.ENUM)) {
+            int cut = pkg.lastIndexOf('.');
+            pkg = cut < 0 ? "" : pkg.substring(0, cut);
+            enclosing = enclosing.getEnclosingElement();
+        }
+        return pkg;
+    }
+
     /** The {@code @JsonCreator} mode name (stringly-typed: no framework dependency). */
     private static String jsonCreatorMode(javax.lang.model.element.ExecutableElement executable) {
         for (var mirror : executable.getAnnotationMirrors()) {
@@ -1068,6 +1306,17 @@ public class JqMapperProcessor extends AbstractProcessor {
         }
         return null;
     }
+
+    /** Metadata for one builder-bound field. */
+    record BuilderFieldInfo(String jsonName, String binderName, boolean isVoid) {}
+
+    /**
+     * Metadata for a {@code @JqBuilder}/{@code @JsonDeserialize} builder
+     * binding on a POJO. Construction is a builder instance plus one call
+     * per bound field plus the terminal build call.
+     */
+    record BuilderInfo(String builderSourceName, String factory, String build, String label,
+                       List<BuilderFieldInfo> bound) {}
 
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,

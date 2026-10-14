@@ -23,6 +23,12 @@
             <version>${jackson.version}</version>
         </dependency>
         <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.hyperfoil.tools</groupId>
             <artifactId>jjq-core</artifactId>
             <scope>test</scope>

@@ -549,4 +549,42 @@ class JacksonAnnotationBridgeTest {
         assertEquals("x", p.name);
         assertEquals("{\"name\":\"x\"}", mapper.toJqValue(p).toJsonString());
     }
+
+    // ---- @JsonDeserialize(builder) + @JsonPOJOBuilder ----
+
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(builder = JackBean.JackBeanBuilder.class)
+    static class JackBean {
+        String name;
+        int age;
+
+        public String getName() { return name; }
+        public int getAge() { return age; }
+
+        @com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder(withPrefix = "with")
+        public static class JackBeanBuilder {
+            private String name;
+            private int age = 21;
+
+            public JackBeanBuilder withName(String name) { this.name = name; return this; }
+            public JackBeanBuilder withAge(int age) { this.age = age; return this; }
+
+            public JackBean build() {
+                JackBean b = new JackBean();
+                b.name = name;
+                b.age = age;
+                return b;
+            }
+        }
+    }
+
+    @Test
+    void jsonDeserializeBuilderBinds() {
+        JackBean b = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), JackBean.class);
+        assertEquals("Ann", b.name);
+        assertEquals(3, b.age);
+        JackBean d = mapper.fromJqValue(JqValues.parse("{\"name\":\"Bo\"}"), JackBean.class);
+        assertEquals(21, d.age);
+        assertEquals("{\"name\":\"Ann\",\"age\":3}", mapper.toJqValue(b).toJsonString());
+    }
 }

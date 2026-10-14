@@ -165,6 +165,27 @@ construct, setters bind the rest; a creator removes the no-arg requirement).
 Jackson `@JsonCreator` (`DELEGATING`/`PROPERTIES`/default modes,
 `@JsonProperty` params) works through the bridge; native wins.
 
+### `@JqBuilder` — builder binding
+
+```java
+@JqBuilder(value = User.Builder.class, factory = "builder", prefix = "")
+class User {
+    final String name;
+    public String getName() { return name; }
+    public static Builder builder() { return new Builder(); }
+    public static class Builder {
+        Builder name(String name) { ...; return this; }  // or void
+        User build() { ... }
+    }
+}
+```
+
+Each property converts as usual, then invokes `prefix + Name(...)`
+(empty prefix is Lombok style); missing keys keep builder defaults.
+Gaps (missing binder/factory/build) fail fast at mapping creation.
+Jackson `@JsonDeserialize(builder=...)` + `@JsonPOJOBuilder` works
+through the bridge without new dependencies; native wins.
+
 ### `@JqEnum` — lenient enum parsing
 
 ```java

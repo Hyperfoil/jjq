@@ -1084,6 +1084,144 @@ class JqMapperTest {
         assertFalse(instance instanceof ShapeMismatchException, instance.getClass().getName());
     }
 
+    // ---- @JqBuilder (Lombok and Jackson styles) ----
+
+    @JqBuilder(value = LombokUser.Builder.class, factory = "builder", prefix = "")
+    static class LombokUser {
+        final String name;
+        final int age;
+
+        private LombokUser(String name, int age) { this.name = name; this.age = age; }
+
+        public String getName() { return name; }
+        public int getAge() { return age; }
+
+        public static Builder builder() { return new Builder(); }
+
+        public static class Builder {
+            private String name;
+            private int age = 18;
+
+            public Builder name(String name) { this.name = name; return this; }
+            public Builder age(int age) { this.age = age; return this; }
+            public LombokUser build() { return new LombokUser(name, age); }
+        }
+    }
+
+    @JqBuilder(LegacyUser.LegacyBuilder.class)
+    static class LegacyUser {
+        private String name;
+        private int age;
+
+        public String getName() { return name; }
+        public int getAge() { return age; }
+
+        public static class LegacyBuilder {
+            private String name;
+            private int age;
+
+            public LegacyBuilder() {}
+
+            public LegacyBuilder withName(String name) { this.name = name; return this; }
+            public void withAge(int age) { this.age = age; }
+
+            public LegacyUser build() {
+                if (name == null) throw new IllegalArgumentException("name required");
+                LegacyUser u = new LegacyUser();
+                u.name = name;
+                u.age = age;
+                return u;
+            }
+        }
+    }
+
+    @JqBuilder(value = GapBuilder.class)
+    static class GapHost {
+        public String name;
+        public String missing;
+    }
+
+    static class GapBuilder {
+        public GapBuilder() {}
+
+        public GapBuilder withName(String name) { return this; }
+
+        public GapHost build() { return new GapHost(); }
+    }
+
+    @JqBuilder(value = BothBuilder.class)
+    static class BothStrategies {
+        @JqCreator
+        public static BothStrategies create(String name) { return new BothStrategies(); }
+    }
+
+    static class BothBuilder {
+        public BothBuilder() {}
+
+        public BothStrategies build() { return new BothStrategies(); }
+    }
+
+    @Test
+    void builderLombokStyleBinds() {
+        LombokUser u = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), LombokUser.class);
+        assertEquals("Ann", u.name);
+        assertEquals(3, u.age);
+        // Builder defaults survive missing keys (same leniency as setters)
+        LombokUser d = mapper.fromJqValue(JqValues.parse("{\"name\":\"Bo\"}"), LombokUser.class);
+        assertEquals("Bo", d.name);
+        assertEquals(18, d.age);
+        // Ser still uses getters; tree/String/bytes agree
+        assertEquals("{\"name\":\"Ann\",\"age\":3}", mapper.toJqValue(u).toJsonString());
+        assertEquals(mapper.toJqValue(u).toJsonString(), mapper.toJson(u));
+        assertBytesMatch(u);
+    }
+
+    @Test
+    void builderWithPrefixAndVoidBinderBinds() {
+        LegacyUser u = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), LegacyUser.class);
+        assertEquals("Ann", u.name);
+        assertEquals(3, u.age);
+    }
+
+    @Test
+    void builderValidationWraps() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"age\":3}"), LegacyUser.class));
+        assertTrue(e.getMessage().contains("LegacyUser"), e.getMessage());
+    }
+
+    @Test
+    void builderFieldFailureHasPath() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"Ann\",\"age\":\"old\"}"), LegacyUser.class));
+        assertEquals(List.of("age"), e.pathSegments());
+    }
+
+    @Test
+    void builderMissingBinderFailsFast() {
+        // GapBuilder has no withMissing binder (message names the gap).
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"a\"}"), GapHost.class));
+        assertTrue(e.getMessage().contains("missing"), e.getMessage());
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+    }
+
+    @Test
+    void builderCreatorConflictFailsFast() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"name\":\"a\"}"), BothStrategies.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+    }
+
+    @Test
+    void builderStrictUnknownFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"name\":\"Ann\",\"age\":3,\"zzz\":1}"), LegacyUser.class));
+        assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
+    }
+
     // ---- java.time (Phase B: ISO strings canonical, epoch accepted for instant-like) ----
 
     record TimeHolder(java.time.Instant instant, java.time.LocalDate date, java.time.LocalTime time,

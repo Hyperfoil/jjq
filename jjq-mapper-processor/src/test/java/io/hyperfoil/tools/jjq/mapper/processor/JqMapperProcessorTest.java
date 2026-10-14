@@ -1012,6 +1012,60 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_builderPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqBuilder;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                @JqBuilder(value = BUser.BUserBuilder.class, factory = "builder", prefix = "")
+                public class BUser {
+                    final String name;
+                    final int age;
+
+                    private BUser(String name, int age) { this.name = name; this.age = age; }
+
+                    public String getName() { return name; }
+                    public int getAge() { return age; }
+
+                    public static BUserBuilder builder() { return new BUserBuilder(); }
+
+                    public static class BUserBuilder {
+                        private String name;
+                        private int age = 18;
+
+                        public BUserBuilder name(String name) { this.name = name; return this; }
+                        public BUserBuilder age(int age) { this.age = age; return this; }
+
+                        public BUser build() { return new BUser(name, age); }
+                    }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.BUser", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object u = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), pojoClass);
+        assertEquals("Ann", pojoClass.getMethod("getName").invoke(u));
+        assertEquals(3, pojoClass.getMethod("getAge").invoke(u));
+        // Builder defaults survive missing keys
+        Object d = mapper.fromJqValue(JqValues.parse("{\"name\":\"Bo\"}"), pojoClass);
+        assertEquals(18, pojoClass.getMethod("getAge").invoke(d));
+        // Ser uses getters; tree/String/bytes agree
+        assertEquals("{\"name\":\"Ann\",\"age\":3}", mapper.toJqValue(u).toJsonString());
+        assertEquals(mapper.toJqValue(u).toJsonString(), mapper.toJson(u));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(u)), mapper.toJsonBytes(u));
+        // Mismatches carry paths
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                        mapper.fromJqValue(JqValues.parse("{\"name\":\"Ann\",\"age\":\"old\"}"), pojoClass));
+        assertTrue(e.getMessage().contains("age"), e.getMessage());
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;
