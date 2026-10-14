@@ -14,9 +14,12 @@ import java.util.Map;
  *
  * <p>Always entered (the outer call cannot know whether nested types need
  * identity — mappings resolve lazily mid-bind, so a fast-path check would
- * isolate siblings into separate scopes). The maps stay lazy, so operations
- * without identity pay one small scope allocation plus ThreadLocal churn,
- * nothing more.</p>
+ * isolate siblings into separate scopes). The scope object itself is kept
+ * in the {@code ThreadLocal} across operations (one per thread — the same
+ * reuse pattern as the serializer buffers); only the maps are dropped on
+ * close and rebuilt lazily on the next identity bind. Operations without
+ * identity therefore pay a {@code ThreadLocal} lookup plus depth
+ * bookkeeping, with zero allocation.</p>
  */
 final class IdentityScope {
 
@@ -31,6 +34,16 @@ final class IdentityScope {
     /** The ambient scope, or null outside an operation. */
     static IdentityScope current() {
         return CURRENT.get();
+    }
+
+    /**
+     * True while inside a top-level mapper operation (depth above zero).
+     * Direct mapping calls outside the {@code JqMapper} API observe an
+     * inactive scope and behave as first occurrences — registrations
+     * there must neither read nor write.
+     */
+    boolean isActive() {
+        return depth > 0;
     }
 
     /**
@@ -50,15 +63,16 @@ final class IdentityScope {
     }
 
     /**
-     * Leave a scope: the owner clears the maps and detaches (nested calls
-     * only decrement). Safe to call without a matching enter on a fresh
-     * thread (no-op).
+     * Leave a scope: the outermost close drops the maps (nested calls only
+     * decrement). The scope object stays in the {@code ThreadLocal} for the
+     * next operation — depth is back at zero and the maps are null, so no
+     * state can leak across calls. Safe to call without a matching enter
+     * on a fresh thread (no-op).
      */
     void close() {
         if (--depth == 0) {
             byId = null;
             byInstance = null;
-            CURRENT.remove();
         }
     }
 

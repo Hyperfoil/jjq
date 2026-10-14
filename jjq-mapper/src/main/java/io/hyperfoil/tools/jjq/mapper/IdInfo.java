@@ -41,42 +41,45 @@ record IdInfo(String property) {
     }
 
     /**
-     * Look up a bound instance by id value. Null scope (direct mapping
-     * calls outside the API) and null values always miss.
+     * Look up a bound instance by id value. Null or inactive scopes
+     * (direct mapping calls outside the API) and null values always miss —
+     * and never create the maps.
      *
      * @param idValue the scalar id
      * @param scope   the ambient scope (may be null)
      * @return the registered instance, or null
      */
     Object lookupDeser(JqValue idValue, IdentityScope scope) {
-        if (scope == null || idValue == null) return null;
+        if (scope == null || !scope.isActive() || idValue == null) return null;
         if (scope.byId().isEmpty()) return null;
         return scope.byId().get(idValue.toJsonString());
     }
 
     /**
-     * Register a bound instance under its id value. Null scope is a no-op
-     * (standalone semantics for direct mapping calls).
+     * Register a bound instance under its id value. Null or inactive scopes
+     * are a no-op (standalone semantics for direct mapping calls — nothing
+     * may leak across them).
      */
     void registerDeser(JqValue idValue, Object instance, IdentityScope scope) {
-        if (scope == null || idValue == null || instance == null) return;
+        if (scope == null || !scope.isActive() || idValue == null || instance == null) return;
         scope.byId().put(idValue.toJsonString(), instance);
     }
 
     /**
-     * Look up a rendered id for an instance. Null scope always misses.
+     * Look up a rendered id for an instance. Null or inactive scopes always
+     * miss.
      *
      * @return the stored id value, or null for first occurrences
      */
     JqValue lookupSer(Object instance, IdentityScope scope) {
-        if (scope == null || instance == null) return null;
+        if (scope == null || !scope.isActive() || instance == null) return null;
         if (scope.byInstance().isEmpty()) return null;
         return scope.byInstance().get(instance);
     }
 
-    /** Register a first occurrence. Null scope is a no-op. */
+    /** Register a first occurrence. Null or inactive scopes are a no-op. */
     void registerSer(Object instance, JqValue idValue, IdentityScope scope) {
-        if (scope == null || instance == null || idValue == null) return;
+        if (scope == null || !scope.isActive() || instance == null || idValue == null) return;
         scope.byInstance().put(instance, idValue);
     }
 }

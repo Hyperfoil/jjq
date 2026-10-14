@@ -1347,6 +1347,24 @@ class JqMapperTest {
     }
 
     @Test
+    void identityDirectCallsStayStandalone() {
+        // Prime the thread with a real operation (its scope object lingers
+        // for reuse); direct mapping calls outside the API must still
+        // behave as first occurrences — reading and writing nothing.
+        NPair primed = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), NPair.class);
+        assertSame(primed.a(), primed.b());
+        Mapping<NNode> mapping = mapper.getMapping(NNode.class);
+        // The primed operation's registrations are invisible here.
+        assertThrows(ShapeMismatchException.class, () ->
+                mapping.fromJqValue(JqValues.parse("\"n1\""), mapper));
+        // Repeats rebind instead of deduping.
+        NNode first = mapping.fromJqValue(JqValues.parse("{\"id\":\"n1\",\"v\":1}"), mapper);
+        NNode second = mapping.fromJqValue(JqValues.parse("{\"id\":\"n1\",\"v\":1}"), mapper);
+        assertNotSame(first, second);
+    }
+
+    @Test
     void identityScopeIsolation() {
         NPair first = mapper.fromJqValue(JqValues.parse(
                 "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), NPair.class);
