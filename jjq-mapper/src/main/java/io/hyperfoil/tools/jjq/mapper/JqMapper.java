@@ -243,7 +243,8 @@ public final class JqMapper {
         public JqMapper build() {
             JqMapper mapper = new JqMapper(List.copyOf(bridges), failOnUnknownProperties);
             for (var m : mappings) {
-                mapper.cache.put(m.type(), new LastHit(m.type(), wrapPoly(m, mapper.bridges)));
+                mapper.cache.put(m.type(),
+                        new LastHit(m.type(), wrapId(wrapPoly(m, mapper.bridges), mapper.bridges)));
             }
             return mapper;
         }
@@ -258,6 +259,18 @@ public final class JqMapper {
             PolySerInfo serInfo = PolyMapping.resolvePolyMember(mapping.type(), bridges);
             if (serInfo == null) return mapping;
             return new PolyGeneratedWrapper<>((GeneratedMapping<Object>) mapping, serInfo);
+        }
+
+        /**
+         * Wrap a pre-registered generated mapping for identity binding
+         * (same rule as discovery-time wrapping, so both paths agree
+         * regardless of registration order).
+         */
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private static GeneratedMapping<?> wrapId(GeneratedMapping<?> mapping, List<AnnotationBridge> bridges) {
+            IdInfo idInfo = IdInfo.resolve(mapping.type(), bridges);
+            if (idInfo == null) return mapping;
+            return new IdGeneratedWrapper<>((GeneratedMapping<Object>) mapping, idInfo);
         }
     }
 
@@ -276,6 +289,16 @@ public final class JqMapper {
      * @throws JqMapperException if mapping fails (type not a record, conversion error, etc.)
      */
     public <T> T fromJqValue(JqValue value, Class<T> type) {
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            return fromJqValueInner(value, type);
+        } finally {
+            scope.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T fromJqValueInner(JqValue value, Class<T> type) {
         if (type.isEnum()) {
             // Enums have no mapping (no no-arg constructor): convert directly so
             // @JsonCreator creators and name-based binding work from any caller,
@@ -333,6 +356,16 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public <T> T fromJqValue(JqValue value, Type type) {
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            return fromJqValueInner(value, type);
+        } finally {
+            scope.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T fromJqValueInner(JqValue value, Type type) {
         Class<?> rawClass = TypeConverter.rawClass(type);
         return (T) TypeConverter.toJava(value, rawClass, type, this);
     }
@@ -376,6 +409,16 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public JqValue toJqValue(Object value) {
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            return toJqValueInner(value);
+        } finally {
+            scope.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private JqValue toJqValueInner(Object value) {
         if (value == null) return io.hyperfoil.tools.jjq.value.JqNull.NULL;
         if (value.getClass().isEnum()) {
             // Enums have no mapping: convert directly so @JsonValue accessors
@@ -433,6 +476,16 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public void appendJson(Object value, StringBuilder sb) {
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            appendJsonInner(value, sb);
+        } finally {
+            scope.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendJsonInner(Object value, StringBuilder sb) {
         if (value == null) { sb.append("null"); return; }
         // Arrays have no mapping (no no-arg constructor): render through the
         // tree like any other unmapped container.
@@ -454,6 +507,16 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public void appendJsonBytes(Object value, BytOutput out) {
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            appendJsonBytesInner(value, out);
+        } finally {
+            scope.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendJsonBytesInner(Object value, BytOutput out) {
         if (value == null) { out.writeNull(); return; }
         // Arrays have no mapping (no no-arg constructor): render through the
         // tree like any other unmapped container.
@@ -463,7 +526,7 @@ public final class JqMapper {
     }
 
     @SuppressWarnings("unchecked")
-    private <T> Mapping<T> getMapping(Class<T> type) {
+    <T> Mapping<T> getMapping(Class<T> type) {
         LastHit hit = lastHit;
         if (hit != null && hit.type() == type) return (Mapping<T>) hit.mapping();
         LastHit resolved = cache.get(type);
@@ -487,10 +550,28 @@ public final class JqMapper {
         PolyConfig poly = PolyMapping.resolvePolyConfig(type, bridges);
         if (poly != null) return new PolyMapping<>(type, poly);
         PolySerInfo serInfo = PolyMapping.resolvePolyMember(type, bridges);
+        IdInfo idInfo = IdInfo.resolve(type, bridges);
+        if (idInfo != null && (type.isInterface()
+                || java.lang.reflect.Modifier.isAbstract(type.getModifiers()))) {
+            // Identity needs instances: interfaces and abstract types can
+            // never bind, with or without an id property.
+            throw new JqMapperException("@JqId on " + type.getName()
+                    + " needs a concrete type — identity binds instances, not interfaces");
+        }
         // Try generated mapping first (from jjq-mapper-processor)
-        GeneratedMapping<T> generated = loadGenerated(type);
+        // Identity POJOs skip codegen: true deserialization cycles need
+        // mid-construction registration (before field binding), which only the
+        // reflection path does — the wrapper registers after the delegate
+        // returns, so generated POJOs support DAGs only. Records are immutable
+        // (no true cycles possible), so they keep the generated fast path.
+        GeneratedMapping<T> generated = (idInfo != null && !type.isRecord()) ? null : loadGenerated(type);
         if (generated != null) {
-            return serInfo == null ? generated : new PolyGeneratedWrapper<>(generated, serInfo);
+            Mapping<T> mapping = serInfo == null ? generated
+                    : new PolyGeneratedWrapper<>(generated, serInfo);
+            if (idInfo != null && mapping instanceof GeneratedMapping<T> gen) {
+                return new IdGeneratedWrapper<>(gen, idInfo);
+            }
+            return mapping;
         }
         // Fall back to reflection-based mapping
         if (type.isRecord()) return ClassMapping.forRecord(type, bridges, serInfo);

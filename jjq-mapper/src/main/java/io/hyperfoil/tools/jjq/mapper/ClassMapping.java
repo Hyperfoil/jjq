@@ -71,6 +71,12 @@ final class ClassMapping<T> implements Mapping<T> {
     // Required wire names in declaration order (absent keys fail binding).
     // Empty for the common case — enforcement no-ops without scanning.
     private final Set<String> required;
+    // Object identity (null for standalone binding): dedup plus reference
+    // resolution on deser, id emission on ser. One predictable branch.
+    private final IdInfo idInfo;
+    // The bound id field for pre-registration (null when the id property
+    // is not a bound field — tree-based fallback then applies).
+    private final FieldMapping idField;
 
     /**
      * Cached any-setter/any-getter handles plus the known-field names used to
@@ -85,7 +91,7 @@ final class ClassMapping<T> implements Mapping<T> {
                          Map<String, Integer> nameToIndex, boolean useForEachFastPath,
                          AnyHandlers anyHandlers, PolySerInfo polySer,
                          CreatorSpec creator, FieldMapping[] deserFields, BuilderSpec builder,
-                         Set<String> required) {
+                         Set<String> required, IdInfo idInfo) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
@@ -98,6 +104,8 @@ final class ClassMapping<T> implements Mapping<T> {
         this.deserFields = deserFields;
         this.builder = builder;
         this.required = required;
+        this.idField = idFieldFor(idInfo, fields);
+        this.idInfo = idInfo;
         Set<String> known = new HashSet<>();
         for (FieldMapping field : deserFields) {
             if (field.usesProgram()) continue;
@@ -366,7 +374,7 @@ final class ClassMapping<T> implements Mapping<T> {
         return new ClassMapping<>(type, fields, ctor, useSpread,
                 canUseFastPath ? nameMap : null, canUseFastPath,
                 resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
-                creator, deser, null, required);
+                creator, deser, null, required, IdInfo.resolve(type, bridges));
     }
 
     /**
@@ -698,7 +706,7 @@ final class ClassMapping<T> implements Mapping<T> {
         return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath,
                 resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
-                creator, deser, builder, required);
+                creator, deser, builder, required, IdInfo.resolve(type, bridges));
     }
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. Returns the Method (unreflect at site). */
@@ -760,7 +768,21 @@ final class ClassMapping<T> implements Mapping<T> {
      */
     @SuppressWarnings("unchecked")
     @Override
+    /**
+     * Deserialize with object-identity support: repeated full objects
+     * deduplicate, scalar ids resolve to bound instances. Types without
+     * identity skip straight to the plain path (one predictable branch).
+     */
     public T fromJqValue(JqValue value, JqMapper mapper) {
+        if (idInfo == null) return fromJqValuePlain(value, mapper);
+        Object known = IdBindings.lookupDeser(value, idInfo, type.getSimpleName());
+        if (known != null) return (T) known;
+        T bound = fromJqValuePlain(value, mapper);
+        IdBindings.registerDeser(value, idInfo, bound);
+        return bound;
+    }
+
+    private T fromJqValuePlain(JqValue value, JqMapper mapper) {
         // POJO path: no-arg constructor + setters. Empty non-record mappings
         // (all fields invisible, issue #95.2) also construct this way.
         if ((fields.length > 0 && fields[0].constructorIndex() < 0)
@@ -866,6 +888,25 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Failed to invoke " + spec.label()
                     + " for " + type.getName(), e);
         }
+    }
+
+    @Override
+    public IdInfo idInfo() {
+        return idInfo;
+    }
+
+    /**
+     * The bound field carrying the id property, for pre-registration before
+     * child binding (true cycles terminate). Null when the id is not a bound
+     * field — tree-based emission then applies (DAGs work, true cycles keep
+     * today's termination).
+     */
+    private static FieldMapping idFieldFor(IdInfo idInfo, FieldMapping[] fields) {
+        if (idInfo == null) return null;
+        for (FieldMapping field : fields) {
+            if (field.jsonName().equals(idInfo.property())) return field;
+        }
+        return null;
     }
 
     /** True when every mapped field uses a direct name lookup (no @JqField programs). */
@@ -1182,6 +1223,12 @@ final class ClassMapping<T> implements Mapping<T> {
             } catch (Throwable e) {
                 throw new JqMapperException("Failed to construct " + type.getName(), e);
             }
+            if (idInfo != null) {
+                // Register before field binding so nested back-references
+                // (true cycles) resolve to this instance under construction.
+                // The id was validated at entry; this only records.
+                IdBindings.registerDeser(value, idInfo, instance);
+            }
         }
         for (FieldMapping field : fields) {
             if (field.isIgnored() || field.skipDeserialize() || !field.hasSetter()) continue;
@@ -1209,8 +1256,31 @@ final class ClassMapping<T> implements Mapping<T> {
     /**
      * Serialize a Java object instance to a JqValue.
      */
+    /**
+     * Serialize with object-identity support: repeats render as the stored
+     * id value. Types without identity skip straight to the tree.
+     */
     @Override
     public JqValue toJqValue(T instance, JqMapper mapper) {
+        if (idInfo == null) return toJqValueTree(instance, mapper);
+        JqValue ref = IdBindings.lookupSer(instance, idInfo);
+        if (ref != null) return ref;
+        if (idField != null) {
+            // Pre-register before child binding so true cycles terminate:
+            // nested repeats hit the registration above instead of rebuilding.
+            Object javaId = idField.readValue(instance);
+            if (javaId != null) {
+                JqValue idValue = idField.toJqValue(javaId, mapper);
+                if (IdBindings.isScalarId(idValue)) {
+                    idInfo.registerSer(instance, idValue, IdentityScope.current());
+                }
+            }
+        }
+        return IdBindings.registerSer(instance, idInfo, toJqValueTree(instance, mapper),
+                type.getSimpleName());
+    }
+
+    private JqValue toJqValueTree(T instance, JqMapper mapper) {
         var builder = JqObject.builder(polySer != null ? fields.length + 1 : fields.length);
         for (FieldMapping field : fields) {
             if (field.isIgnored() || field.skipSerialize()) continue;

@@ -209,6 +209,26 @@ public interface AnnotationBridge {
     }
 
     /**
+     * Identity property for a concrete type (e.g. Jackson
+     * {@code @JsonIdentityInfo} with a property generator): the JSON
+     * property keying instances, or null when unconfigured. Only called
+     * for types without a native {@link JqId} — native wins.
+     *
+     * <p>The default implementation returns {@code null} (standalone
+     * binding); bridges override it when their annotations are present.
+     * Non-property identity schemes should also return {@code null}
+     * (out of scope, keeps today's behavior).</p>
+     *
+     * @param type the class to inspect
+     * @return the id property name, or {@code null} if not present
+     */
+    default String resolveIdentity(Class<?> type) {
+        return null;
+    }
+
+    /**
+
+    /**
      * Alternative accepted JSON keys for a property ({@code @JsonAlias}
      * equivalent). Empty when none are declared — bridges override it when
      * their annotations are present.

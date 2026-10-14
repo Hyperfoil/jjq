@@ -16,6 +16,17 @@ import io.hyperfoil.tools.jjq.value.JqValue;
 sealed interface Mapping<T> permits ClassMapping, GeneratedMapping, PolyMapping, ArrayMapping {
 
     /**
+     * Identity configuration for {@code @JqId} types (null for standalone
+     * binding). Carried by the mapping so deserialization needs no per-call
+     * lookup — one predictable branch.
+     *
+     * @return the identity configuration, or null
+     */
+    default IdInfo idInfo() {
+        return null;
+    }
+
+    /**
      * Deserialize a JqValue into an instance of type T.
      *
      * @param value  the input JqValue (typically a JqObject)

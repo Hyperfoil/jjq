@@ -138,6 +138,27 @@ direct binding to a subtype stays lenient. Jackson interop: `@JsonTypeInfo`
 (`PROPERTY` + `NAME`, with `@JsonSubTypes`/`@JsonTypeName`) works through the
 bridge; native `@JqType` wins when both are present.
 
+### `@JqId` — object identity and cycles
+
+```java
+@JqId
+record Node(String id, int v) {}
+record Pair(Node a, Node b) {}
+// {"a":{"id":"n1","v":1},"b":"n1"} binds one instance; repeats serialize as "n1"
+```
+
+The first occurrence binds fully (its id is a bound field like any other);
+repeated full objects dedup to the same instance, scalar ids resolve to
+already-bound instances, and unknown refs fail fast. Records do dedup plus
+backward references (forward refs fail — nothing is registered before the
+canonical constructor returns); POJOs register right after the no-arg
+constructor, so true cycles resolve. Scopes are per top-level mapper call
+(never shared across calls or threads); missing, null, and non-scalar ids
+fail fast. Lists, maps, and arrays share the path. Identity POJOs bind via
+reflection (generated records share the same semantics through a wrapper).
+Jackson `@JsonIdentityInfo` with `PropertyGenerator` works through the
+bridge (other generators are out of scope); native wins.
+
 ### `@JqCreator` — custom construction
 
 ```java
@@ -432,6 +453,7 @@ semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
 | `@JsonAnyGetter` / `@JsonAnySetter` | `@JqAnyGetter` / `@JqAnySetter` | Same method-form contract |
 | `@JsonValue` / `@JsonCreator` on enums | `@JqName` on constants (+ `@JqEnum` for leniency) | Strict exact mapping; leniency via `@JqEnum`, custom policy via `@JqConverter` |
 | `@JsonTypeInfo` + `@JsonSubTypes` (`PROPERTY`+`NAME`) | `@JqType` (sealed) | Discriminator property + simple-name values (overridable via `@JqName` on the subtype); native wins over bridge; full `JsonTypeInfo` matrix out of scope |
+| `@JsonIdentityInfo` (`PropertyGenerator`) | `@JqId` | Id-property dedup + scalar refs both directions; native wins; other generators out of scope |
 | `@JsonNaming` | `@JqNaming` | All 8 strategies mapped by class name (unknown stays identity) |
 | `@JsonAlias` | `@JqAlias` | First present wins on deser, primary serializes |
 | `@JsonPropertyOrder` | `@JqOrder` | Explicit wires first + alphabetic tail, ser only |

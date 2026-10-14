@@ -6,10 +6,12 @@ import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIdentityInfo;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.ObjectIdGenerators;
 import com.fasterxml.jackson.annotation.JsonValue;
 import io.hyperfoil.tools.jjq.mapper.JqFormat;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
@@ -348,6 +350,17 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
         } catch (ReflectiveOperationException e) {
             return null;
         }
+    }
+
+    @Override
+    public String resolveIdentity(Class<?> type) {
+        // Property generators only: the id lives in a named JSON property
+        // both directions. Sequence/UUID/custom generators are out of scope
+        // (null keeps today's behavior).
+        JsonIdentityInfo info = type.getAnnotation(JsonIdentityInfo.class);
+        if (info == null) return null;
+        if (info.generator() != ObjectIdGenerators.PropertyGenerator.class) return null;
+        return info.property();
     }
 
     @Override

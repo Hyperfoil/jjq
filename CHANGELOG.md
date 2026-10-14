@@ -2,6 +2,15 @@
 
 ## [Unreleased] - 0.2.4
 
+  patterns are moot and ignored (Jackson ignores them)
+- Object identity: native `@JqId` plus Jackson `@JsonIdentityInfo`
+  (property generators) through the bridge — repeated full objects dedup
+  to one instance, scalar ids resolve to bound instances, repeats serialize
+  as bare ids; records do dedup + backward refs (forward refs fail fast),
+  POJOs register after the no-arg constructor so true cycles resolve;
+  per-call scopes, fail-fast on missing/non-scalar/unknown ids, collections
+  share the path; identity POJOs bind via reflection, generated records
+  share the semantics
 - Custom date/time patterns: native `@JqFormat` plus Jackson
   `@JsonFormat` through the bridge — pattern/timezone/locale per field
   on the six date/time types, root locale and UTC by default; patterns

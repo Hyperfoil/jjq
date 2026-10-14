@@ -2,6 +2,8 @@ package io.hyperfoil.tools.jjq.mapper.jackson;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIdentityInfo;
+import com.fasterxml.jackson.annotation.ObjectIdGenerators;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -562,6 +564,53 @@ class JacksonAnnotationBridgeTest {
         assertTrue(e.getMessage().contains("\"name\""), e.getMessage());
         assertEquals(new Req("Ann", 3), mapper.fromJqValue(
                 JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), Req.class));
+    }
+
+    // ---- @JsonIdentityInfo (property generators) ----
+
+    @JsonIdentityInfo(generator = ObjectIdGenerators.PropertyGenerator.class, property = "id")
+    record JNode(String id, int v) {}
+
+    record JPair(JNode a, JNode b) {}
+
+    @JsonIdentityInfo(generator = ObjectIdGenerators.PropertyGenerator.class)
+    record AtNode(int v) {}
+
+    record AtPair(AtNode a, AtNode b) {}
+
+    @JsonIdentityInfo(generator = ObjectIdGenerators.IntSequenceGenerator.class, property = "id")
+    record SeqNode(String id, int v) {}
+
+    @Test
+    void identityPropertyGeneratorBinds() {
+        JPair p = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), JPair.class);
+        assertEquals(1, p.a().v());
+        assertSame(p.a(), p.b());
+        assertEquals("{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}",
+                mapper.toJqValue(p).toJsonString());
+    }
+
+    @Test
+    void identityDefaultProperty() {
+        // No property member: Jackson default "@id" is used faithfully.
+        // The key need not be a bound field (deser-only shape here).
+        AtPair p = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"@id\":\"x\",\"v\":1},\"b\":{\"@id\":\"x\",\"v\":1}}"), AtPair.class);
+        assertEquals(1, p.a().v());
+        assertSame(p.a(), p.b());
+    }
+
+    @Test
+    void identityNonPropertyGeneratorDeclined() {
+        // IntSequenceGenerator is out of scope: behaves as unannotated
+        // (repeated full objects rebind; scalar refs mismatch as before).
+        SeqNode first = mapper.fromJqValue(JqValues.parse("{\"id\":\"s1\",\"v\":1}"), SeqNode.class);
+        SeqNode second = mapper.fromJqValue(JqValues.parse("{\"id\":\"s1\",\"v\":1}"), SeqNode.class);
+        assertEquals(first, second);
+        assertNotSame(first, second);
+        assertThrows(io.hyperfoil.tools.jjq.mapper.ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"id\":\"s1\",\"v\":1}").getField("id"), SeqNode.class));
     }
 
     // ---- @JsonNaming / @JsonAlias / @JsonPropertyOrder ----

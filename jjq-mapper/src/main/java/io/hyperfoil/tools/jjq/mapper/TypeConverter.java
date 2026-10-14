@@ -350,10 +350,12 @@ public final class TypeConverter {
             }
             case RECORD -> {
                 if (value == null || value instanceof JqNull) yield null;
-                if (!(value instanceof JqObject) && !hasDelegatingCreator(targetType, mapper)) {
-                    throw mismatch(JqValue.Type.OBJECT, "object for " + targetType.getSimpleName(), value);
-                }
-                yield mapper.fromJqValue(value, targetType);
+                if (value instanceof JqObject) yield mapper.fromJqValue(value, targetType);
+                // Scalars/arrays targeting records: identity refs and delegating
+                // creators reach the mapping (which resolves or binds); anything
+                // else mismatches as before (collections of identity types share
+                // this path — direct fields bypass via the same gate).
+                yield bindBeanScalar(value, targetType, mapper);
             }
             case DEFAULT -> toJava(value, targetType, genericType, mapper);
         };
@@ -368,6 +370,37 @@ public final class TypeConverter {
     private static boolean hasDelegatingCreator(Class<?> targetType, JqMapper mapper) {
         CreatorSpec creator = CreatorSpec.resolve(targetType, mapper.bridges());
         return creator != null && creator.delegating();
+    }
+
+    /**
+     * Bind a scalar/array document targeting a bean-like type (record,
+     * {@code @JqMapped}, or plain POJO): identity refs and delegating
+     * creators reach the mapping (which resolves or binds); anything else is
+     * a shape mismatch. Shared by the RECORD case and the POJO fallback so
+     * both fail identically.
+     */
+    private static Object bindBeanScalar(JqValue value, Class<?> targetType, JqMapper mapper) {
+        if (isIdentityTarget(targetType, mapper) || hasDelegatingCreator(targetType, mapper)) {
+            return mapper.fromJqValue(value, targetType);
+        }
+        throw mismatch(JqValue.Type.OBJECT, "object for " + targetType.getSimpleName(), value);
+    }
+
+    /**
+     * True when the type binds object identity (native {@code @JqId} or bridge
+     * identity): scalar inputs are references that the mapping resolves.
+     * Consults the cached mapping (LastHit-friendly for repeated collection
+     * elements) — no per-call annotation scan beyond mapping creation.
+     */
+    static boolean isIdentityTarget(Class<?> targetType, JqMapper mapper) {
+        try {
+            Mapping<?> mapping = mapper.getMapping(targetType);
+            return mapping.idInfo() != null;
+        } catch (JqMapperException e) {
+            // Unmappable types (no no-arg constructor, JDK internals, ...)
+            // are not identity targets — the shape gate below reports them.
+            return false;
+        }
     }
 
     /**
@@ -516,7 +549,10 @@ public final class TypeConverter {
             return value.toJavaObject();
         }
         if (isPojoLike(targetType)) {
-            throw mismatch(JqValue.Type.OBJECT, "object for " + targetType.getSimpleName(), value);
+            // Identity refs and delegating creators bind scalars through the
+            // mapping (collections of identity POJOs share this path);
+            // anything else mismatches as before. (Nulls return early above.)
+            return bindBeanScalar(value, targetType, mapper);
         }
         return value.toJavaObject();
     }

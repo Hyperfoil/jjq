@@ -1222,6 +1222,252 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
     }
 
+    // ---- Object identity (@JqId) ----
+
+    @JqId
+    record NNode(String id, int v) {}
+
+    record NPair(NNode a, NNode b) {}
+
+    @JqId("uuid")
+    record UNode(String uuid, int v) {}
+
+    @JqId
+    static class ANode {
+        public String id;
+        public BNode b;
+    }
+
+    @JqId
+    static class BNode {
+        public String id;
+        public ANode a;
+    }
+
+    @Test
+    void identityRecordDedup() {
+        NPair p = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":{\"id\":\"n1\",\"v\":1}}"), NPair.class);
+        assertSame(p.a(), p.b());
+    }
+
+    @Test
+    void identityScalarBackRef() {
+        NPair p = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), NPair.class);
+        assertEquals(1, p.a().v());
+        assertSame(p.a(), p.b());
+    }
+
+    @Test
+    void identityUnknownRefFails() {
+        ShapeMismatchException e = assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"nope\"}"), NPair.class));
+        assertTrue(e.getMessage().contains("n1") || e.getMessage().contains("nope"), e.getMessage());
+    }
+
+    @Test
+    void identityMissingIdFails() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"a\":{\"v\":1},\"b\":{\"id\":\"n1\",\"v\":1}}"), NPair.class));
+    }
+
+    @Test
+    void identityExplicitNullIdFails() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"a\":{\"id\":null,\"v\":1},\"b\":{\"id\":\"n1\",\"v\":1}}"), NPair.class));
+    }
+
+    @Test
+    void identityNonScalarIdFails() {
+        // @JqId defaults to "id" which is a map here — non-scalar fails.
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"a\":{\"id\":{},\"v\":1},\"b\":{\"id\":\"n1\",\"v\":1}}"),
+                NPairWithMap.class));
+    }
+
+    record NPairWithMap(MNode2 a, MNode2 b) {}
+
+    @JqId
+    record MNode2(java.util.Map<String, Integer> id, int v) {}
+
+    @Test
+    void identityPojoCycle() {
+        ANode a = mapper.fromJqValue(JqValues.parse(
+                "{\"id\":\"a1\",\"b\":{\"id\":\"b1\",\"a\":\"a1\"}}"), ANode.class);
+        assertEquals("a1", a.id);
+        assertEquals("b1", a.b.id);
+        assertSame(a, a.b.a);
+    }
+
+    @Test
+    void identityRecordForwardRefFailsFast() {
+        // Records cannot forward-reference (nothing registered yet) — fails,
+        // never hangs.
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"a\":\"later\",\"b\":{\"id\":\"later\",\"v\":1}}"), NPair.class));
+    }
+
+    @Test
+    void identitySerEmitsRef() {
+        ANode a = new ANode();
+        a.id = "a1";
+        BNode b = new BNode();
+        b.id = "b1";
+        a.b = b;
+        b.a = a;
+        assertEquals("{\"id\":\"a1\",\"b\":{\"id\":\"b1\",\"a\":\"a1\"}}",
+                mapper.toJqValue(a).toJsonString());
+    }
+
+    @Test
+    void identitySerDedup() {
+        NNode n = new NNode("n1", 1);
+        NPair p = new NPair(n, n);
+        assertEquals("{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}",
+                mapper.toJqValue(p).toJsonString());
+    }
+
+    @Test
+    void identitySerMissingIdFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.toJqValue(new NNode(null, 1)));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("'id'"), e.getMessage());
+    }
+
+    @Test
+    void identityCustomProperty() {
+        UNode u = mapper.fromJqValue(JqValues.parse("{\"uuid\":\"u1\",\"v\":2}"), UNode.class);
+        assertEquals("u1", u.uuid());
+        record UPair(UNode a, UNode b) {}
+        UPair p = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"uuid\":\"u1\",\"v\":2},\"b\":\"u1\"}"), UPair.class);
+        assertSame(p.a(), p.b());
+    }
+
+    @Test
+    void identityScopeIsolation() {
+        NPair first = mapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), NPair.class);
+        assertSame(first.a(), first.b());
+        // Second top-level call starts a fresh scope: "n1" is unknown again.
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"a\":{\"id\":\"n2\",\"v\":1},\"b\":\"n1\"}"), NPair.class));
+    }
+
+    @Test
+    void identityStrictPasses() {
+        NPair p = strictMapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), NPair.class);
+        assertSame(p.a(), p.b());
+    }
+
+    @JqId
+    interface IdIface {
+        String id();
+    }
+
+    @Test
+    void identityInterfaceFailsClear() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"id\":\"x\"}"), IdIface.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("concrete"), e.getMessage());
+    }
+
+    @JqType
+    sealed interface PolyBase permits PolySub {}
+
+    @JqId
+    record PolySub(String id, int v) implements PolyBase {}
+
+    @Test
+    void identityComposesWithPoly() {
+        PolyBase s = mapper.fromJqValue(
+                JqValues.parse("{\"type\":\"PolySub\",\"id\":\"p1\",\"v\":5}"), PolyBase.class);
+        assertEquals(new PolySub("p1", 5), s);
+        String json = mapper.toJqValue(s).toJsonString();
+        assertTrue(json.contains("\"type\":\"PolySub\""), json);
+        assertTrue(json.contains("\"id\":\"p1\""), json);
+    }
+
+    record NList(java.util.List<NNode> nodes) {}
+
+    record NMap(java.util.Map<String, NNode> byName) {}
+
+    record PList(java.util.List<ANode> nodes) {}
+
+    @Test
+    void identityListBackRef() {
+        NList l = mapper.fromJqValue(JqValues.parse(
+                "{\"nodes\":[{\"id\":\"n1\",\"v\":1},\"n1\"]}"), NList.class);
+        assertEquals(2, l.nodes().size());
+        assertEquals(1, l.nodes().get(0).v());
+        assertSame(l.nodes().get(0), l.nodes().get(1));
+    }
+
+    @Test
+    void identityListSerEmitsRefs() {
+        NNode n = new NNode("n1", 1);
+        NList l = new NList(java.util.List.of(n, n));
+        assertEquals("{\"nodes\":[{\"id\":\"n1\",\"v\":1},\"n1\"]}",
+                mapper.toJqValue(l).toJsonString());
+    }
+
+    @Test
+    void identityMapBackRef() {
+        NMap m = mapper.fromJqValue(JqValues.parse(
+                "{\"byName\":{\"first\":{\"id\":\"n1\",\"v\":1},\"second\":\"n1\"}}"), NMap.class);
+        assertSame(m.byName().get("first"), m.byName().get("second"));
+    }
+
+    @Test
+    void identityPojoListBackRef() {
+        // Plain POJOs travel the DEFAULT->toJava path (not RECORD):
+        // scalar refs must resolve there too.
+        PList l = mapper.fromJqValue(JqValues.parse(
+                "{\"nodes\":[{\"id\":\"a1\"},\"a1\"]}"), PList.class);
+        assertEquals("a1", l.nodes().get(0).id);
+        assertSame(l.nodes().get(0), l.nodes().get(1));
+    }
+
+    @Test
+    void identityGeneratedWrapperSharesSemantics() {
+        // Hand-rolled generated mapping for the identity record: the wrapper
+        // must dedup, resolve refs, and emit ids exactly like reflection.
+        var gen = new GeneratedMapping<NNode>() {
+            @Override
+            public NNode fromJqValue(JqValue input, JqMapper mapper) {
+                if (!(input instanceof JqObject obj)) {
+                    throw new ShapeMismatchException(JqValue.Type.OBJECT,
+                            input == null ? JqValue.Type.NULL : input.type(),
+                            "Cannot bind scalar to object for NNode");
+                }
+                String id = obj.get("id").stringValue();
+                int v = (int) obj.get("v").longValue();
+                return new NNode(id, v);
+            }
+            @Override
+            public JqValue toJqValue(NNode instance, JqMapper mapper) {
+                return JqObject.builder(2)
+                        .putUnchecked("id", instance.id() == null ? JqNull.NULL : JqString.of(instance.id()))
+                        .putUnchecked("v", JqNumber.of(instance.v()))
+                        .build();
+            }
+            @Override
+            public Class<NNode> type() { return NNode.class; }
+        };
+        JqMapper genMapper = JqMapper.builder().register(gen).build();
+        NPair p = genMapper.fromJqValue(JqValues.parse(
+                "{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}"), NPair.class);
+        assertSame(p.a(), p.b());
+        assertEquals("{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}",
+                genMapper.toJqValue(p).toJsonString());
+        // Direct-to-JSON fast paths inherit the identity-aware tree fallback.
+        assertEquals("{\"a\":{\"id\":\"n1\",\"v\":1},\"b\":\"n1\"}", genMapper.toJson(p));
+    }
+
     // ---- @JqFormat (custom date/time patterns) ----
 
     record Formatted(java.time.LocalDate day,
