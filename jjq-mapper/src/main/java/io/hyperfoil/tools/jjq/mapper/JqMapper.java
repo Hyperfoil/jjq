@@ -83,12 +83,33 @@ public final class JqMapper {
     /** Immutable (type, mapping) pair for {@link #lastHit}. */
     private record LastHit(Class<?> type, Mapping<?> mapping) {}
     private final List<AnnotationBridge> bridges;
+    private final boolean failOnUnknownProperties;
     // Resolved @JsonValue/@JsonCreator handlers per enum class (empty = none present).
     private final ConcurrentHashMap<Class<?>, Optional<TypeConverter.EnumHandlers>> enumHandlers =
             new ConcurrentHashMap<>();
 
     private JqMapper(List<AnnotationBridge> bridges) {
+        this(bridges, false);
+    }
+
+    private JqMapper(List<AnnotationBridge> bridges, boolean failOnUnknownProperties) {
         this.bridges = bridges;
+        this.failOnUnknownProperties = failOnUnknownProperties;
+    }
+
+    /**
+     * Whether deserialization fails on unrecognized JSON properties
+     * (Jackson {@code FAIL_ON_UNKNOWN_PROPERTIES} parity, opt-in).
+     * Disabled by default: unknown keys are ignored (forward compatibility)
+     * or forwarded to an any-setter, which always wins over this flag.
+     *
+     * <p>Generated mappings consult this at runtime, so one flag covers
+     * both reflection and codegen paths.</p>
+     *
+     * @return true when unknown properties fail binding
+     */
+    public boolean isFailOnUnknownProperties() {
+        return failOnUnknownProperties;
     }
 
     /**
@@ -164,6 +185,7 @@ public final class JqMapper {
     public static final class Builder {
         private final java.util.List<GeneratedMapping<?>> mappings = new java.util.ArrayList<>();
         private final java.util.List<AnnotationBridge> bridges = new java.util.ArrayList<>();
+        private boolean failOnUnknownProperties;
 
         private Builder() {}
 
@@ -198,6 +220,20 @@ public final class JqMapper {
         }
 
         /**
+         * Fail deserialization on unrecognized JSON properties instead of
+         * ignoring them (Jackson {@code FAIL_ON_UNKNOWN_PROPERTIES} parity).
+         * Disabled by default. Any-setters still consume unknown keys when
+         * present; ignored properties never fail.
+         *
+         * @param fail true to fail on unknown properties
+         * @return this builder for chaining
+         */
+        public Builder failOnUnknownProperties(boolean fail) {
+            this.failOnUnknownProperties = fail;
+            return this;
+        }
+
+        /**
          * Build the mapper with all registered mappings and bridges.
          * Types not pre-registered will still fall back to {@code Class.forName()}
          * discovery and reflection-based mapping.
@@ -205,7 +241,7 @@ public final class JqMapper {
          * @return a new thread-safe JqMapper
          */
         public JqMapper build() {
-            JqMapper mapper = new JqMapper(List.copyOf(bridges));
+            JqMapper mapper = new JqMapper(List.copyOf(bridges), failOnUnknownProperties);
             for (var m : mappings) {
                 mapper.cache.put(m.type(), new LastHit(m.type(), wrapPoly(m, mapper.bridges)));
             }

@@ -16,8 +16,10 @@ import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Cached mapping metadata for a single Java class (record).
@@ -52,6 +54,9 @@ final class ClassMapping<T> implements Mapping<T> {
     // Polymorphic family membership for serialization: injects the discriminator
     // (null for standalone types — one predictable branch, no per-call lookup).
     private final PolySerInfo polySer;
+    // Every non-program lookup key (including ignored ones, which never fail):
+    // the failOnUnknownProperties scan set. Built once; scanned only when strict.
+    private final Set<String> knownKeys;
 
     /**
      * Cached any-setter/any-getter handles plus the known-field names used to
@@ -73,6 +78,11 @@ final class ClassMapping<T> implements Mapping<T> {
         this.useForEachFastPath = useForEachFastPath;
         this.anyHandlers = anyHandlers;
         this.polySer = polySer;
+        Set<String> known = new HashSet<>();
+        for (FieldMapping field : fields) {
+            if (!field.usesProgram()) known.add(field.jsonName());
+        }
+        this.knownKeys = known;
     }
 
     /**
@@ -598,6 +608,14 @@ final class ClassMapping<T> implements Mapping<T> {
             // Fall through to per-field extraction if names didn't match
         }
 
+        // Opt-in strict: unknown keys fail (any-setter classes forward them
+        // instead — checked inside). The fast path above only succeeds when
+        // every key matched, so reaching here is the only fallthrough cost.
+        if (mapper.isFailOnUnknownProperties() && value instanceof JqObject strictObj
+                && (anyHandlers == null || anyHandlers.setter() == null)) {
+            failOnUnknown(strictObj);
+        }
+
         // Standard record path: per-field extraction via get() or JqProgram
         Object[] args = new Object[fields.length];
         for (int i = 0; i < fields.length; i++) {
@@ -625,6 +643,21 @@ final class ClassMapping<T> implements Mapping<T> {
             if (!field.isIgnored() && field.usesProgram()) return false;
         }
         return true;
+    }
+
+    /**
+     * Fail on the first unrecognized input key (opt-in strict mode).
+     * Ignored properties never fail (Jackson parity); any-setter classes
+     * never reach here (their unknowns are forwarded, not failed).
+     */
+    private void failOnUnknown(JqObject obj) {
+        for (int i = 0; i < obj.size(); i++) {
+            String key = obj.keyAt(i);
+            if (!knownKeys.contains(key)) {
+                throw new JqMapperException("Unrecognized field \"" + key + "\" for "
+                        + type.getSimpleName()).prependPath(key);
+            }
+        }
     }
 
     /**
@@ -808,6 +841,12 @@ final class ClassMapping<T> implements Mapping<T> {
         // (same rule as the record path above; @JqField programs stay lenient).
         if (value != null && !(value instanceof JqNull) && !(value instanceof JqObject) && allDirectFields()) {
             throw TypeConverter.mismatch(JqValue.Type.OBJECT, "object for " + type.getSimpleName(), value);
+        }
+        // Opt-in strict: unknown keys fail before binding (any-setter classes
+        // forward them instead — checked inside).
+        if (mapper.isFailOnUnknownProperties() && value instanceof JqObject strictObj
+                && (anyHandlers == null || anyHandlers.setter() == null)) {
+            failOnUnknown(strictObj);
         }
         T instance;
         try {

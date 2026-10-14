@@ -51,6 +51,16 @@ final class PolyMapping<T> implements Mapping<T> {
             throw TypeConverter.mismatch(JqValue.Type.STRING,
                     "one of " + new ArrayList<>(subtypes.keySet()) + " for " + base.getSimpleName(), disc);
         }
+        if (mapper.isFailOnUnknownProperties()) {
+            // The discriminator is consumed here: without stripping, the
+            // subtype mapping would flag it as unrecognized. Rebuilt only in
+            // strict mode; lenient keeps the zero-copy delegation.
+            var stripped = JqObject.builder(obj.size());
+            obj.forEach((k, v) -> {
+                if (!k.equals(discriminator)) stripped.putUnchecked(k, v);
+            });
+            value = stripped.build();
+        }
         return (T) mapper.fromJqValue(value, sub);
     }
 

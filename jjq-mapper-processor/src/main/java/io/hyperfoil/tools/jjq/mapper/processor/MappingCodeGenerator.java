@@ -98,6 +98,8 @@ final class MappingCodeGenerator {
         // Known-field set for unknown-key forwarding (issue #87)
         if (anyInfo.hasSetter()) {
             generateAnyKnownSet(sb, knownJsonNamesRecord(components));
+        } else {
+            generateStrictKnownSet(sb, knownJsonNamesRecord(components));
         }
         sb.append("\n");
 
@@ -188,6 +190,10 @@ final class MappingCodeGenerator {
             sb.append("                // Fall through for precise failure paths\n");
             sb.append("            }\n");
             sb.append("        }\n");
+        }
+
+        if (!anyInfo.hasSetter()) {
+            generateStrictCheck(sb, recordSimpleName);
         }
 
         // Hoist fallible conversions (containers, nested types, custom converters)
@@ -927,6 +933,32 @@ final class MappingCodeGenerator {
         sb.append(");\n");
     }
 
+    /**
+     * Emit the known-field-name set backing the opt-in strict unknown-key
+     * check. Same membership rule as the any-setter set (every non-program
+     * key, including ignored ones — ignored properties never fail). Emitted
+     * only for mappings without an any-setter (setters forward unknowns
+     * instead of failing).
+     */
+    private static void generateStrictKnownSet(StringBuilder sb, java.util.List<String> knownNames) {
+        sb.append("    private static final java.util.Set<String> _STRICT_KNOWN = java.util.Set.of(");
+        for (int i = 0; i < knownNames.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append("JqValues.internFieldName(\"").append(escapeJava(knownNames.get(i))).append("\")");
+        }
+        sb.append(");\n");
+    }
+
+    /**
+     * Emit the runtime strict check into generated {@code fromJqValue}, right
+     * after the positional fast path (a positional hit proves every key
+     * known, so the scan runs only on fallthrough — free on hits).
+     */
+    private static void generateStrictCheck(StringBuilder sb, String simpleName) {
+        sb.append("        if (mapper.isFailOnUnknownProperties()) checkUnknownKeys(input, _STRICT_KNOWN, \"")
+          .append(simpleName).append("\");\n");
+    }
+
     /** Read expression for an any-getter: always a no-arg method call. */
     private static String anyGetterReadExpr(JqMapperProcessor.AnyInfo anyInfo) {
         return "instance." + anyInfo.getterName() + "()";
@@ -1182,6 +1214,8 @@ final class MappingCodeGenerator {
         }
         if (anyInfo.hasSetter()) {
             generateAnyKnownSet(sb, knownJsonNamesPojo(properties));
+        } else {
+            generateStrictKnownSet(sb, knownJsonNamesPojo(properties));
         }
         sb.append("\n");
 
@@ -1232,6 +1266,10 @@ final class MappingCodeGenerator {
             sb.append("                // Fall through for precise failure paths\n");
             sb.append("            }\n");
             sb.append("        }\n");
+        }
+
+        if (!anyInfo.hasSetter()) {
+            generateStrictCheck(sb, classSimpleName);
         }
 
         for (var prop : properties) {

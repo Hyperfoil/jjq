@@ -839,6 +839,65 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_strictRecordRejectsUnknown() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record StrictPoint(int x, int y) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.StrictPoint", source);
+        JqMapper strict = JqMapper.builder().failOnUnknownProperties(true).build();
+
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> strict.fromJqValue(JqValues.parse("{\"x\":1,\"y\":2,\"z\":3}"), recordClass));
+        assertTrue(e.getMessage().contains("\"z\""), e.getMessage());
+
+        // Known keys bind (positional fast path unaffected when lenient,
+        // strict scan passes on fallthrough)
+        Object ok = strict.fromJqValue(JqValues.parse("{\"y\":2,\"x\":1}"), recordClass);
+        assertEquals(1, recordClass.getMethod("x").invoke(ok));
+
+        // Default mapper stays lenient against the same generated code
+        Object lenient = JqMapper.create().fromJqValue(
+                JqValues.parse("{\"x\":1,\"y\":2,\"z\":3}"), recordClass);
+        assertEquals(1, recordClass.getMethod("x").invoke(lenient));
+    }
+
+    @Test
+    void generatedMapping_strictPojoRejectsUnknown() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class StrictPojo {
+                    public String name;
+                    public int age;
+
+                    public StrictPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.StrictPojo", source);
+        JqMapper strict = JqMapper.builder().failOnUnknownProperties(true).build();
+
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> strict.fromJqValue(
+                        JqValues.parse("{\"name\":\"a\",\"age\":1,\"zzz\":true}"), pojoClass));
+        assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
+
+        Object ok = strict.fromJqValue(JqValues.parse("{\"name\":\"a\",\"age\":1}"), pojoClass);
+        assertEquals("a", pojoClass.getField("name").get(ok));
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;

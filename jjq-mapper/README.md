@@ -295,6 +295,14 @@ JqMapper mapper = JqMapper.builder()
     .build();
 ```
 
+Strictness is opt-in per mapper (default stays lenient):
+
+```java
+JqMapper strict = JqMapper.builder().failOnUnknownProperties(true).build();
+// Unknown JSON keys now fail with `Unrecognized field "z" for Point` at `$.z`;
+// any-setters still consume unknowns, ignored properties never fail.
+```
+
 Note: `JqMapper.create()` discovers bridges via `ServiceLoader` automatically;
 `builder()` does not — register bridges explicitly when using the builder.
 
@@ -375,7 +383,7 @@ pinned by tests:
 | `""` → number | 0 (primitives) | throws | fail-fast consistency (`"maybe"` throws too) |
 | Fraction → integral | truncates | throws | no silent loss (reporter preference) |
 | `NaN`/`Infinity` serialization | unquoted literals | `null` | no jq analog; the literals are unreadable here (#136) |
-| Unknown keys | fail by default | ignored | forward compatibility (see `@JqAnySetter`) |
+| Unknown keys | fail by default | ignored (opt-in `failOnUnknownProperties` on the builder) | forward compatibility by default; any-setters still consume unknowns under strict |
 | Duplicate JSON keys (lenient) | last wins | both kept | documented on `parse`; `parseStrict` rejects |
 | Trailing commas etc. (lenient) | fail | tolerated | documented on `parse`; `parseStrict` rejects |
 

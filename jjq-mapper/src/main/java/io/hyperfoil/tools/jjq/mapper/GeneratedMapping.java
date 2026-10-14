@@ -355,6 +355,29 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Fail on the first unrecognized input key (opt-in strict mode,
+     * {@link JqMapper#isFailOnUnknownProperties}). Non-objects pass through
+     * (the shape gate reports them); ignored properties belong in
+     * {@code known} and never fail. Any-setter mappings skip this entirely
+     * (their unknowns are forwarded, not failed) — enforced by codegen.
+     *
+     * @param input      the input value (may be any shape)
+     * @param known      every non-program lookup key of the mapping
+     * @param simpleName the bound class simple name (for the message)
+     * @throws JqMapperException naming the key, pathed at the key
+     */
+    protected static void checkUnknownKeys(JqValue input, java.util.Set<String> known, String simpleName) {
+        if (!(input instanceof io.hyperfoil.tools.jjq.value.JqObject obj)) return;
+        for (int i = 0; i < obj.size(); i++) {
+            String key = obj.keyAt(i);
+            if (!known.contains(key)) {
+                throw new JqMapperException("Unrecognized field \"" + key + "\" for "
+                        + simpleName).prependPath(key);
+            }
+        }
+    }
+
+    /**
      * Require an array value for list conversion. Returns {@code null} for
      * null inputs (callers map those to empty lists); throws a shape-mismatch
      * error for any other non-array shape.

@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- Opt-in `failOnUnknownProperties` on the mapper builder (Jackson
+  parity, default stays lenient): unknown keys fail as
+  `Unrecognized field "z" for Point` pathed at the key, on reflection
+  and generated paths; any-setters still consume unknowns, ignored
+  properties never fail, polymorphic dispatch strips the consumed
+  discriminator before delegating
 - `java.time` in the mapper: `Instant`, `LocalDate`/`Time`/`DateTime`,
   `OffsetDateTime`/`ZonedDateTime`, `Duration`, `Period` — ISO-8601
   strings canonical both ways, epoch seconds accepted on deser for

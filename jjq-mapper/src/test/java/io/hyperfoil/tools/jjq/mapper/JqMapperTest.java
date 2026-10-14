@@ -849,6 +849,101 @@ class JqMapperTest {
         assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
     }
 
+    // ---- failOnUnknownProperties (opt-in strict, Jackson parity) ----
+
+    record Point(int x, int y) {}
+
+    static class StrictPojo {
+        public String name;
+        public int age;
+    }
+
+    record IgnoredHolder(String keep, @JqIgnore String skip) {}
+
+    static class ExtrasStrict {
+        public String name;
+        private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+        public Map<String, JqValue> getExtras() { return extras; }
+
+        @JqAnySetter
+        public void setExtra(String key, JqValue value) { extras.put(key, value); }
+    }
+
+    record NestedStrict(Point point, String label) {}
+
+    private final JqMapper strictMapper = JqMapper.builder().failOnUnknownProperties(true).build();
+
+    @Test
+    void strictRecordRejectsUnknown() {
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"x\":1,\"y\":2,\"z\":3}"), Point.class));
+        assertTrue(e.getMessage().contains("\"z\""), e.getMessage());
+        assertTrue(e.getMessage().contains("Point"), e.getMessage());
+        assertEquals(List.of("z"), e.pathSegments());
+    }
+
+    @Test
+    void strictRecordKnownPasses() {
+        assertEquals(new Point(1, 2),
+                strictMapper.fromJqValue(JqValues.parse("{\"x\":1,\"y\":2}"), Point.class));
+    }
+
+    @Test
+    void lenientDefaultIgnoresUnknown() {
+        assertEquals(new Point(1, 2),
+                mapper.fromJqValue(JqValues.parse("{\"x\":1,\"y\":2,\"z\":3}"), Point.class));
+    }
+
+    @Test
+    void strictMissingStillLenient() {
+        assertEquals(new Point(1, 0),
+                strictMapper.fromJqValue(JqValues.parse("{\"x\":1}"), Point.class));
+    }
+
+    @Test
+    void strictPojoRejectsUnknown() {
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"name\":\"a\",\"age\":1,\"extra\":true}"), StrictPojo.class));
+        assertTrue(e.getMessage().contains("\"extra\""), e.getMessage());
+        StrictPojo p = strictMapper.fromJqValue(
+                JqValues.parse("{\"name\":\"a\",\"age\":1}"), StrictPojo.class);
+        assertEquals("a", p.name);
+        assertEquals(1, p.age);
+    }
+
+    @Test
+    void strictIgnoredKeyPasses() {
+        IgnoredHolder h = strictMapper.fromJqValue(
+                JqValues.parse("{\"keep\":\"a\",\"skip\":\"b\"}"), IgnoredHolder.class);
+        assertEquals("a", h.keep());
+    }
+
+    @Test
+    void strictAnySetterForwardsWithoutFailure() {
+        ExtrasStrict e = strictMapper.fromJqValue(
+                JqValues.parse("{\"name\":\"a\",\"zzz\":42}"), ExtrasStrict.class);
+        assertEquals("a", e.name);
+        assertEquals(42L, e.extras.get("zzz").longValue());
+    }
+
+    @Test
+    void strictNestedPathPointsAtUnknown() {
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"point\":{\"x\":1,\"y\":2,\"z\":3},\"label\":\"a\"}"), NestedStrict.class));
+        assertEquals(List.of("point", "z"), e.pathSegments());
+    }
+
+    @Test
+    void strictPolyIgnoresDiscriminatorButFlagsUnknown() {
+        Shape s = strictMapper.fromJqValue(
+                JqValues.parse("{\"type\":\"Circle\",\"radius\":1.5}"), Shape.class);
+        assertEquals(new Circle(1.5), s);
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"type\":\"Circle\",\"radius\":1.5,\"zzz\":1}"), Shape.class));
+        assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
+    }
+
     // ---- java.time (Phase B: ISO strings canonical, epoch accepted for instant-like) ----
 
     record TimeHolder(java.time.Instant instant, java.time.LocalDate date, java.time.LocalTime time,
