@@ -1222,6 +1222,113 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
     }
 
+    // ---- @JqRequired (absent keys fail, explicit nulls bind) ----
+
+    record RequiredPoint(@JqRequired int x, int y) {}
+
+    static class RequiredPojo {
+        @JqRequired
+        public String name;
+        public int age;
+    }
+
+    record RequiredProgram(@JqRequired @JqField(".a.b") String deep, String other) {}
+
+    record RequiredCreator(String name, int age) {
+        @JqCreator
+        public static RequiredCreator create(@JqName("user_name") @JqRequired String name,
+                                             @JqName("age") int age) {
+            return new RequiredCreator(name, age);
+        }
+    }
+
+    record MootTrap(@JqRequired String name, int age) {
+        @JqCreator
+        public static MootTrap create(@JqName("user_name") String name, @JqName("age") int age) {
+            return new MootTrap(name, age);
+        }
+    }
+
+    @Test
+    void requiredMissingFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"y\":2}"), RequiredPoint.class));
+        assertTrue(e.getMessage().contains("\"x\""), e.getMessage());
+        assertTrue(e.getMessage().contains("RequiredPoint"), e.getMessage());
+        assertEquals(List.of("x"), e.pathSegments());
+    }
+
+    @Test
+    void requiredPresentBindsAndNullBinds() {
+        assertEquals(new RequiredPoint(1, 2),
+                mapper.fromJqValue(JqValues.parse("{\"x\":1,\"y\":2}"), RequiredPoint.class));
+        // Explicit null counts as present (null handling unchanged)
+        RequiredPojo n = mapper.fromJqValue(JqValues.parse("{\"name\":null}"), RequiredPojo.class);
+        assertNull(n.name);
+        assertEquals(0, n.age);
+    }
+
+    @Test
+    void requiredPojoMissingFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"age\":1}"), RequiredPojo.class));
+        assertEquals(List.of("name"), e.pathSegments());
+    }
+
+    @Test
+    void requiredProgramFailsFast() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"other\":\"x\"}"), RequiredProgram.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("direct lookup"), e.getMessage());
+    }
+
+    @Test
+    void requiredCreatorParamFails() {
+        // Creator binds by parameter name: the component wire is irrelevant.
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"age\":3}"), RequiredCreator.class));
+        assertEquals(List.of("user_name"), e.pathSegments());
+        assertEquals(new RequiredCreator("Ann", 3), mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), RequiredCreator.class));
+    }
+
+    @Test
+    void requiredMootTrapFailsFast() {
+        // Component marker on a wire the creator never binds: explicit error
+        // at mapping creation, not a silently unenforced marker.
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), MootTrap.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("never bound"), e.getMessage());
+    }
+
+    @Test
+    void requiredBuilderFieldFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"age\":3}"), ReqBuilderHost.class));
+        assertEquals(List.of("name"), e.pathSegments());
+    }
+
+    @JqBuilder(value = ReqBuilder.class)
+    static class ReqBuilderHost {
+        @JqRequired
+        public String name;
+        public int age;
+
+        public String getName() { return name; }
+        public int getAge() { return age; }
+    }
+
+    static class ReqBuilder {
+        public ReqBuilder() {}
+
+        public ReqBuilder withName(String name) { return this; }
+        public ReqBuilder withAge(int age) { return this; }
+
+        public ReqBuilderHost build() { return new ReqBuilderHost(); }
+    }
+
     // ---- java.time (Phase B: ISO strings canonical, epoch accepted for instant-like) ----
 
     record TimeHolder(java.time.Instant instant, java.time.LocalDate date, java.time.LocalTime time,

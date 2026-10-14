@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.mapper;
 
+import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.value.*;
 
 import java.lang.reflect.Constructor;
@@ -367,6 +368,44 @@ public final class TypeConverter {
     private static boolean hasDelegatingCreator(Class<?> targetType, JqMapper mapper) {
         CreatorSpec creator = CreatorSpec.resolve(targetType, mapper.bridges());
         return creator != null && creator.delegating();
+    }
+
+    /**
+     * Whether the element marks a required property: native
+     * {@code @JqRequired} first, then bridges in order.
+     *
+     * @param element the field, component, or creator parameter to inspect
+     * @param bridges the mapper bridges
+     * @return true when the property must be present
+     */
+    static boolean isRequired(java.lang.reflect.AnnotatedElement element,
+                              List<AnnotationBridge> bridges) {
+        if (element.getAnnotation(JqRequired.class) != null) return true;
+        for (AnnotationBridge bridge : bridges) {
+            if (bridge.isRequired(element)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Enforce required properties: every name must be present in the input
+     * object, else fail naming the first missing one (document order).
+     * Empty sets and non-objects pass (shape gates report those); explicit
+     * nulls count as present. Shared by the reflection paths and generated
+     * code so both fail identically.
+     *
+     * @param value      the input value (may be any shape)
+     * @param required   required wire names in declaration order
+     * @param simpleName the bound class simple name (for the message)
+     */
+    public static void checkRequired(JqValue value, java.util.Collection<String> required, String simpleName) {
+        if (required.isEmpty() || !(value instanceof JqObject obj)) return;
+        for (String name : required) {
+            if (!obj.has(name)) {
+                throw new JqMapperException("Missing required field \"" + name + "\" for "
+                        + simpleName).prependPath(name);
+            }
+        }
     }
 
     /**

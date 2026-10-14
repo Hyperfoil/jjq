@@ -15,7 +15,8 @@ final class MappingCodeGenerator {
      */
     static String generate(String packageName, String recordSimpleName, String recordQualifiedName,
                            String mappingClassName, List<JqMapperProcessor.ComponentInfo> components,
-                           JqMapperProcessor.AnyInfo anyInfo, JqMapperProcessor.CreatorInfo creator) {
+                           JqMapperProcessor.AnyInfo anyInfo, JqMapperProcessor.CreatorInfo creator,
+                           List<String> required) {
         var sb = new StringBuilder(1024);
 
         // Deserialization source: creator params when a property creator is
@@ -133,7 +134,7 @@ final class MappingCodeGenerator {
         if (hasDelegating) {
             emitDelegatingFromJqValue(sb, recordSimpleName, deser.get(0), creator);
         } else {
-            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator);
+            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator, required);
         }
 
         // toJqValue method
@@ -228,7 +229,8 @@ final class MappingCodeGenerator {
                                              List<JqMapperProcessor.ComponentInfo> components,
                                              JqMapperProcessor.AnyInfo anyInfo,
                                              List<JqMapperProcessor.ComponentInfo> positional,
-                                             JqMapperProcessor.CreatorInfo creator) {
+                                             JqMapperProcessor.CreatorInfo creator,
+                                             List<String> required) {
         String constructPrefix = creator != null ? creator.constructPrefix()
                 : "new " + recordSimpleName + "(";
         sb.append("    @Override\n");
@@ -280,6 +282,7 @@ final class MappingCodeGenerator {
         if (!anyInfo.hasSetter()) {
             generateStrictCheck(sb, recordSimpleName);
         }
+        emitRequiredCheck(sb, recordSimpleName, required);
 
         // Hoist fallible conversions (containers, nested types, custom converters)
         // into locals with path tracking. Scalar extractions cannot fail and stay inline.
@@ -1080,6 +1083,24 @@ final class MappingCodeGenerator {
         return "instance." + anyInfo.getterName() + "()";
     }
 
+    /**
+     * Emit the required-properties check into generated {@code fromJqValue},
+     * right after the positional fast path (a positional hit proves every
+     * key present, so the scan runs only on fallthrough — free on hits).
+     * Nothing is emitted for mappings without required properties (zero
+     * diff for existing mappings).
+     */
+    private static void emitRequiredCheck(StringBuilder sb, String simpleName, List<String> required) {
+        if (required.isEmpty()) return;
+        sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.checkRequired(input, ");
+        sb.append("java.util.List.of(");
+        for (int i = 0; i < required.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append("\"").append(escapeJava(required.get(i))).append("\"");
+        }
+        sb.append("), \"").append(simpleName).append("\");\n");
+    }
+
     /** Emit the unknown-key forward loop into generated fromJqValue. */
     private static void generateAnySetterForward(StringBuilder sb, String target,
                                                  JqMapperProcessor.AnyInfo anyInfo) {
@@ -1252,7 +1273,8 @@ final class MappingCodeGenerator {
                                     String mappingClassName, List<JqMapperProcessor.PropertyInfo> properties,
                                     JqMapperProcessor.AnyInfo anyInfo,
                                     JqMapperProcessor.CreatorInfo creator,
-                                    JqMapperProcessor.BuilderInfo builder) {
+                                    JqMapperProcessor.BuilderInfo builder,
+                                    List<String> required) {
         var sb = new StringBuilder(1024);
 
         if (!packageName.isEmpty()) {
@@ -1457,6 +1479,7 @@ final class MappingCodeGenerator {
         if (!anyInfo.hasSetter()) {
             generateStrictCheck(sb, classSimpleName);
         }
+        emitRequiredCheck(sb, classSimpleName, required);
 
         for (var prop : properties) {
             // Builder binding replaces the setter path wholesale (binders

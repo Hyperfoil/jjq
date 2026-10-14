@@ -550,6 +550,17 @@ class JacksonAnnotationBridgeTest {
         assertEquals("{\"name\":\"x\"}", mapper.toJqValue(p).toJsonString());
     }
 
+    @Test
+    void jsonPropertyRequiredFailsOnMissing() {
+        record Req(@JsonProperty(value = "name", required = true) String name, int age) {}
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{\"age\":1}"), Req.class));
+        assertTrue(e.getMessage().contains("\"name\""), e.getMessage());
+        assertEquals(new Req("Ann", 3), mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), Req.class));
+    }
+
     // ---- @JsonDeserialize(builder) + @JsonPOJOBuilder ----
 
     @com.fasterxml.jackson.databind.annotation.JsonDeserialize(builder = JackBean.JackBeanBuilder.class)

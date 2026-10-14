@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.mapper.jsonb;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
+import jakarta.json.bind.annotation.JsonbCreator;
 import jakarta.json.bind.annotation.JsonbNillable;
 import jakarta.json.bind.annotation.JsonbProperty;
 import jakarta.json.bind.annotation.JsonbTransient;
@@ -71,6 +72,22 @@ public class JsonbAnnotationBridge implements AnnotationBridge {
             }
         }
         return element;
+    }
+
+    @Override
+    public java.lang.reflect.Executable resolveJsonCreator(Class<?> type) {
+        for (java.lang.reflect.Method m : type.getMethods()) {
+            if (m.isAnnotationPresent(JsonbCreator.class)
+                    && java.lang.reflect.Modifier.isStatic(m.getModifiers())) {
+                return m;
+            }
+        }
+        for (java.lang.reflect.Constructor<?> c : type.getDeclaredConstructors()) {
+            if (c.isAnnotationPresent(JsonbCreator.class)) {
+                return c;
+            }
+        }
+        return null;
     }
 
     @Override

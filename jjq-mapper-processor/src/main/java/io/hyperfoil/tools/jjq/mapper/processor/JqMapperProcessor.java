@@ -13,6 +13,7 @@ import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqName;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
+import io.hyperfoil.tools.jjq.mapper.JqRequired;
 import io.hyperfoil.tools.jjq.mapper.JqVisibility;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -101,6 +102,8 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         // Collect record component metadata
         List<ComponentInfo> components = new ArrayList<>();
+        // Required wire names in declaration order (absent keys fail binding).
+        List<String> componentRequired = new ArrayList<>();
         // Shared CONV_ field names per converter class (issue #116)
         var convFields = new java.util.LinkedHashMap<String, String>();
         var usedConvNames = new java.util.HashSet<String>();
@@ -175,6 +178,10 @@ public class JqMapperProcessor extends AbstractProcessor {
                 if (rcAccess == null) rcAccess = resolveJacksonAccess(rc, recordType);
                 AdapterInfo adapter = resolveAdapterInfo(rc, rc.asType(), mappingPackage);
                 if (adapter == null && rc.getAnnotation(JqAdapter.class) != null) return null;
+                if (!ignored && (rc.getAnnotation(JqRequired.class) != null
+                        || bridgeRequired(rc, recordType))) {
+                    componentRequired.add(jsonName);
+                }
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
                         "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField));
@@ -208,9 +215,12 @@ public class JqMapperProcessor extends AbstractProcessor {
                     recordType);
             return null;
         }
+        List<String> recordRequired = resolveRequiredWires(recordType, components, componentRequired,
+                recordCreator);
+        if (recordRequired == null) return null;
         String source = MappingCodeGenerator.generate(
                 packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
-                recordAnyInfo, recordCreator);
+                recordAnyInfo, recordCreator, recordRequired);
 
         // Write the generated source file
         try {
@@ -251,6 +261,8 @@ public class JqMapperProcessor extends AbstractProcessor {
 
         // Collect field metadata (declared fields only, skip static/synthetic)
         List<PropertyInfo> properties = new ArrayList<>();
+        // Required wire names in declaration order (absent keys fail binding).
+        List<String> propertyRequired = new ArrayList<>();
         // Shared CONV_ field names per converter class (issue #116)
         var convFields = new java.util.LinkedHashMap<String, String>();
         var usedConvNames = new java.util.HashSet<String>();
@@ -371,6 +383,10 @@ public class JqMapperProcessor extends AbstractProcessor {
             String converterField = converterClass != null && !ignored
                     ? converterFieldFor(convFields, usedConvNames, converterClass)
                     : null;
+            if (!ignored && (field.getAnnotation(JqRequired.class) != null
+                    || bridgeRequired(field, null))) {
+                propertyRequired.add(jsonName);
+            }
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
@@ -402,9 +418,12 @@ public class JqMapperProcessor extends AbstractProcessor {
                     classType);
             return null;
         }
+        List<String> pojoRequired = resolvePojoRequiredWires(classType, properties, propertyRequired,
+                pojoCreator);
+        if (pojoRequired == null) return null;
         String source = MappingCodeGenerator.generateForClass(
                 packageName, classSourceName, classQualifiedName, mappingClassName, properties,
-                pojoAnyInfo, pojoCreator, pojoBuilder);
+                pojoAnyInfo, pojoCreator, pojoBuilder, pojoRequired);
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -897,6 +916,33 @@ public class JqMapperProcessor extends AbstractProcessor {
     }
 
     /**
+     * Bridge-required check for an element: Jackson {@code @JsonProperty}
+     * with {@code required = true}, read off mirrors (stringly-typed).
+     * Record components fall back to the same-named field, mirroring
+     * {@link #bridgeRenameForRecord} (a null owner skips the fallback).
+     */
+    private static boolean bridgeRequired(Element element, TypeElement enclosing) {
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (!mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonProperty")) continue;
+            for (var entry : mirror.getElementValues().entrySet()) {
+                if (entry.getKey().getSimpleName().contentEquals("required")
+                        && Boolean.TRUE.equals(entry.getValue().getValue())) {
+                    return true;
+                }
+            }
+        }
+        if (enclosing != null && element instanceof RecordComponentElement rc) {
+            for (Element e : enclosing.getEnclosedElements()) {
+                if (e.getKind() == ElementKind.FIELD && e.getSimpleName().contentEquals(rc.getSimpleName())) {
+                    if (bridgeRequired(e, null)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * Extraction program for a JSON field name: {@code .name} for plain ASCII
      * identifiers, {@code ."..."} (escaped) otherwise — {@code .host-paths}
      * would parse as a subtraction (issue #103). Both forms compile to
@@ -929,7 +975,7 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /** Metadata for one creator parameter. */
     record CreatorParamInfo(String name, String jsonName, String typeName,
-                            String converterClass, String converterField) {}
+                            String converterClass, String converterField, boolean required) {}
 
     /**
      * Metadata for a {@code @JqCreator}/{@code @JsonCreator} deserialization
@@ -1049,7 +1095,10 @@ public class JqMapperProcessor extends AbstractProcessor {
             if (converterClass != null && !validateConverter(param, mappingPackage)) return null;
             String converterField = converterClass != null
                     ? converterFieldFor(convFields, usedConvNames, converterClass) : null;
-            params.add(new CreatorParamInfo(paramName, jsonName, paramType, converterClass, converterField));
+            boolean paramRequired = param.getAnnotation(JqRequired.class) != null
+                    || bridgeRequired(param, null);
+            params.add(new CreatorParamInfo(paramName, jsonName, paramType, converterClass, converterField,
+                    paramRequired));
         }
         boolean delegating = params.size() == 1 && !anyExplicitName;
         String methodName = executable.getSimpleName().toString();
@@ -1317,6 +1366,106 @@ public class JqMapperProcessor extends AbstractProcessor {
      */
     record BuilderInfo(String builderSourceName, String factory, String build, String label,
                        List<BuilderFieldInfo> bound) {}
+
+    /**
+     * Select the enforced required wires, mirroring the runtime rules:
+     * property creators bind by parameter name (component markers apply
+     * only where the creator binds that wire, anything else fails fast);
+     * delegating creators bind whole scalars (any component marker fails
+     * fast); canonical binding enforces component markers, and programs
+     * cannot prove presence (fail fast). Returns null on error (reported).
+     */
+    private List<String> resolveRequiredWires(TypeElement type, List<ComponentInfo> components,
+            List<String> componentRequired, CreatorInfo creator) {
+        if (creator != null && !creator.delegating()) {
+            var paramWires = new java.util.HashSet<String>();
+            for (var p : creator.params()) paramWires.add(p.jsonName());
+            for (String wire : componentRequired) {
+                if (!paramWires.contains(wire)) {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@JqRequired on '" + wire + "' of " + type.getQualifiedName()
+                                    + " is never bound: the creator binds other wires"
+                                    + " (mark the creator parameter instead)",
+                            type);
+                    return null;
+                }
+            }
+            var required = new ArrayList<String>();
+            for (var p : creator.params()) {
+                if (p.required()) required.add(p.jsonName());
+            }
+            return required;
+        }
+        if (creator != null) {
+            if (!componentRequired.isEmpty()) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqRequired on '" + componentRequired.get(0) + "' of "
+                                + type.getQualifiedName() + " is never bound: the creator"
+                                + " binds whole scalars (mark nothing — scalars are always present)",
+                        type);
+                return null;
+            }
+            return List.of();
+        }
+        for (var comp : components) {
+            if (!comp.ignored() && comp.hasJqField() && componentRequired.contains(comp.jsonName())) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqRequired on '" + comp.name() + "' of " + type.getQualifiedName()
+                                + ": required needs a direct lookup (@JqField programs cannot prove presence)",
+                        type);
+                return null;
+            }
+        }
+        return componentRequired;
+    }
+
+    /**
+     * POJO twin of the record selection above (mirrors the runtime rules
+     * for properties instead of components).
+     */
+    private List<String> resolvePojoRequiredWires(TypeElement type, List<PropertyInfo> properties,
+            List<String> propertyRequired, CreatorInfo creator) {
+        if (creator != null && !creator.delegating()) {
+            var paramWires = new java.util.HashSet<String>();
+            for (var p : creator.params()) paramWires.add(p.jsonName());
+            for (String wire : propertyRequired) {
+                if (!paramWires.contains(wire)) {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@JqRequired on '" + wire + "' of " + type.getQualifiedName()
+                                    + " is never bound: the creator binds other wires"
+                                    + " (mark the creator parameter instead)",
+                            type);
+                    return null;
+                }
+            }
+            var required = new ArrayList<String>();
+            for (var p : creator.params()) {
+                if (p.required()) required.add(p.jsonName());
+            }
+            return required;
+        }
+        if (creator != null) {
+            if (!propertyRequired.isEmpty()) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqRequired on '" + propertyRequired.get(0) + "' of "
+                                + type.getQualifiedName() + " is never bound: the creator"
+                                + " binds whole scalars (mark nothing — scalars are always present)",
+                        type);
+                return null;
+            }
+            return List.of();
+        }
+        for (var prop : properties) {
+            if (!prop.ignored() && prop.hasJqField() && propertyRequired.contains(prop.jsonName())) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqRequired on '" + prop.name() + "' of " + type.getQualifiedName()
+                                + ": required needs a direct lookup (@JqField programs cannot prove presence)",
+                        type);
+                return null;
+            }
+        }
+        return propertyRequired;
+    }
 
     /** Metadata for a single record component. */
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,

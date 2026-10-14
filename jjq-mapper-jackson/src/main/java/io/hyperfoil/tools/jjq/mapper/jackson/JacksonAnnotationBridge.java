@@ -82,6 +82,13 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
     }
 
     @Override
+    public boolean isRequired(AnnotatedElement element) {
+        AnnotatedElement effective = resolveToField(element);
+        JsonProperty prop = effective.getAnnotation(JsonProperty.class);
+        return prop != null && prop.required();
+    }
+
+    @Override
     public JqInclude.Include resolveInclusion(AnnotatedElement element) {
         AnnotatedElement effective = (element instanceof Class<?>) ? element : resolveToField(element);
         JsonInclude include = effective.getAnnotation(JsonInclude.class);

@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.mapper.jsonb;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
+import jakarta.json.bind.annotation.JsonbCreator;
 import jakarta.json.bind.annotation.JsonbProperty;
 import jakarta.json.bind.annotation.JsonbTransient;
 import org.junit.jupiter.api.Test;
@@ -56,6 +57,35 @@ class JsonbAnnotationBridgeTest {
         assertEquals("Alice", r.name());
         assertNull(r.secret());
         assertEquals(42, r.value());
+    }
+
+    // ---- @JsonbCreator ----
+
+    record JsonbUserId(String value) {
+        @JsonbCreator
+        public static JsonbUserId parse(String value) {
+            return new JsonbUserId(value);
+        }
+    }
+
+    record JsonbUser(String name, int age) {
+        @JsonbCreator
+        public static JsonbUser create(@JsonbProperty("user_name") String name,
+                                       @JsonbProperty("age") int age) {
+            return new JsonbUser(name, age);
+        }
+    }
+
+    @Test
+    void jsonbCreatorDelegatingBindsScalar() {
+        assertEquals(new JsonbUserId("abc"),
+                mapper.fromJqValue(JqValues.parse("\"abc\""), JsonbUserId.class));
+    }
+
+    @Test
+    void jsonbCreatorPropertiesBindRenamed() {
+        assertEquals(new JsonbUser("Ann", 3), mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), JsonbUser.class));
     }
 
     @Test

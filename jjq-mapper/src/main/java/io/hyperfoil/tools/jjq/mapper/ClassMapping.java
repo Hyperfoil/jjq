@@ -68,6 +68,9 @@ final class ClassMapping<T> implements Mapping<T> {
     // Every non-program lookup key (including ignored ones, which never fail):
     // the failOnUnknownProperties scan set. Built once; scanned only when strict.
     private final Set<String> knownKeys;
+    // Required wire names in declaration order (absent keys fail binding).
+    // Empty for the common case — enforcement no-ops without scanning.
+    private final Set<String> required;
 
     /**
      * Cached any-setter/any-getter handles plus the known-field names used to
@@ -81,7 +84,8 @@ final class ClassMapping<T> implements Mapping<T> {
                          MethodHandle spreadConstructor,
                          Map<String, Integer> nameToIndex, boolean useForEachFastPath,
                          AnyHandlers anyHandlers, PolySerInfo polySer,
-                         CreatorSpec creator, FieldMapping[] deserFields, BuilderSpec builder) {
+                         CreatorSpec creator, FieldMapping[] deserFields, BuilderSpec builder,
+                         Set<String> required) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
@@ -93,6 +97,7 @@ final class ClassMapping<T> implements Mapping<T> {
         this.creator = creator;
         this.deserFields = deserFields;
         this.builder = builder;
+        this.required = required;
         Set<String> known = new HashSet<>();
         for (FieldMapping field : deserFields) {
             if (!field.usesProgram()) known.add(field.jsonName());
@@ -145,6 +150,9 @@ final class ClassMapping<T> implements Mapping<T> {
         // suppressed entirely (issue #88.1, Jackson parity)
         Method[] anyMethods = resolveAnyMethods(type, bridges);
         Method anyGetter = anyMethods[1];
+
+        // Required wire names in declaration order (absent keys fail binding).
+        Set<String> required = new java.util.LinkedHashSet<>();
 
         for (int i = 0; i < components.length; i++) {
             RecordComponent rc = components[i];
@@ -223,6 +231,13 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("Cannot access record component accessor: " + name, e);
             }
 
+            // Required markers collect here; program combinations are
+            // validated after creator resolution (a property creator makes
+            // component combos moot, delegating makes required moot).
+            if (!ignored && TypeConverter.isRequired(rc, bridges)) {
+                required.add(jsonName);
+            }
+
             // Resolve @JqAdapter (backs the same custom-converter slot) or @JqConverter
             ValueConverter<?> converter = resolveAdapter(rc, fieldType, type, name);
             if (converter == null) converter = resolveConverter(rc.getAnnotation(JqConverter.class));
@@ -259,6 +274,39 @@ final class ClassMapping<T> implements Mapping<T> {
         CreatorSpec creator = CreatorSpec.resolve(type, bridges);
         FieldMapping[] deser = (creator != null && !creator.delegating()) ? creator.params() : fields;
         MethodHandle useSpread = (creator != null && !creator.delegating()) ? creator.spreader() : spread;
+        if (creator != null && !creator.delegating()) {
+            // Property creators bind by parameter name: required follows the
+            // params, and component markers apply only where the creator
+            // actually binds that wire (anything else is a moot trap).
+            java.util.Set<String> paramWires = new java.util.HashSet<>();
+            for (FieldMapping param : creator.params()) paramWires.add(param.jsonName());
+            for (String wire : required) {
+                if (!paramWires.contains(wire)) {
+                    throw new JqMapperException("@JqRequired on '" + wire + "' of "
+                            + type.getName() + " is never bound: the @JqCreator creator"
+                            + " binds other wires (mark the creator parameter instead)");
+                }
+            }
+            required = creator.required();
+        } else if (creator != null) {
+            // Delegating creators bind whole scalars: any component marker
+            // is never bound — fail fast instead of silently dropping it.
+            if (!required.isEmpty()) {
+                throw new JqMapperException("@JqRequired on '" + required.iterator().next()
+                        + "' of " + type.getName() + " is never bound: the @JqCreator creator"
+                        + " binds whole scalars (mark nothing — scalars are always present)");
+            }
+            required = Set.of();
+        } else {
+            // Canonical binding: programs cannot prove presence.
+            for (FieldMapping field : fields) {
+                if (!field.isIgnored() && field.usesProgram() && required.contains(field.jsonName())) {
+                    throw new JqMapperException("@JqRequired on '" + field.name() + "' of "
+                            + type.getName()
+                            + ": required needs a direct lookup (@JqField programs cannot prove presence)");
+                }
+            }
+        }
 
         // Build fast-path name→index map if all fields use direct field names
         // (no @JqField overrides, no @JqIgnore)
@@ -300,7 +348,7 @@ final class ClassMapping<T> implements Mapping<T> {
         return new ClassMapping<>(type, fields, ctor, useSpread,
                 canUseFastPath ? nameMap : null, canUseFastPath,
                 resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
-                creator, deser, null);
+                creator, deser, null, required);
     }
 
     /**
@@ -384,6 +432,8 @@ final class ClassMapping<T> implements Mapping<T> {
         // Declared-only per level, skip static/synthetic/transient.
         var fieldMappings = new ArrayList<FieldMapping>();
         var seenFieldNames = new java.util.HashSet<String>();
+        // Required wire names in declaration order (absent keys fail binding).
+        Set<String> required = new java.util.LinkedHashSet<>();
         for (Class<?> level = type; level != null && level != Object.class; level = level.getSuperclass()) {
         for (Field field : level.getDeclaredFields()) {
             int mods = field.getModifiers();
@@ -527,6 +577,11 @@ final class ClassMapping<T> implements Mapping<T> {
 
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
                     fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser));
+            // Required markers collect here; program combinations are
+            // validated after creator resolution below (mirrors forRecord).
+            if (!ignored && TypeConverter.isRequired(field, bridges)) {
+                required.add(jsonName);
+            }
         }
         }
 
@@ -543,6 +598,39 @@ final class ClassMapping<T> implements Mapping<T> {
         if (noArgMissing && creator == null && builder == null) {
             throw new JqMapperException("POJO " + type.getName() + " requires a no-arg constructor"
                     + " (or a @JqCreator/@JsonCreator creator, or a @JqBuilder builder)");
+        }
+        if (creator != null && !creator.delegating()) {
+            // Property creators bind by parameter name: required follows the
+            // params, and field markers apply only where the creator actually
+            // binds that wire (anything else is a moot trap).
+            java.util.Set<String> paramWires = new java.util.HashSet<>();
+            for (FieldMapping param : creator.params()) paramWires.add(param.jsonName());
+            for (String wire : required) {
+                if (!paramWires.contains(wire)) {
+                    throw new JqMapperException("@JqRequired on '" + wire + "' of "
+                            + type.getName() + " is never bound: the @JqCreator creator"
+                            + " binds other wires (mark the creator parameter instead)");
+                }
+            }
+            required = creator.required();
+        } else if (creator != null) {
+            // Delegating creators bind whole scalars: any field marker is
+            // never bound — fail fast instead of silently dropping it.
+            if (!required.isEmpty()) {
+                throw new JqMapperException("@JqRequired on '" + required.iterator().next()
+                        + "' of " + type.getName() + " is never bound: the @JqCreator creator"
+                        + " binds whole scalars (mark nothing — scalars are always present)");
+            }
+            required = Set.of();
+        } else {
+            // Canonical binding: programs cannot prove presence.
+            for (FieldMapping field : fields) {
+                if (!field.isIgnored() && field.usesProgram() && required.contains(field.jsonName())) {
+                    throw new JqMapperException("@JqRequired on '" + field.name() + "' of "
+                            + type.getName()
+                            + ": required needs a direct lookup (@JqField programs cannot prove presence)");
+                }
+            }
         }
 
         // Build fast-path name→index map (same logic as records)
@@ -580,7 +668,7 @@ final class ClassMapping<T> implements Mapping<T> {
         return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath,
                 resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
-                creator, deser, builder);
+                creator, deser, builder, required);
     }
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. Returns the Method (unreflect at site). */
@@ -678,6 +766,7 @@ final class ClassMapping<T> implements Mapping<T> {
         if (useForEachFastPath && value instanceof JqObject obj && obj.size() == deserFields.length) {
             Object[] args = forEachExtract(obj, mapper, deserFields);
             if (args != null) {
+                TypeConverter.checkRequired(obj, required, type.getSimpleName());
                 T created = invokeCreatorOrConstruct(args);
                 applyAnySetter(created, obj);
                 return created;
@@ -692,6 +781,8 @@ final class ClassMapping<T> implements Mapping<T> {
                 && (anyHandlers == null || anyHandlers.setter() == null)) {
             failOnUnknown(strictObj);
         }
+        // Required properties fail before extraction (no partial work).
+        TypeConverter.checkRequired(value, required, type.getSimpleName());
 
         // Standard record path: per-field extraction via get() or JqProgram
         Object[] args = new Object[deserFields.length];
@@ -1029,6 +1120,8 @@ final class ClassMapping<T> implements Mapping<T> {
                 && (anyHandlers == null || anyHandlers.setter() == null)) {
             failOnUnknown(strictObj);
         }
+        // Required properties fail before construction (no partial work).
+        TypeConverter.checkRequired(value, required, type.getSimpleName());
         if (builder != null) {
             return fromJqValueBuilder(value, mapper);
         }

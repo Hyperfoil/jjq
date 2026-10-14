@@ -1066,6 +1066,87 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_requiredRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqRequired;
+
+                @JqMapped
+                public record ReqPoint(@JqRequired int x, int y) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.ReqPoint", source);
+        JqMapper mapper = JqMapper.create();
+
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                        mapper.fromJqValue(JqValues.parse("{\"y\":2}"), recordClass));
+        assertTrue(e.getMessage().contains("\"x\""), e.getMessage());
+        Object ok = mapper.fromJqValue(JqValues.parse("{\"x\":1,\"y\":2}"), recordClass);
+        assertEquals(1, recordClass.getMethod("x").invoke(ok));
+        // Explicit null counts as present
+        Object n = mapper.fromJqValue(JqValues.parse("{\"x\":null,\"y\":2}"), recordClass);
+        assertEquals(0, recordClass.getMethod("x").invoke(n));
+    }
+
+    @Test
+    void generatedMapping_requiredProgramFailsFast() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqField;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqRequired;
+
+                @JqMapped
+                public record ReqProg(@JqRequired @JqField(".a.b") String deep, String other) {}
+                """;
+
+        com.google.testing.compile.Compilation compilation =
+                com.google.testing.compile.Compiler.javac()
+                        .withProcessors(new io.hyperfoil.tools.jjq.mapper.processor.JqMapperProcessor())
+                        .compile(com.google.testing.compile.JavaFileObjects.forSourceString(
+                                "test.ReqProg", source));
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+        com.google.testing.compile.CompilationSubject.assertThat(compilation)
+                .hadErrorContaining("direct lookup");
+    }
+
+    @Test
+    void generatedMapping_requiredCreatorParam() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqCreator;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+                import io.hyperfoil.tools.jjq.mapper.JqRequired;
+
+                @JqMapped
+                public record ReqCreate(String name, int age) {
+                    @JqCreator
+                    public static ReqCreate create(@JqName("user_name") @JqRequired String name,
+                                                   @JqName("age") int age) {
+                        return new ReqCreate(name, age);
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.ReqCreate", source);
+        JqMapper mapper = JqMapper.create();
+
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                        mapper.fromJqValue(JqValues.parse("{\"age\":3}"), recordClass));
+        assertTrue(e.getMessage().contains("user_name"), e.getMessage());
+        Object ok = mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), recordClass);
+        assertEquals("Ann", recordClass.getMethod("name").invoke(ok));
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;

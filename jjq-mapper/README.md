@@ -186,6 +186,18 @@ Gaps (missing binder/factory/build) fail fast at mapping creation.
 Jackson `@JsonDeserialize(builder=...)` + `@JsonPOJOBuilder` works
 through the bridge without new dependencies; native wins.
 
+### `@JqRequired` — fail on absent keys
+
+```java
+record Point(@JqRequired int x, int y) {}
+// {"y":2} fails: Missing required field "x" for Point at $.x
+```
+
+Explicit nulls still bind (only absence fails); ignored properties never
+fail; `@JqField` programs cannot prove presence and fail fast in
+combination. Applies to creator parameters by wire as well. Jackson
+`@JsonProperty(required = true)` works through the bridge.
+
 ### `@JqEnum` — lenient enum parsing
 
 ```java
@@ -395,6 +407,7 @@ semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
 |---|---|---|
 | `@JsonProperty("x")` | `@JqName("x")` | Key rename with direct lookup |
 | `@JsonProperty(access = …)` | `@JqAccess(…)` | Same `READ_ONLY`/`WRITE_ONLY` names |
+| `@JsonProperty(required = true)` | `@JqRequired` | Absent keys fail; explicit nulls bind |
 | `@JsonIgnore` | `@JqIgnore` | jjq's is always bidirectional |
 | `@JsonInclude` | `@JqInclude` | Same strategy names |
 | `@JsonAutoDetect` | `@JqVisibility` | Getter axes only; fields always bind |
@@ -534,11 +547,12 @@ The any-getter method itself is never emitted as a bean property (Jackson parity
 | `@JsonProperty(access = READ_ONLY)` | Skipped on deser (default kept), emitted on ser |
 | `@JsonAnySetter` / `@JsonAnyGetter` (method form) | Unknown-key capture / extras emission (reflection path) |
 | `@JsonValue` | Enum wire form on ser |
-| `@JsonCreator` (single-arg, delegating) | Enum/factory deser from scalar |
+| `@JsonCreator` (delegating + properties) | Factory/ctor deser; named params via `@JsonProperty` (records + POJOs, reflection + generated) |
+| `@JsonProperty(required = true)` | Absent keys fail (records + POJOs + creator params, reflection + generated) |
 | `@JsonAutoDetect(getterVisibility/isGetterVisibility = NONE)` | Suppress `getX`/`isX` binding; fields read directly (records immune: canonical accessors only) |
 | `@JsonIgnore` on a getter / setter method | Ser-only / deser-only suppression (field-level stays both directions) |
 
-Directional access and `@JsonValue`/`@JsonCreator` work identically through generated mappings (the processor reads Jackson annotations stringly-typed — no Jackson dependency on the processor). Property-based `@JsonCreator` is out of scope.
+Directional access and `@JsonValue`/`@JsonCreator` work identically through generated mappings (the processor reads Jackson annotations stringly-typed — no Jackson dependency on the processor).
 
 Generated-mapping limitations (private fields need a readable accessor — generated code emits no reflection): a private field with no bound getter (including `@JsonAutoDetect`-suppressed ones) is dropped from generated *serialization*, matching the pre-existing accessor-less behavior. The reflection path reads such fields via `setAccessible` instead. `@JsonIgnore` on accessor methods is honored on the reflection path only.
 

@@ -209,6 +209,21 @@ public interface AnnotationBridge {
     }
 
     /**
+     * Whether the element marks a required property (fail on absence).
+     * Only called for direct lookups; program lookups fail fast instead.
+     *
+     * <p>The default implementation returns {@code false} (not required);
+     * bridges override it when their annotations are present (e.g. Jackson
+     * {@code @JsonProperty(required = true)}).</p>
+     *
+     * @param element the field, component, or creator parameter to inspect
+     * @return true when the property must be present
+     */
+    default boolean isRequired(AnnotatedElement element) {
+        return false;
+    }
+
+    /**
      * Normalized builder declaration: which class builds, how to obtain it,
      * which method prefix binds properties, and which method terminates.
      *

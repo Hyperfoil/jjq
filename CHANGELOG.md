@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.4
 
+- Required properties: native `@JqRequired` plus Jackson
+  `@JsonProperty(required)` through the bridge — absent keys fail naming
+  the first missing one, on reflection and generated paths (records,
+  POJOs, builders, creator params by wire); explicit nulls still bind,
+  programs cannot prove presence (fail fast)
+- JSON-B creators: `@JsonbCreator` with `@JsonbProperty` params through
+  the bridge (delegating and properties, mirroring the Jackson subset)
 - Builder binding: native `@JqBuilder` plus Jackson
   `@JsonDeserialize(builder)`/`@JsonPOJOBuilder` through the bridge
   (read reflectively, no new dependency) — Lombok style (empty prefix

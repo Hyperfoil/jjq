@@ -35,7 +35,8 @@ import java.util.List;
  * @param label      the annotation kind for error messages
  *                   ({@code @JqCreator} or {@code @JsonCreator})
  */
-record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegating, String label) {
+record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegating, String label,
+                   java.util.Set<String> required) {
 
     /**
      * Resolve the creator for a type: native {@code @JqCreator} first,
@@ -95,8 +96,12 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
         boolean delegating = parameters.length == 1
                 && explicitName(parameters[0], bridges) == null;
         FieldMapping[] params = new FieldMapping[parameters.length];
+        java.util.Set<String> required = new java.util.LinkedHashSet<>();
         for (int i = 0; i < parameters.length; i++) {
             params[i] = creatorParam(type, label, e, parameters[i], i, bridges, delegating);
+            if (!delegating && TypeConverter.isRequired(parameters[i], bridges)) {
+                required.add(params[i].jsonName());
+            }
         }
         MethodHandle spreader;
         try {
@@ -107,7 +112,8 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
         } catch (IllegalAccessException ex) {
             throw new JqMapperException("Cannot access " + label + " on " + type.getName(), ex);
         }
-        return new CreatorSpec(spreader, params, delegating, label);
+        return new CreatorSpec(spreader, params, delegating, label,
+                java.util.Collections.unmodifiableSet(required));
     }
 
     /**
