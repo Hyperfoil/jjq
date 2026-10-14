@@ -1743,6 +1743,61 @@ class JqMapperTest {
         assertBytesMatch(new Aliased("x", 1));
     }
 
+    static class AliasedPojo {
+        @JqAlias({"host_name", "hostname"})
+        public String hostName;
+        public int port;
+    }
+
+    @Test
+    void aliasPojoBindsWithoutPrimary() {
+        // The absent-key skip must consult aliases, not just the primary:
+        // alias-only input binds on the setter path too.
+        AliasedPojo p = mapper.fromJqValue(
+                JqValues.parse("{\"hostname\":\"x\",\"port\":1}"), AliasedPojo.class);
+        assertEquals("x", p.hostName);
+        assertEquals(1, p.port);
+        assertEquals("{\"hostName\":\"x\",\"port\":1}", mapper.toJqValue(p).toJsonString());
+    }
+
+    @JqBuilder(value = AliasedBuilder.class)
+    static class AliasedBuilt {
+        @JqAlias({"host_name", "hostname"})
+        public String hostName;
+        public int port;
+
+        public String getHostName() { return hostName; }
+        public int getPort() { return port; }
+    }
+
+    static class AliasedBuilder {
+        private String hostName;
+        private int port;
+
+        public AliasedBuilder() {}
+
+        public AliasedBuilder withHostName(String hostName) {
+            this.hostName = hostName;
+            return this;
+        }
+        public AliasedBuilder withPort(int port) { this.port = port; return this; }
+
+        public AliasedBuilt build() {
+            AliasedBuilt b = new AliasedBuilt();
+            b.hostName = hostName;
+            b.port = port;
+            return b;
+        }
+    }
+
+    @Test
+    void aliasBuilderBindsWithoutPrimary() {
+        AliasedBuilt b = mapper.fromJqValue(
+                JqValues.parse("{\"host_name\":\"y\",\"port\":2}"), AliasedBuilt.class);
+        assertEquals("y", b.hostName);
+        assertEquals(2, b.port);
+    }
+
     @Test
     void aliasProgramConflictFailsFast() {
         record BadAlias(@JqAlias("x") @JqField(".a") String a) {}
@@ -1999,6 +2054,122 @@ class JqMapperTest {
         assertNull(GeneratedMapping.asLocalDateChecked(null));
         assertThrows(ShapeMismatchException.class,
                 () -> GeneratedMapping.asLocalDateChecked(JqNumber.of(20261014)));
+    }
+
+    // ---- java.time Phase C: Year/YearMonth/MonthDay/OffsetTime/ZoneId/ZoneOffset ----
+
+    record PhaseC(java.time.Year year, java.time.YearMonth ym, java.time.MonthDay md,
+            java.time.OffsetTime ot, java.time.ZoneId zone, java.time.ZoneOffset offset) {}
+
+    private static PhaseC samplePhaseC() {
+        return new PhaseC(java.time.Year.of(2026), java.time.YearMonth.of(2026, 10),
+                java.time.MonthDay.of(10, 14),
+                java.time.OffsetTime.of(12, 34, 56, 0, java.time.ZoneOffset.ofHours(2)),
+                java.time.ZoneId.of("Europe/Oslo"), java.time.ZoneOffset.ofHours(2));
+    }
+
+    private static String phaseCJson() {
+        return "{\"year\":\"2026\",\"ym\":\"2026-10\",\"md\":\"--10-14\","
+                + "\"ot\":\"12:34:56+02:00\",\"zone\":\"Europe/Oslo\",\"offset\":\"+02:00\"}";
+    }
+
+    @Test
+    void phaseCBindsIsoStrings() {
+        assertEquals(samplePhaseC(), mapper.fromJqValue(JqValues.parse(phaseCJson()), PhaseC.class));
+    }
+
+    @Test
+    void phaseCSerializesIsoStrings() {
+        // Canonical ISO text (unlike Jackson's timestamp/array defaults) —
+        // every form re-binds, so the divergence round-trips.
+        assertEquals(phaseCJson(), mapper.toJqValue(samplePhaseC()).toJsonString());
+    }
+
+    @Test
+    void yearBindsNumbers() {
+        record YearHolder(java.time.Year year) {}
+        assertEquals(java.time.Year.of(2026),
+                mapper.fromJqValue(JqValues.parse("{\"year\":2026}"), YearHolder.class).year());
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"year\":2026.5}"), YearHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"year\":true}"), YearHolder.class));
+    }
+
+    @Test
+    void phaseCRejectsWrongShapes() {
+        // Numbers are meaningless for calendar/zone types (Year excepted);
+        // garbage text and booleans mismatch everywhere.
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"year\":\"2026\",\"ym\":202610,\"md\":\"--10-14\","
+                        + "\"ot\":\"12:34:56+02:00\",\"zone\":\"Europe/Oslo\",\"offset\":\"+02:00\"}"),
+                PhaseC.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"year\":\"yesterday\",\"ym\":\"2026-10\",\"md\":\"--10-14\","
+                        + "\"ot\":\"12:34:56+02:00\",\"zone\":\"Europe/Oslo\",\"offset\":\"+02:00\"}"),
+                PhaseC.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"year\":\"2026\",\"ym\":\"2026-10\",\"md\":\"--10-14\","
+                        + "\"ot\":[12,34],\"zone\":\"Europe/Oslo\",\"offset\":\"+02:00\"}"),
+                PhaseC.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"year\":\"2026\",\"ym\":\"2026-10\",\"md\":\"--10-14\","
+                        + "\"ot\":\"12:34:56+02:00\",\"zone\":true,\"offset\":\"+02:00\"}"),
+                PhaseC.class));
+    }
+
+    @Test
+    void phaseCNullsStayNull() {
+        assertEquals(new PhaseC(null, null, null, null, null, null), mapper.fromJqValue(JqValues.parse(
+                "{\"year\":null,\"ym\":null,\"md\":null,\"ot\":null,\"zone\":null,\"offset\":null}"),
+                PhaseC.class));
+    }
+
+    @Test
+    void phaseCRoundTrip() {
+        PhaseC original = samplePhaseC();
+        assertEquals(original, mapper.fromJqValue(mapper.toJqValue(original), PhaseC.class));
+        assertEquals(mapper.toJqValue(original).toJsonString(), mapper.toJson(original));
+        assertBytesMatch(original);
+    }
+
+    @Test
+    void monthEnumWorksAsEnum() {
+        // Month/DayOfWeek need no temporal support: plain name-based enums.
+        record MonthHolder(java.time.Month month) {}
+        assertEquals(java.time.Month.OCTOBER, mapper.fromJqValue(
+                JqValues.parse("{\"month\":\"OCTOBER\"}"), MonthHolder.class).month());
+        assertEquals("{\"month\":\"OCTOBER\"}",
+                mapper.toJqValue(new MonthHolder(java.time.Month.OCTOBER)).toJsonString());
+    }
+
+    @Test
+    void phaseCCheckedHelpersMirror() {
+        assertEquals(java.time.Year.of(2026),
+                GeneratedMapping.asYearChecked(JqString.of("2026")));
+        assertEquals(java.time.Year.of(2026),
+                GeneratedMapping.asYearChecked(JqNumber.of(2026)));
+        assertNull(GeneratedMapping.asYearChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asYearChecked(JqString.of("yesterday")));
+        assertEquals(java.time.YearMonth.of(2026, 10),
+                GeneratedMapping.asYearMonthChecked(JqString.of("2026-10")));
+        assertNull(GeneratedMapping.asYearMonthChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asYearMonthChecked(JqNumber.of(202610)));
+        assertEquals(java.time.MonthDay.of(10, 14),
+                GeneratedMapping.asMonthDayChecked(JqString.of("--10-14")));
+        assertEquals(java.time.OffsetTime.of(12, 34, 56, 0, java.time.ZoneOffset.ofHours(2)),
+                GeneratedMapping.asOffsetTimeChecked(JqString.of("12:34:56+02:00")));
+        assertEquals(java.time.ZoneId.of("Europe/Oslo"),
+                GeneratedMapping.asZoneIdChecked(JqString.of("Europe/Oslo")));
+        assertEquals(java.time.ZoneOffset.ofHours(2),
+                GeneratedMapping.asZoneOffsetChecked(JqString.of("+02:00")));
+        assertEquals(java.time.ZoneOffset.UTC,
+                GeneratedMapping.asZoneOffsetChecked(JqString.of("Z")));
+        assertNull(GeneratedMapping.asZoneOffsetChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asZoneIdChecked(JqNumber.of(1)));
     }
 
     // ---- Arrays and wider collections ----

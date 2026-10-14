@@ -57,11 +57,14 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public String resolveFieldName(AnnotatedElement element) {
-        // For RecordComponents, Jackson annotations land on the field, not the component
-        AnnotatedElement effective = resolveToField(element);
-        JsonProperty prop = effective.getAnnotation(JsonProperty.class);
-        if (prop != null && !prop.value().isEmpty() && !JsonProperty.USE_DEFAULT_NAME.equals(prop.value())) {
-            return prop.value();
+        // Field first, then conventional accessors (Jackson reads
+        // annotations from any of field/getter/setter — field wins).
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonProperty prop = candidate.getAnnotation(JsonProperty.class);
+            if (prop != null && !prop.value().isEmpty()
+                    && !JsonProperty.USE_DEFAULT_NAME.equals(prop.value())) {
+                return prop.value();
+            }
         }
         return null;
     }
@@ -89,10 +92,14 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public java.util.List<String> resolveAliases(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        JsonAlias alias = effective.getAnnotation(JsonAlias.class);
-        if (alias == null || alias.value().length == 0) return java.util.List.of();
-        return java.util.List.of(alias.value());
+        // Field aliases first, then accessor aliases (duplicates are
+        // harmless — first present wins either way).
+        var all = new java.util.ArrayList<String>();
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonAlias alias = candidate.getAnnotation(JsonAlias.class);
+            if (alias != null && alias.value().length > 0) all.addAll(java.util.List.of(alias.value()));
+        }
+        return all;
     }
 
     @Override
@@ -121,14 +128,28 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public boolean isRequired(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        JsonProperty prop = effective.getAnnotation(JsonProperty.class);
-        return prop != null && prop.required();
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonProperty prop = candidate.getAnnotation(JsonProperty.class);
+            if (prop != null && prop.required()) return true;
+        }
+        return false;
     }
 
     @Override
     public JqInclude.Include resolveInclusion(AnnotatedElement element) {
-        AnnotatedElement effective = (element instanceof Class<?>) ? element : resolveToField(element);
+        if (element instanceof Class<?>) {
+            JqInclude.Include classLevel = resolveInclusionOn(element);
+            if (classLevel != null) return classLevel;
+        }
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JqInclude.Include inclusion = resolveInclusionOn(candidate);
+            if (inclusion != null) return inclusion;
+        }
+        return null;
+    }
+
+    /** Inclusion for one annotated element (class or member), null when absent. */
+    private static JqInclude.Include resolveInclusionOn(AnnotatedElement effective) {
         JsonInclude include = effective.getAnnotation(JsonInclude.class);
         if (include == null) return null;
         return switch (include.value()) {
@@ -142,29 +163,32 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public JqFormat.Spec resolveFormat(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        JsonFormat format = effective.getAnnotation(JsonFormat.class);
-        if (format == null) return null;
-        String pattern = format.pattern();
-        if (pattern.isEmpty()) return null;
-        String timezone = normalizeDefault(format.timezone());
-        String locale = normalizeDefault(format.locale());
-        return new JqFormat.Spec(pattern, timezone, locale);
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonFormat format = candidate.getAnnotation(JsonFormat.class);
+            if (format == null) continue;
+            String pattern = format.pattern();
+            if (pattern.isEmpty()) continue;
+            return new JqFormat.Spec(pattern, normalizeDefault(format.timezone()),
+                    normalizeDefault(format.locale()));
+        }
+        return null;
     }
 
     @Override
     public io.hyperfoil.tools.jjq.mapper.JqFormat.Shape resolveShape(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        JsonFormat format = effective.getAnnotation(JsonFormat.class);
-        if (format == null) return null;
-        // Only STRING and NUMBER change the wire form (verified on databind
-        // 2.18: patterns are ignored on serialization, other shapes are
-        // no-ops) — the rest arrive as ANY.
-        return switch (format.shape()) {
-            case STRING -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.STRING;
-            case NUMBER -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.NUMBER;
-            default -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.ANY;
-        };
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonFormat format = candidate.getAnnotation(JsonFormat.class);
+            if (format == null) continue;
+            // Only STRING and NUMBER change the wire form (verified on databind
+            // 2.18: patterns are ignored on serialization, other shapes are
+            // no-ops) — the rest arrive as ANY.
+            return switch (format.shape()) {
+                case STRING -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.STRING;
+                case NUMBER -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.NUMBER;
+                default -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.ANY;
+            };
+        }
+        return null;
     }
 
     /** Jackson uses "##default" for unset members; house defaults apply instead. */
@@ -255,12 +279,75 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
         return false;
     }
 
-    /** Read Jackson's @JsonProperty(access) for a field (RECORD_COMPONENT resolves to its field). */
+    /** Read Jackson's @JsonProperty(access): field first, then accessors (field wins). */
     private static JsonProperty.Access resolveAccess(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        JsonProperty prop = effective.getAnnotation(JsonProperty.class);
-        if (prop == null) return JsonProperty.Access.AUTO;
-        return prop.access();
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonProperty prop = candidate.getAnnotation(JsonProperty.class);
+            if (prop != null && prop.access() != JsonProperty.Access.AUTO) return prop.access();
+        }
+        return JsonProperty.Access.AUTO;
+    }
+
+    /**
+     * Annotation-bearing elements for a property: the field itself, then
+     * conventional accessors (getter before setter). Jackson reads
+     * annotations from any of field/getter/setter — field wins.
+     */
+    private static java.util.List<AnnotatedElement> selfThenAccessors(AnnotatedElement element) {
+        var all = new java.util.ArrayList<AnnotatedElement>(4);
+        all.add(resolveToField(element));
+        Class<?> declaring = getDeclaringClass(element);
+        String fieldName = getFieldName(element);
+        if (declaring != null && fieldName != null && !fieldName.isEmpty()) {
+            all.addAll(accessorsFirst(declaring, fieldName, getFieldType(element)));
+        }
+        return all;
+    }
+
+    /**
+     * Conventional accessors for a property, getter first: {@code getX()},
+     * {@code isX()} for booleans (the component method itself for records),
+     * then the single-argument {@code setX(...)}.
+     */
+    private static java.util.List<java.lang.reflect.Method> accessorsFirst(
+            Class<?> declaring, String fieldName, Class<?> fieldType) {
+        var found = new java.util.ArrayList<java.lang.reflect.Method>(3);
+        if (declaring.isRecord()) {
+            try {
+                found.add(declaring.getMethod(fieldName));
+            } catch (NoSuchMethodException ignored) {
+                // No explicit accessor — field annotations rule alone.
+            }
+            return found;
+        }
+        String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+        try {
+            found.add(declaring.getMethod("get" + capitalized));
+        } catch (NoSuchMethodException ignored) {
+            // No getter — fall through to isX/setX.
+        }
+        if (fieldType == boolean.class || fieldType == Boolean.class) {
+            try {
+                java.lang.reflect.Method is = declaring.getMethod("is" + capitalized);
+                if (!found.contains(is)) found.add(is);
+            } catch (NoSuchMethodException ignored) {
+                // No is-getter either.
+            }
+        }
+        for (java.lang.reflect.Method m : declaring.getMethods()) {
+            if (m.getName().equals("set" + capitalized) && m.getParameterCount() == 1) {
+                found.add(m);
+                break;
+            }
+        }
+        return found;
+    }
+
+    /** Declared field type for accessor matching (records: the component type). */
+    private static Class<?> getFieldType(AnnotatedElement element) {
+        if (element instanceof RecordComponent rc) return rc.getType();
+        if (element instanceof Field f) return f.getType();
+        return Object.class;
     }
 
     @Override

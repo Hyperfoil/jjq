@@ -2,6 +2,19 @@
 
 ## [Unreleased] - 0.2.4
 
+- java.time Phase C: `Year` (ISO strings plus whole numbers), `YearMonth`,
+  `MonthDay`, `OffsetTime`, `ZoneId`, and `ZoneOffset` (ISO strings) —
+  canonical ISO text on serialization (unlike Jackson's timestamp/array
+  defaults, every form re-binds), fail-fast mismatches, nulls stay null,
+  on reflection and generated paths (`Month`/`DayOfWeek` already work as
+  plain enums; custom patterns stay limited to the original six types)
+- Jackson/JSON-B annotations on accessors: `@JsonProperty` (rename,
+  required, access), `@JsonAlias`, `@JsonInclude`, and `@JsonFormat`
+  (pattern and shape) are now read from getters/setters when the field
+  itself is unannotated (field placement wins); same for `@JsonbProperty`,
+  `@JsonbTransient`, and `@JsonbNillable` through the JSON-B bridge.
+  Also fixed POJO alias binding when only the alias key is present
+  (the absent-key skip consulted the primary name alone)
 - Number/boolean wire shapes: native `@JqFormat(shape)` plus Jackson
   `@JsonFormat(shape)` through the bridge — `STRING` quotes numbers and
   booleans on serialization (deserialization already binds quoted and bare

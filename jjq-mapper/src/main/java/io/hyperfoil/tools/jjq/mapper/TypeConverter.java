@@ -77,6 +77,18 @@ public final class TypeConverter {
         DURATION,
         /** Target is {@link java.time.Period} (ISO string). */
         PERIOD,
+        /** Target is {@link java.time.Year} (ISO string, or whole numbers). */
+        YEAR,
+        /** Target is {@link java.time.YearMonth} (ISO string). */
+        YEAR_MONTH,
+        /** Target is {@link java.time.MonthDay} (ISO string). */
+        MONTH_DAY,
+        /** Target is {@link java.time.OffsetTime} (ISO string). */
+        OFFSET_TIME,
+        /** Target is {@link java.time.ZoneId} (region, offset, or {@code Z}). */
+        ZONE_ID,
+        /** Target is {@link java.time.ZoneOffset} (offset text, or {@code Z}). */
+        ZONE_OFFSET,
         /** Target is an {@code enum} type. */
         ENUM,
         /** Target is a record or {@code @JqMapped} POJO. */
@@ -121,6 +133,12 @@ public final class TypeConverter {
         if (targetType == java.time.ZonedDateTime.class) return Kind.ZONED_DATE_TIME;
         if (targetType == java.time.Duration.class) return Kind.DURATION;
         if (targetType == java.time.Period.class) return Kind.PERIOD;
+        if (targetType == java.time.Year.class) return Kind.YEAR;
+        if (targetType == java.time.YearMonth.class) return Kind.YEAR_MONTH;
+        if (targetType == java.time.MonthDay.class) return Kind.MONTH_DAY;
+        if (targetType == java.time.OffsetTime.class) return Kind.OFFSET_TIME;
+        if (targetType == java.time.ZoneId.class) return Kind.ZONE_ID;
+        if (targetType == java.time.ZoneOffset.class) return Kind.ZONE_OFFSET;
         if (targetType == java.util.UUID.class) return Kind.UUID;
         if (targetType == java.net.URI.class) return Kind.URI;
         if (targetType == java.net.URL.class) return Kind.URL;
@@ -234,6 +252,24 @@ public final class TypeConverter {
             }
             case PERIOD -> {
                 yield coercePeriod(value);
+            }
+            case YEAR -> {
+                yield coerceYear(value);
+            }
+            case YEAR_MONTH -> {
+                yield coerceYearMonth(value);
+            }
+            case MONTH_DAY -> {
+                yield coerceMonthDay(value);
+            }
+            case OFFSET_TIME -> {
+                yield coerceOffsetTime(value);
+            }
+            case ZONE_ID -> {
+                yield coerceZoneId(value);
+            }
+            case ZONE_OFFSET -> {
+                yield coerceZoneOffset(value);
             }
             case LIST -> {
                 if (value == null || value instanceof JqNull) yield newListFor(targetType, 0);
@@ -1122,6 +1158,124 @@ public final class TypeConverter {
         throw mismatch(JqValue.Type.STRING, "Period", value);
     }
 
+    /**
+     * {@code Year} coercion: ISO strings parse ({@code 2026}), whole numbers
+     * bind as proleptic years (fractions, out-of-range values, and
+     * non-finite numbers mismatch); nulls stay null. Shared by
+     * {@link #convert} and the generated-code helper so both paths agree.
+     */
+    static java.time.Year coerceYear(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "Year", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.Year.parse(s.stringValue().trim());
+            } catch (java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.STRING, "Year", value);
+            }
+        }
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "Year", value);
+            try {
+                return java.time.Year.of(n.decimalValue().intValueExact());
+            } catch (ArithmeticException | java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.NUMBER, "Year", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "Year", value);
+    }
+
+    /**
+     * {@code YearMonth} coercion from ISO strings ({@code 2026-10});
+     * numbers are meaningless for calendar types and mismatch; nulls stay
+     * null. Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.YearMonth coerceYearMonth(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "YearMonth", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.YearMonth.parse(s.stringValue().trim());
+            } catch (java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.STRING, "YearMonth", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "YearMonth", value);
+    }
+
+    /**
+     * {@code MonthDay} coercion from ISO strings ({@code --10-14});
+     * numbers are meaningless for calendar types and mismatch; nulls stay
+     * null. Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.MonthDay coerceMonthDay(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "MonthDay", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.MonthDay.parse(s.stringValue().trim());
+            } catch (java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.STRING, "MonthDay", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "MonthDay", value);
+    }
+
+    /**
+     * {@code OffsetTime} coercion from ISO strings
+     * ({@code 12:34:56+02:00}); numbers are meaningless for clock types
+     * and mismatch; nulls stay null. Shared by {@link #convert} and the
+     * generated-code helper.
+     */
+    static java.time.OffsetTime coerceOffsetTime(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "OffsetTime", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.OffsetTime.parse(s.stringValue().trim());
+            } catch (java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.STRING, "OffsetTime", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "OffsetTime", value);
+    }
+
+    /**
+     * {@code ZoneId} coercion from region, offset, or {@code Z} text
+     * ({@code Europe/Oslo}); anything else mismatches; nulls stay null.
+     * Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.ZoneId coerceZoneId(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "ZoneId", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.ZoneId.of(s.stringValue().trim());
+            } catch (java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.STRING, "ZoneId", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "ZoneId", value);
+    }
+
+    /**
+     * {@code ZoneOffset} coercion from offset text ({@code +02:00},
+     * {@code Z}); anything else mismatches; nulls stay null. Shared by
+     * {@link #convert} and the generated-code helper.
+     */
+    static java.time.ZoneOffset coerceZoneOffset(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "ZoneOffset", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.ZoneOffset.of(s.stringValue().trim());
+            } catch (java.time.DateTimeException e) {
+                throw mismatch(JqValue.Type.STRING, "ZoneOffset", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "ZoneOffset", value);
+    }
+
     /** Short human-readable description of a JqValue (strings truncated). */
     private static String describe(JqValue value) {
         if (value == null || value instanceof JqNull) return "null";
@@ -1291,6 +1445,12 @@ public final class TypeConverter {
         if (value instanceof java.time.ZonedDateTime zdt) return JqString.of(zdt.toString());
         if (value instanceof java.time.Duration dur) return JqString.of(dur.toString());
         if (value instanceof java.time.Period p) return JqString.of(p.toString());
+        if (value instanceof java.time.Year y) return JqString.of(y.toString());
+        if (value instanceof java.time.YearMonth ym) return JqString.of(ym.toString());
+        if (value instanceof java.time.MonthDay md) return JqString.of(md.toString());
+        if (value instanceof java.time.OffsetTime ot) return JqString.of(ot.toString());
+        if (value instanceof java.time.ZoneOffset zo) return JqString.of(zo.toString());
+        if (value instanceof java.time.ZoneId z) return JqString.of(z.toString());
         if (value instanceof java.net.URL url) return JqString.of(url.toString());
         if (value instanceof java.net.URI uri) return JqString.of(uri.toString());
         if (value instanceof Optional<?> opt) {

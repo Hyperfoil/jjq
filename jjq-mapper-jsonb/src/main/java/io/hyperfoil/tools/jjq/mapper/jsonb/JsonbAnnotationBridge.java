@@ -36,27 +36,90 @@ public class JsonbAnnotationBridge implements AnnotationBridge {
 
     @Override
     public String resolveFieldName(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        JsonbProperty prop = effective.getAnnotation(JsonbProperty.class);
-        if (prop != null && !prop.value().isEmpty()) {
-            return prop.value();
+        // Field first, then conventional accessors (JSON-B reads annotations
+        // from fields and methods alike — field wins).
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            JsonbProperty prop = candidate.getAnnotation(JsonbProperty.class);
+            if (prop != null && !prop.value().isEmpty()) {
+                return prop.value();
+            }
         }
         return null;
     }
 
     @Override
     public boolean isIgnored(AnnotatedElement element) {
-        AnnotatedElement effective = resolveToField(element);
-        return effective.isAnnotationPresent(JsonbTransient.class);
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            if (candidate.isAnnotationPresent(JsonbTransient.class)) return true;
+        }
+        return false;
     }
 
     @Override
     public JqInclude.Include resolveInclusion(AnnotatedElement element) {
-        AnnotatedElement effective = (element instanceof Class<?>) ? element : resolveToField(element);
-        if (effective.isAnnotationPresent(JsonbNillable.class)) {
-            JsonbNillable nillable = effective.getAnnotation(JsonbNillable.class);
-            return nillable.value() ? JqInclude.Include.ALWAYS : JqInclude.Include.NON_NULL;
+        if (element instanceof Class<?>) {
+            if (element.isAnnotationPresent(JsonbNillable.class)) {
+                JsonbNillable nillable = element.getAnnotation(JsonbNillable.class);
+                return nillable.value() ? JqInclude.Include.ALWAYS : JqInclude.Include.NON_NULL;
+            }
+            return null;
         }
+        for (AnnotatedElement candidate : selfThenAccessors(element)) {
+            if (candidate.isAnnotationPresent(JsonbNillable.class)) {
+                JsonbNillable nillable = candidate.getAnnotation(JsonbNillable.class);
+                return nillable.value() ? JqInclude.Include.ALWAYS : JqInclude.Include.NON_NULL;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Annotation-bearing elements for a property: the field itself, then
+     * conventional accessors (getter before setter).
+     */
+    private static java.util.List<AnnotatedElement> selfThenAccessors(AnnotatedElement element) {
+        var all = new java.util.ArrayList<AnnotatedElement>(4);
+        all.add(resolveToField(element));
+        Class<?> declaring = getDeclaringClass(element);
+        String fieldName = getFieldName(element);
+        if (declaring != null && fieldName != null && !fieldName.isEmpty()) {
+            String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+            if (!declaring.isRecord()) {
+                try {
+                    all.add(declaring.getMethod("get" + capitalized));
+                } catch (NoSuchMethodException ignored) {
+                    // No getter — fall through to the setter scan.
+                }
+            } else {
+                try {
+                    all.add(declaring.getMethod(fieldName));
+                } catch (NoSuchMethodException ignored) {
+                    // No explicit accessor — field annotations rule alone.
+                }
+                return all;
+            }
+            for (java.lang.reflect.Method m : declaring.getMethods()) {
+                boolean getter = (m.getName().equals("get" + capitalized)
+                        || m.getName().equals("is" + capitalized)) && m.getParameterCount() == 0;
+                boolean setter = m.getName().equals("set" + capitalized) && m.getParameterCount() == 1;
+                if ((getter || setter) && !all.contains(m)) {
+                    all.add(m);
+                    if (setter) break;
+                }
+            }
+        }
+        return all;
+    }
+
+    private static Class<?> getDeclaringClass(AnnotatedElement element) {
+        if (element instanceof java.lang.reflect.RecordComponent rc) return rc.getDeclaringRecord();
+        if (element instanceof java.lang.reflect.Field f) return f.getDeclaringClass();
+        return null;
+    }
+
+    private static String getFieldName(AnnotatedElement element) {
+        if (element instanceof java.lang.reflect.RecordComponent rc) return rc.getName();
+        if (element instanceof java.lang.reflect.Field f) return f.getName();
         return null;
     }
 

@@ -540,6 +540,11 @@ for `ServiceLoader` discovery.
 | `OffsetDateTime` / `ZonedDateTime` | string / number | ISO-8601 canonical; epoch seconds bind at UTC |
 | `Duration` | string / number | ISO-8601 canonical (`PT1H30M`); numbers bind as seconds |
 | `Period` | string | ISO-8601 (`P1Y2M3D`) |
+| `Year` | string / number | ISO-8601 (`2026`); whole numbers bind |
+| `YearMonth` | string | ISO-8601 (`2026-10`) |
+| `MonthDay` | string | ISO-8601 (`--10-14`) |
+| `OffsetTime` | string | ISO-8601 (`12:34:56+02:00`) |
+| `ZoneId` / `ZoneOffset` | string | Region, offset, or `Z` (`Europe/Oslo`, `+02:00`) |
 | `List<T>` | array | Recursive element mapping (`LinkedList`, `Collection`, `Queue`/`Deque` bind by interface too) |
 | `Map<String, V>` | object | Recursive value mapping (`TreeMap`/`SortedMap` order naturally) |
 | `T[]` (incl. primitives) | array | Exact element mapping; null arrays stay null |
@@ -594,7 +599,7 @@ The any-getter method itself is never emitted as a bean property (Jackson parity
 
 | Jackson | jjq behavior |
 |---|---|
-| `@JsonProperty("name")` | Field rename (records + POJOs, reflection path) |
+| `@JsonProperty("name")` | Field rename (records + POJOs, reflection path; field, getter, or setter placement — field wins) |
 | `@JsonIgnore`, `@JsonIgnoreProperties` | Exclusion both directions |
 | `@JsonInclude(...)` | ALWAYS/NON_NULL/NON_EMPTY/NON_DEFAULT mapping |
 | `@JsonProperty(access = WRITE_ONLY)` | Bound on deser, skipped on ser (records + POJOs, reflection + generated) |

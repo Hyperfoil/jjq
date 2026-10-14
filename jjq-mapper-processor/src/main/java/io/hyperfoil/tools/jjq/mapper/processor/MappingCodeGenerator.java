@@ -534,6 +534,24 @@ final class MappingCodeGenerator {
             case "java.time.Period" -> {
                 sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
             }
+            case "java.time.Year" -> {
+                sb.append("asYearChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Year\"))");
+            }
+            case "java.time.YearMonth" -> {
+                sb.append("asYearMonthChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"YearMonth\"))");
+            }
+            case "java.time.MonthDay" -> {
+                sb.append("asMonthDayChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"MonthDay\"))");
+            }
+            case "java.time.OffsetTime" -> {
+                sb.append("asOffsetTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetTime\"))");
+            }
+            case "java.time.ZoneId" -> {
+                sb.append("asZoneIdChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneId\"))");
+            }
+            case "java.time.ZoneOffset" -> {
+                sb.append("asZoneOffsetChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneOffset\"))");
+            }
             default -> {
                 String typeName = comp.typeName();
                 // JqValue or subtypes — passthrough
@@ -619,6 +637,18 @@ final class MappingCodeGenerator {
                 sb.append("asDurationChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Duration\"))");
             case "java.time.Period", "Period" ->
                 sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
+            case "java.time.Year", "Year" ->
+                sb.append("asYearChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Year\"))");
+            case "java.time.YearMonth", "YearMonth" ->
+                sb.append("asYearMonthChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"YearMonth\"))");
+            case "java.time.MonthDay", "MonthDay" ->
+                sb.append("asMonthDayChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"MonthDay\"))");
+            case "java.time.OffsetTime", "OffsetTime" ->
+                sb.append("asOffsetTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetTime\"))");
+            case "java.time.ZoneId", "ZoneId" ->
+                sb.append("asZoneIdChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneId\"))");
+            case "java.time.ZoneOffset", "ZoneOffset" ->
+                sb.append("asZoneOffsetChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneOffset\"))");
             case "java.math.BigInteger", "BigInteger" ->
                 sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
             case "java.util.UUID", "UUID" ->
@@ -786,7 +816,9 @@ final class MappingCodeGenerator {
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(".toString())");
             case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
                     "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
-                    "java.time.Duration", "java.time.Period" ->
+                    "java.time.Duration", "java.time.Period",
+                    "java.time.Year", "java.time.YearMonth", "java.time.MonthDay",
+                    "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" ->
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(".toString())");
             default -> {
                 String typeName = comp.typeName();
@@ -936,7 +968,9 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
                     "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
-                    "java.time.Duration", "java.time.Period" ->
+                    "java.time.Duration", "java.time.Period",
+                    "java.time.Year", "java.time.YearMonth", "java.time.MonthDay",
+                    "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
@@ -1093,7 +1127,9 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
                     "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
-                    "java.time.Duration", "java.time.Period" ->
+                    "java.time.Duration", "java.time.Period",
+                    "java.time.Year", "java.time.YearMonth", "java.time.MonthDay",
+                    "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
@@ -1922,7 +1958,9 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
                     "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
-                    "java.time.Duration", "java.time.Period" ->
+                    "java.time.Duration", "java.time.Period",
+                    "java.time.Year", "java.time.YearMonth", "java.time.MonthDay",
+                    "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
@@ -2018,7 +2056,9 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
                     "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
-                    "java.time.Duration", "java.time.Period" ->
+                    "java.time.Duration", "java.time.Period",
+                    "java.time.Year", "java.time.YearMonth", "java.time.MonthDay",
+                    "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
@@ -2103,6 +2143,12 @@ final class MappingCodeGenerator {
             case "java.time.ZonedDateTime" -> "asZonedDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZonedDateTime\"))";
             case "java.time.Duration" -> "asDurationChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Duration\"))";
             case "java.time.Period" -> "asPeriodChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Period\"))";
+            case "java.time.Year" -> "asYearChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Year\"))";
+            case "java.time.YearMonth" -> "asYearMonthChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"YearMonth\"))";
+            case "java.time.MonthDay" -> "asMonthDayChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"MonthDay\"))";
+            case "java.time.OffsetTime" -> "asOffsetTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"OffsetTime\"))";
+            case "java.time.ZoneId" -> "asZoneIdChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZoneId\"))";
+            case "java.time.ZoneOffset" -> "asZoneOffsetChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZoneOffset\"))";
             default -> {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
@@ -2338,7 +2384,9 @@ final class MappingCodeGenerator {
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(".toString())");
             case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
                     "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
-                    "java.time.Duration", "java.time.Period" ->
+                    "java.time.Duration", "java.time.Period",
+                    "java.time.Year", "java.time.YearMonth", "java.time.MonthDay",
+                    "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" ->
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(".toString())");
             default -> sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                          .append(readExpr).append(", mapper)");

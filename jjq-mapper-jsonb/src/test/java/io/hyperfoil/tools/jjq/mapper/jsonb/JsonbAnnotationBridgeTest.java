@@ -42,6 +42,26 @@ class JsonbAnnotationBridgeTest {
         assertFalse(json.contains("\"name\""), "Should not use Java name: " + json);
     }
 
+    // ---- JSON-B annotations on accessors (#1) ----
+
+    static class GetterPlaced {
+        private String name;
+
+        public GetterPlaced() {}
+
+        @JsonbProperty("full_name")
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+    }
+
+    @Test
+    void jsonbPropertyOnGetter_renamesBothDirections() {
+        GetterPlaced p = mapper.fromJqValue(
+                JqValues.parse("{\"full_name\":\"Ann\"}"), GetterPlaced.class);
+        assertEquals("Ann", p.getName());
+        assertEquals("{\"full_name\":\"Ann\"}", mapper.toJqValue(p).toJsonString());
+    }
+
     // ---- @JsonbTransient ----
 
     record TransientRecord(

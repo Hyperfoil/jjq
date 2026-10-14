@@ -325,6 +325,54 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * {@code Year} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse, whole numbers bind; nulls stay null.
+     */
+    protected static java.time.Year asYearChecked(JqValue value) {
+        return TypeConverter.coerceYear(value);
+    }
+
+    /**
+     * {@code YearMonth} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse; nulls stay null.
+     */
+    protected static java.time.YearMonth asYearMonthChecked(JqValue value) {
+        return TypeConverter.coerceYearMonth(value);
+    }
+
+    /**
+     * {@code MonthDay} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse; nulls stay null.
+     */
+    protected static java.time.MonthDay asMonthDayChecked(JqValue value) {
+        return TypeConverter.coerceMonthDay(value);
+    }
+
+    /**
+     * {@code OffsetTime} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse; nulls stay null.
+     */
+    protected static java.time.OffsetTime asOffsetTimeChecked(JqValue value) {
+        return TypeConverter.coerceOffsetTime(value);
+    }
+
+    /**
+     * {@code ZoneId} coercion mirroring {@code TypeConverter} semantics:
+     * region, offset, and {@code Z} text parse; nulls stay null.
+     */
+    protected static java.time.ZoneId asZoneIdChecked(JqValue value) {
+        return TypeConverter.coerceZoneId(value);
+    }
+
+    /**
+     * {@code ZoneOffset} coercion mirroring {@code TypeConverter} semantics:
+     * offset text and {@code Z} parse; nulls stay null.
+     */
+    protected static java.time.ZoneOffset asZoneOffsetChecked(JqValue value) {
+        return TypeConverter.coerceZoneOffset(value);
+    }
+
+    /**
      * Lenient string coercion mirroring {@code TypeConverter} {@code STRING} semantics:
      * nulls stay null, strings unwrap, scalars with source text keep what was
      * written, other scalars render as JSON text, arrays and objects fail fast.

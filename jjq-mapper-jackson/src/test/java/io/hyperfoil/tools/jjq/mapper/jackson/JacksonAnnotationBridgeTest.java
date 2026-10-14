@@ -738,6 +738,192 @@ class JacksonAnnotationBridgeTest {
                 mapper.toJqValue(new JMootPatternBare(4.5)).toJsonString());
     }
 
+    // ---- Jackson annotations on accessors (#1) ----
+    // Jackson allows annotations on field, getter, setter, or (for creators)
+    // parameters. Field placement wins; accessors are the fallback.
+
+    static class GetterPlaced {
+        private String name;
+        private int age;
+
+        public GetterPlaced() {}
+
+        @JsonProperty("full_name")
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public int getAge() { return age; }
+        public void setAge(int age) { this.age = age; }
+    }
+
+    @Test
+    void jsonPropertyOnGetter_renamesBothDirections() {
+        GetterPlaced p = mapper.fromJqValue(
+                JqValues.parse("{\"full_name\":\"Ann\",\"age\":3}"), GetterPlaced.class);
+        assertEquals("Ann", p.getName());
+        assertEquals(3, p.getAge());
+        assertEquals("{\"full_name\":\"Ann\",\"age\":3}",
+                mapper.toJqValue(p).toJsonString());
+    }
+
+    static class SetterPlaced {
+        private String name;
+
+        public SetterPlaced() {}
+
+        public String getName() { return name; }
+        @JsonProperty("full_name")
+        public void setName(String name) { this.name = name; }
+    }
+
+    @Test
+    void jsonPropertyOnSetter_renamesBothDirections() {
+        SetterPlaced p = mapper.fromJqValue(
+                JqValues.parse("{\"full_name\":\"Bo\"}"), SetterPlaced.class);
+        assertEquals("Bo", p.getName());
+        assertEquals("{\"full_name\":\"Bo\"}", mapper.toJqValue(p).toJsonString());
+    }
+
+    static class FieldBeatsAccessor {
+        @JsonProperty("from_field")
+        private String name;
+
+        public FieldBeatsAccessor() {}
+
+        @JsonProperty("from_getter")
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+    }
+
+    @Test
+    void jsonPropertyFieldWinsOverAccessor() {
+        FieldBeatsAccessor p = mapper.fromJqValue(
+                JqValues.parse("{\"from_field\":\"x\"}"), FieldBeatsAccessor.class);
+        assertEquals("x", p.getName());
+        assertEquals("{\"from_field\":\"x\"}", mapper.toJqValue(p).toJsonString());
+    }
+
+    static class GetterIncluded {
+        private String data;
+        private String error;
+
+        public GetterIncluded() {}
+
+        public String getData() { return data; }
+        public void setData(String data) { this.data = data; }
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public String getError() { return error; }
+        public void setError(String error) { this.error = error; }
+    }
+
+    @Test
+    void jsonIncludeOnGetter_filtersNull() {
+        GetterIncluded p = new GetterIncluded();
+        p.setData("hello");
+        assertEquals("{\"data\":\"hello\"}", mapper.toJqValue(p).toJsonString());
+    }
+
+    static class GetterFormatted {
+        private java.time.LocalDate day;
+
+        public GetterFormatted() {}
+
+        @JsonFormat(pattern = "dd/MM/yyyy")
+        public java.time.LocalDate getDay() { return day; }
+        public void setDay(java.time.LocalDate day) { this.day = day; }
+    }
+
+    @Test
+    void jsonFormatOnGetter_bindsPattern() {
+        GetterFormatted p = mapper.fromJqValue(
+                JqValues.parse("{\"day\":\"14/10/2026\"}"), GetterFormatted.class);
+        assertEquals(java.time.LocalDate.parse("2026-10-14"), p.getDay());
+        assertEquals("{\"day\":\"14/10/2026\"}", mapper.toJqValue(p).toJsonString());
+    }
+
+    static class GetterAliased {
+        private String hostName;
+        private int port;
+
+        public GetterAliased() {}
+
+        @JsonAlias("host_name")
+        public String getHostName() { return hostName; }
+        public void setHostName(String hostName) { this.hostName = hostName; }
+        public int getPort() { return port; }
+        public void setPort(int port) { this.port = port; }
+    }
+
+    @Test
+    void jsonAliasOnGetter_bindsButSerializesPrimary() {
+        assertEquals("x", mapper.fromJqValue(
+                JqValues.parse("{\"host_name\":\"x\",\"port\":1}"), GetterAliased.class).getHostName());
+        GetterAliased p = new GetterAliased();
+        p.setHostName("x");
+        p.setPort(1);
+        assertEquals("{\"hostName\":\"x\",\"port\":1}", mapper.toJqValue(p).toJsonString());
+    }
+
+    static class GetterRequired {
+        private String name;
+
+        public GetterRequired() {}
+
+        @JsonProperty(value = "name", required = true)
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+    }
+
+    @Test
+    void jsonPropertyRequiredOnGetter_failsOnMissing() {
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class,
+                () -> mapper.fromJqValue(JqValues.parse("{}"), GetterRequired.class));
+        assertTrue(e.getMessage().contains("\"name\""), e.getMessage());
+    }
+
+    static class GetterAccess {
+        private String name;
+        private String secret;
+
+        public GetterAccess() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        @JsonProperty(value = "secret", access = JsonProperty.Access.WRITE_ONLY)
+        public String getSecret() { return secret; }
+        public void setSecret(String secret) { this.secret = secret; }
+    }
+
+    @Test
+    void jsonPropertyAccessOnGetter_bindsDeserSkipsSer() {
+        GetterAccess p = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"secret\":\"s\"}"), GetterAccess.class);
+        assertEquals("s", p.getSecret());
+        assertEquals("{\"name\":\"t\"}", mapper.toJqValue(p).toJsonString());
+    }
+
+    record ShapedGetter(@JsonFormat(shape = JsonFormat.Shape.STRING) int i) {}
+
+    static class GetterShaped {
+        private int i;
+
+        public GetterShaped() {}
+
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
+        public int getI() { return i; }
+        public void setI(int i) { this.i = i; }
+    }
+
+    @Test
+    void jsonFormatShapeOnGetter_quotes() {
+        // Record components carry Jackson annotations on the field, so the
+        // record form pins the field path; the POJO form pins the fallback.
+        assertEquals("{\"i\":\"42\"}", mapper.toJqValue(new ShapedGetter(42)).toJsonString());
+        GetterShaped p = new GetterShaped();
+        p.setI(42);
+        assertEquals("{\"i\":\"42\"}", mapper.toJqValue(p).toJsonString());
+    }
+
     // ---- @JsonDeserialize(builder) + @JsonPOJOBuilder ----
 
     @com.fasterxml.jackson.databind.annotation.JsonDeserialize(builder = JackBean.JackBeanBuilder.class)

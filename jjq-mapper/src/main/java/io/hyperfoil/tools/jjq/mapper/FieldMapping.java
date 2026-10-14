@@ -109,6 +109,24 @@ final class FieldMapping {
         return program.apply(input);
     }
 
+    /**
+     * True when the input carries this field under its primary name or any
+     * alias (explicit null counts as present — it still writes). Mirrors
+     * {@link #extract}'s lookup exactly; only direct field lookups can
+     * prove absence.
+     */
+    boolean isPresent(JqValue input) {
+        if (!(input instanceof JqObject obj)) return false;
+        if (directFieldName == null) return true; // programs: presence unprovable
+        if (obj.tryGet(directFieldName).isPresent()) return true;
+        if (aliases != null) {
+            for (String alias : aliases) {
+                if (obj.tryGet(alias).isPresent()) return true;
+            }
+        }
+        return false;
+    }
+
     /** Convert the extracted JqValue to the target Java type. */
     @SuppressWarnings("unchecked")
     Object convert(JqValue extracted, JqMapper mapper) {

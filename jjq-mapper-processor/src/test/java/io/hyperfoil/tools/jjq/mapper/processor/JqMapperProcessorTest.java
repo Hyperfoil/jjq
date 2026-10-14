@@ -952,6 +952,37 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_phaseCRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.time.MonthDay;
+                import java.time.OffsetTime;
+                import java.time.Year;
+                import java.time.YearMonth;
+                import java.time.ZoneId;
+                import java.time.ZoneOffset;
+
+                @JqMapped
+                public record CTime(Year year, YearMonth ym, MonthDay md,
+                                    OffsetTime ot, ZoneId zone, ZoneOffset offset) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.CTime", source);
+        JqMapper mapper = JqMapper.create();
+        String json = "{\"year\":\"2026\",\"ym\":\"2026-10\",\"md\":\"--10-14\","
+                + "\"ot\":\"12:34:56+02:00\",\"zone\":\"Europe/Oslo\",\"offset\":\"+02:00\"}";
+        Object r = mapper.fromJqValue(JqValues.parse(json), recordClass);
+        assertEquals(java.time.Year.of(2026), recordClass.getMethod("year").invoke(r));
+        assertEquals(java.time.YearMonth.of(2026, 10), recordClass.getMethod("ym").invoke(r));
+        assertEquals(json, mapper.toJqValue(r).toJsonString());
+        assertEquals(mapper.toJqValue(r).toJsonString(), mapper.toJson(r));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(r)), mapper.toJsonBytes(r));
+        assertEquals(r, mapper.fromJqValue(mapper.toJqValue(r), recordClass));
+    }
+
+    @Test
     void generatedMapping_numberShapeInvalidFailsFast() throws Exception {
         String source = """
                 package test;

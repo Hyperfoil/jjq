@@ -1137,7 +1137,7 @@ final class ClassMapping<T> implements Mapping<T> {
             if (builder.binders()[i] == null) continue;
             // Absent keys leave builder defaults in place (same leniency as
             // the setter path); @JqField programs keep write-always semantics.
-            if (value != null && !field.usesProgram() && !value.has(field.jsonName())) continue;
+            if (value != null && !field.usesProgram() && !field.isPresent(value)) continue;
             JqValue extracted = field.extract(value);
             Object converted;
             try {
@@ -1242,8 +1242,9 @@ final class ClassMapping<T> implements Mapping<T> {
             // Absent keys leave field initializers / constructor defaults in place
             // (Jackson-compatible). Only direct field lookups can prove absence;
             // @JqField program expressions keep write-always semantics.
-            // Explicit nulls are still written. has() is null-safe (false for non-objects).
-            if (value != null && !field.usesProgram() && !value.has(field.jsonName())) continue;
+            // Explicit nulls are still written. Absent means missing under every
+            // accepted key (primary and aliases).
+            if (value != null && !field.usesProgram() && !field.isPresent(value)) continue;
             JqValue extracted = field.extract(value);
             Object converted;
             try {
