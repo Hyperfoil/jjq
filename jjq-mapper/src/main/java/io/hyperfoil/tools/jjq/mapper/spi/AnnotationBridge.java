@@ -193,7 +193,7 @@ public interface AnnotationBridge {
 
     /**
      * Resolve framework-declared polymorphism for a base type (e.g. Jackson
-     * {@code @JsonTypeInfo}). Only called when no native {@link JqType} is
+     * {@code @JsonTypeInfo}). Only called when no native {@link io.hyperfoil.tools.jjq.mapper.JqType} is
      * present — native wins.
      *
      * <p>The default implementation returns {@code null} (not supported);
@@ -212,7 +212,7 @@ public interface AnnotationBridge {
      * Identity property for a concrete type (e.g. Jackson
      * {@code @JsonIdentityInfo} with a property generator): the JSON
      * property keying instances, or null when unconfigured. Only called
-     * for types without a native {@link JqId} — native wins.
+     * for types without a native {@link io.hyperfoil.tools.jjq.mapper.JqId} — native wins.
      *
      * <p>The default implementation returns {@code null} (standalone
      * binding); bridges override it when their annotations are present.
@@ -230,7 +230,7 @@ public interface AnnotationBridge {
      * Wire shape for a field (e.g. Jackson {@code @JsonFormat(shape)}):
      * {@code STRING} quotes numbers and booleans on serialization,
      * {@code NUMBER} is the default form. Only called when no native
-     * {@link JqFormat} shape is present — native wins.
+     * {@link io.hyperfoil.tools.jjq.mapper.JqFormat} shape is present — native wins.
      *
      * <p>The default implementation returns {@code null} (no opinion —
      * the default wire form); bridges override it when their annotations
@@ -320,7 +320,7 @@ public interface AnnotationBridge {
     /**
      * Resolve framework-declared builder binding for a value type (e.g.
      * Jackson {@code @JsonDeserialize(builder)} with {@code @JsonPOJOBuilder}).
-     * Only called when no native {@link JqBuilder} is present — native wins.
+     * Only called when no native {@link io.hyperfoil.tools.jjq.mapper.JqBuilder} is present — native wins.
      *
      * <p>The default implementation returns {@code null} (not supported);
      * bridges override it when their annotations are present. Returning

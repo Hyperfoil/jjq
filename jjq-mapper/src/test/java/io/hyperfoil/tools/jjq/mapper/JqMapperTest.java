@@ -1300,6 +1300,53 @@ class JqMapperTest {
         assertSame(a, a.b.a);
     }
 
+    @JqId
+    @JqBuilder(value = CycBuilder.class)
+    static class CycNode {
+        public String id;
+        public CycPeer peer;
+
+        public String getId() { return id; }
+        public CycPeer getPeer() { return peer; }
+    }
+
+    @JqId
+    static class CycPeer {
+        public String id;
+        public CycNode node;
+
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+        public CycNode getNode() { return node; }
+        public void setNode(CycNode node) { this.node = node; }
+    }
+
+    static class CycBuilder {
+        private String id;
+        private CycPeer peer;
+
+        public CycBuilder() {}
+
+        public CycBuilder withId(String id) { this.id = id; return this; }
+        public CycBuilder withPeer(CycPeer peer) { this.peer = peer; return this; }
+
+        public CycNode build() {
+            CycNode n = new CycNode();
+            n.id = id;
+            n.peer = peer;
+            return n;
+        }
+    }
+
+    @Test
+    void identityBuilderCycleFailsFast() {
+        // Builders construct at the end, so the ancestor is never
+        // mid-registered: the back-reference misses and fails fast
+        // (never hangs, never binds a half-built graph).
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(JqValues.parse(
+                "{\"id\":\"a1\",\"peer\":{\"id\":\"b1\",\"node\":\"a1\"}}"), CycNode.class));
+    }
+
     @Test
     void identityRecordForwardRefFailsFast() {
         // Records cannot forward-reference (nothing registered yet) — fails,

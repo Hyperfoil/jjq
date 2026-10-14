@@ -2,6 +2,9 @@
 
 ## [Unreleased] - 0.2.4
 
+- Identity scope reuse: the per-operation scope object is kept per thread
+  instead of reallocated (zero allocation on mapper entries without
+  identity; no behavior change)
 - java.time Phase C: `Year` (ISO strings plus whole numbers), `YearMonth`,
   `MonthDay`, `OffsetTime`, `ZoneId`, and `ZoneOffset` (ISO strings) —
   canonical ISO text on serialization (unlike Jackson's timestamp/array
