@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- `java.time` in the mapper: `Instant`, `LocalDate`/`Time`/`DateTime`,
+  `OffsetDateTime`/`ZonedDateTime`, `Duration`, `Period` — ISO-8601
+  strings canonical both ways, epoch seconds accepted on deser for
+  instant-like types (fractions carry nanos, at UTC) and `Duration`;
+  unparseable text fails as shape mismatch, never leaked
+  `DateTimeParseException`
 - Arrays and wider collections in the mapper: `T[]` (reference and
   primitive) bind natively with exact element mapping, `LinkedList`,
   `Collection`/`Iterable`, `Queue`/`Deque`, `SortedMap`/`TreeMap` and

@@ -330,6 +330,30 @@ final class MappingCodeGenerator {
             case "java.net.URL" -> {
                 sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
             }
+            case "java.time.Instant" -> {
+                sb.append("asInstantChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Instant\"))");
+            }
+            case "java.time.LocalDate" -> {
+                sb.append("asLocalDateChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDate\"))");
+            }
+            case "java.time.LocalTime" -> {
+                sb.append("asLocalTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalTime\"))");
+            }
+            case "java.time.LocalDateTime" -> {
+                sb.append("asLocalDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDateTime\"))");
+            }
+            case "java.time.OffsetDateTime" -> {
+                sb.append("asOffsetDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetDateTime\"))");
+            }
+            case "java.time.ZonedDateTime" -> {
+                sb.append("asZonedDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZonedDateTime\"))");
+            }
+            case "java.time.Duration" -> {
+                sb.append("asDurationChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Duration\"))");
+            }
+            case "java.time.Period" -> {
+                sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
+            }
             default -> {
                 String typeName = comp.typeName();
                 // JqValue or subtypes — passthrough
@@ -407,6 +431,22 @@ final class MappingCodeGenerator {
                 sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
             case "java.net.URL", "URL" ->
                 sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
+            case "java.time.Instant", "Instant" ->
+                sb.append("asInstantChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Instant\"))");
+            case "java.time.LocalDate", "LocalDate" ->
+                sb.append("asLocalDateChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDate\"))");
+            case "java.time.LocalTime", "LocalTime" ->
+                sb.append("asLocalTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalTime\"))");
+            case "java.time.LocalDateTime", "LocalDateTime" ->
+                sb.append("asLocalDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDateTime\"))");
+            case "java.time.OffsetDateTime", "OffsetDateTime" ->
+                sb.append("asOffsetDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetDateTime\"))");
+            case "java.time.ZonedDateTime", "ZonedDateTime" ->
+                sb.append("asZonedDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZonedDateTime\"))");
+            case "java.time.Duration", "Duration" ->
+                sb.append("asDurationChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Duration\"))");
+            case "java.time.Period", "Period" ->
+                sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
             default -> {
                 // Nested record/enum/POJO: bind structurally (fail-fast on shape
                 // mismatch, mirroring the reflection path). A parameterized type
@@ -548,6 +588,10 @@ final class MappingCodeGenerator {
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqNumber.of(new java.math.BigDecimal(").append(accessor).append("))");
             case "java.util.UUID", "java.net.URI", "java.net.URL" ->
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(".toString())");
+            case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period" ->
+                sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(".toString())");
             default -> {
                 String typeName = comp.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -677,6 +721,10 @@ final class MappingCodeGenerator {
                 // Plain integer rendering; StringBuilder.append(Object) is null-safe (writes "null").
                 sb.append("        _sb.append(").append(accessor).append(");\n");
             case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
+            case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
@@ -814,6 +862,10 @@ final class MappingCodeGenerator {
                 sb.append("        if (").append(accessor).append(" == null) _out.writeNull(); else _out.writeAsciiString(").append(accessor).append(".toString());\n");
             }
             case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
+            case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
@@ -1447,6 +1499,10 @@ final class MappingCodeGenerator {
             }
             case "java.util.UUID", "java.net.URI", "java.net.URL" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
+            case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -1525,6 +1581,10 @@ final class MappingCodeGenerator {
                 sb.append("        _sb.append(").append(readExpr).append(");\n");
             case "java.util.UUID", "java.net.URI", "java.net.URL" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
+            case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period" ->
+                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
@@ -1593,6 +1653,14 @@ final class MappingCodeGenerator {
             case "java.util.UUID" -> "asUuidChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"UUID\"))";
             case "java.net.URI" -> "asUriChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"URI\"))";
             case "java.net.URL" -> "asUrlChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"URL\"))";
+            case "java.time.Instant" -> "asInstantChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Instant\"))";
+            case "java.time.LocalDate" -> "asLocalDateChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"LocalDate\"))";
+            case "java.time.LocalTime" -> "asLocalTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"LocalTime\"))";
+            case "java.time.LocalDateTime" -> "asLocalDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"LocalDateTime\"))";
+            case "java.time.OffsetDateTime" -> "asOffsetDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"OffsetDateTime\"))";
+            case "java.time.ZonedDateTime" -> "asZonedDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZonedDateTime\"))";
+            case "java.time.Duration" -> "asDurationChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Duration\"))";
+            case "java.time.Period" -> "asPeriodChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Period\"))";
             default -> {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
@@ -1748,6 +1816,10 @@ final class MappingCodeGenerator {
             case "java.math.BigInteger" ->
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqNumber.of(new java.math.BigDecimal(").append(readExpr).append("))");
             case "java.util.UUID", "java.net.URI", "java.net.URL" ->
+                sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(".toString())");
+            case "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period" ->
                 sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(").append(readExpr).append(".toString())");
             default -> sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                          .append(readExpr).append(", mapper)");

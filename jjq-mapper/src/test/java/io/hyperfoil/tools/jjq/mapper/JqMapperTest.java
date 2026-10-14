@@ -849,6 +849,102 @@ class JqMapperTest {
         assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
     }
 
+    // ---- java.time (Phase B: ISO strings canonical, epoch accepted for instant-like) ----
+
+    record TimeHolder(java.time.Instant instant, java.time.LocalDate date, java.time.LocalTime time,
+            java.time.LocalDateTime dateTime, java.time.OffsetDateTime offsetDateTime,
+            java.time.ZonedDateTime zonedDateTime, java.time.Duration duration, java.time.Period period) {}
+
+    private static TimeHolder sampleTimes() {
+        return new TimeHolder(java.time.Instant.parse("2026-09-05T12:00:00Z"),
+                java.time.LocalDate.parse("2026-10-14"), java.time.LocalTime.parse("12:34:56"),
+                java.time.LocalDateTime.parse("2026-10-14T12:34:56"),
+                java.time.OffsetDateTime.parse("2026-10-14T12:34:56+02:00"),
+                java.time.ZonedDateTime.parse("2026-10-14T12:34:56+02:00"),
+                java.time.Duration.parse("PT1H30M"), java.time.Period.parse("P1Y2M3D"));
+    }
+
+    @Test
+    void timeTypesBindIsoStrings() {
+        TimeHolder h = mapper.fromJqValue(JqValues.parse(
+                "{\"instant\":\"2026-09-05T12:00:00Z\",\"date\":\"2026-10-14\",\"time\":\"12:34:56\","
+                + "\"dateTime\":\"2026-10-14T12:34:56\",\"offsetDateTime\":\"2026-10-14T12:34:56+02:00\","
+                + "\"zonedDateTime\":\"2026-10-14T12:34:56+02:00\","
+                + "\"duration\":\"PT1H30M\",\"period\":\"P1Y2M3D\"}"), TimeHolder.class);
+        assertEquals(sampleTimes(), h);
+    }
+
+    @Test
+    void instantLikeBindEpochNumbers() {
+        TimeHolder h = mapper.fromJqValue(JqValues.parse(
+                "{\"instant\":0,\"date\":\"2026-10-14\",\"time\":\"12:34:56\","
+                + "\"dateTime\":\"2026-10-14T12:34:56\",\"offsetDateTime\":0,"
+                + "\"zonedDateTime\":0,\"duration\":90,\"period\":\"P1Y2M3D\"}"), TimeHolder.class);
+        assertEquals(java.time.Instant.EPOCH, h.instant());
+        assertEquals(java.time.OffsetDateTime.parse("1970-01-01T00:00:00Z"), h.offsetDateTime());
+        assertEquals(java.time.ZonedDateTime.parse("1970-01-01T00:00:00Z"), h.zonedDateTime());
+        assertEquals(java.time.Duration.ofSeconds(90), h.duration());
+        // Fractional epoch carries nanos
+        TimeHolder f = mapper.fromJqValue(JqValues.parse(
+                "{\"instant\":0.5,\"date\":\"2026-10-14\",\"time\":\"12:34:56\","
+                + "\"dateTime\":\"2026-10-14T12:34:56\",\"offsetDateTime\":\"2026-10-14T12:34:56+02:00\","
+                + "\"zonedDateTime\":\"2026-10-14T12:34:56+02:00\","
+                + "\"duration\":1.5,\"period\":\"P1Y2M3D\"}"), TimeHolder.class);
+        assertEquals(java.time.Instant.ofEpochSecond(0, 500_000_000), f.instant());
+        assertEquals(java.time.Duration.ofMillis(1500), f.duration());
+    }
+
+    @Test
+    void timeTypesRejectWrongShapes() {
+        // Numbers are meaningless for calendar types
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"date\":20261014}"), TimeHolder.class));
+        // Garbage strings mismatch (never leak DateTimeParseException)
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"instant\":\"yesterday\"}"), TimeHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"duration\":\"an hour\"}"), TimeHolder.class));
+        // Booleans and containers mismatch
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"instant\":true}"), TimeHolder.class));
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"date\":[2026,10,14]}"), TimeHolder.class));
+    }
+
+    @Test
+    void timeNullsStayNull() {
+        TimeHolder h = mapper.fromJqValue(JqValues.parse(
+                "{\"instant\":null,\"date\":null,\"time\":null,\"dateTime\":null,"
+                + "\"offsetDateTime\":null,\"zonedDateTime\":null,\"duration\":null,\"period\":null}"),
+                TimeHolder.class);
+        assertEquals(new TimeHolder(null, null, null, null, null, null, null, null), h);
+    }
+
+    @Test
+    void timeTypesRoundTrip() {
+        TimeHolder original = sampleTimes();
+        assertEquals(original, mapper.fromJqValue(mapper.toJqValue(original), TimeHolder.class));
+        assertEquals(mapper.toJqValue(original).toJsonString(), mapper.toJson(original));
+        assertBytesMatch(original);
+    }
+
+    @Test
+    void timeCheckedHelpersMirror() {
+        assertEquals(java.time.Instant.parse("2026-09-05T12:00:00Z"),
+                GeneratedMapping.asInstantChecked(JqString.of("2026-09-05T12:00:00Z")));
+        assertEquals(java.time.Instant.EPOCH, GeneratedMapping.asInstantChecked(JqNumber.of(0)));
+        assertNull(GeneratedMapping.asInstantChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asInstantChecked(JqString.of("yesterday")));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asInstantChecked(JqBoolean.TRUE));
+        assertEquals(java.time.LocalDate.parse("2026-10-14"),
+                GeneratedMapping.asLocalDateChecked(JqString.of("2026-10-14")));
+        assertNull(GeneratedMapping.asLocalDateChecked(null));
+        assertThrows(ShapeMismatchException.class,
+                () -> GeneratedMapping.asLocalDateChecked(JqNumber.of(20261014)));
+    }
+
     // ---- Arrays and wider collections ----
 
     record ArrayHolder(String[] names, int[] counts, long[] big, double[] scores, boolean[] flags) {}

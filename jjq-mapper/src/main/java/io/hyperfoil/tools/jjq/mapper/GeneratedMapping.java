@@ -261,6 +261,70 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * {@code Instant} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse, epoch numbers bind; nulls stay null.
+     */
+    protected static java.time.Instant asInstantChecked(JqValue value) {
+        return TypeConverter.coerceInstant(value);
+    }
+
+    /**
+     * {@code LocalDate} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse; nulls stay null.
+     */
+    protected static java.time.LocalDate asLocalDateChecked(JqValue value) {
+        return TypeConverter.coerceLocalDate(value);
+    }
+
+    /**
+     * {@code LocalTime} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse; nulls stay null.
+     */
+    protected static java.time.LocalTime asLocalTimeChecked(JqValue value) {
+        return TypeConverter.coerceLocalTime(value);
+    }
+
+    /**
+     * {@code LocalDateTime} coercion mirroring {@code TypeConverter}
+     * semantics: ISO strings parse; nulls stay null.
+     */
+    protected static java.time.LocalDateTime asLocalDateTimeChecked(JqValue value) {
+        return TypeConverter.coerceLocalDateTime(value);
+    }
+
+    /**
+     * {@code OffsetDateTime} coercion mirroring {@code TypeConverter}
+     * semantics: ISO strings parse, epoch numbers bind at UTC; nulls stay null.
+     */
+    protected static java.time.OffsetDateTime asOffsetDateTimeChecked(JqValue value) {
+        return TypeConverter.coerceOffsetDateTime(value);
+    }
+
+    /**
+     * {@code ZonedDateTime} coercion mirroring {@code TypeConverter}
+     * semantics: ISO strings parse, epoch numbers bind at UTC; nulls stay null.
+     */
+    protected static java.time.ZonedDateTime asZonedDateTimeChecked(JqValue value) {
+        return TypeConverter.coerceZonedDateTime(value);
+    }
+
+    /**
+     * {@code Duration} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse, numbers bind as seconds; nulls stay null.
+     */
+    protected static java.time.Duration asDurationChecked(JqValue value) {
+        return TypeConverter.coerceDuration(value);
+    }
+
+    /**
+     * {@code Period} coercion mirroring {@code TypeConverter} semantics:
+     * ISO strings parse; nulls stay null.
+     */
+    protected static java.time.Period asPeriodChecked(JqValue value) {
+        return TypeConverter.coercePeriod(value);
+    }
+
+    /**
      * Lenient string coercion mirroring {@code TypeConverter} {@code STRING} semantics:
      * nulls stay null, strings unwrap, scalars with source text keep what was
      * written, other scalars render as JSON text, arrays and objects fail fast.

@@ -793,6 +793,52 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_timeTypes_roundTrip() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.time.Instant;
+                import java.time.LocalDate;
+                import java.time.LocalDateTime;
+                import java.time.Duration;
+
+                @JqMapped
+                public record Times(Instant at, LocalDate day, LocalDateTime stamp, Duration ttl) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Times", source);
+        JqMapper mapper = JqMapper.create();
+
+        var ctor = recordClass.getDeclaredConstructor(
+                java.time.Instant.class, java.time.LocalDate.class,
+                java.time.LocalDateTime.class, java.time.Duration.class);
+        Object original = ctor.newInstance(java.time.Instant.parse("2026-09-05T12:00:00Z"),
+                java.time.LocalDate.parse("2026-10-14"),
+                java.time.LocalDateTime.parse("2026-10-14T12:34:56"),
+                java.time.Duration.parse("PT1H30M"));
+
+        // Tree, String, and bytes paths agree (time fields serialize via toString)
+        String viaToJson = mapper.toJson(original);
+        String viaJqValue = mapper.toJqValue(original).toJsonString();
+        assertEquals(viaJqValue, viaToJson);
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(original)), mapper.toJsonBytes(original));
+
+        // Deser binds through the generated checked helpers (ISO + epoch)
+        Object back = mapper.fromJqValue(mapper.toJqValue(original), recordClass);
+        assertEquals(original, back);
+        Object fromEpoch = mapper.fromJqValue(
+                JqValues.parse("{\"at\":0,\"day\":\"2026-10-14\","
+                        + "\"stamp\":\"2026-10-14T12:34:56\",\"ttl\":90}"), recordClass);
+        assertEquals(java.time.Instant.EPOCH, recordClass.getMethod("at").invoke(fromEpoch));
+
+        // Nulls stay null on every path
+        Object withNulls = ctor.newInstance(null, null, null, null);
+        assertEquals("{\"at\":null,\"day\":null,\"stamp\":null,\"ttl\":null}", mapper.toJson(withNulls));
+        assertEquals(withNulls, mapper.fromJqValue(mapper.toJqValue(withNulls), recordClass));
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;

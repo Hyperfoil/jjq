@@ -60,6 +60,22 @@ public final class TypeConverter {
         MAP,
         /** Target is a Java array (reference or primitive component). */
         ARRAY,
+        /** Target is {@link java.time.Instant} (ISO string, or epoch seconds). */
+        INSTANT,
+        /** Target is {@link java.time.LocalDate} (ISO string). */
+        LOCAL_DATE,
+        /** Target is {@link java.time.LocalTime} (ISO string). */
+        LOCAL_TIME,
+        /** Target is {@link java.time.LocalDateTime} (ISO string). */
+        LOCAL_DATE_TIME,
+        /** Target is {@link java.time.OffsetDateTime} (ISO string, or epoch seconds as UTC). */
+        OFFSET_DATE_TIME,
+        /** Target is {@link java.time.ZonedDateTime} (ISO string, or epoch seconds as UTC). */
+        ZONED_DATE_TIME,
+        /** Target is {@link java.time.Duration} (ISO string, or seconds). */
+        DURATION,
+        /** Target is {@link java.time.Period} (ISO string). */
+        PERIOD,
         /** Target is an {@code enum} type. */
         ENUM,
         /** Target is a record or {@code @JqMapped} POJO. */
@@ -96,6 +112,14 @@ public final class TypeConverter {
         if (targetType == char.class || targetType == Character.class) return Kind.CHAR;
         if (targetType == BigDecimal.class) return Kind.BIG_DECIMAL;
         if (targetType == java.math.BigInteger.class) return Kind.BIG_INTEGER;
+        if (targetType == java.time.Instant.class) return Kind.INSTANT;
+        if (targetType == java.time.LocalDate.class) return Kind.LOCAL_DATE;
+        if (targetType == java.time.LocalTime.class) return Kind.LOCAL_TIME;
+        if (targetType == java.time.LocalDateTime.class) return Kind.LOCAL_DATE_TIME;
+        if (targetType == java.time.OffsetDateTime.class) return Kind.OFFSET_DATE_TIME;
+        if (targetType == java.time.ZonedDateTime.class) return Kind.ZONED_DATE_TIME;
+        if (targetType == java.time.Duration.class) return Kind.DURATION;
+        if (targetType == java.time.Period.class) return Kind.PERIOD;
         if (targetType == java.util.UUID.class) return Kind.UUID;
         if (targetType == java.net.URI.class) return Kind.URI;
         if (targetType == java.net.URL.class) return Kind.URL;
@@ -185,6 +209,30 @@ public final class TypeConverter {
             }
             case URL -> {
                 yield coerceUrl(value);
+            }
+            case INSTANT -> {
+                yield coerceInstant(value);
+            }
+            case LOCAL_DATE -> {
+                yield coerceLocalDate(value);
+            }
+            case LOCAL_TIME -> {
+                yield coerceLocalTime(value);
+            }
+            case LOCAL_DATE_TIME -> {
+                yield coerceLocalDateTime(value);
+            }
+            case OFFSET_DATE_TIME -> {
+                yield coerceOffsetDateTime(value);
+            }
+            case ZONED_DATE_TIME -> {
+                yield coerceZonedDateTime(value);
+            }
+            case DURATION -> {
+                yield coerceDuration(value);
+            }
+            case PERIOD -> {
+                yield coercePeriod(value);
             }
             case LIST -> {
                 if (value == null || value instanceof JqNull) yield newListFor(targetType, 0);
@@ -664,6 +712,201 @@ public final class TypeConverter {
         throw mismatch(JqValue.Type.STRING, "URL", value);
     }
 
+    /**
+     * {@code Instant} coercion: ISO-8601 strings parse, JSON numbers bind as
+     * epoch seconds (fractions carry nanos); anything else (booleans,
+     * non-finite numbers, containers, unparseable text) is a shape mismatch;
+     * nulls stay null. Shared by {@link #convert} and the generated-code
+     * helper so both paths agree.
+     *
+     * @param value the value (may be null)
+     * @return the instant, or null for null inputs
+     * @throws ShapeMismatchException for unparseable or unrepresentable values
+     */
+    static java.time.Instant coerceInstant(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "Instant", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.Instant.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "Instant", value);
+            }
+        }
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "Instant", value);
+            try {
+                return epochToInstant(n.decimalValue());
+            } catch (ArithmeticException e) {
+                throw mismatch(JqValue.Type.NUMBER, "Instant", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "Instant", value);
+    }
+
+    /**
+     * Split epoch seconds (integral or fractional) into an {@code Instant}.
+     * Sub-nanosecond fractions are unrepresentable and fail via
+     * {@code intValueExact}; magnitudes beyond {@code long} fail via
+     * {@code longValueExact} — both surface as shape mismatches at callers.
+     */
+    private static java.time.Instant epochToInstant(BigDecimal decimal) {
+        long seconds = decimal.setScale(0, java.math.RoundingMode.DOWN).longValueExact();
+        int nanos = decimal.subtract(BigDecimal.valueOf(seconds)).movePointRight(9).intValueExact();
+        return java.time.Instant.ofEpochSecond(seconds, nanos);
+    }
+
+    /**
+     * {@code LocalDate} coercion from ISO strings ({@code 2026-10-14});
+     * numbers are meaningless for calendar types and mismatch; nulls stay
+     * null. Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.LocalDate coerceLocalDate(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "LocalDate", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.LocalDate.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "LocalDate", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "LocalDate", value);
+    }
+
+    /**
+     * {@code LocalTime} coercion from ISO strings; nulls stay null.
+     * Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.LocalTime coerceLocalTime(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "LocalTime", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.LocalTime.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "LocalTime", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "LocalTime", value);
+    }
+
+    /**
+     * {@code LocalDateTime} coercion from ISO strings; nulls stay null.
+     * Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.LocalDateTime coerceLocalDateTime(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "LocalDateTime", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.LocalDateTime.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "LocalDateTime", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "LocalDateTime", value);
+    }
+
+    /**
+     * {@code OffsetDateTime} coercion: ISO strings parse, numbers bind as
+     * epoch seconds at UTC; nulls stay null. Shared by {@link #convert} and
+     * the generated-code helper.
+     */
+    static java.time.OffsetDateTime coerceOffsetDateTime(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "OffsetDateTime", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.OffsetDateTime.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "OffsetDateTime", value);
+            }
+        }
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "OffsetDateTime", value);
+            try {
+                return epochToInstant(n.decimalValue()).atOffset(java.time.ZoneOffset.UTC);
+            } catch (ArithmeticException e) {
+                throw mismatch(JqValue.Type.NUMBER, "OffsetDateTime", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "OffsetDateTime", value);
+    }
+
+    /**
+     * {@code ZonedDateTime} coercion: ISO strings parse, numbers bind as
+     * epoch seconds at UTC; nulls stay null. Shared by {@link #convert} and
+     * the generated-code helper.
+     */
+    static java.time.ZonedDateTime coerceZonedDateTime(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "ZonedDateTime", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.ZonedDateTime.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "ZonedDateTime", value);
+            }
+        }
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "ZonedDateTime", value);
+            try {
+                return epochToInstant(n.decimalValue()).atZone(java.time.ZoneOffset.UTC);
+            } catch (ArithmeticException e) {
+                throw mismatch(JqValue.Type.NUMBER, "ZonedDateTime", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "ZonedDateTime", value);
+    }
+
+    /**
+     * {@code Duration} coercion: ISO strings parse ({@code PT1H30M}),
+     * numbers bind as seconds (fractions carry nanos); nulls stay null.
+     * Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.Duration coerceDuration(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "Duration", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.Duration.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "Duration", value);
+            }
+        }
+        if (value instanceof JqNumber n) {
+            if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "Duration", value);
+            try {
+                BigDecimal decimal = n.decimalValue();
+                long seconds = decimal.setScale(0, java.math.RoundingMode.DOWN).longValueExact();
+                int nanos = decimal.subtract(BigDecimal.valueOf(seconds)).movePointRight(9).intValueExact();
+                return java.time.Duration.ofSeconds(seconds, nanos);
+            } catch (ArithmeticException e) {
+                throw mismatch(JqValue.Type.NUMBER, "Duration", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "Duration", value);
+    }
+
+    /**
+     * {@code Period} coercion from ISO strings ({@code P1Y2M3D}); numbers
+     * are meaningless for calendar periods and mismatch; nulls stay null.
+     * Shared by {@link #convert} and the generated-code helper.
+     */
+    static java.time.Period coercePeriod(JqValue value) {
+        if (value == null || value instanceof JqNull) return null;
+        if (value.isContainer()) throw mismatch(JqValue.Type.STRING, "Period", value);
+        if (value instanceof JqString s) {
+            try {
+                return java.time.Period.parse(s.stringValue().trim());
+            } catch (java.time.format.DateTimeParseException e) {
+                throw mismatch(JqValue.Type.STRING, "Period", value);
+            }
+        }
+        throw mismatch(JqValue.Type.STRING, "Period", value);
+    }
+
     /** Short human-readable description of a JqValue (strings truncated). */
     private static String describe(JqValue value) {
         if (value == null || value instanceof JqNull) return "null";
@@ -825,6 +1068,14 @@ public final class TypeConverter {
         if (value instanceof Boolean b) return JqBoolean.of(b);
         if (value instanceof Character c) return JqString.of(String.valueOf(c));
         if (value instanceof java.util.UUID u) return JqString.of(u.toString());
+        if (value instanceof java.time.Instant i) return JqString.of(i.toString());
+        if (value instanceof java.time.LocalDate d) return JqString.of(d.toString());
+        if (value instanceof java.time.LocalTime t) return JqString.of(t.toString());
+        if (value instanceof java.time.LocalDateTime dt) return JqString.of(dt.toString());
+        if (value instanceof java.time.OffsetDateTime odt) return JqString.of(odt.toString());
+        if (value instanceof java.time.ZonedDateTime zdt) return JqString.of(zdt.toString());
+        if (value instanceof java.time.Duration dur) return JqString.of(dur.toString());
+        if (value instanceof java.time.Period p) return JqString.of(p.toString());
         if (value instanceof java.net.URL url) return JqString.of(url.toString());
         if (value instanceof java.net.URI uri) return JqString.of(uri.toString());
         if (value instanceof Optional<?> opt) {

@@ -412,6 +412,11 @@ for `ServiceLoader` discovery.
 | `BigDecimal` | number | Preserves precision |
 | `BigInteger` | number | Exact, any magnitude; fractions/non-finite mismatch |
 | `UUID` / `URI` / `URL` | string | Strict parse; relative refs bind `URI` but mismatch `URL` |
+| `Instant` | string / number | ISO-8601 canonical; epoch seconds accepted on deser (fractions carry nanos) |
+| `LocalDate` / `LocalTime` / `LocalDateTime` | string | ISO-8601; numbers mismatch |
+| `OffsetDateTime` / `ZonedDateTime` | string / number | ISO-8601 canonical; epoch seconds bind at UTC |
+| `Duration` | string / number | ISO-8601 canonical (`PT1H30M`); numbers bind as seconds |
+| `Period` | string | ISO-8601 (`P1Y2M3D`) |
 | `List<T>` | array | Recursive element mapping (`LinkedList`, `Collection`, `Queue`/`Deque` bind by interface too) |
 | `Map<String, V>` | object | Recursive value mapping (`TreeMap`/`SortedMap` order naturally) |
 | `T[]` (incl. primitives) | array | Exact element mapping; null arrays stay null |
