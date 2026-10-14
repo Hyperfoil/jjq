@@ -1529,6 +1529,151 @@ class JqMapperTest {
         assertFalse(mismatch instanceof ShapeMismatchException, mismatch.getClass().getName());
     }
 
+    // ---- @JqFormat shapes on numbers/booleans (#6) ----
+
+    record ShapedNums(
+            @JqFormat(shape = JqFormat.Shape.STRING) int i,
+            @JqFormat(shape = JqFormat.Shape.STRING) long l,
+            @JqFormat(shape = JqFormat.Shape.STRING) double d,
+            @JqFormat(shape = JqFormat.Shape.STRING) float f,
+            @JqFormat(shape = JqFormat.Shape.STRING) short s,
+            @JqFormat(shape = JqFormat.Shape.STRING) java.math.BigDecimal bd,
+            @JqFormat(shape = JqFormat.Shape.STRING) java.math.BigInteger bi,
+            @JqFormat(shape = JqFormat.Shape.STRING) boolean flag) {}
+
+    private static ShapedNums sampleShaped() {
+        return new ShapedNums(42, 9876543210L, 4.5, 4.5f, (short) 7,
+                new java.math.BigDecimal("3.140"), new java.math.BigInteger("123"), true);
+    }
+
+    @Test
+    void numberShapeStringSerQuotes() {
+        assertEquals("{\"i\":\"42\",\"l\":\"9876543210\",\"d\":\"4.5\",\"f\":\"4.5\","
+                        + "\"s\":\"7\",\"bd\":\"3.140\",\"bi\":\"123\",\"flag\":\"true\"}",
+                mapper.toJqValue(sampleShaped()).toJsonString());
+    }
+
+    @Test
+    void numberShapeStringDeserBothForms() {
+        ShapedNums expected = sampleShaped();
+        assertEquals(expected, mapper.fromJqValue(JqValues.parse(
+                "{\"i\":\"42\",\"l\":\"9876543210\",\"d\":\"4.5\",\"f\":\"4.5\","
+                        + "\"s\":\"7\",\"bd\":\"3.140\",\"bi\":\"123\",\"flag\":\"true\"}"),
+                ShapedNums.class));
+        // Bare numbers still bind (Jackson accepts both; shape is ser-side).
+        // (Bare 3.140 normalizes to scale 2 through JSON number parsing —
+        // quoted "3.140" above preserves scale exactly.)
+        ShapedNums bare = mapper.fromJqValue(JqValues.parse(
+                "{\"i\":42,\"l\":9876543210,\"d\":4.5,\"f\":4.5,"
+                        + "\"s\":7,\"bd\":3.140,\"bi\":123,\"flag\":true}"),
+                ShapedNums.class);
+        assertEquals(expected.i(), bare.i());
+        assertEquals(expected.l(), bare.l());
+        assertEquals(expected.d(), bare.d());
+        assertEquals(expected.f(), bare.f());
+        assertEquals(expected.s(), bare.s());
+        assertEquals(0, expected.bd().compareTo(bare.bd()));
+        assertEquals(expected.bi(), bare.bi());
+        assertEquals(expected.flag(), bare.flag());
+    }
+
+    @Test
+    void numberShapeIntegralDoubleRendersJavaForm() {
+        // Shaped text follows Java toString (Jackson parity): 3.0 stays "3.0",
+        // unlike the unshaped jq plain notation which renders 3.
+        record ShapedDouble(@JqFormat(shape = JqFormat.Shape.STRING) double d) {}
+        assertEquals("{\"d\":\"3.0\"}", mapper.toJqValue(new ShapedDouble(3.0)).toJsonString());
+        assertEquals("{\"d\":3}", mapper.toJqValue(new PlainDouble(3.0)).toJsonString());
+    }
+
+    record PlainDouble(double d) {}
+
+    @Test
+    void numberShapeNonFiniteStaysNull() {
+        record ShapedDouble(@JqFormat(shape = JqFormat.Shape.STRING) double d) {}
+        record ShapedFloat(@JqFormat(shape = JqFormat.Shape.STRING) float f) {}
+        assertEquals("{\"d\":null}",
+                mapper.toJqValue(new ShapedDouble(Double.NaN)).toJsonString());
+        assertEquals("{\"f\":null}",
+                mapper.toJqValue(new ShapedFloat(Float.POSITIVE_INFINITY)).toJsonString());
+    }
+
+    @Test
+    void numberShapeNullBoxedStaysNull() {
+        record ShapedBoxed(@JqFormat(shape = JqFormat.Shape.STRING) Integer i,
+                           @JqFormat(shape = JqFormat.Shape.STRING) Boolean flag) {}
+        assertEquals("{\"i\":null,\"flag\":null}",
+                mapper.toJqValue(new ShapedBoxed(null, null)).toJsonString());
+    }
+
+    record NumMarked(@JqFormat(shape = JqFormat.Shape.NUMBER) int i,
+                     @JqFormat(shape = JqFormat.Shape.NUMBER) String s,
+                     @JqFormat(shape = JqFormat.Shape.STRING) char c) {}
+
+    @Test
+    void numberShapeNumberIsNoop() {
+        // NUMBER on numbers/strings and STRING on chars change nothing.
+        assertEquals("{\"i\":42,\"s\":\"x\",\"c\":\"q\"}",
+                mapper.toJqValue(new NumMarked(42, "x", 'q')).toJsonString());
+        assertEquals(new NumMarked(42, "x", 'q'), mapper.fromJqValue(
+                JqValues.parse("{\"i\":42,\"s\":\"x\",\"c\":\"q\"}"), NumMarked.class));
+    }
+
+    record BoolNumber(@JqFormat(shape = JqFormat.Shape.NUMBER) boolean flag) {}
+
+    @Test
+    void numberShapeNumberOnBooleanFails() {
+        // Explicit numeric wire form for booleans conflicts with jq-wins:
+        // booleans stay booleans, loudly.
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"flag\":true}"), BoolNumber.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("booleans stay booleans"), e.getMessage());
+    }
+
+    enum ShapedEnum { FOO, BAR }
+
+    record EnumNumber(@JqFormat(shape = JqFormat.Shape.NUMBER) ShapedEnum kind) {}
+
+    @Test
+    void numberShapeNumberOnEnumFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"kind\":\"FOO\"}"), EnumNumber.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("ordinals"), e.getMessage());
+    }
+
+    record PatNumber(@JqFormat(pattern = "0.00") double d) {}
+
+    @Test
+    void numberShapePatternStillFails() {
+        // Native patterns stay date/time-only (no DecimalFormat support).
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"d\":4.5}"), PatNumber.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("date/time"), e.getMessage());
+    }
+
+    record OptShaped(@JqFormat(shape = JqFormat.Shape.STRING) java.util.Optional<Integer> i) {}
+
+    @Test
+    void numberShapeOptionalFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"i\":1}"), OptShaped.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("Optional"), e.getMessage());
+    }
+
+    @Test
+    void numberShapeRoundTripsAllPaths() {
+        ShapedNums original = sampleShaped();
+        String tree = mapper.toJqValue(original).toJsonString();
+        assertEquals(tree, mapper.toJson(original));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(original)),
+                mapper.toJsonBytes(original));
+        assertEquals(original, mapper.fromJqValue(mapper.toJqValue(original), ShapedNums.class));
+    }
+
     // ---- naming strategies ----
 
     @Test

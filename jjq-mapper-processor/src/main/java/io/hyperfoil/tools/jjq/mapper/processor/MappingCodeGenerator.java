@@ -240,7 +240,7 @@ final class MappingCodeGenerator {
                     p.name(), p.jsonName(), p.typeName(),
                     JqMapperProcessor.fieldProgram(p.jsonName()),
                     false, false, "ALWAYS", p.converterClass(), false,
-                    false, false, null, p.converterField(), java.util.List.of(), null));
+                    false, false, null, p.converterField(), java.util.List.of(), null, false));
         }
         return list;
     }
@@ -742,6 +742,15 @@ final class MappingCodeGenerator {
             return;
         }
 
+        // String wire shape: quote numbers/booleans (shared helper keeps
+        // generated and reflection output identical, including nulls and
+        // non-finite doubles)
+        if (comp.stringShape()) {
+            sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toQuotedString(")
+              .append(accessor).append(", mapper)");
+            return;
+        }
+
         switch (comp.typeName()) {
             case "java.lang.String" ->
                 sb.append(accessor).append(" == null ? JqNull.NULL : JqString.of(").append(accessor).append(")");
@@ -895,6 +904,14 @@ final class MappingCodeGenerator {
             return;
         }
 
+        // String wire shape: quote numbers/booleans (shared helper keeps
+        // generated and reflection output identical)
+        if (comp.stringShape()) {
+            sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toQuotedString(")
+              .append(accessor).append(", mapper).appendTo(_sb);\n");
+            return;
+        }
+
         switch (comp.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(");\n");
@@ -1041,6 +1058,14 @@ final class MappingCodeGenerator {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ")
               .append(accessor).append(" == null ? null : ")
               .append(formatConst(comp.name())).append(".format(").append(accessor).append("));\n");
+            return;
+        }
+
+        // String wire shape: quote numbers/booleans (shared helper keeps
+        // generated and reflection output identical)
+        if (comp.stringShape()) {
+            sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toQuotedString(")
+              .append(accessor).append(", mapper).appendToBytes(_out);\n");
             return;
         }
 
@@ -1866,6 +1891,13 @@ final class MappingCodeGenerator {
               .append(formatConst(prop.name())).append(".format(").append(readExpr).append("));\n");
             return;
         }
+        // String wire shape: quote numbers/booleans (shared helper keeps
+        // generated and reflection output identical)
+        if (prop.stringShape()) {
+            sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toQuotedString(")
+              .append(readExpr).append(", mapper).appendToBytes(_out);\n");
+            return;
+        }
         switch (prop.typeName()) {
             case "java.lang.String", "char", "java.lang.Character" ->
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(");\n");
@@ -1953,6 +1985,13 @@ final class MappingCodeGenerator {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ")
               .append(readExpr).append(" == null ? null : ")
               .append(formatConst(prop.name())).append(".format(").append(readExpr).append("));\n");
+            return;
+        }
+        // String wire shape: quote numbers/booleans (shared helper keeps
+        // generated and reflection output identical)
+        if (prop.stringShape()) {
+            sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toQuotedString(")
+              .append(readExpr).append(", mapper).appendTo(_sb);\n");
             return;
         }
         switch (prop.typeName()) {
@@ -2095,7 +2134,7 @@ final class MappingCodeGenerator {
         return new JqMapperProcessor.PropertyInfo(
                 p.name(), p.jsonName(), p.typeName(), null, false, false,
                 null, null, false, "ALWAYS", p.converterClass(), false,
-                false, false, false, false, null, p.converterField(), java.util.List.of(), null);
+                false, false, false, false, null, p.converterField(), java.util.List.of(), null, false);
     }
 
     /**
@@ -2255,6 +2294,13 @@ final class MappingCodeGenerator {
         if (prop.format() != null) {
             sb.append(readExpr).append(" == null ? JqNull.NULL : JqString.of(")
               .append(formatConst(prop.name())).append(".format(").append(readExpr).append("))");
+            return;
+        }
+        // String wire shape: quote numbers/booleans (shared helper keeps
+        // generated and reflection output identical)
+        if (prop.stringShape()) {
+            sb.append("io.hyperfoil.tools.jjq.mapper.TypeConverter.toQuotedString(")
+              .append(readExpr).append(", mapper)");
             return;
         }
         switch (prop.typeName()) {

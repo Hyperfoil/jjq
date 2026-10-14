@@ -186,20 +186,31 @@ construct, setters bind the rest; a creator removes the no-arg requirement).
 Jackson `@JsonCreator` (`DELEGATING`/`PROPERTIES`/default modes,
 `@JsonProperty` params) works through the bridge; native wins.
 
-### `@JqFormat` — custom date/time patterns
+### `@JqFormat` — custom date/time patterns, number/boolean wire shapes
 
 ```java
 record Event(@JqFormat(pattern = "dd/MM/yyyy") LocalDate day,
              @JqFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Europe/Oslo") Instant at) {}
 // Binds "14/10/2026" and serializes back identically.
+record Ids(@JqFormat(shape = JqFormat.Shape.STRING) long id) {}
+// Serializes {"id":"42"} (quoted); binds quoted and bare numbers alike.
 ```
 
-Applies to the six date/time types (durations stay ISO); patterns are
-strings-only (no epoch fallback) with root locale and UTC zone by
+Patterns apply to the six date/time types (durations stay ISO); patterns
+are strings-only (no epoch fallback) with root locale and UTC zone by
 default. Invalid patterns/zones and non-temporal targets fail fast at
 mapping creation; unparseable text fails as shape mismatch. Jackson
-`@JsonFormat(pattern, timezone, locale)` works through the bridge
-(string shapes only).
+`@JsonFormat(pattern, timezone, locale)` works through the bridge.
+
+`shape = STRING` quotes numbers and booleans on serialization —
+deserialization already accepts quoted and bare forms, so shape is
+serialization-side only (quoted `BigDecimal` keeps its scale, integral
+doubles render `"3.0"`). On strings, characters, enums, and pattern-less
+date/time types it is a no-op. `shape = NUMBER` is the default form
+(no-op on numbers/strings/characters); on booleans, date/time types,
+and enums it fails fast at mapping creation, as do shapes on
+`Optional`. Native patterns stay date/time-only; bridged
+number/boolean patterns are moot (Jackson ignores them) and ignored.
 
 ### `@JqBuilder` — builder binding
 
@@ -483,6 +494,7 @@ pinned by tests:
 | Area | Jackson | jjq | Why |
 |---|---|---|---|
 | Boolean → number | 0/1 | throws | jq `tonumber` rejects booleans; jq wins |
+| Boolean + `shape = NUMBER` | 0/1 | fails at mapping creation | explicit numeric-wire request conflicts with jq-wins; booleans stay booleans |
 | `""` → number | 0 (primitives) | throws | fail-fast consistency (`"maybe"` throws too) |
 | Fraction → integral | truncates | throws | no silent loss (reporter preference) |
 | `NaN`/`Infinity` serialization | unquoted literals | `null` | no jq analog; the literals are unreadable here (#136) |
@@ -590,7 +602,8 @@ The any-getter method itself is never emitted as a bean property (Jackson parity
 | `@JsonAnySetter` / `@JsonAnyGetter` (method form) | Unknown-key capture / extras emission (reflection path) |
 | `@JsonValue` | Enum wire form on ser |
 | `@JsonCreator` (delegating + properties) | Factory/ctor deser; named params via `@JsonProperty` (records + POJOs, reflection + generated) |
-| `@JsonFormat(pattern, timezone, locale)` | Custom date/time strings (string shapes only, reflection + generated) |
+| `@JsonFormat(pattern, timezone, locale)` | Custom date/time strings (reflection + generated) |
+| `@JsonFormat(shape = STRING)` | Quoted numbers/booleans on ser (deser already lenient; reflection + generated) |
 | `@JsonProperty(required = true)` | Absent keys fail (records + POJOs + creator params, reflection + generated) |
 | `@JsonAutoDetect(getterVisibility/isGetterVisibility = NONE)` | Suppress `getX`/`isX` binding; fields read directly (records immune: canonical accessors only) |
 | `@JsonIgnore` on a getter / setter method | Ser-only / deser-only suppression (field-level stays both directions) |

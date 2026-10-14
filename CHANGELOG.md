@@ -2,6 +2,15 @@
 
 ## [Unreleased] - 0.2.4
 
+- Number/boolean wire shapes: native `@JqFormat(shape)` plus Jackson
+  `@JsonFormat(shape)` through the bridge — `STRING` quotes numbers and
+  booleans on serialization (deserialization already binds quoted and bare
+  forms, so shape is ser-side; quoted `BigDecimal` keeps its scale,
+  integral doubles render `"3.0"`), on reflection and generated paths;
+  `NUMBER` is the default form (no-op, other Jackson shapes ignored);
+  explicit numeric forms fail fast at mapping creation (booleans stay
+  booleans, no timestamp/enum-ordinal output, no shapes on `Optional`);
+  native patterns stay date/time-only while bridged number/boolean
   patterns are moot and ignored (Jackson ignores them)
 - Object identity: native `@JqId` plus Jackson `@JsonIdentityInfo`
   (property generators) through the bridge — repeated full objects dedup

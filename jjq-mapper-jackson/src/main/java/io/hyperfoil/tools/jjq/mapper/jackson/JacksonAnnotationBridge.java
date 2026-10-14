@@ -15,7 +15,6 @@ import com.fasterxml.jackson.annotation.ObjectIdGenerators;
 import com.fasterxml.jackson.annotation.JsonValue;
 import io.hyperfoil.tools.jjq.mapper.JqFormat;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
-import io.hyperfoil.tools.jjq.mapper.JqMapperException;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
 import io.hyperfoil.tools.jjq.mapper.JqOrder;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
@@ -146,10 +145,6 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
         AnnotatedElement effective = resolveToField(element);
         JsonFormat format = effective.getAnnotation(JsonFormat.class);
         if (format == null) return null;
-        if (format.shape() != JsonFormat.Shape.ANY && format.shape() != JsonFormat.Shape.STRING) {
-            throw new JqMapperException("@JsonFormat on " + describe(element)
-                    + ": only string shapes are supported (found " + format.shape() + ")");
-        }
         String pattern = format.pattern();
         if (pattern.isEmpty()) return null;
         String timezone = normalizeDefault(format.timezone());
@@ -157,16 +152,24 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
         return new JqFormat.Spec(pattern, timezone, locale);
     }
 
+    @Override
+    public io.hyperfoil.tools.jjq.mapper.JqFormat.Shape resolveShape(AnnotatedElement element) {
+        AnnotatedElement effective = resolveToField(element);
+        JsonFormat format = effective.getAnnotation(JsonFormat.class);
+        if (format == null) return null;
+        // Only STRING and NUMBER change the wire form (verified on databind
+        // 2.18: patterns are ignored on serialization, other shapes are
+        // no-ops) — the rest arrive as ANY.
+        return switch (format.shape()) {
+            case STRING -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.STRING;
+            case NUMBER -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.NUMBER;
+            default -> io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.ANY;
+        };
+    }
+
     /** Jackson uses "##default" for unset members; house defaults apply instead. */
     private static String normalizeDefault(String value) {
         return (value == null || value.equals("##default")) ? "" : value;
-    }
-
-    /** Short element description for error messages. */
-    private static String describe(AnnotatedElement element) {
-        String name = getFieldName(element);
-        Class<?> declaring = getDeclaringClass(element);
-        return (declaring != null ? declaring.getSimpleName() + "#" : "") + (name != null ? name : element);
     }
 
     @Override

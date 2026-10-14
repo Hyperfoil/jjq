@@ -44,13 +44,14 @@ final class FieldMapping {
     private final TypeConverter.Kind conversionKind; // pre-resolved conversion strategy
     private final ValueConverter<?> customConverter; // custom converter (from @JqConverter), null if none
     private final java.time.format.DateTimeFormatter formatter; // custom string format (from @JqFormat), null if none
+    private final boolean stringShaped; // quote numbers/booleans on ser (from @JqFormat shape, validated at creation)
     private final String[] aliases; // alternative accepted keys on deser (null when none)
 
     /** Constructor for record components (positional constructor, no setter). */
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
-        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null, false, false, null, null);
+        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null, false, false, null, null, false);
     }
 
     /** Full constructor with all options. */
@@ -59,7 +60,7 @@ final class FieldMapping {
                  MethodHandle getter, MethodHandle setter, int constructorIndex,
                  boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter,
                  boolean skipSerialize, boolean skipDeserialize, String[] aliases,
-                 java.time.format.DateTimeFormatter formatter) {
+                 java.time.format.DateTimeFormatter formatter, boolean stringShaped) {
         this.name = name;
         this.jsonName = jsonName.intern();
         this.directFieldName = directFieldName != null ? directFieldName.intern() : null;
@@ -75,6 +76,7 @@ final class FieldMapping {
         this.inclusion = inclusion;
         this.customConverter = customConverter;
         this.formatter = formatter;
+        this.stringShaped = stringShaped;
         if (aliases != null) {
             aliases = aliases.clone();
             for (int i = 0; i < aliases.length; i++) aliases[i] = aliases[i].intern();
@@ -173,6 +175,9 @@ final class FieldMapping {
         }
         if (formatter != null && value != null) {
             return JqString.of(formatter.format((java.time.temporal.TemporalAccessor) value));
+        }
+        if (stringShaped && value != null) {
+            return TypeConverter.toQuotedString(value, mapper);
         }
         return TypeConverter.toJqValue(value, mapper);
     }

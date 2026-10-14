@@ -272,6 +272,8 @@ final class ClassMapping<T> implements Mapping<T> {
             fields[i] = new FieldMapping(name, jsonName, directFieldName, program, fieldType, genericType,
                     getter, null, i, ignored, inclusion, converter, skipSer, skipDeser, aliases,
                     ignored ? null : resolveFormatter(fieldType, rc,
+                            "'" + name + "' of " + type.getName(), bridges),
+                    ignored ? false : resolveShape(fieldType, rc,
                             "'" + name + "' of " + type.getName(), bridges));
         }
 
@@ -609,6 +611,8 @@ final class ClassMapping<T> implements Mapping<T> {
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
                     fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser, aliases,
                     ignored ? null : resolveFormatter(fieldType, field,
+                            "'" + name + "' of " + type.getName(), bridges),
+                    ignored ? false : resolveShape(fieldType, field,
                             "'" + name + "' of " + type.getName(), bridges)));
             // Required markers collect here; program combinations are
             // validated after creator resolution below (mirrors forRecord).
@@ -1390,7 +1394,9 @@ final class ClassMapping<T> implements Mapping<T> {
      * Resolve a custom string format for a date/time field (native
      * {@code @JqFormat} first, then bridges). Null when default ISO handling
      * applies. Fails fast on invalid patterns/zones and on non-temporal
-     * targets (durations stay ISO, numbers keep their own rules).
+     * targets (durations stay ISO, numbers keep their own rules) — except
+     * bridged number/boolean patterns, which are moot (Jackson ignores
+     * {@code DecimalFormat} patterns on serialization) and ignored.
      */
     private static java.time.format.DateTimeFormatter resolveFormatter(
             Class<?> fieldType, AnnotatedElement element, String fieldDesc,
@@ -1398,11 +1404,13 @@ final class ClassMapping<T> implements Mapping<T> {
         String pattern = null;
         String timezone = "";
         String locale = "";
+        boolean fromNative = false;
         JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
         if (nativeAnn != null && !nativeAnn.pattern().isEmpty()) {
             pattern = nativeAnn.pattern();
             timezone = nativeAnn.timezone();
             locale = nativeAnn.locale();
+            fromNative = true;
         } else {
             for (AnnotationBridge bridge : bridges) {
                 JqFormat.Spec spec = bridge.resolveFormat(element);
@@ -1420,6 +1428,13 @@ final class ClassMapping<T> implements Mapping<T> {
                     + "': not supported on Optional (bind the temporal type directly)");
         }
         if (!TypeConverter.isTemporalDate(fieldType)) {
+            if (!fromNative && (TypeConverter.isNumberType(fieldType)
+                    || TypeConverter.isBooleanType(fieldType))) {
+                // Moot: Jackson ignores DecimalFormat patterns on numbers
+                // and booleans (verified on databind 2.18) — deserialization
+                // coerces through the normal scalar rules either way.
+                return null;
+            }
             throw new JqMapperException("@JqFormat on '" + fieldDesc
                     + "': patterns need a date/time type (Instant, LocalDate/Time/DateTime,"
                     + " OffsetDateTime, ZonedDateTime)");
@@ -1430,6 +1445,66 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("@JqFormat on '" + fieldDesc
                     + "': invalid pattern or zone (" + e.getMessage() + ")", e);
         }
+    }
+
+    /**
+     * Whether a field serializes numbers/booleans quoted (string wire
+     * shape): native {@code @JqFormat(shape)} first, then bridges. True
+     * only for numbers and booleans with {@code STRING} — everything else
+     * already renders as a string (no-op) or keeps the default form.
+     * Deserialization needs no flag (quoted and bare forms bind alike).
+     * Fails fast on explicit numeric wire requests with no numeric form
+     * (booleans, date/time types, enums) and on shapes over
+     * {@code Optional}.
+     */
+    private static boolean resolveShape(Class<?> fieldType, AnnotatedElement element,
+                                        String fieldDesc, List<AnnotationBridge> bridges) {
+        JqFormat.Shape shape = JqFormat.Shape.ANY;
+        JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
+        if (nativeAnn != null && nativeAnn.shape() != JqFormat.Shape.ANY) {
+            shape = nativeAnn.shape();
+        } else {
+            for (AnnotationBridge bridge : bridges) {
+                JqFormat.Shape bridged = bridge.resolveShape(element);
+                if (bridged != null && bridged != JqFormat.Shape.ANY) {
+                    shape = bridged;
+                    break;
+                }
+            }
+        }
+        if (shape == JqFormat.Shape.ANY) return false;
+        if (fieldType == java.util.Optional.class) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': shape " + shape + " is not supported on Optional"
+                    + " (bind the inner type directly)");
+        }
+        if (shape == JqFormat.Shape.STRING) {
+            return TypeConverter.isNumberType(fieldType) || TypeConverter.isBooleanType(fieldType);
+        }
+        // NUMBER is the default form: no-op on numbers, strings, and
+        // characters; anything else has no numeric rendering.
+        if (TypeConverter.isNumberType(fieldType) || fieldType == String.class
+                || fieldType == char.class || fieldType == Character.class) {
+            return false;
+        }
+        if (TypeConverter.isBooleanType(fieldType)) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': shape NUMBER would render booleans as 0/1 —"
+                    + " booleans stay booleans (jq wins on conflict)");
+        }
+        if (TypeConverter.isTemporalDate(fieldType)) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': shape NUMBER would render timestamps —"
+                    + " string forms only (epoch output is out of scope)");
+        }
+        if (fieldType.isEnum()) {
+            throw new JqMapperException("@JqFormat on '" + fieldDesc
+                    + "': shape NUMBER would render enum ordinals —"
+                    + " enums serialize by name (ordinals are out of scope)");
+        }
+        // Containers, records, and POJOs have no numeric form either —
+        // the marker is harmless, so it stays a no-op.
+        return false;
     }
 
     /** Consult bridges for a field name override. Returns null if no bridge provides one. */

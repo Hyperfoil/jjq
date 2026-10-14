@@ -141,6 +141,12 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
                         + ": @JsonFormat is not supported on creator parameters"
                         + " (bind the ISO form and format afterwards)");
             }
+            io.hyperfoil.tools.jjq.mapper.JqFormat.Shape paramShape = bridge.resolveShape(parameter);
+            if (paramShape != null && paramShape != io.hyperfoil.tools.jjq.mapper.JqFormat.Shape.ANY) {
+                throw new JqMapperException(label + " on " + type.getName()
+                        + ": @JsonFormat is not supported on creator parameters"
+                        + " (bind the default form and format afterwards)");
+            }
         }
         if (parameter.isAnnotationPresent(JqAdapter.class)) {
             throw new JqMapperException(label + " on " + type.getName()
@@ -175,7 +181,7 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
         }
         String jsonName = name.intern();
         return new FieldMapping(name, jsonName, jsonName, null, paramType, genericType,
-                null, null, index, false, JqInclude.Include.ALWAYS, converter, false, false, null, null);
+                null, null, index, false, JqInclude.Include.ALWAYS, converter, false, false, null, null, false);
     }
 
     /**

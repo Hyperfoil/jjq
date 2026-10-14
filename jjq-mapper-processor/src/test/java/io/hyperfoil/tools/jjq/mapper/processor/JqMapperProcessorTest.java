@@ -922,6 +922,56 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_numberShapeRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqFormat;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record SNum(@JqFormat(shape = JqFormat.Shape.STRING) int i,
+                                   @JqFormat(shape = JqFormat.Shape.STRING) double d,
+                                   @JqFormat(shape = JqFormat.Shape.STRING) boolean flag,
+                                   int plain) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.SNum", source);
+        JqMapper mapper = JqMapper.create();
+        Object r = mapper.fromJqValue(
+                JqValues.parse("{\"i\":\"42\",\"d\":\"4.5\",\"flag\":\"true\",\"plain\":1}"), recordClass);
+        assertEquals(42, recordClass.getMethod("i").invoke(r));
+        // Bare numbers bind too (shape is ser-side)
+        Object b = mapper.fromJqValue(
+                JqValues.parse("{\"i\":42,\"d\":4.5,\"flag\":true,\"plain\":1}"), recordClass);
+        assertEquals(r, b);
+        assertEquals("{\"i\":\"42\",\"d\":\"4.5\",\"flag\":\"true\",\"plain\":1}",
+                mapper.toJqValue(r).toJsonString());
+        assertEquals(mapper.toJqValue(r).toJsonString(), mapper.toJson(r));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(r)), mapper.toJsonBytes(r));
+    }
+
+    @Test
+    void generatedMapping_numberShapeInvalidFailsFast() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqFormat;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record SBad(@JqFormat(shape = JqFormat.Shape.NUMBER) boolean flag) {}
+                """;
+
+        com.google.testing.compile.Compilation compilation =
+                com.google.testing.compile.Compiler.javac()
+                        .withProcessors(new JqMapperProcessor())
+                        .compile(com.google.testing.compile.JavaFileObjects.forSourceString(
+                                "test.SBad", source));
+        com.google.testing.compile.CompilationSubject.assertThat(compilation).failed();
+    }
+
+    @Test
     void generatedMapping_aliasAndOrder() throws Exception {
         String source = """
                 package test;

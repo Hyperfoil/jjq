@@ -677,6 +677,67 @@ class JacksonAnnotationBridgeTest {
                 mapper.fromJqValue(JqValues.parse("{\"day\":\"2026\"}"), Shaped.class));
     }
 
+    // ---- @JsonFormat shapes on numbers/booleans (#6) ----
+
+    record JShaped(@JsonFormat(shape = JsonFormat.Shape.STRING) int i,
+                   @JsonFormat(shape = JsonFormat.Shape.STRING) double d,
+                   @JsonFormat(shape = JsonFormat.Shape.STRING) boolean flag) {}
+
+    @Test
+    void jsonFormatShapeStringQuotes() {
+        assertEquals("{\"i\":\"42\",\"d\":\"4.5\",\"flag\":\"true\"}",
+                mapper.toJqValue(new JShaped(42, 4.5, true)).toJsonString());
+        assertEquals(new JShaped(42, 4.5, true), mapper.fromJqValue(
+                JqValues.parse("{\"i\":\"42\",\"d\":\"4.5\",\"flag\":\"true\"}"), JShaped.class));
+        assertEquals(new JShaped(42, 4.5, true), mapper.fromJqValue(
+                JqValues.parse("{\"i\":42,\"d\":4.5,\"flag\":true}"), JShaped.class));
+    }
+
+    record JNumNoop(@JsonFormat(shape = JsonFormat.Shape.NUMBER) int i,
+                    @JsonFormat(shape = JsonFormat.Shape.NUMBER) String s) {}
+
+    @Test
+    void jsonFormatShapeNumberNoop() {
+        assertEquals("{\"i\":42,\"s\":\"x\"}",
+                mapper.toJqValue(new JNumNoop(42, "x")).toJsonString());
+    }
+
+    record JBoolNum(@JsonFormat(shape = JsonFormat.Shape.NUMBER) boolean flag) {}
+
+    @Test
+    void jsonFormatShapeNumberOnBooleanFails() {
+        io.hyperfoil.tools.jjq.mapper.JqMapperException e = assertThrows(
+                io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                        mapper.fromJqValue(JqValues.parse("{\"flag\":true}"), JBoolNum.class));
+        assertFalse(e instanceof io.hyperfoil.tools.jjq.mapper.ShapeMismatchException,
+                e.getClass().getName());
+    }
+
+    record JArrShape(@JsonFormat(shape = JsonFormat.Shape.ARRAY) int i) {}
+
+    @Test
+    void jsonFormatArrayShapeNoop() {
+        // Jackson ignores non-STRING/NUMBER shapes on numbers; so do we.
+        assertEquals("{\"i\":42}", mapper.toJqValue(new JArrShape(42)).toJsonString());
+        assertEquals(new JArrShape(42),
+                mapper.fromJqValue(JqValues.parse("{\"i\":42}"), JArrShape.class));
+    }
+
+    record JMootPattern(@JsonFormat(pattern = "0.00", shape = JsonFormat.Shape.STRING) double d) {}
+    record JMootPatternBare(@JsonFormat(pattern = "0.00") double d) {}
+
+    @Test
+    void jsonFormatPatternOnNumberMoot() {
+        // Jackson ignores DecimalFormat patterns on serialization; the shape
+        // still applies and binding stays lenient — no fail-fast.
+        assertEquals("{\"d\":\"4.5\"}",
+                mapper.toJqValue(new JMootPattern(4.5)).toJsonString());
+        assertEquals(new JMootPattern(4.5), mapper.fromJqValue(
+                JqValues.parse("{\"d\":\"4.50\"}"), JMootPattern.class));
+        assertEquals("{\"d\":4.5}",
+                mapper.toJqValue(new JMootPatternBare(4.5)).toJsonString());
+    }
+
     // ---- @JsonDeserialize(builder) + @JsonPOJOBuilder ----
 
     @com.fasterxml.jackson.databind.annotation.JsonDeserialize(builder = JackBean.JackBeanBuilder.class)

@@ -436,6 +436,59 @@ public final class TypeConverter {
                 || targetType == java.time.ZonedDateTime.class;
     }
 
+    /** True for the ten numeric types supporting string wire shapes. */
+    static boolean isNumberType(Class<?> targetType) {
+        return targetType == byte.class || targetType == Byte.class
+                || targetType == short.class || targetType == Short.class
+                || targetType == int.class || targetType == Integer.class
+                || targetType == long.class || targetType == Long.class
+                || targetType == float.class || targetType == Float.class
+                || targetType == double.class || targetType == Double.class
+                || targetType == java.math.BigInteger.class
+                || targetType == BigDecimal.class;
+    }
+
+    /** True for boolean/boolean (string wire shapes quote them). */
+    static boolean isBooleanType(Class<?> targetType) {
+        return targetType == boolean.class || targetType == Boolean.class;
+    }
+
+    /**
+     * Render a scalar for a string-shaped field (quoted wire form): numbers
+     * and booleans become their Java-text form ({@code Double.toString},
+     * scale-preserving {@code BigDecimal.toString}), matching Jackson's
+     * {@code shape = STRING} output. Nulls stay null and non-finite
+     * floats/doubles stay null (issue #136 — no readable form exists).
+     * Anything else renders normally (string-shaped markers only ever sit
+     * on numeric/boolean fields — validated at mapping creation).
+     * Shared by the reflection path and generated code so both quote
+     * identically.
+     *
+     * @param value  the Java value to render (may be null)
+     * @param mapper the mapper for the fallback path
+     * @return the quoted string value, or {@code JqNull} for nulls/non-finites
+     */
+    public static JqValue toQuotedString(Object value, JqMapper mapper) {
+        if (value == null) return JqNull.NULL;
+        if (value instanceof Boolean b) return JqString.of(b.toString());
+        if (value instanceof BigDecimal bd) return JqString.of(bd.toString());
+        if (value instanceof java.math.BigInteger bi) return JqString.of(bi.toString());
+        if (value instanceof Float f) {
+            float fv = f;
+            if (Float.isNaN(fv) || Float.isInfinite(fv)) return JqNull.NULL;
+            return JqString.of(Float.toString(fv));
+        }
+        if (value instanceof Double d) {
+            double dv = d;
+            if (Double.isNaN(dv) || Double.isInfinite(dv)) return JqNull.NULL;
+            return JqString.of(Double.toString(dv));
+        }
+        if (value instanceof Number n) return JqString.of(n.toString());
+        if (value instanceof Character c) return JqString.of(String.valueOf(c));
+        if (value instanceof String s) return JqString.of(s);
+        return toJqValue(value, mapper);
+    }
+
     /**
      * Convert a JqValue with an explicit formatter (custom-pattern binding).
      * Strings parse with the pattern; every other shape mismatches (patterns

@@ -195,11 +195,15 @@ public class JqMapperProcessor extends AbstractProcessor {
                 }
                 JqFormat.Spec compFormat = resolveFormatSpec(rc, recordType, typeName,
                         "'" + name + "' of " + recordType.getQualifiedName());
-                if (compFormat == null && hasFormatMarker(rc)) return null;
+                Boolean compStringShape = resolveShapeFlag(rc, recordType, typeName,
+                        rc.asType(), "'" + name + "' of " + recordType.getQualifiedName());
+                if (compStringShape == null) return null;
+                if (compFormat == null && hasPatternMarker(rc)
+                        && !isNumberTypeName(typeName) && !isBooleanTypeName(typeName)) return null;
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
                         "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField,
-                        compAliases, compFormat));
+                        compAliases, compFormat, compStringShape));
             }
         }
 
@@ -414,12 +418,16 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
             JqFormat.Spec propFormat = resolveFormatSpec(field, null, typeName,
                     "'" + name + "' of " + classType.getQualifiedName());
-            if (propFormat == null && hasFormatMarker(field)) return null;
+            Boolean propStringShape = resolveShapeFlag(field, null, typeName,
+                    field.asType(), "'" + name + "' of " + classType.getQualifiedName());
+            if (propStringShape == null) return null;
+            if (propFormat == null && hasPatternMarker(field)
+                    && !isNumberTypeName(typeName) && !isBooleanTypeName(typeName)) return null;
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
                     skipSer, skipDeser, isPrivate, isFinal, adapter, converterField, propAliases,
-                    propFormat));
+                    propFormat, propStringShape));
         }
 
         // Generate the mapping class
@@ -1018,29 +1026,18 @@ public class JqMapperProcessor extends AbstractProcessor {
         String pattern = null;
         String timezone = "";
         String locale = "";
+        boolean fromNative = false;
         JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
         if (nativeAnn != null && !nativeAnn.pattern().isEmpty()) {
             pattern = nativeAnn.pattern();
             timezone = nativeAnn.timezone();
             locale = nativeAnn.locale();
+            fromNative = true;
         } else {
-            Element fallback = element;
-            if (enclosing != null && element instanceof RecordComponentElement rc) {
-                fallback = null;
-                for (Element e : enclosing.getEnclosedElements()) {
-                    if (e.getKind() == ElementKind.FIELD
-                            && e.getSimpleName().contentEquals(rc.getSimpleName())) {
-                        fallback = e;
-                        break;
-                    }
-                }
-            }
             String bridgedPattern = null;
             String bridgedTimezone = "";
             String bridgedLocale = "";
-            Element[] sources = fallback != null && fallback != element
-                    ? new Element[]{element, fallback} : new Element[]{element};
-            for (Element source : sources) {
+            for (Element source : formatSources(element, enclosing)) {
                 String[] bridged = bridgeFormat(source);
                 if (bridged != null) {
                     bridgedPattern = bridged[0];
@@ -1057,6 +1054,11 @@ public class JqMapperProcessor extends AbstractProcessor {
         }
         if (pattern == null || pattern.isEmpty()) return null;
         if (!isTemporalDateName(typeName)) {
+            if (!fromNative && (isNumberTypeName(typeName) || isBooleanTypeName(typeName))) {
+                // Moot: Jackson ignores DecimalFormat patterns on numbers
+                // and booleans — drop the pattern, keep the shape (if any).
+                return null;
+            }
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                     "@JqFormat on '" + fieldDesc
                             + "': patterns need a date/time type (Instant, LocalDate/Time/DateTime,"
@@ -1085,11 +1087,116 @@ public class JqMapperProcessor extends AbstractProcessor {
                 || typeName.equals("java.time.ZonedDateTime");
     }
 
+    /** True for the numeric type names supporting string wire shapes. */
+    private static boolean isNumberTypeName(String typeName) {
+        return typeName.equals("byte") || typeName.equals("java.lang.Byte")
+                || typeName.equals("short") || typeName.equals("java.lang.Short")
+                || typeName.equals("int") || typeName.equals("java.lang.Integer")
+                || typeName.equals("long") || typeName.equals("java.lang.Long")
+                || typeName.equals("float") || typeName.equals("java.lang.Float")
+                || typeName.equals("double") || typeName.equals("java.lang.Double")
+                || typeName.equals("java.math.BigInteger")
+                || typeName.equals("java.math.BigDecimal");
+    }
+
+    /** True for boolean type names (string wire shapes quote them). */
+    private static boolean isBooleanTypeName(String typeName) {
+        return typeName.equals("boolean") || typeName.equals("java.lang.Boolean");
+    }
+
+    /**
+     * Bridge annotation sources for an element: the element itself plus the
+     * same-named field for record components (Jackson/JSON-B annotations
+     * target fields, not components).
+     */
+    private static Element[] formatSources(Element element, TypeElement enclosing) {
+        Element fallback = element;
+        if (enclosing != null && element instanceof RecordComponentElement rc) {
+            fallback = null;
+            for (Element e : enclosing.getEnclosedElements()) {
+                if (e.getKind() == ElementKind.FIELD
+                        && e.getSimpleName().contentEquals(rc.getSimpleName())) {
+                    fallback = e;
+                    break;
+                }
+            }
+        }
+        return fallback != null && fallback != element
+                ? new Element[]{element, fallback} : new Element[]{element};
+    }
+
+    /**
+     * String-shape flag for an element: native {@code @JqFormat(shape)}
+     * first, then the bridged {@code @JsonFormat} shape. True only for
+     * numbers and booleans with {@code STRING} (mirrors the runtime
+     * {@code resolveShape} — codegen would otherwise misrender). Null when
+     * an invalid combination reports a compile error (the caller bails).
+     */
+    private Boolean resolveShapeFlag(Element element, TypeElement enclosing, String typeName,
+                                     javax.lang.model.type.TypeMirror type, String fieldDesc) {
+        String shape = "ANY";
+        JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
+        if (nativeAnn != null && !nativeAnn.shape().name().equals("ANY")) {
+            shape = nativeAnn.shape().name();
+        } else {
+            for (Element source : formatSources(element, enclosing)) {
+                String[] bridged = bridgeFormat(source);
+                if (bridged != null) {
+                    shape = bridged[3];
+                    break;
+                }
+            }
+        }
+        if (shape.equals("ANY")) return Boolean.FALSE;
+        if (typeName.startsWith("java.util.Optional")) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "@JqFormat on '" + fieldDesc + "': shape " + shape
+                            + " is not supported on Optional (bind the inner type directly)",
+                    element);
+            return null;
+        }
+        if (shape.equals("STRING")) {
+            return (isNumberTypeName(typeName) || isBooleanTypeName(typeName))
+                    ? Boolean.TRUE : Boolean.FALSE;
+        }
+        // NUMBER is the default form: no-op on numbers, strings, and
+        // characters; explicit failures mirror the runtime rule.
+        if (isNumberTypeName(typeName) || typeName.equals("java.lang.String")
+                || typeName.equals("char") || typeName.equals("java.lang.Character")) {
+            return Boolean.FALSE;
+        }
+        if (isBooleanTypeName(typeName)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "@JqFormat on '" + fieldDesc + "': shape NUMBER would render"
+                            + " booleans as 0/1 — booleans stay booleans (jq wins on conflict)",
+                    element);
+            return null;
+        }
+        if (isTemporalDateName(typeName)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "@JqFormat on '" + fieldDesc + "': shape NUMBER would render"
+                            + " timestamps — string forms only (epoch output is out of scope)",
+                    element);
+            return null;
+        }
+        javax.lang.model.element.Element typeElement =
+                processingEnv.getTypeUtils().asElement(type);
+        if (typeElement != null && typeElement.getKind() == ElementKind.ENUM) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "@JqFormat on '" + fieldDesc + "': shape NUMBER would render"
+                            + " enum ordinals — enums serialize by name (ordinals are out of scope)",
+                    element);
+            return null;
+        }
+        return Boolean.FALSE;
+    }
+
     /**
      * Bridge format reading: Jackson {@code @JsonFormat} mirror as
-     * {@code [pattern, timezone, locale]}, or null when absent. Non-string
-     * shapes report a compile error inline (null comes back and the marker
-     * check bails the caller).
+     * {@code [pattern, timezone, locale, shape]}, or null when absent.
+     * Shapes never gate the spec (non-string shapes are no-ops on numbers
+     * — verified on databind 2.18); shape handling lives in
+     * {@link #resolveShapeFlag}.
      */
     private String[] bridgeFormat(Element element) {
         for (var mirror : element.getAnnotationMirrors()) {
@@ -1112,25 +1219,30 @@ public class JqMapperProcessor extends AbstractProcessor {
                     locale = s.equals("##default") ? "" : s;
                 }
             }
-            if (!shape.equals("ANY") && !shape.equals("STRING")) {
-                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                        "@JsonFormat: only string shapes are supported (found " + shape + ")",
-                        element);
-                return null;
-            }
-            if (pattern == null || pattern.isEmpty()) return null;
-            return new String[]{pattern, timezone, locale};
+            if (pattern == null || pattern.isEmpty()) return new String[]{null, "", "", shape};
+            return new String[]{pattern, timezone, locale, shape};
         }
         return null;
     }
 
-    /** True when the element carries any format marker (bail check). */
-    private static boolean hasFormatMarker(Element element) {
-        if (element.getAnnotation(JqFormat.class) != null) return true;
+    /**
+     * True when the element carries a pattern-bearing format marker (bail
+     * check): a native pattern, or a bridged pattern member. Shape-only and
+     * bare markers never bail — they generate normally (with a string-shape
+     * flag when applicable).
+     */
+    private static boolean hasPatternMarker(Element element) {
+        JqFormat nativeAnn = element.getAnnotation(JqFormat.class);
+        if (nativeAnn != null && !nativeAnn.pattern().isEmpty()) return true;
         for (var mirror : element.getAnnotationMirrors()) {
-            if (mirror.getAnnotationType().toString()
-                    .equals("com.fasterxml.jackson.annotation.JsonFormat")) {
-                return true;
+            if (!mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonFormat")) continue;
+            for (var entry : mirror.getElementValues().entrySet()) {
+                if (entry.getKey().getSimpleName().toString().equals("pattern")
+                        && entry.getValue().getValue() instanceof String s
+                        && !s.isEmpty()) {
+                    return true;
+                }
             }
         }
         return false;
@@ -1721,7 +1833,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                          String inclusion, String converterClass, boolean nestedRecord,
                          boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter,
                          String converterField, java.util.List<String> aliases,
-                         io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format) {}
+                         io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format, boolean stringShape) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
@@ -1730,7 +1842,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                         boolean skipSerialize, boolean skipDeserialize,
                         boolean privateField, boolean finalField, AdapterInfo adapter,
                         String converterField, java.util.List<String> aliases,
-                        io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format) {}
+                        io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format, boolean stringShape) {}
 
     /**
      * Shared {@code CONV_} field name per converter class, first-seen order

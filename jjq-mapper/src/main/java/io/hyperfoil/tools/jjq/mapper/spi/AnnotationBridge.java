@@ -227,6 +227,22 @@ public interface AnnotationBridge {
     }
 
     /**
+     * Wire shape for a field (e.g. Jackson {@code @JsonFormat(shape)}):
+     * {@code STRING} quotes numbers and booleans on serialization,
+     * {@code NUMBER} is the default form. Only called when no native
+     * {@link JqFormat} shape is present — native wins.
+     *
+     * <p>The default implementation returns {@code null} (no opinion —
+     * the default wire form); bridges override it when their annotations
+     * are present. Shapes with no wire effect map to
+     * {@link io.hyperfoil.tools.jjq.mapper.JqFormat.Shape#ANY}.</p>
+     *
+     * @param element the field or record component to inspect
+     * @return the wire shape, or {@code null} if not present
+     */
+    default io.hyperfoil.tools.jjq.mapper.JqFormat.Shape resolveShape(AnnotatedElement element) {
+        return null;
+    }
 
     /**
      * Alternative accepted JSON keys for a property ({@code @JsonAlias}
