@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.mapper.jackson;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
@@ -11,6 +12,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
+import io.hyperfoil.tools.jjq.mapper.JqOrder;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 
 import java.lang.reflect.AnnotatedElement;
@@ -82,6 +84,38 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
     }
 
     @Override
+    public java.util.List<String> resolveAliases(AnnotatedElement element) {
+        AnnotatedElement effective = resolveToField(element);
+        JsonAlias alias = effective.getAnnotation(JsonAlias.class);
+        if (alias == null || alias.value().length == 0) return java.util.List.of();
+        return java.util.List.of(alias.value());
+    }
+
+    @Override
+    public JqOrder.Spec resolveOrder(Class<?> type) {
+        // @JsonPropertyOrder lives in databind: match by simple name and
+        // read members reflectively (covers Jackson 2 and 3).
+        for (java.lang.annotation.Annotation ann : type.getAnnotations()) {
+            if (!ann.annotationType().getSimpleName().equals("JsonPropertyOrder")) continue;
+            java.util.List<String> explicit = new java.util.ArrayList<>();
+            boolean alphabetic = false;
+            try {
+                Object value = ann.annotationType().getMethod("value").invoke(ann);
+                if (value instanceof String[] names) explicit.addAll(java.util.List.of(names));
+                Object alpha = ann.annotationType().getMethod("alphabetic").invoke(ann);
+                if (alpha instanceof Boolean b) alphabetic = b;
+            } catch (NoSuchMethodException e) {
+                continue;
+            } catch (ReflectiveOperationException e) {
+                throw new io.hyperfoil.tools.jjq.mapper.JqMapperException(
+                        "Cannot read @JsonPropertyOrder on " + type.getName(), e);
+            }
+            return new JqOrder.Spec(explicit, alphabetic);
+        }
+        return null;
+    }
+
+    @Override
     public boolean isRequired(AnnotatedElement element) {
         AnnotatedElement effective = resolveToField(element);
         JsonProperty prop = effective.getAnnotation(JsonProperty.class);
@@ -104,8 +138,31 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public JqNaming.Strategy resolveNaming(Class<?> type) {
-        // Jackson's @JsonNaming uses a PropertyNamingStrategy class, not an enum.
-        // Mapping it would require importing jackson-databind. For now, return null.
+        // Jackson's @JsonNaming lives in databind (naming strategy classes
+        // too), which this module deliberately does not depend on — match by
+        // simple name and map the well-known strategies (covers Jackson 2+3).
+        // Anything custom (or absent) returns null: naming stays identity.
+        for (java.lang.annotation.Annotation ann : type.getAnnotations()) {
+            if (!ann.annotationType().getSimpleName().equals("JsonNaming")) continue;
+            String strategyClass;
+            try {
+                Object value = ann.annotationType().getMethod("value").invoke(ann);
+                if (!(value instanceof Class<?> c)) return null;
+                strategyClass = c.getSimpleName();
+            } catch (ReflectiveOperationException e) {
+                return null;
+            }
+            return switch (strategyClass) {
+                case "SnakeCaseStrategy" -> JqNaming.Strategy.SNAKE_CASE;
+                case "UpperSnakeCaseStrategy" -> JqNaming.Strategy.UPPER_SNAKE_CASE;
+                case "LowerCamelCaseStrategy" -> JqNaming.Strategy.LOWER_CAMEL_CASE;
+                case "UpperCamelCaseStrategy" -> JqNaming.Strategy.UPPER_CAMEL_CASE;
+                case "LowerCaseStrategy" -> JqNaming.Strategy.LOWER_CASE;
+                case "KebabCaseStrategy" -> JqNaming.Strategy.KEBAB_CASE;
+                case "LowerDotCaseStrategy" -> JqNaming.Strategy.LOWER_DOT_CASE;
+                default -> null;
+            };
+        }
         return null;
     }
 

@@ -1,10 +1,12 @@
 package io.hyperfoil.tools.jjq.mapper.jackson;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.value.JqValue;
@@ -559,6 +561,44 @@ class JacksonAnnotationBridgeTest {
         assertTrue(e.getMessage().contains("\"name\""), e.getMessage());
         assertEquals(new Req("Ann", 3), mapper.fromJqValue(
                 JqValues.parse("{\"name\":\"Ann\",\"age\":3}"), Req.class));
+    }
+
+    // ---- @JsonNaming / @JsonAlias / @JsonPropertyOrder ----
+
+    @com.fasterxml.jackson.databind.annotation.JsonNaming(
+            com.fasterxml.jackson.databind.PropertyNamingStrategies.KebabCaseStrategy.class)
+    record KebabBean(String hostPaths, int maxRetries) {}
+
+    record AliasedBean(@JsonAlias({"host_name", "hostname"}) String hostName, int port) {}
+
+    @JsonPropertyOrder({"id", "name"})
+    record OrderedBean(String name, String id, int age) {}
+
+    @Test
+    void jsonNamingKebabBinds() {
+        KebabBean b = mapper.fromJqValue(
+                JqValues.parse("{\"host-paths\":\"a\",\"max-retries\":3}"), KebabBean.class);
+        assertEquals("a", b.hostPaths());
+        assertEquals(3, b.maxRetries());
+        assertEquals("{\"host-paths\":\"a\",\"max-retries\":3}",
+                mapper.toJqValue(b).toJsonString());
+    }
+
+    @Test
+    void jsonAliasBindsButSerializesPrimary() {
+        assertEquals("x", mapper.fromJqValue(
+                JqValues.parse("{\"host_name\":\"x\",\"port\":1}"), AliasedBean.class).hostName());
+        assertEquals("{\"hostName\":\"x\",\"port\":1}",
+                mapper.toJqValue(new AliasedBean("x", 1)).toJsonString());
+    }
+
+    @Test
+    void jsonPropertyOrderSerializesFirst() {
+        assertEquals("{\"id\":\"1\",\"name\":\"a\",\"age\":3}",
+                mapper.toJqValue(new OrderedBean("a", "1", 3)).toJsonString());
+        // Deser unaffected
+        assertEquals(new OrderedBean("a", "1", 3), mapper.fromJqValue(
+                JqValues.parse("{\"age\":3,\"name\":\"a\",\"id\":\"1\"}"), OrderedBean.class));
     }
 
     // ---- @JsonDeserialize(builder) + @JsonPOJOBuilder ----

@@ -839,6 +839,69 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_aliasAndOrder() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAlias;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqOrder;
+
+                @JqMapped
+                @JqOrder({"id", "name"})
+                public record Aliased(@JqAlias({"host_name", "hostname"}) String name,
+                                      String id, int age) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Aliased", source);
+        JqMapper mapper = JqMapper.create();
+
+        // Every name binds; serialization uses the primary in order
+        for (String key : new String[]{"name", "host_name", "hostname"}) {
+            Object r = mapper.fromJqValue(
+                    JqValues.parse("{\"" + key + "\":\"x\",\"id\":\"1\",\"age\":3}"), recordClass);
+            assertEquals("x", recordClass.getMethod("name").invoke(r));
+        }
+        Object full = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"x\",\"id\":\"1\",\"age\":3}"), recordClass);
+        assertEquals("{\"id\":\"1\",\"name\":\"x\",\"age\":3}",
+                mapper.toJqValue(full).toJsonString());
+        assertEquals(mapper.toJqValue(full).toJsonString(), mapper.toJson(full));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(full)), mapper.toJsonBytes(full));
+    }
+
+    @Test
+    void generatedMapping_aliasPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAlias;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public class AliasPojo {
+                    @JqAlias("nm")
+                    public String name;
+                    public int age;
+
+                    public AliasPojo() {}
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.AliasPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object a = mapper.fromJqValue(JqValues.parse("{\"nm\":\"x\",\"age\":1}"), pojoClass);
+        assertEquals("x", pojoClass.getField("name").get(a));
+        Object b = mapper.fromJqValue(JqValues.parse("{\"name\":\"y\",\"age\":2}"), pojoClass);
+        assertEquals("y", pojoClass.getField("name").get(b));
+        // Explicit null through an alias still writes
+        Object n = mapper.fromJqValue(JqValues.parse("{\"nm\":null,\"age\":1}"), pojoClass);
+        assertNull(pojoClass.getField("name").get(n));
+        assertEquals("{\"name\":\"y\",\"age\":2}", mapper.toJqValue(b).toJsonString());
+    }
+
+    @Test
     void generatedMapping_strictRecordRejectsUnknown() throws Exception {
         String source = """
                 package test;

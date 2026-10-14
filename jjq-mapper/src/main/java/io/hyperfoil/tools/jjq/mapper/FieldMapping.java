@@ -43,12 +43,13 @@ final class FieldMapping {
     private final JqInclude.Include inclusion; // serialization inclusion strategy
     private final TypeConverter.Kind conversionKind; // pre-resolved conversion strategy
     private final ValueConverter<?> customConverter; // custom converter (from @JqConverter), null if none
+    private final String[] aliases; // alternative accepted keys on deser (null when none)
 
     /** Constructor for record components (positional constructor, no setter). */
     FieldMapping(String name, String directFieldName, JqProgram program,
                  Class<?> type, Type genericType,
                  MethodHandle getter, int constructorIndex, boolean ignored) {
-        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null, false, false);
+        this(name, name, directFieldName, program, type, genericType, getter, null, constructorIndex, ignored, JqInclude.Include.ALWAYS, null, false, false, null);
     }
 
     /** Full constructor with all options. */
@@ -56,7 +57,7 @@ final class FieldMapping {
                  Class<?> type, Type genericType,
                  MethodHandle getter, MethodHandle setter, int constructorIndex,
                  boolean ignored, JqInclude.Include inclusion, ValueConverter<?> customConverter,
-                 boolean skipSerialize, boolean skipDeserialize) {
+                 boolean skipSerialize, boolean skipDeserialize, String[] aliases) {
         this.name = name;
         this.jsonName = jsonName.intern();
         this.directFieldName = directFieldName != null ? directFieldName.intern() : null;
@@ -71,6 +72,11 @@ final class FieldMapping {
         this.skipDeserialize = skipDeserialize;
         this.inclusion = inclusion;
         this.customConverter = customConverter;
+        if (aliases != null) {
+            aliases = aliases.clone();
+            for (int i = 0; i < aliases.length; i++) aliases[i] = aliases[i].intern();
+        }
+        this.aliases = aliases;
         this.conversionKind = ignored ? TypeConverter.Kind.DEFAULT
                                      : TypeConverter.resolveKind(type, genericType);
     }
@@ -81,7 +87,18 @@ final class FieldMapping {
         if (directFieldName != null) {
             // Direct field access, bypassing JqProgram entirely. The name is
             // interned at mapping creation, so identity lookup applies.
-            if (input instanceof JqObject obj) return obj.get(directFieldName);
+            if (input instanceof JqObject obj) {
+                if (aliases == null) return obj.get(directFieldName);
+                // Aliases: first present wins (explicit null counts as
+                // present); the primary stays the serialization name.
+                var hit = obj.tryGet(directFieldName);
+                if (hit.isPresent()) return hit.get();
+                for (String alias : aliases) {
+                    hit = obj.tryGet(alias);
+                    if (hit.isPresent()) return hit.get();
+                }
+                return JqNull.NULL;
+            }
             return JqNull.NULL;
         }
         return program.apply(input);
@@ -155,6 +172,8 @@ final class FieldMapping {
     boolean hasSetter() { return setter != null; }
     boolean skipSerialize() { return skipSerialize; }
     boolean skipDeserialize() { return skipDeserialize; }
+    /** Alternative accepted keys on deserialization (null when none). */
+    String[] aliases() { return aliases; }
     JqInclude.Include inclusion() { return inclusion; }
     String name() { return name; }
     /** The JSON key name for serialization (may differ from name() due to @JqNaming). */

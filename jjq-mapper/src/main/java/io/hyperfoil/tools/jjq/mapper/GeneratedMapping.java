@@ -343,6 +343,29 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * First-present lookup across a primary key and its aliases: returns the
+     * first hit (an explicitly present {@code null} counts as present), else
+     * JSON null. Backs aliased fields in generated slow paths, mirroring the
+     * reflection {@code FieldMapping} extraction exactly.
+     *
+     * @param input   the input value (any shape; non-objects yield null)
+     * @param primary the primary wire name
+     * @param aliases alternative accepted wires, in priority order
+     * @return the first present value, or JSON null
+     */
+    protected static JqValue firstPresent(JqValue input, String primary, String... aliases) {
+        if (input instanceof JqObject obj) {
+            var hit = obj.tryGet(primary);
+            if (hit.isPresent()) return hit.get();
+            for (String alias : aliases) {
+                hit = obj.tryGet(alias);
+                if (hit.isPresent()) return hit.get();
+            }
+        }
+        return io.hyperfoil.tools.jjq.value.JqNull.NULL;
+    }
+
+    /**
      * Object-shape gate failure for generated {@code fromJqValue}: mirrors
      * the reflection rule (scalar/array documents with only direct lookups).
      *

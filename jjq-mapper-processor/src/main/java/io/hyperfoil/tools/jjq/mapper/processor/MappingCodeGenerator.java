@@ -16,7 +16,7 @@ final class MappingCodeGenerator {
     static String generate(String packageName, String recordSimpleName, String recordQualifiedName,
                            String mappingClassName, List<JqMapperProcessor.ComponentInfo> components,
                            JqMapperProcessor.AnyInfo anyInfo, JqMapperProcessor.CreatorInfo creator,
-                           List<String> required) {
+                           List<String> required, io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order) {
         var sb = new StringBuilder(1024);
 
         // Deserialization source: creator params when a property creator is
@@ -73,8 +73,9 @@ final class MappingCodeGenerator {
         // Static JqProgram fields for each non-ignored deserialization
         // component (creator params when a property creator is present).
         // Delegating creators bind one scalar inline — no programs at all.
+        // Aliased fields skip programs (they bind through firstPresent).
         for (var comp : deser) {
-            if (!comp.ignored() && !hasDelegating) {
+            if (!comp.ignored() && !hasDelegating && comp.aliases().isEmpty()) {
                 sb.append("    private static final JqProgram P_")
                   .append(comp.name().toUpperCase())
                   .append(" = JqProgram.compile(\"")
@@ -137,7 +138,9 @@ final class MappingCodeGenerator {
             generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator, required);
         }
 
-        // toJqValue method
+        // toJqValue method (serialization iterates the ordered view;
+        // binding above stays declaration-ordered for constructor alignment)
+        sortSerView(components, JqMapperProcessor.ComponentInfo::jsonName, order);
         generateToJqValue(sb, recordSimpleName, components, anyInfo);
 
         // appendJson method — direct-to-JSON, bypasses JqValue tree
@@ -182,6 +185,23 @@ final class MappingCodeGenerator {
     }
 
     /**
+     * Deserialization apply expression for a component: the compiled program
+     * for plain fields, first-present lookup for aliased ones (an explicitly
+     * present null counts as present, mirroring the reflection path).
+     */
+    private static String deserApply(JqMapperProcessor.ComponentInfo comp) {
+        if (comp.aliases().isEmpty()) {
+            return "P_" + comp.name().toUpperCase() + ".apply(input)";
+        }
+        var sb = new StringBuilder("firstPresent(input, \"")
+                .append(escapeJava(comp.jsonName())).append("\"");
+        for (String alias : comp.aliases()) {
+            sb.append(", \"").append(escapeJava(alias)).append("\"");
+        }
+        return sb.append(")").toString();
+    }
+
+    /**
      * Deserialization components for a property creator: one direct lookup
      * per parameter (converters honored, programs never — creator params
      * bind by wire name, mirroring the runtime {@code CreatorSpec}).
@@ -194,7 +214,7 @@ final class MappingCodeGenerator {
                     p.name(), p.jsonName(), p.typeName(),
                     JqMapperProcessor.fieldProgram(p.jsonName()),
                     false, false, "ALWAYS", p.converterClass(), false,
-                    false, false, null, p.converterField()));
+                    false, false, null, p.converterField(), java.util.List.of()));
         }
         return list;
     }
@@ -292,7 +312,7 @@ final class MappingCodeGenerator {
             sb.append("        ").append(comp.typeName()).append(" _c").append(i).append(";\n");
             sb.append("        try {\n");
             sb.append("            _c").append(i).append(" = ");
-            generateExtraction(sb, comp, "P_" + comp.name().toUpperCase() + ".apply(input)");
+            generateExtraction(sb, comp, deserApply(comp));
             sb.append(";\n");
             sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
             sb.append("            throw _e.prependPath(\"").append(escapeJava(comp.jsonName())).append("\");\n");
@@ -325,7 +345,7 @@ final class MappingCodeGenerator {
             } else if (isFallibleExtraction(comp)) {
                 sb.append("_c").append(i);
             } else {
-                generateExtraction(sb, comp, "P_" + comp.name().toUpperCase() + ".apply(input)");
+                generateExtraction(sb, comp, deserApply(comp));
             }
             if (i < components.size() - 1) sb.append(",");
             sb.append("\n");
@@ -1022,7 +1042,9 @@ final class MappingCodeGenerator {
             List<JqMapperProcessor.ComponentInfo> components) {
         var names = new java.util.ArrayList<String>();
         for (var comp : components) {
-            if (!comp.hasJqField()) names.add(comp.jsonName());
+            if (comp.hasJqField()) continue;
+            names.add(comp.jsonName());
+            names.addAll(comp.aliases());
         }
         return names;
     }
@@ -1032,7 +1054,9 @@ final class MappingCodeGenerator {
             List<JqMapperProcessor.PropertyInfo> properties) {
         var names = new java.util.ArrayList<String>();
         for (var prop : properties) {
-            if (!prop.hasJqField()) names.add(prop.jsonName());
+            if (prop.hasJqField()) continue;
+            names.add(prop.jsonName());
+            names.addAll(prop.aliases());
         }
         return names;
     }
@@ -1099,6 +1123,31 @@ final class MappingCodeGenerator {
             sb.append("\"").append(escapeJava(required.get(i))).append("\"");
         }
         sb.append("), \"").append(simpleName).append("\");\n");
+    }
+
+    /**
+     * Sort bound fields in place for serialization: explicit wires first
+     * (validated), tail by declaration or alphabetically. Call only after
+     * all deserialization emission (constructor alignment depends on
+     * declaration order); only serialization follows. No-op when unordered.
+     */
+    private static <T> void sortSerView(java.util.List<T> items,
+                                        java.util.function.Function<T, String> jsonName,
+                                        io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order) {
+        if (order == null) return;
+        var rank = new java.util.HashMap<String, Integer>();
+        for (int i = 0; i < order.explicit().size(); i++) {
+            rank.putIfAbsent(order.explicit().get(i), i);
+        }
+        items.sort((a, b) -> {
+            Integer ra = rank.get(jsonName.apply(a));
+            Integer rb = rank.get(jsonName.apply(b));
+            if (ra != null && rb != null) return Integer.compare(ra, rb);
+            if (ra != null) return -1;
+            if (rb != null) return 1;
+            if (order.alphabetic()) return jsonName.apply(a).compareTo(jsonName.apply(b));
+            return 0;
+        });
     }
 
     /** Emit the unknown-key forward loop into generated fromJqValue. */
@@ -1274,7 +1323,7 @@ final class MappingCodeGenerator {
                                     JqMapperProcessor.AnyInfo anyInfo,
                                     JqMapperProcessor.CreatorInfo creator,
                                     JqMapperProcessor.BuilderInfo builder,
-                                    List<String> required) {
+                                    List<String> required, io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order) {
         var sb = new StringBuilder(1024);
 
         if (!packageName.isEmpty()) {
@@ -1499,10 +1548,15 @@ final class MappingCodeGenerator {
             } else {
                 // Single lookup: tryGet distinguishes absent keys (skip, keep
                 // field initializers) from explicit nulls (write) with one probe.
-                // K_ holds the interned key, so no equals runs at all.
+                // K_ holds the interned key, so no equals runs at all. Aliases
+                // fall back in priority order (literals: cold path, equals is fine).
                 optVar = "_v_" + prop.name();
                 sb.append("        var ").append(optVar).append(" = input.tryGet(K_")
                   .append(prop.name().toUpperCase()).append(");\n");
+                for (String alias : prop.aliases()) {
+                    sb.append("        if (").append(optVar).append(".isEmpty()) ").append(optVar)
+                      .append(" = input.tryGet(\"").append(escapeJava(alias)).append("\");\n");
+                }
                 writeExpr = buildExtraction(prop, optVar + ".get()");
             }
 
@@ -1541,7 +1595,9 @@ final class MappingCodeGenerator {
         sb.append("        return instance;\n");
         sb.append("    }\n\n");
 
-        // toJqValue: getter calls
+        // toJqValue: getter calls (serialization iterates the ordered view;
+        // binding above stays declaration-ordered for constructor alignment)
+        sortSerView(properties, JqMapperProcessor.PropertyInfo::jsonName, order);
         int activeCount = (int) properties.stream().filter(p -> !p.ignored()).count();
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
@@ -1949,7 +2005,7 @@ final class MappingCodeGenerator {
         return new JqMapperProcessor.PropertyInfo(
                 p.name(), p.jsonName(), p.typeName(), null, false, false,
                 null, null, false, "ALWAYS", p.converterClass(), false,
-                false, false, false, false, null, p.converterField());
+                false, false, false, false, null, p.converterField(), java.util.List.of());
     }
 
     /**

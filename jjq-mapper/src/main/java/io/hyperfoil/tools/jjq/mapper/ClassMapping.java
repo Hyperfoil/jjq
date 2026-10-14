@@ -100,7 +100,11 @@ final class ClassMapping<T> implements Mapping<T> {
         this.required = required;
         Set<String> known = new HashSet<>();
         for (FieldMapping field : deserFields) {
-            if (!field.usesProgram()) known.add(field.jsonName());
+            if (field.usesProgram()) continue;
+            known.add(field.jsonName());
+            if (field.aliases() != null) {
+                java.util.Collections.addAll(known, field.aliases());
+            }
         }
         this.knownKeys = known;
     }
@@ -187,6 +191,11 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("@JqName and @JqField conflict on '" + name
                         + "' of " + type.getName() + ": rename the key or query it, not both");
             }
+            String[] aliases = !ignored ? resolveAliases(rc, bridges) : null;
+            if (aliases != null && jqFieldAnnotation != null) {
+                throw new JqMapperException("@JqAlias and @JqField conflict on '" + name
+                        + "' of " + type.getName() + ": programs do not read keys");
+            }
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
@@ -253,7 +262,7 @@ final class ClassMapping<T> implements Mapping<T> {
             }
 
             fields[i] = new FieldMapping(name, jsonName, directFieldName, program, fieldType, genericType,
-                    getter, null, i, ignored, inclusion, converter, skipSer, skipDeser);
+                    getter, null, i, ignored, inclusion, converter, skipSer, skipDeser, aliases);
         }
 
         // Find and cache the canonical constructor + pre-cached spreader
@@ -272,6 +281,10 @@ final class ClassMapping<T> implements Mapping<T> {
         // (property creators bind their params like canonical fields;
         // delegating creators are handled as a scalar branch in fromJqValue).
         CreatorSpec creator = CreatorSpec.resolve(type, bridges);
+        // Serialization order: explicit wires first (unknown names fail
+        // fast), tail by declaration or alphabetically. Name-based binding
+        // (including positional index maps below) derives from this order.
+        fields = orderFields(type, fields, bridges);
         FieldMapping[] deser = (creator != null && !creator.delegating()) ? creator.params() : fields;
         MethodHandle useSpread = (creator != null && !creator.delegating()) ? creator.spreader() : spread;
         if (creator != null && !creator.delegating()) {
@@ -318,6 +331,9 @@ final class ClassMapping<T> implements Mapping<T> {
                 break;
             }
             nameMap.put(deser[i].jsonName(), i);
+            if (deser[i].aliases() != null) {
+                for (String alias : deser[i].aliases()) nameMap.putIfAbsent(alias, i);
+            }
         }
 
         if (polySer != null) {
@@ -469,6 +485,11 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw new JqMapperException("@JqName and @JqField conflict on '" + name
                         + "' of " + type.getName() + ": rename the key or query it, not both");
             }
+            String[] aliases = !ignored ? resolveAliases(field, bridges) : null;
+            if (aliases != null && jqFieldAnnotation != null) {
+                throw new JqMapperException("@JqAlias and @JqField conflict on '" + name
+                        + "' of " + type.getName() + ": programs do not read keys");
+            }
             if (!ignored && jqFieldAnnotation != null) {
                 directFieldName = null;
                 program = JqProgram.compile(jqFieldAnnotation.value());
@@ -576,7 +597,7 @@ final class ClassMapping<T> implements Mapping<T> {
             }
 
             fieldMappings.add(new FieldMapping(name, jsonName, directFieldName, program,
-                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser));
+                    fieldType, genericType, getter, setter, -1, ignored, inclusion, converter, skipSer, skipDeser, aliases));
             // Required markers collect here; program combinations are
             // validated after creator resolution below (mirrors forRecord).
             if (!ignored && TypeConverter.isRequired(field, bridges)) {
@@ -586,6 +607,8 @@ final class ClassMapping<T> implements Mapping<T> {
         }
 
         FieldMapping[] fields = fieldMappings.toArray(new FieldMapping[0]);
+        // Serialization order (same rule as records; binding stays name-based).
+        fields = orderFields(type, fields, bridges);
 
         // Builder binding takes over construction when configured (native
         // @JqBuilder or bridge pair); at most one construction strategy with
@@ -642,6 +665,9 @@ final class ClassMapping<T> implements Mapping<T> {
                 break;
             }
             nameMap.put(fields[i].jsonName(), i);
+            if (fields[i].aliases() != null) {
+                for (String alias : fields[i].aliases()) nameMap.putIfAbsent(alias, i);
+            }
         }
 
         // Known keys for the strict scan: property fields plus creator
@@ -953,7 +979,11 @@ final class ClassMapping<T> implements Mapping<T> {
             // @JqField program fields are excluded: their jsonName is not a lookup key.
             knownNames = new java.util.HashSet<>();
             for (FieldMapping field : fields) {
-                if (!field.usesProgram()) knownNames.add(field.jsonName());
+                if (field.usesProgram()) continue;
+                knownNames.add(field.jsonName());
+                if (field.aliases() != null) {
+                    java.util.Collections.addAll(knownNames, field.aliases());
+                }
             }
         }
         MethodHandle getter = null;
@@ -1205,6 +1235,10 @@ final class ClassMapping<T> implements Mapping<T> {
      * lookup entirely. Falls back to HashMap for out-of-order keys.</p>
      */
     private Object[] forEachExtract(JqObject obj, JqMapper mapper, FieldMapping[] bound) {
+        // Args align by constructor position, not array position: @JqOrder
+        // may reorder fields for serialization while construction stays
+        // canonical (identical when unordered — constructor positions always
+        // densely cover 0..n-1 here, so the array is exactly sized).
         Object[] args = new Object[bound.length];
         int n = obj.size();
         for (int i = 0; i < n; i++) {
@@ -1219,7 +1253,7 @@ final class ClassMapping<T> implements Mapping<T> {
                 if (mapped == null) return null; // unknown key — fall back to standard path
                 idx = mapped;
             }
-            args[idx] = convertIndexed(bound[idx], obj.valueAt(i), mapper);
+            args[bound[idx].constructorIndex()] = convertIndexed(bound[idx], obj.valueAt(i), mapper);
         }
         return args;
     }
@@ -1233,6 +1267,51 @@ final class ClassMapping<T> implements Mapping<T> {
         }
     }
 
+    /**
+     * Order fields for serialization: explicit wire names first (in listed
+     * order, unknown names fail fast), then the tail in declaration order
+     * (or wire-name order when alphabetic). Returns the same array when no
+     * order is configured. Deserialization is unaffected (name-based).
+     */
+    private static FieldMapping[] orderFields(Class<?> type, FieldMapping[] fields,
+                                              List<AnnotationBridge> bridges) {
+        JqOrder.Spec spec = null;
+        JqOrder nativeAnn = type.getAnnotation(JqOrder.class);
+        if (nativeAnn != null) {
+            spec = new JqOrder.Spec(List.of(nativeAnn.value()), nativeAnn.alphabetic());
+        } else {
+            for (AnnotationBridge bridge : bridges) {
+                spec = bridge.resolveOrder(type);
+                if (spec != null) break;
+            }
+        }
+        if (spec == null) return fields;
+        Set<String> known = new HashSet<>();
+        for (FieldMapping field : fields) known.add(field.jsonName());
+        for (String name : spec.explicit()) {
+            if (!known.contains(name)) {
+                throw new JqMapperException("@JqOrder on " + type.getName()
+                        + ": unknown wire name '" + name + "'");
+            }
+        }
+        Map<String, Integer> rank = new HashMap<>();
+        for (int i = 0; i < spec.explicit().size(); i++) {
+            rank.putIfAbsent(spec.explicit().get(i), i);
+        }
+        FieldMapping[] sorted = fields.clone();
+        final JqOrder.Spec effective = spec;
+        java.util.Arrays.sort(sorted, (a, b) -> {
+            Integer ra = rank.get(a.jsonName());
+            Integer rb = rank.get(b.jsonName());
+            if (ra != null && rb != null) return Integer.compare(ra, rb);
+            if (ra != null) return -1;
+            if (rb != null) return 1;
+            if (effective.alphabetic()) return a.jsonName().compareTo(b.jsonName());
+            return 0;
+        });
+        return sorted;
+    }
+
     /** Consult bridges for a field name override. Returns null if no bridge provides one. */
     private static String resolveBridgeFieldName(AnnotatedElement element, List<AnnotationBridge> bridges) {
         for (AnnotationBridge bridge : bridges) {
@@ -1240,6 +1319,33 @@ final class ClassMapping<T> implements Mapping<T> {
             if (name != null) return name;
         }
         return null;
+    }
+
+    /**
+     * Alternative accepted keys for a field (native {@code @JqAlias} first,
+     * then bridges in order). Null when none are declared. Empty entries
+     * are dropped; duplicates are harmless (first present wins either way).
+     */
+    private static String[] resolveAliases(AnnotatedElement element, List<AnnotationBridge> bridges) {
+        List<String> aliases = null;
+        JqAlias nativeAnn = element.getAnnotation(JqAlias.class);
+        if (nativeAnn != null) {
+            for (String alias : nativeAnn.value()) {
+                if (!alias.isEmpty()) {
+                    if (aliases == null) aliases = new ArrayList<>();
+                    aliases.add(alias);
+                }
+            }
+        }
+        for (AnnotationBridge bridge : bridges) {
+            for (String alias : bridge.resolveAliases(element)) {
+                if (!alias.isEmpty()) {
+                    if (aliases == null) aliases = new ArrayList<>();
+                    aliases.add(alias);
+                }
+            }
+        }
+        return aliases == null ? null : aliases.toArray(new String[0]);
     }
 
     /** True when a @JqName carries a non-empty wire name (empty means "no rename"). */

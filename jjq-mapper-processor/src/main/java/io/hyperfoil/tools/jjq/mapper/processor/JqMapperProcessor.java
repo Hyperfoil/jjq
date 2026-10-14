@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.mapper.processor;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.mapper.JqAccess;
 import io.hyperfoil.tools.jjq.mapper.JqAdapter;
+import io.hyperfoil.tools.jjq.mapper.JqAlias;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
 import io.hyperfoil.tools.jjq.mapper.JqBuilder;
@@ -13,6 +14,7 @@ import io.hyperfoil.tools.jjq.mapper.JqInclude;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqName;
 import io.hyperfoil.tools.jjq.mapper.JqNaming;
+import io.hyperfoil.tools.jjq.mapper.JqOrder;
 import io.hyperfoil.tools.jjq.mapper.JqRequired;
 import io.hyperfoil.tools.jjq.mapper.JqVisibility;
 
@@ -182,9 +184,18 @@ public class JqMapperProcessor extends AbstractProcessor {
                         || bridgeRequired(rc, recordType))) {
                     componentRequired.add(jsonName);
                 }
+                java.util.List<String> compAliases = resolveElementAliases(rc);
+                if (!compAliases.isEmpty() && jqField != null) {
+                    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@JqAlias and @JqField conflict on '" + name
+                                    + "': programs do not read keys",
+                            rc);
+                    return null;
+                }
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
                         isRecordType(rc.asType()),
-                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField));
+                        "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField,
+                        compAliases));
             }
         }
 
@@ -218,9 +229,11 @@ public class JqMapperProcessor extends AbstractProcessor {
         List<String> recordRequired = resolveRequiredWires(recordType, components, componentRequired,
                 recordCreator);
         if (recordRequired == null) return null;
+        JqOrder.Spec recordOrder = orderSpecFor(recordType);
+        if (!validateOrderSpec(recordType, components, ComponentInfo::jsonName, recordOrder)) return null;
         String source = MappingCodeGenerator.generate(
                 packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
-                recordAnyInfo, recordCreator, recordRequired);
+                recordAnyInfo, recordCreator, recordRequired, recordOrder);
 
         // Write the generated source file
         try {
@@ -387,10 +400,18 @@ public class JqMapperProcessor extends AbstractProcessor {
                     || bridgeRequired(field, null))) {
                 propertyRequired.add(jsonName);
             }
+            java.util.List<String> propAliases = resolveElementAliases(field);
+            if (!propAliases.isEmpty() && jqField != null) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqAlias and @JqField conflict on '" + name
+                                + "': programs do not read keys",
+                        field);
+                return null;
+            }
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
                     isRecordType(field.asType()),
-                    skipSer, skipDeser, isPrivate, isFinal, adapter, converterField));
+                    skipSer, skipDeser, isPrivate, isFinal, adapter, converterField, propAliases));
         }
 
         // Generate the mapping class
@@ -421,9 +442,11 @@ public class JqMapperProcessor extends AbstractProcessor {
         List<String> pojoRequired = resolvePojoRequiredWires(classType, properties, propertyRequired,
                 pojoCreator);
         if (pojoRequired == null) return null;
+        JqOrder.Spec pojoOrder = orderSpecFor(classType);
+        if (!validateOrderSpec(classType, properties, PropertyInfo::jsonName, pojoOrder)) return null;
         String source = MappingCodeGenerator.generateForClass(
                 packageName, classSourceName, classQualifiedName, mappingClassName, properties,
-                pojoAnyInfo, pojoCreator, pojoBuilder, pojoRequired);
+                pojoAnyInfo, pojoCreator, pojoBuilder, pojoRequired, pojoOrder);
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -940,6 +963,38 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
         }
         return false;
+    }
+
+    /**
+     * Aliases for an element: native {@code @JqAlias} first, then the bridge
+     * {@code @JsonAlias} mirror. Empty entries dropped. Never null.
+     */
+    private static java.util.List<String> resolveElementAliases(Element element) {
+        var aliases = new ArrayList<String>();
+        JqAlias nativeAnn = element.getAnnotation(JqAlias.class);
+        if (nativeAnn != null) {
+            for (String alias : nativeAnn.value()) {
+                if (!alias.isEmpty() && !aliases.contains(alias)) aliases.add(alias);
+            }
+        }
+        for (var mirror : element.getAnnotationMirrors()) {
+            if (!mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonAlias")) continue;
+            for (var entry : mirror.getElementValues().entrySet()) {
+                if (!entry.getKey().getSimpleName().contentEquals("value")) continue;
+                Object value = entry.getValue().getValue();
+                if (value instanceof java.util.List<?> items) {
+                    for (Object item : items) {
+                        Object itemValue = item instanceof javax.lang.model.element.AnnotationValue av
+                                ? av.getValue() : item;
+                        if (itemValue instanceof String s && !s.isEmpty() && !aliases.contains(s)) {
+                            aliases.add(s);
+                        }
+                    }
+                }
+            }
+        }
+        return aliases;
     }
 
     /**
@@ -1467,11 +1522,66 @@ public class JqMapperProcessor extends AbstractProcessor {
         return propertyRequired;
     }
 
-    /** Metadata for a single record component. */
+    /**
+     * Serialization order for a type: native {@code @JqOrder} first, then
+     * the bridge {@code @JsonPropertyOrder} mirror. Null when unconfigured
+     * (declaration order).
+     */
+    private JqOrder.Spec orderSpecFor(TypeElement type) {
+        JqOrder nativeAnn = type.getAnnotation(JqOrder.class);
+        if (nativeAnn != null) {
+            return new JqOrder.Spec(java.util.List.of(nativeAnn.value()), nativeAnn.alphabetic());
+        }
+        for (var mirror : type.getAnnotationMirrors()) {
+            if (!mirror.getAnnotationType().toString().endsWith(".JsonPropertyOrder")) continue;
+            var explicit = new ArrayList<String>();
+            boolean alphabetic = false;
+            for (var entry : mirror.getElementValues().entrySet()) {
+                String member = entry.getKey().getSimpleName().toString();
+                Object value = entry.getValue().getValue();
+                if (member.equals("value") && value instanceof java.util.List<?> items) {
+                    for (Object item : items) {
+                        Object itemValue =
+                                item instanceof javax.lang.model.element.AnnotationValue av
+                                        ? av.getValue() : item;
+                        if (itemValue instanceof String s) explicit.add(s);
+                    }
+                } else if (member.equals("alphabetic") && Boolean.TRUE.equals(value)) {
+                    alphabetic = true;
+                }
+            }
+            return new JqOrder.Spec(explicit, alphabetic);
+        }
+        return null;
+    }
+
+    /**
+     * Validate an order spec against bound wires (unknown names fail fast).
+     * Sorting itself happens at emission from the validated spec; binding
+     * lists stay declaration-ordered (constructor alignment depends on it).
+     */
+    private <T> boolean validateOrderSpec(TypeElement type, List<T> items,
+                                          java.util.function.Function<T, String> jsonName,
+                                          JqOrder.Spec spec) {
+        if (spec == null) return true;
+        var known = new java.util.HashSet<String>();
+        for (T item : items) known.add(jsonName.apply(item));
+        for (String name : spec.explicit()) {
+            if (!known.contains(name)) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqOrder on " + type.getQualifiedName()
+                                + ": unknown wire name '" + name + "'",
+                        type);
+                return false;
+            }
+        }
+        return true;
+    }
+
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                          String inclusion, String converterClass, boolean nestedRecord,
                          boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter,
-                         String converterField) {}
+                         String converterField, java.util.List<String> aliases) {}
 
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
@@ -1479,7 +1589,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                         String converterClass, boolean nestedRecord,
                         boolean skipSerialize, boolean skipDeserialize,
                         boolean privateField, boolean finalField, AdapterInfo adapter,
-                        String converterField) {}
+                        String converterField, java.util.List<String> aliases) {}
 
     /**
      * Shared {@code CONV_} field name per converter class, first-seen order

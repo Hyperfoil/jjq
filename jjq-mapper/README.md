@@ -242,7 +242,10 @@ record PcpMetric(String metricName, double metricValue) {}
 // Deserializes from: {"metric_name":"cpu", "metric_value":0.5}
 ```
 
-Strategies: `IDENTITY` (default), `SNAKE_CASE`.
+Strategies: `IDENTITY` (default), `SNAKE_CASE`, `LOWER_CAMEL_CASE`,
+`UPPER_CAMEL_CASE`, `UPPER_SNAKE_CASE`, `LOWER_CASE`, `KEBAB_CASE`,
+`LOWER_DOT_CASE`. Existing separators normalize to the target, so every
+strategy renders canonically.
 
 ### `@JqConverter` — custom type conversion
 ```java
@@ -414,7 +417,9 @@ semantics — hence the `Jq` prefix, the same reason Jakarta chose `Jsonb*`):
 | `@JsonAnyGetter` / `@JsonAnySetter` | `@JqAnyGetter` / `@JqAnySetter` | Same method-form contract |
 | `@JsonValue` / `@JsonCreator` on enums | `@JqName` on constants (+ `@JqEnum` for leniency) | Strict exact mapping; leniency via `@JqEnum`, custom policy via `@JqConverter` |
 | `@JsonTypeInfo` + `@JsonSubTypes` (`PROPERTY`+`NAME`) | `@JqType` (sealed) | Discriminator property + simple-name values (overridable via `@JqName` on the subtype); native wins over bridge; full `JsonTypeInfo` matrix out of scope |
-| `@JsonNaming` | `@JqNaming` | Strategy-based, fewer strategies |
+| `@JsonNaming` | `@JqNaming` | All 8 strategies mapped by class name (unknown stays identity) |
+| `@JsonAlias` | `@JqAlias` | First present wins on deser, primary serializes |
+| `@JsonPropertyOrder` | `@JqOrder` | Explicit wires first + alphabetic tail, ser only |
 | `TypeReference<T>` | `TypeToken<T>` | Anonymous-subclass capture, same idiom |
 
 ### Parity policy: jq wins on conflict

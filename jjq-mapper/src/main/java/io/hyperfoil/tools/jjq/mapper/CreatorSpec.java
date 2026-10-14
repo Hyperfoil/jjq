@@ -163,7 +163,7 @@ record CreatorSpec(MethodHandle spreader, FieldMapping[] params, boolean delegat
         }
         String jsonName = name.intern();
         return new FieldMapping(name, jsonName, jsonName, null, paramType, genericType,
-                null, null, index, false, JqInclude.Include.ALWAYS, converter, false, false);
+                null, null, index, false, JqInclude.Include.ALWAYS, converter, false, false, null);
     }
 
     /**

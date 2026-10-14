@@ -1222,6 +1222,130 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
     }
 
+    // ---- naming strategies ----
+
+    @Test
+    void namingTransforms() {
+        assertEquals("metric_name", JqNaming.Strategy.SNAKE_CASE.transform("metricName"));
+        assertEquals("http_url", JqNaming.Strategy.SNAKE_CASE.transform("httpURL"));
+        assertEquals("already_snake", JqNaming.Strategy.SNAKE_CASE.transform("already_snake"));
+        assertEquals("host_paths", JqNaming.Strategy.SNAKE_CASE.transform("host-paths"));
+        assertEquals("host-paths", JqNaming.Strategy.KEBAB_CASE.transform("hostPaths"));
+        assertEquals("host-paths", JqNaming.Strategy.KEBAB_CASE.transform("host_paths"));
+        assertEquals("host.paths", JqNaming.Strategy.LOWER_DOT_CASE.transform("hostPaths"));
+        assertEquals("METRIC_NAME", JqNaming.Strategy.UPPER_SNAKE_CASE.transform("metricName"));
+        assertEquals("url", JqNaming.Strategy.LOWER_CAMEL_CASE.transform("URL"));
+        assertEquals("urlValue", JqNaming.Strategy.LOWER_CAMEL_CASE.transform("URLValue"));
+        assertEquals("name", JqNaming.Strategy.LOWER_CAMEL_CASE.transform("Name"));
+        assertEquals("name", JqNaming.Strategy.LOWER_CAMEL_CASE.transform("name"));
+        assertEquals("Name", JqNaming.Strategy.UPPER_CAMEL_CASE.transform("name"));
+        assertEquals("HostPaths", JqNaming.Strategy.UPPER_CAMEL_CASE.transform("host_paths"));
+        assertEquals("hostpaths", JqNaming.Strategy.LOWER_CASE.transform("hostPaths"));
+        assertEquals("name", JqNaming.Strategy.IDENTITY.transform("name"));
+        assertNull(JqNaming.Strategy.SNAKE_CASE.transform(null));
+        assertEquals("", JqNaming.Strategy.KEBAB_CASE.transform(""));
+    }
+
+    @JqNaming(JqNaming.Strategy.KEBAB_CASE)
+    record KebabRecord(String hostPaths, int maxRetries) {}
+
+    @Test
+    void namingKebabRecordBinds() {
+        KebabRecord r = mapper.fromJqValue(
+                JqValues.parse("{\"host-paths\":\"a\",\"max-retries\":3}"), KebabRecord.class);
+        assertEquals("a", r.hostPaths());
+        assertEquals(3, r.maxRetries());
+        assertEquals("{\"host-paths\":\"a\",\"max-retries\":3}",
+                mapper.toJqValue(r).toJsonString());
+    }
+
+    // ---- @JqAlias (first present wins, primary serializes) ----
+
+    record Aliased(@JqAlias({"host_name", "hostname"}) String hostName, int port) {}
+
+    @Test
+    void aliasBindsEveryName() {
+        assertEquals("x", mapper.fromJqValue(
+                JqValues.parse("{\"hostName\":\"x\",\"port\":1}"), Aliased.class).hostName());
+        assertEquals("x", mapper.fromJqValue(
+                JqValues.parse("{\"host_name\":\"x\",\"port\":1}"), Aliased.class).hostName());
+        assertEquals("x", mapper.fromJqValue(
+                JqValues.parse("{\"hostname\":\"x\",\"port\":1}"), Aliased.class).hostName());
+        // Reordered docs fall through positional to the slow path, same result
+        assertEquals(2, mapper.fromJqValue(
+                JqValues.parse("{\"port\":2,\"hostname\":\"x\"}"), Aliased.class).port());
+    }
+
+    @Test
+    void aliasExplicitNullStaysNull() {
+        assertNull(mapper.fromJqValue(
+                JqValues.parse("{\"hostname\":null,\"port\":1}"), Aliased.class).hostName());
+    }
+
+    @Test
+    void aliasSerializesPrimary() {
+        assertEquals("{\"hostName\":\"x\",\"port\":1}",
+                mapper.toJqValue(new Aliased("x", 1)).toJsonString());
+        assertEquals(mapper.toJqValue(new Aliased("x", 1)).toJsonString(),
+                mapper.toJson(new Aliased("x", 1)));
+        assertBytesMatch(new Aliased("x", 1));
+    }
+
+    @Test
+    void aliasProgramConflictFailsFast() {
+        record BadAlias(@JqAlias("x") @JqField(".a") String a) {}
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"a\":\"x\"}"), BadAlias.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("@JqAlias"), e.getMessage());
+    }
+
+    @Test
+    void aliasKnownToStrictAndAnySetter() {
+        // Alias keys bind (never "unknown")...
+        Aliased a = strictMapper.fromJqValue(
+                JqValues.parse("{\"hostname\":\"x\",\"port\":1}"), Aliased.class);
+        assertEquals("x", a.hostName());
+        // ...while genuinely unknown keys still fail.
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"hostname\":\"x\",\"port\":1,\"zzz\":1}"), Aliased.class));
+        assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
+    }
+
+    // ---- @JqOrder (serialization order only) ----
+
+    @JqOrder({"id", "name"})
+    record Ordered(String name, String id, int age) {}
+
+    @JqOrder(alphabetic = true)
+    record AlphaOrdered(String zebra, String apple, String mango) {}
+
+    @JqOrder({"zzz"})
+    record BadOrder(String a) {}
+
+    @Test
+    void orderExplicitFirst() {
+        assertEquals("{\"id\":\"1\",\"name\":\"a\",\"age\":3}",
+                mapper.toJqValue(new Ordered("a", "1", 3)).toJsonString());
+        // Deser unaffected by order (reordered input binds)
+        assertEquals(new Ordered("a", "1", 3), mapper.fromJqValue(
+                JqValues.parse("{\"age\":3,\"name\":\"a\",\"id\":\"1\"}"), Ordered.class));
+    }
+
+    @Test
+    void orderAlphabeticTail() {
+        assertEquals("{\"apple\":\"a\",\"mango\":\"m\",\"zebra\":\"z\"}",
+                mapper.toJqValue(new AlphaOrdered("z", "a", "m")).toJsonString());
+    }
+
+    @Test
+    void orderUnknownFailsFast() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"a\":\"x\"}"), BadOrder.class));
+        assertFalse(e instanceof ShapeMismatchException, e.getClass().getName());
+        assertTrue(e.getMessage().contains("zzz"), e.getMessage());
+    }
+
     // ---- @JqRequired (absent keys fail, explicit nulls bind) ----
 
     record RequiredPoint(@JqRequired int x, int y) {}

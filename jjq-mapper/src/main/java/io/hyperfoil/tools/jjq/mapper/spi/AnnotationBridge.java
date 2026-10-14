@@ -209,6 +209,35 @@ public interface AnnotationBridge {
     }
 
     /**
+     * Alternative accepted JSON keys for a property ({@code @JsonAlias}
+     * equivalent). Empty when none are declared — bridges override it when
+     * their annotations are present.
+     *
+     * <p>The default implementation returns an empty list (no aliases);
+     * bridges override it when their annotations are present.</p>
+     *
+     * @param element the field or component to inspect
+     * @return the alias wire names, or empty when none
+     */
+    default java.util.List<String> resolveAliases(AnnotatedElement element) {
+        return java.util.List.of();
+    }
+
+    /**
+     * Explicit serialization order for a type ({@code @JsonPropertyOrder}
+     * equivalent): listed wire names first, then the remainder.
+     *
+     * <p>The default implementation returns {@code null} (declaration
+     * order); bridges override it when their annotations are present.</p>
+     *
+     * @param type the class to inspect
+     * @return the order spec, or {@code null} for declaration order
+     */
+    default io.hyperfoil.tools.jjq.mapper.JqOrder.Spec resolveOrder(Class<?> type) {
+        return null;
+    }
+
+    /**
      * Whether the element marks a required property (fail on absence).
      * Only called for direct lookups; program lookups fail fast instead.
      *

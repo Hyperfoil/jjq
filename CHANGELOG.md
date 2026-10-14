@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Naming, aliases, order: all 8 `JqNaming` strategies (existing
+  separators normalize), native `@JqAlias` (first present wins, primary
+  serializes, strict/any-setter aware) and `@JqOrder` (explicit wires
+  plus alphabetic tail, serialization only) with Jackson
+  `@JsonNaming`/`@JsonAlias`/`@JsonPropertyOrder` through the bridge
 - Required properties: native `@JqRequired` plus Jackson
   `@JsonProperty(required)` through the bridge — absent keys fail naming
   the first missing one, on reflection and generated paths (records,
