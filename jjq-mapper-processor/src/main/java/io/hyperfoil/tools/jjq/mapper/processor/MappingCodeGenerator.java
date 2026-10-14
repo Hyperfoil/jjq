@@ -15,8 +15,18 @@ final class MappingCodeGenerator {
      */
     static String generate(String packageName, String recordSimpleName, String recordQualifiedName,
                            String mappingClassName, List<JqMapperProcessor.ComponentInfo> components,
-                           JqMapperProcessor.AnyInfo anyInfo) {
+                           JqMapperProcessor.AnyInfo anyInfo, JqMapperProcessor.CreatorInfo creator) {
         var sb = new StringBuilder(1024);
+
+        // Deserialization source: creator params when a property creator is
+        // present (direct lookups by wire name), else the components.
+        // Delegating creators bind one scalar inline — no key emission at all.
+        boolean hasDelegating = creator != null && creator.delegating();
+        boolean hasPropertyCreator = creator != null && !creator.delegating();
+        List<JqMapperProcessor.ComponentInfo> deser =
+                creator != null ? creatorComponents(creator) : components;
+        String constructPrefix = hasPropertyCreator ? creator.constructPrefix()
+                : "new " + recordSimpleName + "(";
 
         // Package declaration
         if (!packageName.isEmpty()) {
@@ -29,11 +39,16 @@ final class MappingCodeGenerator {
         sb.append("import io.hyperfoil.tools.jjq.mapper.JqMapper;\n");
         sb.append("import io.hyperfoil.tools.jjq.value.*;\n");
         sb.append("\n");
-        // Additional imports for specific types
-        boolean needsBigDecimal = components.stream().anyMatch(c -> c.typeName().equals("java.math.BigDecimal"));
-        boolean needsList = components.stream().anyMatch(c -> c.typeName().startsWith("java.util.List"));
-        boolean needsMap = components.stream().anyMatch(c -> c.typeName().startsWith("java.util.Map"));
-        boolean needsOptional = components.stream().anyMatch(c -> c.typeName().startsWith("java.util.Optional"));
+        // Additional imports for specific types (deser params included:
+        // creator parameter types need the same imports as components)
+        boolean needsBigDecimal = components.stream().anyMatch(c -> c.typeName().equals("java.math.BigDecimal"))
+                || deser.stream().anyMatch(c -> c.typeName().equals("java.math.BigDecimal"));
+        boolean needsList = components.stream().anyMatch(c -> c.typeName().startsWith("java.util.List"))
+                || deser.stream().anyMatch(c -> c.typeName().startsWith("java.util.List"));
+        boolean needsMap = components.stream().anyMatch(c -> c.typeName().startsWith("java.util.Map"))
+                || deser.stream().anyMatch(c -> c.typeName().startsWith("java.util.Map"));
+        boolean needsOptional = components.stream().anyMatch(c -> c.typeName().startsWith("java.util.Optional"))
+                || deser.stream().anyMatch(c -> c.typeName().startsWith("java.util.Optional"));
         boolean needsArrayList = needsList;
 
         if (needsBigDecimal) sb.append("import java.math.BigDecimal;\n");
@@ -54,9 +69,11 @@ final class MappingCodeGenerator {
         sb.append("public final class ").append(mappingClassName);
         sb.append(" extends GeneratedMapping<").append(recordSimpleName).append("> {\n\n");
 
-        // Static JqProgram fields for each non-ignored component
-        for (var comp : components) {
-            if (!comp.ignored()) {
+        // Static JqProgram fields for each non-ignored deserialization
+        // component (creator params when a property creator is present).
+        // Delegating creators bind one scalar inline — no programs at all.
+        for (var comp : deser) {
+            if (!comp.ignored() && !hasDelegating) {
                 sb.append("    private static final JqProgram P_")
                   .append(comp.name().toUpperCase())
                   .append(" = JqProgram.compile(\"")
@@ -67,11 +84,11 @@ final class MappingCodeGenerator {
         // Positional fast path (record deser without key hashing/comparison):
         // eligible when every non-ignored component binds directly. Bindable
         // fields (direct, deserialized) match doc positions by key identity.
-        boolean positionalEligible = components.stream()
+        boolean positionalEligible = !hasDelegating && deser.stream()
                 .filter(c -> !c.ignored())
                 .allMatch(c -> !c.hasJqField());
         java.util.List<JqMapperProcessor.ComponentInfo> positional = positionalEligible
-                ? components.stream()
+                ? deser.stream()
                     .filter(c -> !c.ignored() && !c.skipDeserialize())
                     .toList()
                 : java.util.List.of();
@@ -83,10 +100,19 @@ final class MappingCodeGenerator {
               .append(escapeJava(comp.jsonName()))
               .append("\");\n");
         }
-        // Static converter fields for @JqConverter annotations
+        // Static converter fields for @JqConverter annotations (both
+        // serialization components and creator params share instances)
         var emittedConverters = new java.util.HashSet<String>();
         for (var comp : components) {
             if (!comp.ignored() && comp.converterClass() != null
+                    && emittedConverters.add(comp.converterField())) {
+                sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> ")
+                  .append(comp.converterField())
+                  .append(" = new ").append(comp.converterClass()).append("();\n");
+            }
+        }
+        for (var comp : deser) {
+            if (comp.converterClass() != null
                     && emittedConverters.add(comp.converterField())) {
                 sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> ")
                   .append(comp.converterField())
@@ -97,14 +123,18 @@ final class MappingCodeGenerator {
 
         // Known-field set for unknown-key forwarding (issue #87)
         if (anyInfo.hasSetter()) {
-            generateAnyKnownSet(sb, knownJsonNamesRecord(components));
-        } else {
-            generateStrictKnownSet(sb, knownJsonNamesRecord(components));
+            generateAnyKnownSet(sb, knownJsonNamesRecord(deser));
+        } else if (!hasDelegating) {
+            generateStrictKnownSet(sb, knownJsonNamesRecord(deser));
         }
         sb.append("\n");
 
         // fromJqValue method
-        generateFromJqValue(sb, recordSimpleName, components, anyInfo, positional);
+        if (hasDelegating) {
+            emitDelegatingFromJqValue(sb, recordSimpleName, deser.get(0), creator);
+        } else {
+            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator);
+        }
 
         // toJqValue method
         generateToJqValue(sb, recordSimpleName, components, anyInfo);
@@ -123,7 +153,9 @@ final class MappingCodeGenerator {
 
         // Helper methods for list conversion
         boolean needsListHelper = components.stream().anyMatch(c ->
-                !c.ignored() && c.typeName().startsWith("java.util.List<"));
+                !c.ignored() && c.typeName().startsWith("java.util.List<"))
+                || deser.stream().anyMatch(c ->
+                c.typeName().startsWith("java.util.List<"));
         if (needsListHelper) {
             sb.append("\n");
             sb.append("    @SuppressWarnings(\"unchecked\")\n");
@@ -148,10 +180,57 @@ final class MappingCodeGenerator {
         return sb.toString();
     }
 
+    /**
+     * Deserialization components for a property creator: one direct lookup
+     * per parameter (converters honored, programs never — creator params
+     * bind by wire name, mirroring the runtime {@code CreatorSpec}).
+     */
+    private static List<JqMapperProcessor.ComponentInfo> creatorComponents(
+            JqMapperProcessor.CreatorInfo creator) {
+        var list = new java.util.ArrayList<JqMapperProcessor.ComponentInfo>();
+        for (var p : creator.params()) {
+            list.add(new JqMapperProcessor.ComponentInfo(
+                    p.name(), p.jsonName(), p.typeName(),
+                    JqMapperProcessor.fieldProgram(p.jsonName()),
+                    false, false, "ALWAYS", p.converterClass(), false,
+                    false, false, null, p.converterField()));
+        }
+        return list;
+    }
+
+    /**
+     * Emit a delegating-creator {@code fromJqValue}: null stays lenient,
+     * objects are shape mismatches (the creator owns binding, so creator
+     * validation cannot be bypassed), and every other document converts to
+     * the single argument. Mirrors the runtime delegating branch.
+     */
+    private static void emitDelegatingFromJqValue(StringBuilder sb, String recordSimpleName,
+                                                  JqMapperProcessor.ComponentInfo arg,
+                                                  JqMapperProcessor.CreatorInfo creator) {
+        sb.append("    @Override\n");
+        sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
+        sb.append("        if (input == null || input instanceof JqNull) return null;\n");
+        sb.append("        if (input instanceof JqObject) throw mismatchObject(input, \"").append(recordSimpleName).append("\");\n");
+        sb.append("        try {\n");
+        sb.append("            return ").append(creator.constructPrefix());
+        generateExtraction(sb, arg, "input");
+        sb.append(");\n");
+        sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+        sb.append("            throw _e;\n");
+        sb.append("        } catch (RuntimeException _e) {\n");
+        sb.append("            throw new io.hyperfoil.tools.jjq.mapper.JqMapperException(\"Failed to invoke ")
+          .append(creator.label()).append(" for ").append(recordSimpleName).append("\", _e);\n");
+        sb.append("        }\n");
+        sb.append("    }\n\n");
+    }
+
     private static void generateFromJqValue(StringBuilder sb, String recordSimpleName,
                                              List<JqMapperProcessor.ComponentInfo> components,
                                              JqMapperProcessor.AnyInfo anyInfo,
-                                             List<JqMapperProcessor.ComponentInfo> positional) {
+                                             List<JqMapperProcessor.ComponentInfo> positional,
+                                             JqMapperProcessor.CreatorInfo creator) {
+        String constructPrefix = creator != null ? creator.constructPrefix()
+                : "new " + recordSimpleName + "(";
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
         emitObjectShapeGate(sb, recordSimpleName, components.stream()
@@ -172,7 +251,7 @@ final class MappingCodeGenerator {
             }
             sb.append(") {\n");
             sb.append("            try {\n");
-            sb.append("                return new ").append(recordSimpleName).append("(\n");
+            sb.append("                return ").append(constructPrefix).append("\n");
             int slot = 0;
             for (int i = 0; i < components.size(); i++) {
                 var comp = components.get(i);
@@ -186,7 +265,13 @@ final class MappingCodeGenerator {
                 sb.append("\n");
             }
             sb.append("                );\n");
-            sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+            if (creator != null) {
+                // Creator validation also fails here (not just conversion):
+                // fall through so the slow path reports the wrapped error.
+                sb.append("            } catch (RuntimeException _e) {\n");
+            } else {
+                sb.append("            } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+            }
             sb.append("                // Fall through for precise failure paths\n");
             sb.append("            }\n");
             sb.append("        }\n");
@@ -211,11 +296,22 @@ final class MappingCodeGenerator {
             sb.append("        }\n");
         }
 
-        if (anyInfo.hasSetter()) {
-            sb.append("        ").append(recordSimpleName).append(" instance = new ")
-              .append(recordSimpleName).append("(\n");
+        if (anyInfo.hasSetter() && creator == null) {
+            sb.append("        ").append(recordSimpleName).append(" instance = ")
+              .append(constructPrefix).append("\n");
+        } else if (anyInfo.hasSetter()) {
+            // Creator validation failures wrap (runtime parity) before
+            // unknown-key forwarding runs against the built instance.
+            sb.append("        ").append(recordSimpleName).append(" instance;\n");
+            sb.append("        try {\n");
+            sb.append("            instance = ").append(constructPrefix).append("\n");
+        } else if (creator != null) {
+            // Creator validation failures wrap (runtime parity); the
+            // positional path above already fell through on the same error.
+            sb.append("        try {\n");
+            sb.append("            return ").append(constructPrefix).append("\n");
         } else {
-            sb.append("        return new ").append(recordSimpleName).append("(\n");
+            sb.append("        return ").append(constructPrefix).append("\n");
         }
 
         for (int i = 0; i < components.size(); i++) {
@@ -234,12 +330,32 @@ final class MappingCodeGenerator {
 
         if (anyInfo.hasSetter()) {
             sb.append("        );\n");
+            if (creator != null) {
+                emitCreatorCatch(sb, recordSimpleName, creator.label());
+            }
             generateAnySetterForward(sb, "instance", anyInfo);
             sb.append("        return instance;\n");
         } else {
             sb.append("        );\n");
+            if (creator != null) {
+                emitCreatorCatch(sb, recordSimpleName, creator.label());
+            }
         }
         sb.append("    }\n\n");
+    }
+
+    /**
+     * Close a creator-construction try block: creator-thrown domain failures
+     * pass through with their own paths; everything else wraps with the
+     * creator kind (runtime parity).
+     */
+    private static void emitCreatorCatch(StringBuilder sb, String simpleName, String label) {
+        sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
+        sb.append("            throw _e;\n");
+        sb.append("        } catch (RuntimeException _e) {\n");
+        sb.append("            throw new io.hyperfoil.tools.jjq.mapper.JqMapperException(\"Failed to invoke ")
+          .append(label).append(" for ").append(simpleName).append("\", _e);\n");
+        sb.append("        }\n");
     }
 
     /**
@@ -1134,7 +1250,8 @@ final class MappingCodeGenerator {
      */
     static String generateForClass(String packageName, String classSimpleName, String classQualifiedName,
                                     String mappingClassName, List<JqMapperProcessor.PropertyInfo> properties,
-                                    JqMapperProcessor.AnyInfo anyInfo) {
+                                    JqMapperProcessor.AnyInfo anyInfo,
+                                    JqMapperProcessor.CreatorInfo creator) {
         var sb = new StringBuilder(1024);
 
         if (!packageName.isEmpty()) {
@@ -1169,13 +1286,26 @@ final class MappingCodeGenerator {
             }
         }
         // Interned key constants for direct tryGet lookups: canonical instances
-        // hit the JqObject identity fast path against parsed docs
+        // hit the JqObject identity fast path against parsed docs.
+        // Creator wire constants use a C_ prefix (a creator wire may equal a
+        // property name, and K_ is already taken by the property).
         for (var prop : properties) {
             if (!prop.ignored() && !prop.skipDeserialize() && !prop.hasJqField()) {
                 sb.append("    private static final String K_")
                   .append(prop.name().toUpperCase())
                   .append(" = JqValues.internFieldName(\"")
                   .append(escapeJava(prop.jsonName()))
+                  .append("\");\n");
+            }
+        }
+        java.util.Set<String> creatorWires = new java.util.HashSet<>();
+        if (creator != null && !creator.delegating()) {
+            for (var p : creator.params()) {
+                creatorWires.add(p.jsonName());
+                sb.append("    private static final String C_")
+                  .append(p.name().toUpperCase())
+                  .append(" = JqValues.internFieldName(\"")
+                  .append(escapeJava(p.jsonName()))
                   .append("\");\n");
             }
         }
@@ -1187,6 +1317,16 @@ final class MappingCodeGenerator {
                 sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> ")
                   .append(prop.converterField())
                   .append(" = new ").append(prop.converterClass()).append("();\n");
+            }
+        }
+        if (creator != null) {
+            for (var p : creator.params()) {
+                if (p.converterClass() != null
+                        && emittedPojoConverters.add(p.converterField())) {
+                    sb.append("    private static final io.hyperfoil.tools.jjq.mapper.ValueConverter<?> ")
+                      .append(p.converterField())
+                      .append(" = new ").append(p.converterClass()).append("();\n");
+                }
             }
         }
         // Cached field handles for the private-field fallback (issue #104):
@@ -1212,11 +1352,21 @@ final class MappingCodeGenerator {
             sb.append("        }\n");
             sb.append("    }\n");
         }
+        boolean hasPojoDelegating = creator != null && creator.delegating();
+        boolean hasPojoCreator = creator != null && !creator.delegating();
         if (anyInfo.hasSetter()) {
             generateAnyKnownSet(sb, knownJsonNamesPojo(properties));
-        } else {
+        } else if (hasPojoCreator) {
+            // Creator wires bind too (a creator-only name must not fail).
+            var strictNames = new java.util.ArrayList<>(knownJsonNamesPojo(properties));
+            for (var p : creator.params()) {
+                if (!strictNames.contains(p.jsonName())) strictNames.add(p.jsonName());
+            }
+            generateStrictKnownSet(sb, strictNames);
+        } else if (creator == null) {
             generateStrictKnownSet(sb, knownJsonNamesPojo(properties));
         }
+        // (Delegating creators mismatch objects before any scan — no set.)
         sb.append("\n");
 
         // Positional fast path (same eligibility rule as records): every
@@ -1232,15 +1382,45 @@ final class MappingCodeGenerator {
                     .toList()
                 : java.util.List.of();
 
-        // fromJqValue: no-arg constructor + setters
+        // fromJqValue: no-arg constructor + setters (or creator)
         sb.append("    @Override\n");
         sb.append("    public ").append(classSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
         emitObjectShapeGate(sb, classSimpleName, properties.stream()
                 .filter(p -> !p.ignored() && !p.skipDeserialize())
                 .anyMatch(JqMapperProcessor.PropertyInfo::hasJqField));
-        sb.append("        ").append(classSimpleName).append(" instance = new ").append(classSimpleName).append("();\n");
+        if (hasPojoDelegating) {
+            // Delegating creator owns binding: null stays lenient, objects
+            // mismatch (creator validation cannot be bypassed), scalars convert.
+            sb.append("        if (input == null || input instanceof JqNull) return null;\n");
+            sb.append("        if (input instanceof JqObject) throw mismatchObject(input, \"").append(classSimpleName).append("\");\n");
+            sb.append("        try {\n");
+            sb.append("            return ").append(creator.constructPrefix());
+            sb.append(buildExtraction(creatorProperty(creator.params().get(0)), "input"));
+            sb.append(");\n");
+            emitCreatorCatch(sb, classSimpleName, creator.label());
+        } else if (hasPojoCreator) {
+            for (int i = 0; i < creator.params().size(); i++) {
+                var p = creator.params().get(i);
+                sb.append("        var _carg").append(i).append(" = ")
+                  .append(buildExtraction(creatorProperty(p),
+                          "input.tryGet(C_" + p.name().toUpperCase() + ").orElse(JqNull.NULL)"))
+                  .append(";\n");
+            }
+            sb.append("        ").append(classSimpleName).append(" instance;\n");
+            sb.append("        try {\n");
+            sb.append("            instance = ")
+              .append(creator.constructPrefix());
+            for (int i = 0; i < creator.params().size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append("_carg").append(i);
+            }
+            sb.append(");\n");
+            emitCreatorCatch(sb, classSimpleName, creator.label());
+        } else {
+            sb.append("        ").append(classSimpleName).append(" instance = new ").append(classSimpleName).append("();\n");
+        }
 
-        if (!pojoPositional.isEmpty()) {
+        if (!pojoPositional.isEmpty() && creator == null) {
             // Ordered docs with exactly the bindable keys bind by index.
             // Anything else (reordered/extra/missing keys, non-objects) falls
             // through to the slow path, which also re-attributes failures.
@@ -1274,6 +1454,9 @@ final class MappingCodeGenerator {
 
         for (var prop : properties) {
             if (prop.ignored() || prop.skipDeserialize()) continue;
+            // Creator-bound properties are already set (the creator owns
+            // them); setters bind the rest. Mirrors the runtime rule.
+            if (creatorWires.contains(prop.jsonName())) continue;
             String writeExpr;
             String optVar;
             if (prop.hasJqField()) {
@@ -1717,6 +1900,20 @@ final class MappingCodeGenerator {
                 yield "mapper.fromJqValue(" + apply + ", " + typeLiteral(typeName) + ")";
             }
         };
+    }
+
+    /**
+     * Synthetic property for one creator parameter: direct lookup by wire
+     * name, honoring {@code @JqConverter}. Only the conversion-relevant
+     * fields are meaningful; the rest are dummies (creator args never read
+     * properties or write setters).
+     */
+    private static JqMapperProcessor.PropertyInfo creatorProperty(
+            JqMapperProcessor.CreatorParamInfo p) {
+        return new JqMapperProcessor.PropertyInfo(
+                p.name(), p.jsonName(), p.typeName(), null, false, false,
+                null, null, false, "ALWAYS", p.converterClass(), false,
+                false, false, false, false, null, p.converterField());
     }
 
     /**

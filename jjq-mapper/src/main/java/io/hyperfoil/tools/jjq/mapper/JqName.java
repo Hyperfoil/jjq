@@ -36,13 +36,16 @@ import java.lang.annotation.Target;
  * <p>On a type declaration, sets the polymorphic discriminator value for
  * that type inside a {@link JqType} family (default: the simple class name).</p>
  *
+ * <p>On a creator parameter ({@link JqCreator}), sets the JSON property
+ * name bound to that parameter (default: the real parameter name).</p>
+ *
  * @see JqField
  * @see JqNaming
  * @see JqMapped
  *
  * <p>Jackson equivalent: {@code @JsonProperty("x")} (rename only).</p>
  */
-@Target({ElementType.TYPE, ElementType.RECORD_COMPONENT, ElementType.FIELD})
+@Target({ElementType.TYPE, ElementType.RECORD_COMPONENT, ElementType.FIELD, ElementType.PARAMETER})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface JqName {
     /**

@@ -138,6 +138,33 @@ direct binding to a subtype stays lenient. Jackson interop: `@JsonTypeInfo`
 (`PROPERTY` + `NAME`, with `@JsonSubTypes`/`@JsonTypeName`) works through the
 bridge; native `@JqType` wins when both are present.
 
+### `@JqCreator` — custom construction
+
+```java
+record UserId(String value) {
+    @JqCreator
+    public static UserId parse(String value) {   // single unnamed param: binds scalars
+        if (value.isEmpty()) throw new IllegalArgumentException("empty");
+        return new UserId(value);
+    }
+}
+record User(String name, int age) {
+    @JqCreator
+    public static User create(@JqName("user_name") String name,   // named params: binds objects
+                              @JqName("age") int age) {
+        return new User(name, age);
+    }
+}
+```
+
+A single unnamed parameter delegates scalar documents; named parameters
+(`@JqName`, else real names) bind object documents. The creator takes over
+construction (objects mismatch a delegating creator and vice versa);
+failures wrap with the creator kind. POJOs work too (property creators
+construct, setters bind the rest; a creator removes the no-arg requirement).
+Jackson `@JsonCreator` (`DELEGATING`/`PROPERTIES`/default modes,
+`@JsonProperty` params) works through the bridge; native wins.
+
 ### `@JqEnum` — lenient enum parsing
 
 ```java

@@ -5,6 +5,7 @@ import io.hyperfoil.tools.jjq.mapper.JqAccess;
 import io.hyperfoil.tools.jjq.mapper.JqAdapter;
 import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
 import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+import io.hyperfoil.tools.jjq.mapper.JqCreator;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqInclude;
@@ -195,9 +196,12 @@ public class JqMapperProcessor extends AbstractProcessor {
         String mappingClassName = recordSourceName.replace('.', '_') + "_JqMapping";
         String qualifiedMappingName = packageName.isEmpty() ? mappingClassName : packageName + "." + mappingClassName;
 
+        CreatorInfo recordCreator = resolveCreatorInfo(recordType, recordSourceName, packageName,
+                convFields, usedConvNames);
+        if (recordCreator == null && hasCreatorMarker(recordType)) return null;
         String source = MappingCodeGenerator.generate(
                 packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
-                recordAnyInfo);
+                recordAnyInfo, recordCreator);
 
         // Write the generated source file
         try {
@@ -377,9 +381,12 @@ public class JqMapperProcessor extends AbstractProcessor {
         String mappingClassName = classSourceName.replace('.', '_') + "_JqMapping";
         String qualifiedMappingName = packageName.isEmpty() ? mappingClassName : packageName + "." + mappingClassName;
 
+        CreatorInfo pojoCreator = resolveCreatorInfo(classType, classSourceName, packageName,
+                convFields, usedConvNames);
+        if (pojoCreator == null && hasCreatorMarker(classType)) return null;
         String source = MappingCodeGenerator.generateForClass(
                 packageName, classSourceName, classQualifiedName, mappingClassName, properties,
-                pojoAnyInfo);
+                pojoAnyInfo, pojoCreator);
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -900,6 +907,166 @@ public class JqMapperProcessor extends AbstractProcessor {
     private JqNaming.Strategy resolveNamingStrategy(TypeElement type) {
         JqNaming naming = type.getAnnotation(JqNaming.class);
         return naming != null ? naming.value() : JqNaming.Strategy.IDENTITY;
+    }
+
+    /** Metadata for one creator parameter. */
+    record CreatorParamInfo(String name, String jsonName, String typeName,
+                            String converterClass, String converterField) {}
+
+    /**
+     * Metadata for a {@code @JqCreator}/{@code @JsonCreator} deserialization
+     * creator. Delegating creators (single unnamed parameter) bind scalar
+     * documents; property creators bind object documents by parameter name.
+     */
+    record CreatorInfo(boolean delegating, String label, String constructPrefix,
+                       List<CreatorParamInfo> params) {}
+
+    /**
+     * Resolve a {@code @JqCreator}/{@code @JsonCreator} deserialization
+     * creator on the mapped type (null when absent). Native wins; an invalid
+     * native creator reports a compile error (the caller bails when a marker
+     * is present but no info comes back). Mirrors the runtime
+     * {@code CreatorSpec} rules: single unnamed parameter delegates scalars,
+     * anything else binds properties by name.
+     */
+    private CreatorInfo resolveCreatorInfo(TypeElement type, String sourceSimpleName,
+            String mappingPackage,
+            java.util.Map<String, String> convFields, java.util.Set<String> usedConvNames) {
+        var nativeCandidates = new ArrayList<javax.lang.model.element.ExecutableElement>();
+        var bridgeCandidates = new ArrayList<javax.lang.model.element.ExecutableElement>();
+        for (Element enclosed : type.getEnclosedElements()) {
+            if (!(enclosed instanceof javax.lang.model.element.ExecutableElement executable)) continue;
+            var kind = executable.getKind();
+            if (kind != ElementKind.METHOD && kind != ElementKind.CONSTRUCTOR) continue;
+            if (executable.getAnnotation(JqCreator.class) != null) {
+                nativeCandidates.add(executable);
+            } else {
+                String mode = jsonCreatorMode(executable);
+                if (mode == null) continue;
+                int params = executable.getParameters().size();
+                if (mode.equals("PROPERTIES") && params >= 1) bridgeCandidates.add(executable);
+                else if (mode.equals("DELEGATING") && params == 1) bridgeCandidates.add(executable);
+                else if (mode.equals("DEFAULT") && params >= 1) bridgeCandidates.add(executable);
+            }
+        }
+        javax.lang.model.element.ExecutableElement executable;
+        boolean nativeAnn;
+        if (!nativeCandidates.isEmpty()) {
+            if (nativeCandidates.size() > 1) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JqCreator on " + type.getQualifiedName()
+                                + ": at most one creator per type",
+                        type);
+                return null;
+            }
+            executable = nativeCandidates.get(0);
+            nativeAnn = true;
+        } else if (!bridgeCandidates.isEmpty()) {
+            if (bridgeCandidates.size() > 1) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "@JsonCreator on " + type.getQualifiedName()
+                                + ": at most one creator per type",
+                        type);
+                return null;
+            }
+            executable = bridgeCandidates.get(0);
+            nativeAnn = false;
+        } else {
+            return null;
+        }
+        String label = nativeAnn ? "@JqCreator" : "@JsonCreator";
+        boolean isMethod = executable.getKind() == ElementKind.METHOD;
+        if (isMethod && !executable.getModifiers().contains(Modifier.PUBLIC)
+                && executable.getModifiers().contains(Modifier.PRIVATE)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    label + " on " + type.getQualifiedName()
+                            + ": the creator must be public (or non-private in this package)"
+                            + " — generated code shares the package, not the class",
+                    executable);
+            return null;
+        }
+        if (executable.getParameters().isEmpty()) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    label + " on " + type.getQualifiedName()
+                            + ": creators need at least one parameter",
+                    executable);
+            return null;
+        }
+        if (isMethod && !processingEnv.getTypeUtils()
+                .isAssignable(executable.getReturnType(), type.asType())) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    label + " on " + type.getQualifiedName()
+                            + ": the factory must return " + type.getSimpleName(),
+                    executable);
+            return null;
+        }
+        var params = new ArrayList<CreatorParamInfo>();
+        boolean anyExplicitName = false;
+        for (var param : executable.getParameters()) {
+            if (param.getAnnotation(JqField.class) != null) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        label + " on " + type.getQualifiedName()
+                                + ": @JqField programs are not supported on creator parameters"
+                                + " (rename with @JqName instead)",
+                        param);
+                return null;
+            }
+            if (param.getAnnotation(JqAdapter.class) != null) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        label + " on " + type.getQualifiedName()
+                                + ": @JqAdapter is not supported on creator parameters"
+                                + " (use @JqConverter instead)",
+                        param);
+                return null;
+            }
+            JqName jqNameAnn = param.getAnnotation(JqName.class);
+            String jqName = jqNameAnn != null && !jqNameAnn.value().isEmpty()
+                    ? jqNameAnn.value() : null;
+            String wire = jqName != null ? jqName : bridgeRename(param);
+            String paramName = param.getSimpleName().toString();
+            String jsonName = wire != null ? wire : paramName;
+            if (wire != null) anyExplicitName = true;
+            String paramType = param.asType().toString();
+            String converterClass = resolveConverterClass(param);
+            if (converterClass != null && !validateConverter(param, mappingPackage)) return null;
+            String converterField = converterClass != null
+                    ? converterFieldFor(convFields, usedConvNames, converterClass) : null;
+            params.add(new CreatorParamInfo(paramName, jsonName, paramType, converterClass, converterField));
+        }
+        boolean delegating = params.size() == 1 && !anyExplicitName;
+        String methodName = executable.getSimpleName().toString();
+        String constructPrefix = isMethod
+                ? sourceSimpleName + "." + methodName + "("
+                : "new " + sourceSimpleName + "(";
+        return new CreatorInfo(delegating, label, constructPrefix, List.copyOf(params));
+    }
+
+    /** True when the type carries any creator marker (bail check for failed resolution). */
+    private static boolean hasCreatorMarker(TypeElement type) {
+        for (Element enclosed : type.getEnclosedElements()) {
+            if (!(enclosed instanceof javax.lang.model.element.ExecutableElement executable)) continue;
+            var kind = executable.getKind();
+            if (kind != ElementKind.METHOD && kind != ElementKind.CONSTRUCTOR) continue;
+            if (executable.getAnnotation(JqCreator.class) != null) return true;
+            if (jsonCreatorMode(executable) != null) return true;
+        }
+        return false;
+    }
+
+    /** The {@code @JsonCreator} mode name (stringly-typed: no framework dependency). */
+    private static String jsonCreatorMode(javax.lang.model.element.ExecutableElement executable) {
+        for (var mirror : executable.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString()
+                    .equals("com.fasterxml.jackson.annotation.JsonCreator")) {
+                for (var entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().contentEquals("mode")) {
+                        return entry.getValue().getValue().toString();
+                    }
+                }
+                return "DEFAULT";
+            }
+        }
+        return null;
     }
 
     /** Metadata for a single record component. */

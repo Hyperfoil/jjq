@@ -231,21 +231,23 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public java.lang.reflect.Executable resolveJsonCreator(Class<?> type) {
-        // Delegating mode only (exactly one argument); property-based creators are out of scope.
+        // Jackson DEFAULT parity: single-arg (delegating) or multi-arg
+        // (properties); explicit PROPERTIES the same; explicit DELEGATING
+        // needs exactly one argument. Property-based creators bind via
+        // @JsonProperty/@JqName parameter names (CreatorSpec).
         for (java.lang.reflect.Method m : type.getMethods()) {
             JsonCreator ann = m.getAnnotation(JsonCreator.class);
-            if (ann != null && ann.mode() != JsonCreator.Mode.PROPERTIES
-                    && java.lang.reflect.Modifier.isStatic(m.getModifiers())
-                    && m.getParameterCount() == 1) {
-                return m;
-            }
+            if (ann == null || !java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+            if (ann.mode() == JsonCreator.Mode.PROPERTIES && m.getParameterCount() >= 1) return m;
+            if (ann.mode() == JsonCreator.Mode.DELEGATING && m.getParameterCount() == 1) return m;
+            if (ann.mode() == JsonCreator.Mode.DEFAULT && m.getParameterCount() >= 1) return m;
         }
         for (java.lang.reflect.Constructor<?> c : type.getDeclaredConstructors()) {
             JsonCreator ann = c.getAnnotation(JsonCreator.class);
-            if (ann != null && ann.mode() != JsonCreator.Mode.PROPERTIES
-                    && c.getParameterCount() == 1) {
-                return c;
-            }
+            if (ann == null) continue;
+            if (ann.mode() == JsonCreator.Mode.PROPERTIES && c.getParameterCount() >= 1) return c;
+            if (ann.mode() == JsonCreator.Mode.DELEGATING && c.getParameterCount() == 1) return c;
+            if (ann.mode() == JsonCreator.Mode.DEFAULT && c.getParameterCount() >= 1) return c;
         }
         return null;
     }

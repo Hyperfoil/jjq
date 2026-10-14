@@ -944,6 +944,146 @@ class JqMapperTest {
         assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
     }
 
+    // ---- @JqCreator (delegating + property-based, records and POJOs) ----
+
+    record UserId(String value) {
+        @JqCreator
+        public static UserId parse(String value) {
+            if (value == null || value.isEmpty()) throw new IllegalArgumentException("empty id");
+            return new UserId(value);
+        }
+    }
+
+    record UserIdHolder(UserId id, String name) {}
+
+    record ValidatedUser(String name, int age) {
+        @JqCreator
+        public static ValidatedUser create(@JqName("user_name") String name, @JqName("age") int age) {
+            if (age < 0) throw new IllegalArgumentException("negative age");
+            return new ValidatedUser(name, age);
+        }
+    }
+
+    static class NoDefault {
+        final String name;
+
+        @JqCreator
+        public NoDefault(@JqName("name") String name) { this.name = name; }
+
+        public String getName() { return name; }
+    }
+
+    static class Slug {
+        final String value;
+
+        private Slug(String value) { this.value = value; }
+
+        @JqCreator
+        public static Slug from(String value) { return new Slug(value); }
+
+        public String getValue() { return value; }
+    }
+
+    static class Greeter {
+        final String first;
+        final String last;
+        String nickname;
+
+        @JqCreator
+        public Greeter(@JqName("first") String first, @JqName("last") String last) {
+            this.first = first;
+            this.last = last;
+        }
+
+        public String getFirst() { return first; }
+        public String getLast() { return last; }
+        public String getNickname() { return nickname; }
+        public void setNickname(String nickname) { this.nickname = nickname; }
+    }
+
+    static class ZeroArg {
+        @JqCreator
+        public static ZeroArg create() { return new ZeroArg(); }
+    }
+
+    static class InstanceCreator {
+        @JqCreator
+        public InstanceCreator make(String name) { return new InstanceCreator(); }
+    }
+
+    @Test
+    void creatorDelegatingBindsScalar() {
+        assertEquals(new UserId("abc"), mapper.fromJqValue(JqValues.parse("\"abc\""), UserId.class));
+        assertEquals(new UserId("abc"), mapper.fromJqValue(
+                JqValues.parse("{\"id\":\"abc\",\"name\":\"x\"}"), UserIdHolder.class).id());
+    }
+
+    @Test
+    void creatorDelegatingRejectsObjectAndNull() {
+        assertThrows(ShapeMismatchException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"value\":\"abc\"}"), UserId.class));
+        assertNull(mapper.fromJqValue(JqNull.NULL, UserId.class));
+    }
+
+    @Test
+    void creatorFailureWraps() {
+        JqMapperException e = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("\"\""), UserId.class));
+        assertTrue(e.getMessage().contains("UserId"), e.getMessage());
+    }
+
+    @Test
+    void creatorPropertiesBindRenamedAndDefaulted() {
+        ValidatedUser u = mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), ValidatedUser.class);
+        assertEquals(new ValidatedUser("Ann", 3), u);
+        // Missing params stay lenient (same as canonical construction)
+        ValidatedUser d = mapper.fromJqValue(JqValues.parse("{\"user_name\":\"Bo\"}"), ValidatedUser.class);
+        assertEquals(new ValidatedUser("Bo", 0), d);
+        // Creator validation runs
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Cy\",\"age\":-1}"), ValidatedUser.class));
+    }
+
+    @Test
+    void creatorPropertiesSerializeViaAccessors() {
+        assertEquals("{\"name\":\"Ann\",\"age\":3}",
+                mapper.toJqValue(new ValidatedUser("Ann", 3)).toJsonString());
+    }
+
+    @Test
+    void creatorConstructorBindsPojoWithoutNoArg() {
+        NoDefault n = mapper.fromJqValue(JqValues.parse("{\"name\":\"x\"}"), NoDefault.class);
+        assertEquals("x", n.name);
+        assertEquals("{\"name\":\"x\"}", mapper.toJqValue(n).toJsonString());
+    }
+
+    @Test
+    void creatorDelegatingBindsPojoScalar() {
+        Slug s = mapper.fromJqValue(JqValues.parse("\"hi\""), Slug.class);
+        assertEquals("hi", s.value);
+        assertEquals("{\"value\":\"hi\"}", mapper.toJqValue(s).toJsonString());
+    }
+
+    @Test
+    void creatorPropertiesThenSettersOnPojo() {
+        Greeter g = mapper.fromJqValue(
+                JqValues.parse("{\"first\":\"A\",\"last\":\"B\",\"nickname\":\"Al\"}"), Greeter.class);
+        assertEquals("A", g.first);
+        assertEquals("B", g.last);
+        assertEquals("Al", g.nickname);
+    }
+
+    @Test
+    void creatorInvalidFailsFast() {
+        JqMapperException zero = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"a\":1}"), ZeroArg.class));
+        assertFalse(zero instanceof ShapeMismatchException, zero.getClass().getName());
+        JqMapperException instance = assertThrows(JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("\"x\""), InstanceCreator.class));
+        assertFalse(instance instanceof ShapeMismatchException, instance.getClass().getName());
+    }
+
     // ---- java.time (Phase B: ISO strings canonical, epoch accepted for instant-like) ----
 
     record TimeHolder(java.time.Instant instant, java.time.LocalDate date, java.time.LocalTime time,

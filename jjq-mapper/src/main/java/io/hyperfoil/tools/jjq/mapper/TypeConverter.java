@@ -349,13 +349,24 @@ public final class TypeConverter {
             }
             case RECORD -> {
                 if (value == null || value instanceof JqNull) yield null;
-                if (!(value instanceof JqObject)) {
+                if (!(value instanceof JqObject) && !hasDelegatingCreator(targetType, mapper)) {
                     throw mismatch(JqValue.Type.OBJECT, "object for " + targetType.getSimpleName(), value);
                 }
                 yield mapper.fromJqValue(value, targetType);
             }
             case DEFAULT -> toJava(value, targetType, genericType, mapper);
         };
+    }
+
+    /**
+     * True when the type declares a delegating (single unnamed-parameter)
+     * creator, which binds scalar documents. Lets scalar inputs reach the
+     * mapping instead of failing at the object shape gate. Resolution runs
+     * only on this cold path; the mapping itself caches the resolved creator.
+     */
+    private static boolean hasDelegatingCreator(Class<?> targetType, JqMapper mapper) {
+        CreatorSpec creator = CreatorSpec.resolve(targetType, mapper.bridges());
+        return creator != null && creator.delegating();
     }
 
     /**
@@ -1218,9 +1229,11 @@ public final class TypeConverter {
             }
             // A present @JqEnum takes over deserialization: bridge creators
             // are ignored for that enum (serialization accessors still apply).
+            // Enum creators stay single-arg (delegating): multi-arg bridge
+            // creators are not enum-applicable and read as absent here.
             if (creator == null && leniency == null) {
                 Executable e = bridge.resolveJsonCreator(type);
-                if (e != null) {
+                if (e != null && e.getParameterCount() == 1) {
                     validateCreator(e, type);
                     creator = e;
                 }
@@ -1342,7 +1355,7 @@ public final class TypeConverter {
         }
     }
 
-    /** Fail fast on malformed creator signatures (checked once per class). */
+    /** Fail fast on malformed enum-creator signatures (checked once per class). */
     private static void validateCreator(Executable e, Class<?> type) {
         if (e.getParameterCount() != 1
                 || (e instanceof Method m && !java.lang.reflect.Modifier.isStatic(m.getModifiers()))) {

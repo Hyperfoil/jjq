@@ -54,6 +54,14 @@ final class ClassMapping<T> implements Mapping<T> {
     // Polymorphic family membership for serialization: injects the discriminator
     // (null for standalone types — one predictable branch, no per-call lookup).
     private final PolySerInfo polySer;
+    // Deserialization creator (null for canonical construction). Property
+    // creators bind deserFields like canonical fields; delegating creators
+    // take the scalar branch in fromJqValue.
+    private final CreatorSpec creator;
+    // Fields bound on deserialization: creator params when a property creator
+    // is present, else the component/property fields. Serialization always
+    // uses {@link #fields}.
+    private final FieldMapping[] deserFields;
     // Every non-program lookup key (including ignored ones, which never fail):
     // the failOnUnknownProperties scan set. Built once; scanned only when strict.
     private final Set<String> knownKeys;
@@ -69,7 +77,8 @@ final class ClassMapping<T> implements Mapping<T> {
     private ClassMapping(Class<T> type, FieldMapping[] fields, MethodHandle constructor,
                          MethodHandle spreadConstructor,
                          Map<String, Integer> nameToIndex, boolean useForEachFastPath,
-                         AnyHandlers anyHandlers, PolySerInfo polySer) {
+                         AnyHandlers anyHandlers, PolySerInfo polySer,
+                         CreatorSpec creator, FieldMapping[] deserFields) {
         this.type = type;
         this.fields = fields;
         this.constructor = constructor;
@@ -78,8 +87,10 @@ final class ClassMapping<T> implements Mapping<T> {
         this.useForEachFastPath = useForEachFastPath;
         this.anyHandlers = anyHandlers;
         this.polySer = polySer;
+        this.creator = creator;
+        this.deserFields = deserFields;
         Set<String> known = new HashSet<>();
-        for (FieldMapping field : fields) {
+        for (FieldMapping field : deserFields) {
             if (!field.usesProgram()) known.add(field.jsonName());
         }
         this.knownKeys = known;
@@ -238,20 +249,27 @@ final class ClassMapping<T> implements Mapping<T> {
             throw new JqMapperException("Cannot find canonical constructor for record " + type.getName(), e);
         }
 
+        // Deserialization creator takes over construction when present
+        // (property creators bind their params like canonical fields;
+        // delegating creators are handled as a scalar branch in fromJqValue).
+        CreatorSpec creator = CreatorSpec.resolve(type, bridges);
+        FieldMapping[] deser = (creator != null && !creator.delegating()) ? creator.params() : fields;
+        MethodHandle useSpread = (creator != null && !creator.delegating()) ? creator.spreader() : spread;
+
         // Build fast-path name→index map if all fields use direct field names
         // (no @JqField overrides, no @JqIgnore)
         boolean canUseFastPath = true;
-        Map<String, Integer> nameMap = new HashMap<>(fields.length);
-        for (int i = 0; i < fields.length; i++) {
-            if (fields[i].isIgnored() || fields[i].usesProgram() || fields[i].skipDeserialize()) {
+        Map<String, Integer> nameMap = new HashMap<>(deser.length);
+        for (int i = 0; i < deser.length; i++) {
+            if (deser[i].isIgnored() || deser[i].usesProgram() || deser[i].skipDeserialize()) {
                 canUseFastPath = false;
                 break;
             }
-            nameMap.put(fields[i].jsonName(), i);
+            nameMap.put(deser[i].jsonName(), i);
         }
 
         if (polySer != null) {
-            for (FieldMapping field : fields) {
+            for (FieldMapping field : deser) {
                 if (!field.isIgnored() && field.jsonName().equals(polySer.discriminator())) {
                     throw new JqMapperException("Field '" + field.jsonName() + "' of " + type.getName()
                             + " collides with the polymorphic discriminator '"
@@ -260,9 +278,10 @@ final class ClassMapping<T> implements Mapping<T> {
             }
         }
 
-        return new ClassMapping<>(type, fields, ctor, spread,
+        return new ClassMapping<>(type, fields, ctor, useSpread,
                 canUseFastPath ? nameMap : null, canUseFastPath,
-                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer);
+                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
+                creator, deser);
     }
 
     /**
@@ -295,14 +314,19 @@ final class ClassMapping<T> implements Mapping<T> {
                 });
         MethodHandles.Lookup lookup = lookupFor.apply(type);
 
-        // Find no-arg constructor
-        MethodHandle ctor;
+        // Find no-arg constructor (optional when a creator takes over
+        // construction: delegating creators bind scalars, property creators
+        // construct from their params and setters bind the rest).
+        CreatorSpec creator = CreatorSpec.resolve(type, bridges);
+        MethodHandle ctor = null;
         try {
             Constructor<T> noArgCtor = type.getDeclaredConstructor();
             noArgCtor.setAccessible(true);
             ctor = lookup.unreflectConstructor(noArgCtor);
         } catch (NoSuchMethodException e) {
-            throw new JqMapperException("POJO " + type.getName() + " requires a no-arg constructor", e);
+            if (creator == null) {
+                throw new JqMapperException("POJO " + type.getName() + " requires a no-arg constructor", e);
+            }
         } catch (IllegalAccessException e) {
             throw new JqMapperException("Cannot access no-arg constructor of " + type.getName(), e);
         }
@@ -502,8 +526,19 @@ final class ClassMapping<T> implements Mapping<T> {
             nameMap.put(fields[i].jsonName(), i);
         }
 
+        // Known keys for the strict scan: property fields plus creator
+        // params (a creator-only name still binds, so it must not fail).
+        FieldMapping[] deser;
+        if (creator != null && !creator.delegating()) {
+            deser = new FieldMapping[creator.params().length + fields.length];
+            System.arraycopy(creator.params(), 0, deser, 0, creator.params().length);
+            System.arraycopy(fields, 0, deser, creator.params().length, fields.length);
+        } else {
+            deser = fields;
+        }
+
         if (polySer != null) {
-            for (FieldMapping field : fields) {
+            for (FieldMapping field : deser) {
                 if (!field.isIgnored() && field.jsonName().equals(polySer.discriminator())) {
                     throw new JqMapperException("Field '" + field.jsonName() + "' of " + type.getName()
                             + " collides with the polymorphic discriminator '"
@@ -514,7 +549,8 @@ final class ClassMapping<T> implements Mapping<T> {
 
         return new ClassMapping<>(type, fields, ctor, null,
                 canUseFastPath ? nameMap : null, canUseFastPath,
-                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer);
+                resolveAnyHandlers(type, fields, anyMethods[0], anyMethods[1], lookup), polySer,
+                creator, deser);
     }
 
     /** Find a getter method for a field: getFieldName() or isFieldName() for booleans. Returns the Method (unreflect at site). */
@@ -584,6 +620,22 @@ final class ClassMapping<T> implements Mapping<T> {
             return fromJqValuePojo(value, mapper);
         }
 
+        // Delegating creator takes over binding (Jackson parity): scalars
+        // convert to the argument; objects are shape mismatches even when
+        // they match the component shape (else creator validation would be
+        // bypassable). Null stays lenient like the convert-level rule.
+        // No path prepending: the whole document is the argument.
+        if (creator != null && creator.delegating()) {
+            if (value == null || value instanceof JqNull) return null;
+            if (value instanceof JqObject) {
+                throw TypeConverter.mismatch(JqValue.Type.OBJECT,
+                        "object for " + type.getSimpleName(), value);
+            }
+            Object[] args = new Object[1];
+            args[0] = creator.params()[0].convert(value, mapper);
+            return invokeCreator(creator, args);
+        }
+
         // Records and @JqMapped POJOs bind from objects (null stays lenient).
         // Scalar/array documents with only direct field lookups are shape mismatches;
         // @JqField programs may legitimately extract from any shape, so those stay lenient.
@@ -591,17 +643,12 @@ final class ClassMapping<T> implements Mapping<T> {
             throw TypeConverter.mismatch(JqValue.Type.OBJECT, "object for " + type.getSimpleName(), value);
         }
 
-        // Record path: positional constructor
+        // Record path: positional constructor (or property creator).
         // Fast path: single-pass iteration over the object's entries.
-        if (useForEachFastPath && value instanceof JqObject obj && obj.size() == fields.length) {
-            Object[] args = forEachExtract(obj, mapper);
+        if (useForEachFastPath && value instanceof JqObject obj && obj.size() == deserFields.length) {
+            Object[] args = forEachExtract(obj, mapper, deserFields);
             if (args != null) {
-                T created;
-                try {
-                    created = (T) spreadConstructor.invoke(args);
-                } catch (Throwable e) {
-                    throw new JqMapperException("Failed to construct " + type.getName(), e);
-                }
+                T created = invokeCreatorOrConstruct(args);
                 applyAnySetter(created, obj);
                 return created;
             }
@@ -617,9 +664,9 @@ final class ClassMapping<T> implements Mapping<T> {
         }
 
         // Standard record path: per-field extraction via get() or JqProgram
-        Object[] args = new Object[fields.length];
-        for (int i = 0; i < fields.length; i++) {
-            FieldMapping field = fields[i];
+        Object[] args = new Object[deserFields.length];
+        for (int i = 0; i < deserFields.length; i++) {
+            FieldMapping field = deserFields[i];
             try {
                 JqValue extracted = field.extract(value);
                 args[field.constructorIndex()] = field.convert(extracted, mapper);
@@ -627,14 +674,47 @@ final class ClassMapping<T> implements Mapping<T> {
                 throw e.prependPath(field.jsonName());
             }
         }
-        T created;
-        try {
-            created = (T) spreadConstructor.invoke(args);
-        } catch (Throwable e) {
-            throw new JqMapperException("Failed to construct " + type.getName(), e);
-        }
+        T created = invokeCreatorOrConstruct(args);
         applyAnySetter(created, value);
         return created;
+    }
+
+    /**
+     * Invoke the property creator (or the canonical constructor) with
+     * extracted arguments. Creator-thrown failures wrap with the creator
+     * kind; pass-through keeps paths built inside intact.
+     */
+    @SuppressWarnings("unchecked")
+    private T invokeCreatorOrConstruct(Object[] args) {
+        try {
+            return (T) spreadConstructor.invoke(args);
+        } catch (JqMapperException e) {
+            // Creator bodies throw domain failures with their own paths;
+            // canonical constructors keep the historical wrap.
+            if (creator != null) throw e;
+            throw new JqMapperException("Failed to construct " + type.getName(), e);
+        } catch (Throwable e) {
+            if (creator != null) {
+                throw new JqMapperException("Failed to invoke " + creator.label()
+                        + " for " + type.getName(), e);
+            }
+            throw new JqMapperException("Failed to construct " + type.getName(), e);
+        }
+    }
+
+    /**
+     * Invoke a delegating creator with its single converted argument.
+     */
+    @SuppressWarnings("unchecked")
+    private T invokeCreator(CreatorSpec spec, Object[] args) {
+        try {
+            return (T) spec.spreader().invoke(args);
+        } catch (JqMapperException e) {
+            throw e;
+        } catch (Throwable e) {
+            throw new JqMapperException("Failed to invoke " + spec.label()
+                    + " for " + type.getName(), e);
+        }
     }
 
     /** True when every mapped field uses a direct name lookup (no @JqField programs). */
@@ -837,6 +917,20 @@ final class ClassMapping<T> implements Mapping<T> {
     /** POJO deserialization: no-arg constructor + setter calls. */
     @SuppressWarnings("unchecked")
     private T fromJqValuePojo(JqValue value, JqMapper mapper) {
+        // Delegating creator takes over binding (Jackson parity): scalars
+        // convert to the argument; objects mismatch even when setters could
+        // bind them (else creator validation would be bypassable). Null stays
+        // lenient. No path prepending: the whole document is the argument.
+        if (creator != null && creator.delegating()) {
+            if (value == null || value instanceof JqNull) return null;
+            if (value instanceof JqObject) {
+                throw TypeConverter.mismatch(JqValue.Type.OBJECT,
+                        "object for " + type.getSimpleName(), value);
+            }
+            Object[] args = new Object[1];
+            args[0] = creator.params()[0].convert(value, mapper);
+            return invokeCreator(creator, args);
+        }
         // Scalar/array documents with only direct field lookups are shape mismatches
         // (same rule as the record path above; @JqField programs stay lenient).
         if (value != null && !(value instanceof JqNull) && !(value instanceof JqObject) && allDirectFields()) {
@@ -849,13 +943,34 @@ final class ClassMapping<T> implements Mapping<T> {
             failOnUnknown(strictObj);
         }
         T instance;
-        try {
-            instance = (T) constructor.invoke();
-        } catch (Throwable e) {
-            throw new JqMapperException("Failed to construct " + type.getName(), e);
+        Set<String> creatorCovered = null;
+        if (creator != null && !creator.delegating()) {
+            // Property creator constructs; setters bind the rest.
+            Object[] args = new Object[creator.params().length];
+            for (int i = 0; i < creator.params().length; i++) {
+                FieldMapping param = creator.params()[i];
+                try {
+                    JqValue extracted = param.extract(value);
+                    args[param.constructorIndex()] = param.convert(extracted, mapper);
+                } catch (JqMapperException e) {
+                    throw e.prependPath(param.jsonName());
+                }
+            }
+            instance = invokeCreator(creator, args);
+            creatorCovered = new java.util.HashSet<>();
+            for (FieldMapping param : creator.params()) creatorCovered.add(param.jsonName());
+        } else {
+            try {
+                instance = (T) constructor.invoke();
+            } catch (Throwable e) {
+                throw new JqMapperException("Failed to construct " + type.getName(), e);
+            }
         }
         for (FieldMapping field : fields) {
             if (field.isIgnored() || field.skipDeserialize() || !field.hasSetter()) continue;
+            // Creator-bound properties are already set (JSON parity: the
+            // creator owns them, setters bind the rest).
+            if (creatorCovered != null && creatorCovered.contains(field.jsonName())) continue;
             // Absent keys leave field initializers / constructor defaults in place
             // (Jackson-compatible). Only direct field lookups can prove absence;
             // @JqField program expressions keep write-always semantics.
@@ -906,22 +1021,22 @@ final class ClassMapping<T> implements Mapping<T> {
      * the field at position i (common for in-order JSON). If yes, avoids the HashMap
      * lookup entirely. Falls back to HashMap for out-of-order keys.</p>
      */
-    private Object[] forEachExtract(JqObject obj, JqMapper mapper) {
-        Object[] args = new Object[fields.length];
+    private Object[] forEachExtract(JqObject obj, JqMapper mapper, FieldMapping[] bound) {
+        Object[] args = new Object[bound.length];
         int n = obj.size();
         for (int i = 0; i < n; i++) {
             String key = obj.keyAt(i);
             // Positional-first: if key matches the field at position i, use it directly.
             // String identity check first (interned keys), then equals fallback.
             int idx;
-            if (key == fields[i].jsonName() || key.equals(fields[i].jsonName())) {
+            if (key == bound[i].jsonName() || key.equals(bound[i].jsonName())) {
                 idx = i;
             } else {
                 Integer mapped = nameToIndex.get(key);
                 if (mapped == null) return null; // unknown key — fall back to standard path
                 idx = mapped;
             }
-            args[idx] = convertIndexed(fields[idx], obj.valueAt(i), mapper);
+            args[idx] = convertIndexed(bound[idx], obj.valueAt(i), mapper);
         }
         return args;
     }

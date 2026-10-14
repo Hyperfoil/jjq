@@ -175,10 +175,11 @@ public interface AnnotationBridge {
     }
 
     /**
-     * Resolve a {@code @JsonCreator}-equivalent single-argument factory
-     * (static method or constructor) for deserializing a scalar into the type.
-     * Only delegating mode (exactly one argument) is supported; property-based
-     * creators are out of scope.
+     * Resolve a {@code @JsonCreator}-equivalent factory (static method or
+     * constructor) for the type. Single-argument executables delegate
+     * scalars; multi-argument executables bind properties by parameter
+     * name (see {@code CreatorSpec}). Enum consumers accept single-arg
+     * executables only.
      *
      * <p>The default implementation returns {@code null} (not supported);
      * bridges override it when their annotations are present.</p>

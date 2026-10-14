@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- Deserialization creators: native `@JqCreator` plus Jackson
+  `@JsonCreator` through the bridge (`DELEGATING`/`PROPERTIES`/default
+  modes, `@JsonProperty` params) — single unnamed parameters bind
+  scalars, named parameters bind objects with validation running inside;
+  records, POJOs (creator removes the no-arg requirement, setters bind
+  the rest), reflection and generated paths alike
 - Opt-in `failOnUnknownProperties` on the mapper builder (Jackson
   parity, default stays lenient): unknown keys fail as
   `Unrecognized field "z" for Point` pathed at the key, on reflection

@@ -898,6 +898,120 @@ class JqMapperProcessorTest {
     }
 
     @Test
+    void generatedMapping_creatorDelegatingRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqCreator;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Tag(String value) {
+                    @JqCreator
+                    public static Tag parse(String value) {
+                        if (value == null || value.isEmpty()) throw new IllegalArgumentException("empty");
+                        return new Tag(value);
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Tag", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object tag = mapper.fromJqValue(JqValues.parse("\"abc\""), recordClass);
+        assertEquals("abc", recordClass.getMethod("value").invoke(tag));
+        // Objects mismatch (creator owns binding); nulls stay lenient
+        assertThrows(io.hyperfoil.tools.jjq.mapper.ShapeMismatchException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"value\":\"abc\"}"), recordClass));
+        assertNull(mapper.fromJqValue(
+                io.hyperfoil.tools.jjq.value.JqNull.NULL, recordClass));
+        // Ser still uses accessors; tree/String/bytes agree
+        assertEquals("{\"value\":\"abc\"}", mapper.toJqValue(tag).toJsonString());
+        assertEquals(mapper.toJqValue(tag).toJsonString(), mapper.toJson(tag));
+        assertArrayEquals(JqValues.serializeToBytes(mapper.toJqValue(tag)), mapper.toJsonBytes(tag));
+    }
+
+    @Test
+    void generatedMapping_creatorPropertiesRecord() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqCreator;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                @JqMapped
+                public record VUser(String name, int age) {
+                    @JqCreator
+                    public static VUser create(@JqName("user_name") String name,
+                                               @JqName("age") int age) {
+                        if (age < 0) throw new IllegalArgumentException("negative");
+                        return new VUser(name, age);
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.VUser", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object u = mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), recordClass);
+        assertEquals("Ann", recordClass.getMethod("name").invoke(u));
+        assertEquals(3, recordClass.getMethod("age").invoke(u));
+        // Reordered keys fall through positional to the slow path
+        Object r = mapper.fromJqValue(
+                JqValues.parse("{\"age\":4,\"user_name\":\"Bo\"}"), recordClass);
+        assertEquals("Bo", recordClass.getMethod("name").invoke(r));
+        // Creator validation runs; missing params stay lenient
+        assertThrows(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () ->
+                mapper.fromJqValue(JqValues.parse("{\"user_name\":\"Cy\",\"age\":-1}"), recordClass));
+        Object d = mapper.fromJqValue(JqValues.parse("{\"user_name\":\"De\"}"), recordClass);
+        assertEquals(0, recordClass.getMethod("age").invoke(d));
+        // Ser uses accessors under component names
+        assertEquals("{\"name\":\"Ann\",\"age\":3}", mapper.toJqValue(u).toJsonString());
+    }
+
+    @Test
+    void generatedMapping_creatorPojo() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqCreator;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                @JqMapped
+                public class CPojo {
+                    public final String first;
+                    public final String last;
+                    public String nickname;
+
+                    @JqCreator
+                    public CPojo(@JqName("first") String first, @JqName("last") String last) {
+                        this.first = first;
+                        this.last = last;
+                    }
+
+                    public String getNickname() { return nickname; }
+                    public void setNickname(String nickname) { this.nickname = nickname; }
+                }
+                """;
+
+        Class<?> pojoClass = compileAndLoad("test.CPojo", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object p = mapper.fromJqValue(
+                JqValues.parse("{\"first\":\"A\",\"last\":\"B\",\"nickname\":\"Al\"}"), pojoClass);
+        assertEquals("A", pojoClass.getField("first").get(p));
+        assertEquals("B", pojoClass.getField("last").get(p));
+        assertEquals("Al", pojoClass.getField("nickname").get(p));
+        // Ser covers creator-built and setter-bound fields alike
+        String json = mapper.toJqValue(p).toJsonString();
+        assertTrue(json.contains("\"first\":\"A\""), json);
+        assertTrue(json.contains("\"nickname\":\"Al\""), json);
+    }
+
+    @Test
     void generatedMapping_appendJsonBytes_doubleAndDecimal() throws Exception {
         String source = """
                 package test;

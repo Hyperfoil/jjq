@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.mapper.jackson;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -502,5 +503,50 @@ class JacksonAnnotationBridgeTest {
         // unannotated (interfaces cannot bind → fail fast as today).
         assertThrows(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () -> mapper.fromJqValue(
                 JqValues.parse("{\"circle\":{\"radius\":1.5}}"), WrappedShape.class));
+    }
+
+    // ---- @JsonCreator on records and POJOs ----
+
+    record JackUserId(String value) {
+        @JsonCreator
+        public static JackUserId parse(String value) {
+            return new JackUserId(value);
+        }
+    }
+
+    record JackUser(String name, int age) {
+        @JsonCreator
+        public static JackUser create(@JsonProperty("user_name") String name,
+                                      @JsonProperty("age") int age) {
+            return new JackUser(name, age);
+        }
+    }
+
+    static class JackPojo {
+        final String name;
+
+        @JsonCreator
+        public JackPojo(@JsonProperty("name") String name) { this.name = name; }
+
+        public String getName() { return name; }
+    }
+
+    @Test
+    void jsonCreatorDelegatingBindsScalar() {
+        assertEquals(new JackUserId("abc"),
+                mapper.fromJqValue(JqValues.parse("\"abc\""), JackUserId.class));
+    }
+
+    @Test
+    void jsonCreatorPropertiesBindRenamed() {
+        assertEquals(new JackUser("Ann", 3), mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), JackUser.class));
+    }
+
+    @Test
+    void jsonCreatorConstructorBindsPojo() {
+        JackPojo p = mapper.fromJqValue(JqValues.parse("{\"name\":\"x\"}"), JackPojo.class);
+        assertEquals("x", p.name);
+        assertEquals("{\"name\":\"x\"}", mapper.toJqValue(p).toJsonString());
     }
 }
