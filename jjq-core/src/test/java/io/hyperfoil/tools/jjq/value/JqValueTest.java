@@ -1692,6 +1692,67 @@ class JqValueTest {
         }
     }
 
+    // ---- Duplicate-key policy for strict parsing (issue #148) ----
+
+    private static ParseOptions keepLast() {
+        return ParseOptions.defaults()
+                .withDuplicatePolicy(ParseOptions.DuplicatePolicy.KEEP_LAST);
+    }
+
+    @Test
+    void strictKeepLastWinsWithFirstSeenOrder() {
+        assertEquals("{\"a\":3,\"b\":2}", JqValues.parseStrict(
+                "{\"a\":1,\"b\":2,\"a\":3}", keepLast()).toJsonString());
+        assertEquals("{\"a\":3,\"b\":2}", JqValues.parseStrict(
+                "{\"a\":1,\"b\":2,\"a\":3}".getBytes(StandardCharsets.UTF_8), keepLast())
+                .toJsonString());
+    }
+
+    @Test
+    void strictKeepLastNestedAndRepeated() {
+        assertEquals("{\"x\":{\"a\":2},\"a\":0}", JqValues.parseStrict(
+                "{\"x\":{\"a\":1,\"a\":2},\"a\":0}", keepLast()).toJsonString());
+        assertEquals("{\"a\":3}", JqValues.parseStrict(
+                "{\"a\":1,\"a\":2,\"a\":3}", keepLast()).toJsonString());
+    }
+
+    @Test
+    void strictKeepLastNullCounts() {
+        // Explicit nulls overwrite and are overwritten like any value.
+        assertEquals("{\"a\":1}", JqValues.parseStrict(
+                "{\"a\":null,\"a\":1}", keepLast()).toJsonString());
+        assertEquals("{\"a\":null}", JqValues.parseStrict(
+                "{\"a\":1,\"a\":null}", keepLast()).toJsonString());
+    }
+
+    @Test
+    void strictKeepLastAcrossShapes() {
+        assertEquals("{\"a\":{\"x\":1}}", JqValues.parseStrict(
+                "{\"a\":[1],\"a\":{\"x\":1}}", keepLast()).toJsonString());
+        // Escaped keys resolve before comparison, like the reject path.
+        assertEquals("{\"a\":2}", JqValues.parseStrict(
+                "{\"\\u0061\":1,\"a\":2}", keepLast()).toJsonString());
+    }
+
+    @Test
+    void strictRejectDefaultUnchanged() {
+        // REJECT stays the default with the same error text and positions.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"a\":1,\"a\":2}"));
+        assertTrue(e.getMessage().contains("uplicate key"), e.getMessage());
+        assertTrue(e.getMessage().contains("column 8"), e.getMessage());
+        IllegalArgumentException explicit = assertThrows(IllegalArgumentException.class, () -> JqValues.parseStrict(
+                "{\"a\":1,\"a\":2}", ParseOptions.defaults()
+                        .withDuplicatePolicy(ParseOptions.DuplicatePolicy.REJECT)));
+        assertTrue(explicit.getMessage().contains("uplicate key"), explicit.getMessage());
+    }
+
+    @Test
+    void strictKeepLastInvalidPolicyFailsFast() {
+        assertThrows(NullPointerException.class,
+                () -> ParseOptions.defaults().withDuplicatePolicy(null));
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================

@@ -1352,6 +1352,7 @@ public final class JqValues {
         reader.strict = true;
         reader.base = offset;
         reader.maxDepth = options.maxDepth();
+        reader.duplicatePolicy = options.duplicatePolicy();
         JqValue result = parseValueBytes(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.end) {
@@ -2005,6 +2006,10 @@ public final class JqValues {
         // Maximum tolerated nesting depth (configurable strict option;
         // defaults to MAX_PARSE_DEPTH so lenient parsing is unchanged).
         int maxDepth = MAX_PARSE_DEPTH;
+        // Duplicate-key policy for strict objects (configurable strict
+        // option; defaults to REJECT so lenient parsing is unchanged).
+        // Only consulted when a repeated key is actually found.
+        ParseOptions.DuplicatePolicy duplicatePolicy = ParseOptions.DuplicatePolicy.REJECT;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -2338,7 +2343,8 @@ public final class JqValues {
             int keyStart = r.pos;
             // Keys interned for deduplication and reference equality in JqObject.get()
             keys[count] = parseAndInternKeyBytes(r);
-            if (seen != null && !seen.add(keys[count])) {
+            boolean dup = seen != null && !seen.add(keys[count]);
+            if (dup && r.duplicatePolicy == ParseOptions.DuplicatePolicy.REJECT) {
                 throw duplicateKeyError(r, keys[count], keyStart);
             }
             r.skipWs();
@@ -2346,8 +2352,21 @@ public final class JqValues {
                 throw strictError(r, "Expected ':' in object");
             }
             r.pos++; // skip :
-            values[count] = parseValueBytes(r, depth);
-            count++;
+            JqValue parsed = parseValueBytes(r, depth);
+            if (dup) {
+                // KEEP_LAST (serde): the later value wins at the first-seen
+                // key position (LinkedHashMap put semantics). The count stays
+                // put, so the trailing slot is simply overwritten next round.
+                for (int i = 0; i < count; i++) {
+                    if (keys[i] == keys[count] || keys[i].equals(keys[count])) {
+                        values[i] = parsed;
+                        break;
+                    }
+                }
+            } else {
+                values[count] = parsed;
+                count++;
+            }
             r.skipWs();
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) == '}') {
                 if (r.pos >= r.end && r.strict) throw strictError(r, "Unterminated object");

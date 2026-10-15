@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.4
 
+- Duplicate-key policy for strict parsing: `ParseOptions.DuplicatePolicy`
+  with `REJECT` (current) and `KEEP_LAST` (later value wins at the
+  first-seen key position, serde/LinkedHashMap semantics) — lenient parsing
+  keeps entries as-is, error text unchanged
 - Float-literal shape on numbers: `JqNumber.isFloatLexed()` records whether
   the literal was float-spelled (`.`/`e`, or negative zero which binds as
   float) at parse time — metadata only, so rendering, equality, hashing,

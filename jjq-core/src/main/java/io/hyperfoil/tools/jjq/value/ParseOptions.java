@@ -37,14 +37,28 @@ public final class ParseOptions {
         REJECT
     }
 
+    /** What to do when an object repeats a key in strict mode. */
+    public enum DuplicatePolicy {
+        /** Fail with a positioned error (current behavior). */
+        REJECT,
+        /**
+         * Later value wins at the first-seen key position (serde
+         * compatibility; matches {@code LinkedHashMap} put semantics).
+         */
+        KEEP_LAST
+    }
+
     private final int maxDepth;
     private final BomPolicy bomPolicy;
     private final NulPolicy nulPolicy;
+    private final DuplicatePolicy duplicatePolicy;
 
-    private ParseOptions(int maxDepth, BomPolicy bomPolicy, NulPolicy nulPolicy) {
+    private ParseOptions(int maxDepth, BomPolicy bomPolicy, NulPolicy nulPolicy,
+                         DuplicatePolicy duplicatePolicy) {
         this.maxDepth = maxDepth;
         this.bomPolicy = bomPolicy;
         this.nulPolicy = nulPolicy;
+        this.duplicatePolicy = duplicatePolicy;
     }
 
     /**
@@ -53,7 +67,8 @@ public final class ParseOptions {
      * @return options with depth 10000, BOM stripping, NUL allowed
      */
     public static ParseOptions defaults() {
-        return new ParseOptions(JqValues.MAX_PARSE_DEPTH, BomPolicy.STRIP, NulPolicy.ALLOW);
+        return new ParseOptions(JqValues.MAX_PARSE_DEPTH, BomPolicy.STRIP, NulPolicy.ALLOW,
+                DuplicatePolicy.REJECT);
     }
 
     /**
@@ -68,7 +83,7 @@ public final class ParseOptions {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
         }
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
     }
 
     /**
@@ -80,7 +95,7 @@ public final class ParseOptions {
      */
     public ParseOptions withBomPolicy(BomPolicy bomPolicy) {
         Objects.requireNonNull(bomPolicy, "bomPolicy");
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
     }
 
     /**
@@ -93,7 +108,20 @@ public final class ParseOptions {
      */
     public ParseOptions withNulPolicy(NulPolicy nulPolicy) {
         Objects.requireNonNull(nulPolicy, "nulPolicy");
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
+    }
+
+    /**
+     * Duplicate-key handling for strict objects (lenient parsing always
+     * keeps entries as-is).
+     *
+     * @param duplicatePolicy the policy (non-null)
+     * @return new options with this policy
+     * @throws NullPointerException if {@code duplicatePolicy} is null
+     */
+    public ParseOptions withDuplicatePolicy(DuplicatePolicy duplicatePolicy) {
+        Objects.requireNonNull(duplicatePolicy, "duplicatePolicy");
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
     }
 
     /**
@@ -115,5 +143,12 @@ public final class ParseOptions {
      */
     public NulPolicy nulPolicy() {
         return nulPolicy;
+    }
+
+    /**
+     * @return the duplicate-key policy
+     */
+    public DuplicatePolicy duplicatePolicy() {
+        return duplicatePolicy;
     }
 }
