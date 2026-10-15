@@ -145,6 +145,8 @@ JqValues.parse(bytes);                   // byte[] input (fastest)
 JqValues.parse(bytes, offset, length);   // byte[] slice
 JqValues.parse(inputStream);             // InputStream (throws IOException)
 JqValues.parseStrict(jsonString);        // Rejects trailing content (for fromjson)
+JqValues.parseStrict(jsonString,         // + depth limit, BOM/NUL policy
+    ParseOptions.defaults().withMaxDepth(128));
 JqValues.parseAll(jsonString);           // JSONL / multi-document streams
 ```
 

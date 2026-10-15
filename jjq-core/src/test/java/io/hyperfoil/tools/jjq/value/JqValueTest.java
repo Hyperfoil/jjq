@@ -1376,6 +1376,105 @@ class JqValueTest {
                 JqValues.parse("{\"status\":\"Running\",\"status\":\"Frozen\"}").toJsonString());
     }
 
+    // ---- Configurable strict-parse options (issue #144) ----
+
+    private static String nestedArrays(int depth) {
+        return "[".repeat(depth) + "]".repeat(depth);
+    }
+
+    private static String nestedObjects(int depth) {
+        return "{\"a\":".repeat(depth) + "1" + "}".repeat(depth);
+    }
+
+    @Test
+    void strictOptionsDefaultsUnchanged() {
+        // Defaults keep the 10000 limit, strip BOMs, and allow NULs.
+        assertEquals(nestedArrays(200),
+                JqValues.parseStrict(nestedArrays(200), ParseOptions.defaults()).toJsonString());
+        byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, '[', ']'};
+        assertEquals("[]", JqValues.parseStrict(bom, ParseOptions.defaults()).toJsonString());
+        assertEquals("[]",
+                JqValues.parseStrict("\uFEFF[]", ParseOptions.defaults()).toJsonString());
+        assertEquals(JqValues.parse("\"a\0b\""),
+                JqValues.parseStrict("\"a\0b\"", ParseOptions.defaults()));
+    }
+
+    @Test
+    void strictOptionsMaxDepthBoundary() {
+        // maxDepth is the maximum tolerated nesting: 128 binds, 129 throws.
+        ParseOptions opts = ParseOptions.defaults().withMaxDepth(128);
+        assertEquals(nestedArrays(128), JqValues.parseStrict(nestedArrays(128), opts).toJsonString());
+        assertEquals(nestedObjects(128), JqValues.parseStrict(nestedObjects(128), opts).toJsonString());
+        IllegalArgumentException array = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(nestedArrays(129), opts));
+        assertTrue(array.getMessage().contains("depth"), array.getMessage());
+        IllegalArgumentException object = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(nestedObjects(129), opts));
+        assertTrue(object.getMessage().contains("depth"), object.getMessage());
+        // Same through the byte[] entry point.
+        IllegalArgumentException bytes = assertThrows(IllegalArgumentException.class, () -> JqValues.parseStrict(
+                nestedArrays(129).getBytes(StandardCharsets.UTF_8), opts));
+        assertTrue(bytes.getMessage().contains("depth"), bytes.getMessage());
+    }
+
+    @Test
+    void strictOptionsInvalidMaxDepthFailsFast() {
+        assertThrows(IllegalArgumentException.class, () -> ParseOptions.defaults().withMaxDepth(0));
+        assertThrows(IllegalArgumentException.class, () -> ParseOptions.defaults().withMaxDepth(-5));
+        assertThrows(NullPointerException.class,
+                () -> ParseOptions.defaults().withBomPolicy(null));
+        assertThrows(NullPointerException.class,
+                () -> ParseOptions.defaults().withNulPolicy(null));
+    }
+
+    @Test
+    void strictOptionsBomRejected() {
+        ParseOptions reject = ParseOptions.defaults().withBomPolicy(ParseOptions.BomPolicy.REJECT);
+        byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, '[', ']'};
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(bom, reject));
+        assertTrue(e.getMessage().contains("BOM"), e.getMessage());
+        assertTrue(e.getMessage().contains("column"), e.getMessage());
+        IllegalArgumentException s = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("\uFEFF[]", reject));
+        assertTrue(s.getMessage().contains("BOM"), s.getMessage());
+        // BOM-only input rejects too (nothing left to parse either way).
+        assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(bom, reject));
+    }
+
+    @Test
+    void strictOptionsNulRejected() {
+        ParseOptions reject = ParseOptions.defaults().withNulPolicy(ParseOptions.NulPolicy.REJECT);
+        for (String doc : new String[]{"\"a\0b\"", "[1, \0 2]", "{\"\0k\":1}", "12\0"}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parseStrict(doc, reject), "NUL accepted: " + doc);
+            assertTrue(e.getMessage().contains("NUL"), e.getMessage());
+            assertTrue(e.getMessage().contains("column"), e.getMessage());
+            IllegalArgumentException b = assertThrows(IllegalArgumentException.class, () -> JqValues.parseStrict(
+                    doc.getBytes(StandardCharsets.UTF_8), reject), "NUL bytes accepted: " + doc);
+            assertTrue(b.getMessage().contains("NUL"), b.getMessage());
+            assertTrue(b.getMessage().contains("column"), b.getMessage());
+        }
+    }
+
+    @Test
+    void strictOptionsEscapedNulStaysLegal() {
+        // "\u0000" is six ASCII chars — no raw NUL — so it binds under REJECT.
+        ParseOptions reject = ParseOptions.defaults().withNulPolicy(ParseOptions.NulPolicy.REJECT);
+        assertEquals(JqValues.parse("\"\\u0000\""),
+                JqValues.parseStrict("\"\\u0000\"", reject));
+        assertEquals(JqValues.parse("\"\\u0000\""), JqValues.parseStrict(
+                "\"\\u0000\"".getBytes(StandardCharsets.UTF_8), reject));
+    }
+
+    @Test
+    void strictOptionsLenientUnaffected() {
+        // Lenient parse takes no options: deep nesting and NULs still bind.
+        assertEquals(nestedArrays(200), JqValues.parse(nestedArrays(200)).toJsonString());
+        assertEquals(JqValues.parse("\"a\0b\""), JqValues.parse("\"a\0b\""));
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================

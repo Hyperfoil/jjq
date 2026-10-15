@@ -21,7 +21,8 @@ import java.util.Map;
  */
 public final class JqValues {
 
-    private static final int MAX_PARSE_DEPTH = 10000;
+    // Package-visible for ParseOptions.defaults(): the single canonical depth.
+    static final int MAX_PARSE_DEPTH = 10000;
     private static final int MAX_SERIALIZE_DEPTH = 10001;
     private static final int SERIALIZE_BUFFER_INIT = 8192;
     private static final int SERIALIZE_BUFFER_MAX_RETAINED = 1024 * 1024; // 1MB
@@ -905,6 +906,9 @@ public final class JqValues {
         final String json;
         final int len;
         int pos;
+        // Maximum tolerated nesting depth (configurable strict option;
+        // defaults to MAX_PARSE_DEPTH so lenient parsing is unchanged).
+        int maxDepth = MAX_PARSE_DEPTH;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -1204,17 +1208,44 @@ public final class JqValues {
      * Empty input still yields null, matching {@code parse}.
      */
     public static JqValue parseStrict(String json) {
+        return parseStrict(json, ParseOptions.defaults());
+    }
+
+    /**
+     * Strict parse of a JSON string with configurable options: nesting depth
+     * limit, byte-order-mark policy, and raw-NUL policy. Defaults match
+     * {@link #parseStrict(String)} (10000 levels, BOMs stripped, NULs
+     * allowed); narrowing any of them only rejects more input, never more.
+     *
+     * @param json    the JSON string to parse
+     * @param options the strict-parse options (non-null)
+     * @return the parsed value ({@code null} for empty input)
+     * @throws IllegalArgumentException with line/column position on malformed
+     *         input or policy violation
+     */
+    public static JqValue parseStrict(String json, ParseOptions options) {
+        if (options.nulPolicy() == ParseOptions.NulPolicy.REJECT) {
+            int nul = json.indexOf('\0');
+            if (nul >= 0) {
+                throw new IllegalArgumentException("NUL character rejected" + lineColOf(json, nul));
+            }
+        }
         if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
             byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-            return parseStrictBytes(bytes, 0, bytes.length, json);
+            return parseStrictBytes(bytes, 0, bytes.length, json, options);
         }
         // Large string: use char-based parser
         String trimmed = json.trim();
         if (trimmed.isEmpty()) return JqNull.NULL;
         if (trimmed.charAt(0) == '\uFEFF') {
+            if (options.bomPolicy() == ParseOptions.BomPolicy.REJECT) {
+                throw new IllegalArgumentException("Byte-order mark (BOM) rejected"
+                        + lineColOf(json, firstNonWs(json)));
+            }
             trimmed = trimmed.substring(1);
         }
         var reader = new JsonReader(trimmed);
+        reader.maxDepth = options.maxDepth();
         JqValue result = parseValue(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.len) {
@@ -1238,9 +1269,35 @@ public final class JqValues {
      * @throws IllegalArgumentException with line/column position on malformed input
      */
     public static JqValue parseStrict(byte[] bytes) {
+        return parseStrict(bytes, ParseOptions.defaults());
+    }
+
+    /**
+     * Strict parse of a UTF-8 JSON byte array with configurable options:
+     * nesting depth limit, byte-order-mark policy, and raw-NUL policy.
+     * Defaults match {@link #parseStrict(byte[])} (10000 levels, BOMs
+     * stripped, NULs allowed); narrowing any of them only rejects more
+     * input, never more.
+     *
+     * @param bytes   the UTF-8 JSON document
+     * @param options the strict-parse options (non-null)
+     * @return the parsed value ({@code null} for empty input)
+     * @throws IllegalArgumentException with line/column position on malformed
+     *         input or policy violation
+     */
+    public static JqValue parseStrict(byte[] bytes, ParseOptions options) {
         int bad = Utf8.validate(bytes, 0, bytes.length);
         if (bad >= 0) throw utf8Error(bytes, 0, bad);
-        return parseStrictBytes(bytes, 0, bytes.length, null);
+        if (options.nulPolicy() == ParseOptions.NulPolicy.REJECT) {
+            for (int i = 0; i < bytes.length; i++) {
+                if (bytes[i] == 0) {
+                    StringBuilder sb = new StringBuilder("NUL byte rejected");
+                    appendPosition(sb, bytes, 0, i);
+                    throw new IllegalArgumentException(sb.toString());
+                }
+            }
+        }
+        return parseStrictBytes(bytes, 0, bytes.length, null, options);
     }
 
     /** Malformed-UTF-8 error with line/column for a byte offset (cold path). */
@@ -1262,12 +1319,19 @@ public final class JqValues {
     }
 
     /** Byte-based strict parse with trailing content validation. */
-    private static JqValue parseStrictBytes(byte[] bytes, int offset, int length, String originalForError) {
+    private static JqValue parseStrictBytes(byte[] bytes, int offset, int length,
+                                            String originalForError, ParseOptions options) {
         int end = offset + length;
+        int docStart = offset;
         while (offset < end && isWsByte(bytes[offset])) offset++;
         if (offset >= end) return JqNull.NULL;
         if (end - offset >= 3 && (bytes[offset] & 0xFF) == 0xEF
                 && (bytes[offset + 1] & 0xFF) == 0xBB && (bytes[offset + 2] & 0xFF) == 0xBF) {
+            if (options.bomPolicy() == ParseOptions.BomPolicy.REJECT) {
+                StringBuilder sb = new StringBuilder("Byte-order mark (BOM) rejected");
+                appendPosition(sb, bytes, docStart, offset);
+                throw new IllegalArgumentException(sb.toString());
+            }
             offset += 3;
             while (offset < end && isWsByte(bytes[offset])) offset++;
         }
@@ -1275,6 +1339,7 @@ public final class JqValues {
         var reader = new JsonByteReader(bytes, offset, end);
         reader.strict = true;
         reader.base = offset;
+        reader.maxDepth = options.maxDepth();
         JqValue result = parseValueBytes(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.end) {
@@ -1300,6 +1365,28 @@ public final class JqValues {
     /** Append ` at line L, column C` for a byte offset (cold error paths only). */
     private static void appendPosition(StringBuilder sb, JsonByteReader r, int pos) {
         appendPosition(sb, r.data, r.base, Math.min(pos, r.end));
+    }
+
+    /** Index of the first non-whitespace char (cold paths only). */
+    private static int firstNonWs(String text) {
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return i;
+            i++;
+        }
+        return i;
+    }
+
+    /** ` at line L, column C` for a char index (cold error paths only). */
+    private static String lineColOf(String text, int index) {
+        int line = 1;
+        int lineStart = 0;
+        int stop = Math.min(index, text.length());
+        for (int i = 0; i < stop; i++) {
+            if (text.charAt(i) == '\n') { line++; lineStart = i + 1; }
+        }
+        return " at line " + line + ", column " + (stop - lineStart + 1);
     }
 
     /** Duplicate-key error naming the key and its position (strict mode). */
@@ -1416,7 +1503,7 @@ public final class JqValues {
         // Iterate through consecutive opening brackets
         while (r.pos < r.len && r.json.charAt(r.pos) == '[') {
             depth++;
-            if (depth > MAX_PARSE_DEPTH) {
+            if (depth > r.maxDepth) {
                 throw new IllegalArgumentException("Exceeds depth limit for parsing");
             }
             r.pos++; // skip [
@@ -1490,7 +1577,7 @@ public final class JqValues {
     }
 
     private static JqObject parseObject(JsonReader r, int depth) {
-        if (depth > MAX_PARSE_DEPTH) {
+        if (depth > r.maxDepth) {
             throw new IllegalArgumentException("Exceeds depth limit for parsing");
         }
         r.pos++; // skip {
@@ -1864,6 +1951,9 @@ public final class JqValues {
         // tolerating it. Off for parse/parseAll: zero behavior change there
         // beyond one predictable branch per check site.
         boolean strict;
+        // Maximum tolerated nesting depth (configurable strict option;
+        // defaults to MAX_PARSE_DEPTH so lenient parsing is unchanged).
+        int maxDepth = MAX_PARSE_DEPTH;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -2101,7 +2191,7 @@ public final class JqValues {
 
         while (r.pos < r.end && (r.data[r.pos] & 0xFF) == '[') {
             depth++;
-            if (depth > MAX_PARSE_DEPTH) throw new IllegalArgumentException("Exceeds depth limit for parsing");
+            if (depth > r.maxDepth) throw new IllegalArgumentException("Exceeds depth limit for parsing");
             r.pos++;
             r.skipWs();
 
@@ -2169,7 +2259,7 @@ public final class JqValues {
     }
 
     private static JqObject parseObjectBytes(JsonByteReader r, int depth) {
-        if (depth > MAX_PARSE_DEPTH) throw new IllegalArgumentException("Exceeds depth limit for parsing");
+        if (depth > r.maxDepth) throw new IllegalArgumentException("Exceeds depth limit for parsing");
         r.pos++;
         r.skipWs();
         if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '}') { r.pos++; return JqObject.EMPTY; }

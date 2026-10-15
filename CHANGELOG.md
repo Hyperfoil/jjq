@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.4
 
+- Configurable strict-parse options: `ParseOptions` with `maxDepth`
+  (default 10000), BOM `STRIP`/`REJECT`, and raw-NUL `ALLOW`/`REJECT`
+  policies on new `parseStrict(doc, options)` overloads — defaults match
+  `parseStrict` exactly; escaped `\u0000` stays legal under REJECT
 - Identity scope reuse: the per-operation scope object is kept per thread
   instead of reallocated (zero allocation on mapper entries without
   identity; no behavior change)
