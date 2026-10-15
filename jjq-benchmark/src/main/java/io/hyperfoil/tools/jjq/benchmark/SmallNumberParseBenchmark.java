@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.benchmark;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import io.hyperfoil.tools.jjq.value.JqNumber;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.openjdk.jmh.annotations.*;
@@ -39,6 +40,7 @@ public class SmallNumberParseBenchmark {
 
     private byte[] smallInt;
     private byte[] u64;
+    private byte[] u64bare;
     private byte[] overU64;
     private byte[] exp;
     private byte[] float100;
@@ -47,13 +49,16 @@ public class SmallNumberParseBenchmark {
 
     private JqValue preSmallInt;
     private JqValue preU64;
+    private JqValue preU64bare;
     private JqValue preExp;
     private JqValue preEdge;
+    private JqValue preOne;
 
     @Setup
     public void setup() {
         smallInt = doc("{\"a\":1}");
         u64 = doc("{\"a\":18446744073709551615}");
+        u64bare = doc("18446744073709551615");
         overU64 = doc("{\"a\":18446744073709551616}");
         exp = doc("{\"a\":1e20}");
         float100 = doc("{\"a\":100.0}");
@@ -63,8 +68,10 @@ public class SmallNumberParseBenchmark {
 
         preSmallInt = JqValues.parse(smallInt);
         preU64 = JqValues.parse(u64);
+        preU64bare = JqValues.parse(u64bare);
         preExp = JqValues.parse(exp);
         preEdge = JqValues.parse(edge);
+        preOne = JqValues.parse(doc("1"));
     }
 
     private static byte[] doc(String json) {
@@ -152,6 +159,30 @@ public class SmallNumberParseBenchmark {
     @Benchmark
     public String renderEdge() {
         return preEdge.toJsonString();
+    }
+
+    // ---- fresh end-to-end operations (parse + first use per op) ----
+
+    @Benchmark
+    public Object parseConvertU64() {
+        return JqValues.parse(u64).toJavaObject();
+    }
+
+    @Benchmark
+    public String parseSerializeU64() {
+        return JqValues.parse(u64).toJsonString();
+    }
+
+    @Benchmark
+    public String parseAddU64() {
+        return ((JqNumber) JqValues.parse(u64bare)).add(preOne).toJsonString();
+    }
+
+    // ---- warmed numeric operation (shared tree, materialization amortized) ----
+
+    @Benchmark
+    public String addPreU64() {
+        return ((JqNumber) preU64bare).add(preOne).toJsonString();
     }
 
     // ---- Jackson 3 tree reference (context only, not the streaming baseline) ----
