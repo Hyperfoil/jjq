@@ -2357,6 +2357,11 @@ public final class JqValues {
         return result;
     }
 
+    // Linear duplicate-scan range: at most MAX compares per key with no
+    // allocation. Past it, promotion builds the HashSet once. Aligned with
+    // the inline key/value arrays (8) so promotion and scratch growth agree.
+    private static final int DUP_LINEAR_MAX = 8;
+
     private static JqObject parseObjectBytes(JsonByteReader r, int depth) {
         if (depth > r.maxDepth) throw new IllegalArgumentException("Exceeds depth limit for parsing");
         r.pos++;
@@ -2366,9 +2371,11 @@ public final class JqValues {
         String[] keys = new String[8];
         JqValue[] values = new JqValue[8];
         int count = 0;
-        // Strict duplicate tracking: per-object set, allocated only in
-        // strict mode so lenient parsing pays one predictable branch per key.
-        java.util.Set<String> seen = r.strict ? new java.util.HashSet<>() : null;
+        // Strict duplicate tracking: linear scan while the object stays
+        // small (no set, no per-key nodes), promoted to a HashSet once past
+        // DUP_LINEAR_MAX. Lenient parsing skips detection entirely, so it
+        // pays one predictable branch per key and nothing else.
+        java.util.Set<String> seen = null;
         while (true) {
             r.skipWs();
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') {
@@ -2382,7 +2389,30 @@ public final class JqValues {
             int keyStart = r.pos;
             // Keys interned for deduplication and reference equality in JqObject.get()
             keys[count] = parseAndInternKeyBytes(r);
-            boolean dup = seen != null && !seen.add(keys[count]);
+            boolean dup = false;
+            if (r.strict) {
+                String key = keys[count];
+                if (seen != null) {
+                    dup = !seen.add(key);
+                } else if (count <= DUP_LINEAR_MAX) {
+                    // Escaped keys may not be interned, so == needs the
+                    // equals fallback (same rule as the KEEP_LAST scan below).
+                    for (int i = 0; i < count; i++) {
+                        if (keys[i] == key || keys[i].equals(key)) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (!dup && count == DUP_LINEAR_MAX) {
+                        // Genuinely growing past the linear range: build the
+                        // set once with everything stored so far. A dup at
+                        // exactly MAX leaves count frozen, so count can never
+                        // exceed MAX with seen == null after this point.
+                        seen = new java.util.HashSet<>();
+                        for (int i = 0; i <= count; i++) seen.add(keys[i]);
+                    }
+                }
+            }
             if (dup && r.duplicatePolicy == ParseOptions.DuplicatePolicy.REJECT) {
                 throw duplicateKeyError(r, keys[count], keyStart);
             }

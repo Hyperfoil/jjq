@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- Strict duplicate detection scans small objects linearly, promoting to a
+  `HashSet` past 8 keys (single-key strict parse −32% with lower
+  allocation; `KEEP_LAST` order and escaped-key equality unchanged,
+  wide-object and 1MB controls flat). New end-to-end benchmark rows
+  cover fresh parse→convert, parse→serialize, and numeric-add paths,
+  pinning first-conversion cost at ~49 ns vs ~14 ns steady-state.
 - Deferred beyond-long integers: the parser retains the normalized digit
   literal and converts only on first numeric access (strict u64 parse
   −41% overall, rendering −82%, conversions at parity in steady state;

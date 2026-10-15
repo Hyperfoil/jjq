@@ -1735,6 +1735,37 @@ class JqValueTest {
     }
 
     @Test
+    void strictWideObjectDuplicatesAcrossDetectionRanges() {
+        // 12 distinct keys with duplicates in the early, boundary, and late
+        // ranges, plus an escaped-vs-raw pair. Pins KEEP_LAST first-seen
+        // order and last-value-wins however duplicates are detected.
+        // (Lenient output resolves escapes, so the escaped key renders raw.)
+        String doc = "{\"k0\":0,\"k1\":1,\"k2\":2,\"k3\":3,\"k4\":4,\"k5\":5,"
+                + "\"k6\":6,\"k7\":7,\"k8\":8,\"k9\":9,\"k10\":10,\"k11\":11,"
+                + "\"k2\":\"dup-early\",\"k8\":\"dup-boundary\",\"k11\":\"dup-late\","
+                + "\"k0\":\"dup-first\",\"\\u006b2\":\"dup-escaped\"}";
+        assertEquals("{\"k0\":\"dup-first\",\"k1\":1,\"k2\":\"dup-escaped\",\"k3\":3,"
+                + "\"k4\":4,\"k5\":5,\"k6\":6,\"k7\":7,\"k8\":\"dup-boundary\","
+                + "\"k9\":9,\"k10\":10,\"k11\":\"dup-late\"}",
+                JqValues.parseStrict(doc, keepLast()).toJsonString());
+        assertEquals("{\"k0\":0,\"k1\":1,\"k2\":2,\"k3\":3,\"k4\":4,\"k5\":5,"
+                + "\"k6\":6,\"k7\":7,\"k8\":8,\"k9\":9,\"k10\":10,\"k11\":11,"
+                + "\"k2\":\"dup-early\",\"k8\":\"dup-boundary\",\"k11\":\"dup-late\","
+                + "\"k0\":\"dup-first\",\"k2\":\"dup-escaped\"}",
+                JqValues.parse(doc).toJsonString());
+    }
+
+    @Test
+    void strictRejectWideObjectDuplicate() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(
+                        "{\"k0\":0,\"k1\":1,\"k2\":2,\"k3\":3,\"k4\":4,\"k5\":5,"
+                        + "\"k6\":6,\"k7\":7,\"k8\":8,\"k9\":9,\"k10\":10,\"k11\":11,"
+                        + "\"k8\":12}"));
+        assertTrue(e.getMessage().contains("uplicate key"), e.getMessage());
+    }
+
+    @Test
     void strictRejectDefaultUnchanged() {
         // REJECT stays the default with the same error text and positions.
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
