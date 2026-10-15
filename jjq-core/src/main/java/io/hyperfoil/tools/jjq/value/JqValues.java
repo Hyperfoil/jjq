@@ -1937,7 +1937,7 @@ public final class JqValues {
         if (!isDecimal && !overflow && intDigitCount <= 18) {
             // Integer that fits in a long — no string allocation needed
             // Integer-lexed negative zero is a float (serde/jq distinguish -0 from 0).
-            if (negative && acc == 0) return JqNumber.of(-0.0);
+            if (negative && acc == 0) return JqNumber.of(-0.0, true);
             return JqNumber.of(negative ? -acc : acc);
         }
 
@@ -1957,7 +1957,7 @@ public final class JqValues {
                 } else if (expValue != 0) {
                     value *= Math.pow(10, expValue);
                 }
-                return JqNumber.of(negative ? -value : value);
+                return JqNumber.of(negative ? -value : value, isDecimal);
             }
         }
 
@@ -1965,14 +1965,14 @@ public final class JqValues {
         String numStr = s.substring(start, r.pos);
         if (isDecimal) {
             try {
-                return JqNumber.of(new BigDecimal(numStr));
+                return JqNumber.of(new BigDecimal(numStr), isDecimal);
             } catch (NumberFormatException | ArithmeticException e) {
-                return JqNumber.of(Double.parseDouble(numStr));
+                return JqNumber.of(Double.parseDouble(numStr), isDecimal);
             }
         }
         try {
             long parsed = Long.parseLong(numStr);
-            if (parsed == 0 && negative) return JqNumber.of(-0.0);
+            if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
             return JqNumber.of(parsed);
         } catch (NumberFormatException e) {
             try {
@@ -2728,7 +2728,7 @@ public final class JqValues {
 
         if (!isDecimal && !overflow && intDigitCount <= 18) {
             // Integer-lexed negative zero is a float (serde/jq distinguish -0 from 0).
-            if (negative && acc == 0) return JqNumber.of(-0.0);
+            if (negative && acc == 0) return JqNumber.of(-0.0, true);
             return JqNumber.of(negative ? -acc : acc);
         }
 
@@ -2740,19 +2740,19 @@ public final class JqValues {
                 if (expValue > 0 && expValue < POW10.length) value *= POW10[expValue];
                 else if (expValue < 0 && -expValue < POW10.length) value /= POW10[-expValue];
                 else if (expValue != 0) value *= Math.pow(10, expValue);
-                return JqNumber.of(negative ? -value : value);
+                return JqNumber.of(negative ? -value : value, isDecimal);
             }
         }
 
         // Fallback: convert byte range to String for BigDecimal/Double parsing
         String numStr = new String(r.data, start, r.pos - start, java.nio.charset.StandardCharsets.UTF_8);
         if (isDecimal) {
-            try { return JqNumber.of(new BigDecimal(numStr)); }
-            catch (NumberFormatException | ArithmeticException e) { return JqNumber.of(Double.parseDouble(numStr)); }
+            try { return JqNumber.of(new BigDecimal(numStr), isDecimal); }
+            catch (NumberFormatException | ArithmeticException e) { return JqNumber.of(Double.parseDouble(numStr), isDecimal); }
         }
         try {
             long parsed = Long.parseLong(numStr);
-            if (parsed == 0 && negative) return JqNumber.of(-0.0);
+            if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
             return JqNumber.of(parsed);
         }
         catch (NumberFormatException e) {

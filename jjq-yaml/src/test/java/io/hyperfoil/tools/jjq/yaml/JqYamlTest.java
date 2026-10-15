@@ -552,6 +552,14 @@ class JqYamlTest {
     // failure is by construction a real save-fidelity regression, never a
     // stale expectation. Runs in milliseconds (tiny docs, no I/O).
     @Test
+    void floatLexedRecordedForYamlFloats() {
+        // YAML float spellings carry the same provenance as JSON ones.
+        assertTrue(((JqNumber) JqYaml.parse("100.0")).isFloatLexed());
+        assertTrue(((JqNumber) JqYaml.parse("-0")).isFloatLexed());
+        assertFalse(((JqNumber) JqYaml.parse("100")).isFloatLexed());
+    }
+
+    @Test
     void toYamlRoundTripAuditMatrix() {
         List<String> docs = List.of(
             "{\"auto-clone-repos\":1}", "{\"a b\":1}", "{\"a:b\":1}", "{\"a: b\":1}",

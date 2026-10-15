@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Float-literal shape on numbers: `JqNumber.isFloatLexed()` records whether
+  the literal was float-spelled (`.`/`e`, or negative zero which binds as
+  float) at parse time — metadata only, so rendering, equality, hashing,
+  and `toJavaObject` are unchanged and adapters branch on it for int-vs-float
+  typing; programmatic values carry no provenance
 - Strict-mode lone surrogates: `\uD800`-style escapes fail fast unless
   paired (`\uD83D\uDE00` binds), in values and keys, with the usual
   positions — plus a documented contract that every malformed document

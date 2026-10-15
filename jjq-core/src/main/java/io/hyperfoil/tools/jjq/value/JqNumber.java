@@ -12,7 +12,7 @@ public final class JqNumber implements JqValue {
     private static final JqNumber[] CACHE = new JqNumber[CACHE_HIGH - CACHE_LOW + 1];
     static {
         for (int i = 0; i < CACHE.length; i++) {
-            CACHE[i] = new JqNumber(i + CACHE_LOW, null, 0, true, null);
+            CACHE[i] = new JqNumber(i + CACHE_LOW, null, 0, true, null, false);
         }
     }
 
@@ -25,13 +25,20 @@ public final class JqNumber implements JqValue {
     // `0022` resolving to 18). Null for canonical values. Used only for String
     // binding; ignored by serialization, equality, and queries.
     private final String sourceText;
+    // True when the literal was spelled as a float (`.`/`e`/`E`, or negative
+    // zero which binds as float). Metadata only: ignored by serialization,
+    // equality, hashCode, and toJavaObject — adapters branch on it for
+    // int-vs-float typing.
+    private final boolean floatLexed;
 
-    private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong, String sourceText) {
+    private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong,
+                     String sourceText, boolean floatLexed) {
         this.longVal = longVal;
         this.decimalVal = decimalVal;
         this.rawDouble = rawDouble;
         this.isLong = isLong;
         this.sourceText = sourceText;
+        this.floatLexed = floatLexed;
     }
 
     /**
@@ -42,7 +49,7 @@ public final class JqNumber implements JqValue {
      */
     public JqNumber withSourceText(String sourceText) {
         if (sourceText == this.sourceText) return this;
-        return new JqNumber(longVal, decimalVal, rawDouble, isLong, sourceText);
+        return new JqNumber(longVal, decimalVal, rawDouble, isLong, sourceText, floatLexed);
     }
 
     @Override
@@ -52,23 +59,55 @@ public final class JqNumber implements JqValue {
         if (value >= CACHE_LOW && value <= CACHE_HIGH) {
             return CACHE[(int) value - CACHE_LOW];
         }
-        return new JqNumber(value, null, 0, true, null);
+        return new JqNumber(value, null, 0, true, null, false);
     }
 
     public static JqNumber of(double value) {
+        return ofDouble(value, false);
+    }
+
+    /**
+     * Create a JqNumber from a double with float-literal provenance (the
+     * parser passes whether the literal was spelled as a float).
+     * Programmatic doubles carry no provenance ({@code false}).
+     *
+     * @param value      the double value
+     * @param floatLexed true when float-spelled in source text
+     */
+    public static JqNumber of(double value, boolean floatLexed) {
+        return ofDouble(value, floatLexed);
+    }
+
+    private static JqNumber ofDouble(double value, boolean floatLexed) {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
-            return new JqNumber(0, null, value, false, null);
+            return new JqNumber(0, null, value, false, null, false);
         }
         if (value == 0.0 && Double.doubleToRawLongBits(value) == Long.MIN_VALUE) {
             // Negative zero never folds to long: serde-style consumers
             // distinguish -0.0 (float) from 0 (int), and jq renders "-0".
-            return new JqNumber(0, null, value, false, null);
+            return new JqNumber(0, null, value, false, null, floatLexed);
         }
         if (value == Math.floor(value) && value >= Long.MIN_VALUE && value <= Long.MAX_VALUE) {
-            return of((long) value);
+            long folded = (long) value;
+            if (!floatLexed) return of(folded);
+            return new JqNumber(folded, null, 0, true, null, true);
         }
         // Store double directly, defer BigDecimal construction until needed
-        return new JqNumber(0, null, value, false, null);
+        return new JqNumber(0, null, value, false, null, floatLexed);
+    }
+
+    /**
+     * True when the literal was spelled as a float (contains {@code .} or
+     * exponent) or denotes negative zero (which binds as float) — as
+     * opposed to computed values, which carry no provenance. Metadata only:
+     * ignored by serialization, equality, hashCode, and {@code toJavaObject}.
+     * serde-style adapters branch on it for int-vs-float typing:
+     * <pre>{@code
+     * Object typed = n.isFloatLexed() ? (Object) n.doubleValue() : n.toJavaObject();
+     * }</pre>
+     */
+    public boolean isFloatLexed() {
+        return floatLexed;
     }
 
     /**
@@ -147,24 +186,43 @@ public final class JqNumber implements JqValue {
      * high-throughput JSON parsing (issue #59).</p>
      */
     public static JqNumber of(BigDecimal value) {
+        return ofDecimal(value, false);
+    }
+
+    /**
+     * Create a JqNumber from a BigDecimal with float-literal provenance (the
+     * parser passes whether the literal was spelled as a float).
+     *
+     * @param value      the decimal value
+     * @param floatLexed true when float-spelled in source text
+     */
+    public static JqNumber of(BigDecimal value, boolean floatLexed) {
+        return ofDecimal(value, floatLexed);
+    }
+
+    private static JqNumber ofDecimal(BigDecimal value, boolean floatLexed) {
         int scale = value.scale();
         if (scale <= 0) {
             // No fractional part — check if it fits in a long
             if (fitsInLong(value, scale)) {
-                return of(value.longValueExact()); // guaranteed no exception
+                long folded = value.longValueExact(); // guaranteed no exception
+                if (!floatLexed) return of(folded);
+                return new JqNumber(folded, null, 0, true, null, true);
             }
             // Too large for long — keep as BigDecimal
-            return new JqNumber(0, value, value.doubleValue(), false, null);
+            return new JqNumber(0, value, value.doubleValue(), false, null, floatLexed);
         }
         // Positive scale — has fractional digits. Strip trailing zeros first
         // to handle cases like 3.00 which should be treated as integer 3.
         BigDecimal stripped = value.stripTrailingZeros();
         int strippedScale = stripped.scale();
         if (strippedScale <= 0 && fitsInLong(stripped, strippedScale)) {
-            return of(stripped.longValueExact()); // guaranteed no exception
+            long folded = stripped.longValueExact(); // guaranteed no exception
+            if (!floatLexed) return of(folded);
+            return new JqNumber(folded, null, 0, true, null, true);
         }
         // Genuinely non-integer — store as BigDecimal
-        return new JqNumber(0, value, value.doubleValue(), false, null);
+        return new JqNumber(0, value, value.doubleValue(), false, null, floatLexed);
     }
 
     /**
@@ -187,7 +245,7 @@ public final class JqNumber implements JqValue {
 
     /** Preserve cached instance identity across serialization. */
     private Object readResolve() {
-        if (isLong && longVal >= CACHE_LOW && longVal <= CACHE_HIGH) {
+        if (isLong && !floatLexed && longVal >= CACHE_LOW && longVal <= CACHE_HIGH) {
             return CACHE[(int) longVal - CACHE_LOW];
         }
         return this;

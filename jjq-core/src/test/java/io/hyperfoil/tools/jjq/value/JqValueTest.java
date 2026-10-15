@@ -1418,6 +1418,57 @@ class JqValueTest {
                 JqNumber.of(new BigInteger("18446744073709551615")).toJavaObject());
     }
 
+    // ---- Float-literal shape (issue #147) ----
+
+    @Test
+    void floatLexedTrueForFloatSpellings() {
+        for (String doc : new String[]{"100.0", "1E5", "1e20", "-0", "-0.0", "0.5", "3.14"}) {
+            assertTrue(((JqNumber) JqValues.parseStrict(doc)).isFloatLexed(), doc);
+            assertTrue(((JqNumber) JqValues.parseStrict(
+                    doc.getBytes(StandardCharsets.UTF_8))).isFloatLexed(), doc);
+        }
+    }
+
+    @Test
+    void floatLexedFalseOtherwise() {
+        for (String doc : new String[]{"100", "-5", "0", "18446744073709551615",
+                "123456789012345678901234567890"}) {
+            assertFalse(((JqNumber) JqValues.parseStrict(doc)).isFloatLexed(), doc);
+        }
+        // Programmatic construction carries no provenance.
+        assertFalse(JqNumber.of(1.5).isFloatLexed());
+        assertFalse(JqNumber.of(100L).isFloatLexed());
+        assertFalse(JqNumber.of(-0.0).isFloatLexed());
+    }
+
+    @Test
+    void floatLexedChangesNothingElse() {
+        // Metadata only: equality, hash, rendering, and toJavaObject ignore it.
+        assertEquals(JqValues.parseStrict("100"), JqValues.parseStrict("100.0"));
+        assertEquals(JqValues.parseStrict("100").hashCode(),
+                JqValues.parseStrict("100.0").hashCode());
+        assertEquals("100", JqValues.parseStrict("100.0").toJsonString());
+        assertEquals(Long.valueOf(100), JqValues.parseStrict("100.0").toJavaObject());
+    }
+
+    @Test
+    void floatLexedAdapterRecipe() {
+        // The serde-style rule the flag exists for: float-lexed binds Double,
+        // everything else follows the integral rule (Long, or BigInteger
+        // beyond long — never a wrapped long).
+        for (String doc : new String[]{"100.0", "1e20", "-0"}) {
+            JqNumber n = (JqNumber) JqValues.parseStrict(doc);
+            assertTrue(n.isFloatLexed(), doc);
+            assertInstanceOf(Double.class, n.doubleValue(), doc);
+        }
+        JqNumber i = (JqNumber) JqValues.parseStrict("100");
+        assertFalse(i.isFloatLexed());
+        assertEquals(Long.valueOf(100), i.toJavaObject());
+        JqNumber u = (JqNumber) JqValues.parseStrict("18446744073709551615");
+        assertFalse(u.isFloatLexed());
+        assertEquals(new BigInteger("18446744073709551615"), u.toJavaObject());
+    }
+
     @Test
     void testParseStrictDuplicateKeyPosition() {
         // Second "status" starts at column 21 (1-based)
