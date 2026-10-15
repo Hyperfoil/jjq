@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Deferred beyond-long integers: the parser retains the normalized digit
+  literal and converts only on first numeric access (strict u64 parse
+  −41% overall, rendering −82%, conversions at parity in steady state;
+  observably identical to the eager form, pinned by differential tests
+  covering rendering, ordering, arithmetic, and Java conversion quirks)
 - `toJavaObject` sizes the output map for the known entry count instead of
   taking the default 16-slot table (single-key conversions −4 to −5% with
   lower allocation; insertion order unchanged)

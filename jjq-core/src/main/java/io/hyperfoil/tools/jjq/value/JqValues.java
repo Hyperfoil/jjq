@@ -6,7 +6,6 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -2810,6 +2809,19 @@ public final class JqValues {
     private static JqNumber parseNumberFallback(String source, int start, int end,
                                                  boolean isDecimal, boolean negative) {
         int length = end - start;
+        // Only literals longer than a 19-digit long can be beyond-long;
+        // shorter ones take the shared path with zero added work.
+        if (!isDecimal && length - (negative ? 1 : 0) > 19) {
+            int scan = negative ? 1 : 0;
+            while (scan < length && source.charAt(start + scan) == '0') scan++;
+            int digits = length - scan;
+            if (digits > 19 || (digits == 19 && !fitsLongLiteral(source, start + scan, negative))) {
+                // Beyond long: slice the normalized digits directly, no buffer copy.
+                String literal = source.substring(start + scan, end);
+                if (negative) literal = "-" + literal;
+                return JqNumber.ofDeferredInteger(literal);
+            }
+        }
         char[] chars = numberBuffer(length);
         source.getChars(start, end, chars, 0);
         return parseNumberChars(chars, length, isDecimal, negative);
@@ -2819,6 +2831,16 @@ public final class JqValues {
     private static JqNumber parseNumberFallback(byte[] source, int start, int end,
                                                  boolean isDecimal, boolean negative) {
         int length = end - start;
+        if (!isDecimal && length - (negative ? 1 : 0) > 19) {
+            int scan = negative ? 1 : 0;
+            while (scan < length && source[start + scan] == '0') scan++;
+            int digits = length - scan;
+            if (digits > 19 || (digits == 19 && !fitsLongLiteral(source, start + scan, negative))) {
+                String literal = new String(source, start + scan, digits, java.nio.charset.StandardCharsets.UTF_8);
+                if (negative) literal = "-" + literal;
+                return JqNumber.ofDeferredInteger(literal);
+            }
+        }
         char[] chars = numberBuffer(length);
         for (int i = 0; i < length; i++) {
             chars[i] = (char) (source[start + i] & 0xFF);
@@ -2850,10 +2872,9 @@ public final class JqValues {
                 if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
                 return JqNumber.of(negative ? parsed : -parsed);
             }
-            // Beyond long: the digits are already validated ASCII, so
-            // accumulate base-1e9 limbs directly instead of paying
-            // BigDecimal's per-character dispatch.
-            return parseHugeInteger(chars, first, digits, negative);
+            // Beyond long: retain the normalized significant digits and defer
+            // conversion until first numeric access.
+            return parseDeferredInteger(chars, first, digits, negative);
         }
         try {
             return JqNumber.of(new BigDecimal(chars, 0, length), isDecimal);
@@ -2864,42 +2885,44 @@ public final class JqValues {
         }
     }
 
-    private static final long EIGHTEEN_DIGITS = 1_000_000_000_000_000_000L;
-    private static final BigInteger QUINTILLION = BigInteger.valueOf(EIGHTEEN_DIGITS);
-
     /**
      * Beyond-long integer literals: at least 20 significant digits (or a
-     * 19-digit overflow, proven by the caller). Builds the magnitude in
-     * base-1e18 limbs with plain ASCII arithmetic, then wraps a scale-0
-     * BigDecimal — value-identical to the general decimal constructor.
-     * Eighteen digits fit in a long, so a 20-digit literal needs a single
-     * multiply-add pair instead of one pair per 9-digit group.
+     * 19-digit overflow, proven by the caller). Copies the normalized
+     * significant digits (leading zeros were skipped into {@code first})
+     * into an owned String and defers conversion — parsing pays only the
+     * copy, numeric access materializes the eager-identical value.
      */
-    private static JqNumber parseHugeInteger(char[] chars, int first, int digits, boolean negative) {
-        int pos = first;
-        int head = digits % 18;
-        if (head == 0) head = 18;
-        long chunk = 0;
-        for (int i = 0; i < head; i++) {
-            chunk = chunk * 10 + (chars[pos++] - '0');
-        }
-        BigInteger magnitude = BigInteger.valueOf(chunk);
-        int end = first + digits;
-        while (pos < end) {
-            chunk = 0;
-            for (int i = 0; i < 18; i++) {
-                chunk = chunk * 10 + (chars[pos++] - '0');
-            }
-            magnitude = magnitude.multiply(QUINTILLION).add(BigInteger.valueOf(chunk));
-        }
-        if (negative) magnitude = magnitude.negate();
-        return JqNumber.of(new BigDecimal(magnitude), false);
+    private static JqNumber parseDeferredInteger(char[] chars, int first, int digits, boolean negative) {
+        String literal = new String(chars, first, digits);
+        if (negative) literal = "-" + literal;
+        return JqNumber.ofDeferredInteger(literal);
     }
 
     /** Compare exactly 19 significant digits against the appropriate signed-long boundary. */
-    private static boolean fitsLongLiteral(char[] chars, int first, boolean negative) {        String limit = negative ? "9223372036854775808" : "9223372036854775807";
+    private static boolean fitsLongLiteral(char[] chars, int first, boolean negative) {
+        String limit = negative ? "9223372036854775808" : "9223372036854775807";
         for (int i = 0; i < limit.length(); i++) {
             int difference = chars[first + i] - limit.charAt(i);
+            if (difference != 0) return difference < 0;
+        }
+        return true;
+    }
+
+    /** String-slice variant of the 19-digit boundary check, for the pre-gate. */
+    private static boolean fitsLongLiteral(String source, int offset, boolean negative) {
+        String limit = negative ? "9223372036854775808" : "9223372036854775807";
+        for (int i = 0; i < limit.length(); i++) {
+            int difference = source.charAt(offset + i) - limit.charAt(i);
+            if (difference != 0) return difference < 0;
+        }
+        return true;
+    }
+
+    /** Byte-slice variant (digits are validated ASCII, so masking is exact). */
+    private static boolean fitsLongLiteral(byte[] source, int offset, boolean negative) {
+        String limit = negative ? "9223372036854775808" : "9223372036854775807";
+        for (int i = 0; i < limit.length(); i++) {
+            int difference = (source[offset + i] & 0xFF) - limit.charAt(i);
             if (difference != 0) return difference < 0;
         }
         return true;

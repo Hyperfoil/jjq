@@ -30,15 +30,27 @@ public final class JqNumber implements JqValue {
     // equality, hashCode, and toJavaObject — adapters branch on it for
     // int-vs-float typing.
     private final boolean floatLexed;
+    // Normalized beyond-long integer literal (optional '-' plus significant
+    // digits, never empty, never zero) with conversion deferred until first
+    // numeric access. Null for all other numbers. Rendering uses it directly;
+    // every numeric query materializes the identical BigDecimal the eager
+    // constructor would have built, so behavior matches exactly.
+    private final String deferredDigits;
 
     private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong,
                      String sourceText, boolean floatLexed) {
+        this(longVal, decimalVal, rawDouble, isLong, sourceText, floatLexed, null);
+    }
+
+    private JqNumber(long longVal, BigDecimal decimalVal, double rawDouble, boolean isLong,
+                     String sourceText, boolean floatLexed, String deferredDigits) {
         this.longVal = longVal;
         this.decimalVal = decimalVal;
         this.rawDouble = rawDouble;
         this.isLong = isLong;
         this.sourceText = sourceText;
         this.floatLexed = floatLexed;
+        this.deferredDigits = deferredDigits;
     }
 
     /**
@@ -49,7 +61,7 @@ public final class JqNumber implements JqValue {
      */
     public JqNumber withSourceText(String sourceText) {
         if (sourceText == this.sourceText) return this;
-        return new JqNumber(longVal, decimalVal, rawDouble, isLong, sourceText, floatLexed);
+        return new JqNumber(longVal, decimalVal, rawDouble, isLong, sourceText, floatLexed, deferredDigits);
     }
 
     @Override
@@ -175,6 +187,63 @@ public final class JqNumber implements JqValue {
     private static final BigDecimal LONG_MIN_BD = BigDecimal.valueOf(Long.MIN_VALUE);
     private static final BigDecimal LONG_MAX_BD = BigDecimal.valueOf(Long.MAX_VALUE);
 
+    private static final long EIGHTEEN_DIGITS = 1_000_000_000_000_000_000L;
+    private static final BigInteger QUINTILLION = BigInteger.valueOf(EIGHTEEN_DIGITS);
+
+    /**
+     * Beyond-long integer literal with conversion deferred until first numeric
+     * access. {@code digits} is the normalized literal: optional '-'
+     * followed by significant digits, never empty, never all zeros (the
+     * parser guarantees this). Only the parser calls this; programmatic
+     * values stay eager.
+     */
+    static JqNumber ofDeferredInteger(String digits) {
+        return new JqNumber(0, null, 0.0, false, null, false, digits);
+    }
+
+    /**
+     * Materialize the deferred literal into the identical BigDecimal the
+     * eager constructor would have built (scale-0 over the same magnitude),
+     * reusing the value cache. Racy-lazy like {@link #cachedDecimal}: the
+     * computation is deterministic so a lost race only repeats it.
+     */
+    private BigDecimal materializeDeferred() {
+        BigDecimal materialized = cachedDecimal;
+        if (materialized == null) {
+            materialized = decimalFromDeferred(deferredDigits);
+            cachedDecimal = materialized;
+        }
+        return materialized;
+    }
+
+    /** Base-1e18 limb accumulation over validated ASCII digits. */
+    private static BigDecimal decimalFromDeferred(String digits) {
+        int pos = 0;
+        boolean negative = false;
+        if (digits.charAt(0) == '-') {
+            negative = true;
+            pos = 1;
+        }
+        int end = digits.length();
+        int remaining = end - pos;
+        int head = remaining % 18;
+        if (head == 0) head = 18;
+        long chunk = 0;
+        for (int i = 0; i < head; i++) {
+            chunk = chunk * 10 + (digits.charAt(pos++) - '0');
+        }
+        BigInteger magnitude = BigInteger.valueOf(chunk);
+        while (pos < end) {
+            chunk = 0;
+            for (int i = 0; i < 18; i++) {
+                chunk = chunk * 10 + (digits.charAt(pos++) - '0');
+            }
+            magnitude = magnitude.multiply(QUINTILLION).add(BigInteger.valueOf(chunk));
+        }
+        if (negative) magnitude = magnitude.negate();
+        return new BigDecimal(magnitude);
+    }
+
     /**
      * Create a JqNumber from a BigDecimal. If the value represents a whole number
      * that fits in a long, returns a long-backed instance (with cache hit for [-128, 1023]).
@@ -262,6 +331,7 @@ public final class JqNumber implements JqValue {
     public boolean isIntegral() {
         if (isLong) return true;
         if (isSpecial()) return false; // NaN/Infinity
+        if (deferredDigits != null) return true; // pure integer literal
         if (decimalVal == null) {
             // double-backed: check if it's a whole number
             return rawDouble == Math.floor(rawDouble) && !Double.isInfinite(rawDouble);
@@ -285,6 +355,7 @@ public final class JqNumber implements JqValue {
     @Override
     public long longValue() {
         if (isLong) return longVal;
+        if (deferredDigits != null) return materializeDeferred().longValue();
         if (decimalVal != null) return decimalVal.longValue();
         return (long) rawDouble;
     }
@@ -292,6 +363,7 @@ public final class JqNumber implements JqValue {
     @Override
     public double doubleValue() {
         if (isLong) return (double) longVal;
+        if (deferredDigits != null) return materializeDeferred().doubleValue();
         if (decimalVal != null) return decimalVal.doubleValue();
         return rawDouble;
     }
@@ -312,6 +384,7 @@ public final class JqNumber implements JqValue {
             }
             return cached;
         }
+        if (deferredDigits != null) return materializeDeferred();
         if (decimalVal != null) return decimalVal;
         // Double-backed (specials already rejected above): lazy construct.
         BigDecimal cached = cachedDecimal;
@@ -328,6 +401,7 @@ public final class JqNumber implements JqValue {
         if (isSpecial()) {
             return "null"; // JSON: NaN and Infinity -> null
         }
+        if (deferredDigits != null) return renderDeferred();
         if (decimalVal == null) {
             return formatDouble(rawDouble);
         }
@@ -342,6 +416,22 @@ public final class JqNumber implements JqValue {
             return stripped.toString();
         }
         return stripped.toPlainString();
+    }
+
+    /**
+     * Render the deferred literal exactly as the eager form would: plain
+     * digits, except long trailing-zero runs which render scientifically.
+     * The common case touches nothing but the retained characters.
+     */
+    private String renderDeferred() {
+        if (trailingZeros(deferredDigits) <= 20) return deferredDigits;
+        return materializeDeferred().stripTrailingZeros().toString();
+    }
+
+    private static int trailingZeros(String digits) {
+        int zeros = 0;
+        while (zeros < digits.length() && digits.charAt(digits.length() - 1 - zeros) == '0') zeros++;
+        return zeros;
     }
 
     /** Format a double for JSON output, matching jq's plain notation for common values. */
@@ -366,6 +456,10 @@ public final class JqNumber implements JqValue {
         }
         if (isSpecial()) {
             sb.append("null");
+            return;
+        }
+        if (deferredDigits != null) {
+            sb.append(renderDeferred());
             return;
         }
         if (decimalVal == null) {
@@ -394,6 +488,10 @@ public final class JqNumber implements JqValue {
         }
         if (isSpecial()) {
             out.writeNull();
+            return;
+        }
+        if (deferredDigits != null) {
+            out.writeAsciiString(renderDeferred());
             return;
         }
         if (decimalVal == null) {
@@ -451,6 +549,11 @@ public final class JqNumber implements JqValue {
             if (this.isSpecial() || n.isSpecial()) {
                 return Double.compare(this.doubleValue(), n.doubleValue()) == 0;
             }
+            // Deferred integers compare by materialized value, exactly like
+            // their eager counterparts (including the double fast path below).
+            if (this.deferredDigits != null || n.deferredDigits != null) {
+                return this.decimalValue().compareTo(n.decimalValue()) == 0;
+            }
             // Fast path: both double-backed, compare doubles directly
             if (!this.isLong && this.decimalVal == null && !n.isLong && n.decimalVal == null) {
                 return Double.compare(this.rawDouble, n.rawDouble) == 0;
@@ -471,6 +574,7 @@ public final class JqNumber implements JqValue {
     public int hashCode() {
         if (isLong) return Long.hashCode(longVal);
         if (isSpecial()) return Double.hashCode(rawDouble);
+        if (deferredDigits != null) return materializeDeferred().stripTrailingZeros().hashCode();
         // Zeroes hash alike (matches the equals collapse above).
         if (decimalVal == null && rawDouble == 0.0) return 0;
         if (decimalVal == null) return Double.hashCode(rawDouble);

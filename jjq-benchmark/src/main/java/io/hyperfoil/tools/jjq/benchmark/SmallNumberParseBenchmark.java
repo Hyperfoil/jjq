@@ -142,6 +142,18 @@ public class SmallNumberParseBenchmark {
         return preEdge.toJavaObject();
     }
 
+    // ---- rendering (deferred numbers render from retained digits) ----
+
+    @Benchmark
+    public String renderU64() {
+        return preU64.toJsonString();
+    }
+
+    @Benchmark
+    public String renderEdge() {
+        return preEdge.toJsonString();
+    }
+
     // ---- Jackson 3 tree reference (context only, not the streaming baseline) ----
 
     @Benchmark
