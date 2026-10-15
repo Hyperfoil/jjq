@@ -2,6 +2,9 @@
 
 ## [Unreleased] - 0.2.4
 
+- `toJavaObject` sizes the output map for the known entry count instead of
+  taking the default 16-slot table (single-key conversions −4 to −5% with
+  lower allocation; insertion order unchanged)
 - Parser workspace tables go lazy: the per-parse scratch and schema-cache
   arrays allocate on first use instead of in the reader constructor
   (small-document parse −7 to −17% with lower allocation; sharing logic

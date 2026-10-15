@@ -259,7 +259,12 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 yield list;
             }
             case JqObject o -> {
-                var map = new java.util.LinkedHashMap<String, Object>();
+                // Size the table for the known entry count: the default
+                // constructor allocates a 16-slot table on first put even
+                // for a single key (HashMap resizes lazily from threshold 0),
+                // and grows it again past 12 entries.
+                int size = o.size();
+                var map = new java.util.LinkedHashMap<String, Object>((int) (size / 0.75f) + 1);
                 o.forEach((key, val) -> map.put(key, val.toJavaObject()));
                 yield map;
             }
