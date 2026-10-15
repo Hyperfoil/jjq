@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -2797,6 +2798,10 @@ public final class JqValues {
                 if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
                 return JqNumber.of(negative ? parsed : -parsed);
             }
+            // Beyond long: the digits are already validated ASCII, so
+            // accumulate base-1e9 limbs directly instead of paying
+            // BigDecimal's per-character dispatch.
+            return parseHugeInteger(chars, first, digits, negative);
         }
         try {
             return JqNumber.of(new BigDecimal(chars, 0, length), isDecimal);
@@ -2807,9 +2812,40 @@ public final class JqValues {
         }
     }
 
+    private static final long EIGHTEEN_DIGITS = 1_000_000_000_000_000_000L;
+    private static final BigInteger QUINTILLION = BigInteger.valueOf(EIGHTEEN_DIGITS);
+
+    /**
+     * Beyond-long integer literals: at least 20 significant digits (or a
+     * 19-digit overflow, proven by the caller). Builds the magnitude in
+     * base-1e18 limbs with plain ASCII arithmetic, then wraps a scale-0
+     * BigDecimal — value-identical to the general decimal constructor.
+     * Eighteen digits fit in a long, so a 20-digit literal needs a single
+     * multiply-add pair instead of one pair per 9-digit group.
+     */
+    private static JqNumber parseHugeInteger(char[] chars, int first, int digits, boolean negative) {
+        int pos = first;
+        int head = digits % 18;
+        if (head == 0) head = 18;
+        long chunk = 0;
+        for (int i = 0; i < head; i++) {
+            chunk = chunk * 10 + (chars[pos++] - '0');
+        }
+        BigInteger magnitude = BigInteger.valueOf(chunk);
+        int end = first + digits;
+        while (pos < end) {
+            chunk = 0;
+            for (int i = 0; i < 18; i++) {
+                chunk = chunk * 10 + (chars[pos++] - '0');
+            }
+            magnitude = magnitude.multiply(QUINTILLION).add(BigInteger.valueOf(chunk));
+        }
+        if (negative) magnitude = magnitude.negate();
+        return JqNumber.of(new BigDecimal(magnitude), false);
+    }
+
     /** Compare exactly 19 significant digits against the appropriate signed-long boundary. */
-    private static boolean fitsLongLiteral(char[] chars, int first, boolean negative) {
-        String limit = negative ? "9223372036854775808" : "9223372036854775807";
+    private static boolean fitsLongLiteral(char[] chars, int first, boolean negative) {        String limit = negative ? "9223372036854775808" : "9223372036854775807";
         for (int i = 0; i < limit.length(); i++) {
             int difference = chars[first + i] - limit.charAt(i);
             if (difference != 0) return difference < 0;
