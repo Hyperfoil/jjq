@@ -924,7 +924,9 @@ public final class JqValues {
         // post-order, so for nested schemas the previous completed object is never the same
         // schema and a one-entry cache never hits. Mirrors JsonByteReader.schemaCache.
         private static final int SCHEMA_CACHE_SIZE = 8;
-        private final String[][] schemaCache = new String[SCHEMA_CACHE_SIZE][];
+        // Allocated on first use, not in the constructor: small documents
+        // never need either table.
+        private String[][] schemaCache;
         private int schemaCacheNext;
         // Per-depth scratch buffers for objects with more than 8 members. The member count
         // is unknown until '}', so the arrays must grow; growing them fresh per object is
@@ -932,7 +934,7 @@ public final class JqValues {
         // A buffer is dropped once its unused slack exceeds MAX_SCRATCH_SLACK, which bounds
         // retained waste per depth without assuming anything about object sizes.
         private static final int MAX_SCRATCH_SLACK = 1024;
-        private Object[][] scratch = new Object[32][];
+        private Object[][] scratch;
 
         JsonReader(String json) {
             this.json = json;
@@ -956,32 +958,49 @@ public final class JqValues {
         }
 
         String[] growKeys(int depth, String[] keys, int count) {
-            if (2 * depth + 1 >= scratch.length) {
-                scratch = java.util.Arrays.copyOf(scratch, Math.max(2 * depth + 2, scratch.length * 2));
+            Object[][] table = scratch;
+            if (table == null) {
+                table = new Object[32][];
+                scratch = table;
             }
-            String[] k = (String[]) scratch[2 * depth];
+            if (2 * depth + 1 >= table.length) {
+                table = java.util.Arrays.copyOf(table, Math.max(2 * depth + 2, table.length * 2));
+                scratch = table;
+            }
+            String[] k = (String[]) table[2 * depth];
             if (k == null || k.length < count * 2) {
                 k = new String[Math.max(count * 2, 32)];
-                scratch[2 * depth] = k;
+                table[2 * depth] = k;
             }
             System.arraycopy(keys, 0, k, 0, count);
             return k;
         }
 
         JqValue[] growValues(int depth, JqValue[] values, int count) {
-            JqValue[] v = (JqValue[]) scratch[2 * depth + 1];
+            // growKeys runs first at the same depth, so the table exists
+            // and is already sized; only the null case needs handling.
+            Object[][] table = scratch;
+            if (table == null) {
+                table = new Object[32][];
+                scratch = table;
+            }
+            JqValue[] v = (JqValue[]) table[2 * depth + 1];
             if (v == null || v.length < count * 2) {
                 v = new JqValue[Math.max(count * 2, 32)];
-                scratch[2 * depth + 1] = v;
+                table[2 * depth + 1] = v;
             }
             System.arraycopy(values, 0, v, 0, count);
             return v;
         }
 
         void releaseScratchIfWasteful(int depth, int capacity, int count) {
+            Object[][] table = scratch;
+            // Only runs for objects past the small inline capacity, which
+            // always grew the table first; the guard is purely defensive.
+            if (table == null) return;
             if (capacity - count > MAX_SCRATCH_SLACK) {
-                scratch[2 * depth] = null;
-                scratch[2 * depth + 1] = null;
+                table[2 * depth] = null;
+                table[2 * depth + 1] = null;
             }
         }
 
@@ -992,7 +1011,9 @@ public final class JqValues {
                 while (i < count && prev[i] == keys[i]) i++;
                 if (i == count) return prev;
             }
-            for (String[] c : schemaCache) {
+            String[][] cache = schemaCache;
+            if (cache == null) return null;
+            for (String[] c : cache) {
                 if (c == null || c.length != count) continue;
                 int i = 0;
                 while (i < count && c[i] == keys[i]) i++;
@@ -1003,7 +1024,12 @@ public final class JqValues {
 
         void rememberKeys(String[] exactKeys) {
             previousKeys = exactKeys;
-            schemaCache[schemaCacheNext] = exactKeys;
+            String[][] cache = schemaCache;
+            if (cache == null) {
+                cache = new String[SCHEMA_CACHE_SIZE][];
+                schemaCache = cache;
+            }
+            cache[schemaCacheNext] = exactKeys;
             schemaCacheNext = (schemaCacheNext + 1) & (SCHEMA_CACHE_SIZE - 1);
         }
     }
@@ -2006,7 +2032,9 @@ public final class JqValues {
         // post-order, so for nested schemas the previous completed object is never the same
         // schema and a one-entry cache never hits.
         private static final int SCHEMA_CACHE_SIZE = 8;
-        private final String[][] schemaCache = new String[SCHEMA_CACHE_SIZE][];
+        // Allocated on first use, not in the constructor: small documents
+        // never need either table.
+        private String[][] schemaCache;
         private int schemaCacheNext;
         // Per-depth scratch buffers for objects with more than 8 members. The member count
         // is unknown until '}', so the arrays must grow; growing them fresh per object is
@@ -2014,7 +2042,7 @@ public final class JqValues {
         // A buffer is dropped once its unused slack exceeds MAX_SCRATCH_SLACK, which bounds
         // retained waste per depth without assuming anything about object sizes.
         private static final int MAX_SCRATCH_SLACK = 1024;
-        private Object[][] scratch = new Object[32][];
+        private Object[][] scratch;
 
         JsonByteReader(byte[] data, int offset, int end) {
             this.data = data;
@@ -2023,23 +2051,36 @@ public final class JqValues {
         }
 
         String[] growKeys(int depth, String[] keys, int count) {
-            if (2 * depth + 1 >= scratch.length) {
-                scratch = java.util.Arrays.copyOf(scratch, Math.max(2 * depth + 2, scratch.length * 2));
+            Object[][] table = scratch;
+            if (table == null) {
+                table = new Object[32][];
+                scratch = table;
             }
-            String[] k = (String[]) scratch[2 * depth];
+            if (2 * depth + 1 >= table.length) {
+                table = java.util.Arrays.copyOf(table, Math.max(2 * depth + 2, table.length * 2));
+                scratch = table;
+            }
+            String[] k = (String[]) table[2 * depth];
             if (k == null || k.length < count * 2) {
                 k = new String[Math.max(count * 2, 32)];
-                scratch[2 * depth] = k;
+                table[2 * depth] = k;
             }
             System.arraycopy(keys, 0, k, 0, count);
             return k;
         }
 
         JqValue[] growValues(int depth, JqValue[] values, int count) {
-            JqValue[] v = (JqValue[]) scratch[2 * depth + 1];
+            // growKeys runs first at the same depth, so the table exists
+            // and is already sized; only the null case needs handling.
+            Object[][] table = scratch;
+            if (table == null) {
+                table = new Object[32][];
+                scratch = table;
+            }
+            JqValue[] v = (JqValue[]) table[2 * depth + 1];
             if (v == null || v.length < count * 2) {
                 v = new JqValue[Math.max(count * 2, 32)];
-                scratch[2 * depth + 1] = v;
+                table[2 * depth + 1] = v;
             }
             System.arraycopy(values, 0, v, 0, count);
             return v;
@@ -2057,9 +2098,13 @@ public final class JqValues {
          * reader for a whole stream, so there the bound is per stream rather than per document.
          */
         void releaseScratchIfWasteful(int depth, int capacity, int count) {
+            Object[][] table = scratch;
+            // Only runs for objects past the small inline capacity, which
+            // always grew the table first; the guard is purely defensive.
+            if (table == null) return;
             if (capacity - count > MAX_SCRATCH_SLACK) {
-                scratch[2 * depth] = null;
-                scratch[2 * depth + 1] = null;
+                table[2 * depth] = null;
+                table[2 * depth + 1] = null;
             }
         }
 
@@ -2070,7 +2115,9 @@ public final class JqValues {
                 while (i < count && prev[i] == keys[i]) i++;
                 if (i == count) return prev;
             }
-            for (String[] c : schemaCache) {
+            String[][] cache = schemaCache;
+            if (cache == null) return null;
+            for (String[] c : cache) {
                 if (c == null || c.length != count) continue;
                 int i = 0;
                 while (i < count && c[i] == keys[i]) i++;
@@ -2081,7 +2128,12 @@ public final class JqValues {
 
         void rememberKeys(String[] exactKeys) {
             previousKeys = exactKeys;
-            schemaCache[schemaCacheNext] = exactKeys;
+            String[][] cache = schemaCache;
+            if (cache == null) {
+                cache = new String[SCHEMA_CACHE_SIZE][];
+                schemaCache = cache;
+            }
+            cache[schemaCacheNext] = exactKeys;
             schemaCacheNext = (schemaCacheNext + 1) & (SCHEMA_CACHE_SIZE - 1);
         }
 

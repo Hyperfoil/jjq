@@ -2,6 +2,15 @@
 
 ## [Unreleased] - 0.2.4
 
+- Parser workspace tables go lazy: the per-parse scratch and schema-cache
+  arrays allocate on first use instead of in the reader constructor
+  (small-document parse −7 to −17% with lower allocation; sharing logic
+  unchanged, large-document controls flat)
+- Beyond-long integer literals take a specialized path: validated ASCII
+  digits accumulate in base-1e18 `long` limbs instead of paying
+  `BigDecimal`'s per-character dispatch (strict u64 parse −25% with a
+  small allocation increase; small-integer and large-document controls
+  unchanged)
 - Large-number parsing and Java conversion check the signed-long range
   before narrowing instead of throwing and catching overflow exceptions;
   the parser's uncommon fallback uses a bounded per-thread character
