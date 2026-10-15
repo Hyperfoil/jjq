@@ -265,6 +265,12 @@ public final class JqValues {
     private static final ThreadLocal<BytOutput> BYTE_SERIALIZER_BUFFER =
             ThreadLocal.withInitial(() -> new BytOutput(SERIALIZE_BUFFER_INIT));
 
+    // Only the uncommon number fallback uses this buffer. Bound retention so
+    // one unusually long literal does not enlarge every subsequent parse.
+    private static final int MAX_NUMBER_BUFFER_CHARS = 4096;
+    private static final ThreadLocal<char[]> NUMBER_BUFFER =
+            ThreadLocal.withInitial(() -> new char[64]);
+
     /**
      * Spread hash bits before masking. Similar field names (e.g. "...-cpu0", "...-cpu1")
      * differ only in low bits of the polynomial hash, which clusters them into adjacent
@@ -1962,26 +1968,7 @@ public final class JqValues {
             }
         }
 
-        // Fall back to string-based parsing for high-precision or extreme exponents
-        String numStr = s.substring(start, r.pos);
-        if (isDecimal) {
-            try {
-                return JqNumber.of(new BigDecimal(numStr), isDecimal);
-            } catch (NumberFormatException | ArithmeticException e) {
-                return JqNumber.of(Double.parseDouble(numStr), isDecimal);
-            }
-        }
-        try {
-            long parsed = Long.parseLong(numStr);
-            if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
-            return JqNumber.of(parsed);
-        } catch (NumberFormatException e) {
-            try {
-                return JqNumber.of(new BigDecimal(numStr));
-            } catch (NumberFormatException | ArithmeticException e2) {
-                return JqNumber.of(Double.parseDouble(numStr));
-            }
-        }
+        return parseNumberFallback(s, start, r.pos, isDecimal, negative);
     }
 
     // ========================================================================
@@ -2763,21 +2750,71 @@ public final class JqValues {
             }
         }
 
-        // Fallback: convert byte range to String for BigDecimal/Double parsing
-        String numStr = new String(r.data, start, r.pos - start, java.nio.charset.StandardCharsets.UTF_8);
-        if (isDecimal) {
-            try { return JqNumber.of(new BigDecimal(numStr), isDecimal); }
-            catch (NumberFormatException | ArithmeticException e) { return JqNumber.of(Double.parseDouble(numStr), isDecimal); }
+        return parseNumberFallback(r.data, start, r.pos, isDecimal, negative);
+    }
+
+    /** The char parser shares the fallback without allocating a substring. */
+    private static JqNumber parseNumberFallback(String source, int start, int end,
+                                                 boolean isDecimal, boolean negative) {
+        int length = end - start;
+        char[] chars = numberBuffer(length);
+        source.getChars(start, end, chars, 0);
+        return parseNumberChars(chars, length, isDecimal, negative);
+    }
+
+    /** Numeric tokens contain only ASCII; BigDecimal can parse the copied slice directly. */
+    private static JqNumber parseNumberFallback(byte[] source, int start, int end,
+                                                 boolean isDecimal, boolean negative) {
+        int length = end - start;
+        char[] chars = numberBuffer(length);
+        for (int i = 0; i < length; i++) {
+            chars[i] = (char) (source[start + i] & 0xFF);
+        }
+        return parseNumberChars(chars, length, isDecimal, negative);
+    }
+
+    private static char[] numberBuffer(int length) {
+        char[] chars = NUMBER_BUFFER.get();
+        if (length <= chars.length) return chars;
+        char[] expanded = new char[length];
+        if (length <= MAX_NUMBER_BUFFER_CHARS) NUMBER_BUFFER.set(expanded);
+        return expanded;
+    }
+
+    /** Range-check integer literals before conversion: overflow is not an exceptional input. */
+    private static JqNumber parseNumberChars(char[] chars, int length,
+                                             boolean isDecimal, boolean negative) {
+        if (!isDecimal) {
+            int first = negative ? 1 : 0;
+            while (first < length && chars[first] == '0') first++;
+            int digits = length - first;
+            if (digits < 19 || (digits == 19 && fitsLongLiteral(chars, first, negative))) {
+                // Accumulate negatively so Long.MIN_VALUE is representable too.
+                long parsed = 0;
+                for (int i = first; i < length; i++) {
+                    parsed = parsed * 10 - (chars[i] - '0');
+                }
+                if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
+                return JqNumber.of(negative ? parsed : -parsed);
+            }
         }
         try {
-            long parsed = Long.parseLong(numStr);
-            if (parsed == 0 && negative) return JqNumber.of(-0.0, true);
-            return JqNumber.of(parsed);
+            return JqNumber.of(new BigDecimal(chars, 0, length), isDecimal);
+        } catch (NumberFormatException | ArithmeticException e) {
+            // Extreme exponents retain the existing double fallback. Only
+            // this exceptional path needs a String.
+            return JqNumber.of(Double.parseDouble(new String(chars, 0, length)), isDecimal);
         }
-        catch (NumberFormatException e) {
-            try { return JqNumber.of(new BigDecimal(numStr)); }
-            catch (NumberFormatException | ArithmeticException e2) { return JqNumber.of(Double.parseDouble(numStr)); }
+    }
+
+    /** Compare exactly 19 significant digits against the appropriate signed-long boundary. */
+    private static boolean fitsLongLiteral(char[] chars, int first, boolean negative) {
+        String limit = negative ? "9223372036854775808" : "9223372036854775807";
+        for (int i = 0; i < limit.length(); i++) {
+            int difference = chars[first + i] - limit.charAt(i);
+            if (difference != 0) return difference < 0;
         }
+        return true;
     }
 
     /**

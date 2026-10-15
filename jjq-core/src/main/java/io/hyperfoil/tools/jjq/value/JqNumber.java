@@ -140,11 +140,11 @@ public final class JqNumber implements JqValue {
      */
     public Object integralValueExact() {
         if (isLong) return longVal;
-        try {
-            return decimalValue().longValueExact();
-        } catch (ArithmeticException e) {
-            return decimalValue().toBigIntegerExact();
+        BigDecimal value = decimalValue();
+        if (value.signum() == 0 || fitsInLong(value, value.scale())) {
+            return value.longValueExact();
         }
+        return value.toBigIntegerExact();
     }
 
     /**

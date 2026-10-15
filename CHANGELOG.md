@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Large-number parsing and Java conversion check the signed-long range
+  before narrowing instead of throwing and catching overflow exceptions;
+  the parser's uncommon fallback uses a bounded per-thread character
+  buffer instead of allocating a number String. Added focused small-number
+  benchmarks and boundary tests for exactness, signed zero, and float provenance
 - Duplicate-key policy for strict parsing: `ParseOptions.DuplicatePolicy`
   with `REJECT` (current) and `KEEP_LAST` (later value wins at the
   first-seen key position, serde/LinkedHashMap semantics) — lenient parsing
