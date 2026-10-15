@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.value;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.MathContext;
 
 public final class JqNumber implements JqValue {
@@ -58,6 +59,11 @@ public final class JqNumber implements JqValue {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
             return new JqNumber(0, null, value, false, null);
         }
+        if (value == 0.0 && Double.doubleToRawLongBits(value) == Long.MIN_VALUE) {
+            // Negative zero never folds to long: serde-style consumers
+            // distinguish -0.0 (float) from 0 (int), and jq renders "-0".
+            return new JqNumber(0, null, value, false, null);
+        }
         if (value == Math.floor(value) && value >= Long.MIN_VALUE && value <= Long.MAX_VALUE) {
             return of((long) value);
         }
@@ -66,10 +72,48 @@ public final class JqNumber implements JqValue {
     }
 
     /**
+     * True for double-backed negative zero — the only value distinguishing
+     * -0.0 from +0.0 in the model (JSON input and IEEE arithmetic preserve
+     * it; program literals, math builtins, and negation normalize to +0).
+     */
+    public boolean isNegativeZero() {
+        return !isLong && decimalVal == null && Double.doubleToRawLongBits(rawDouble) == Long.MIN_VALUE;
+    }
+
+    /**
+     * Wrap a rounding result: jq keeps -0.0 for negative inputs rounding to
+     * zero ({@code round(-0.4)} is -0.0). {@link Math#round(double)} returns
+     * long, which has no negative zero.
+     */
+    public static JqNumber ofRounded(double value) {
+        long rounded = Math.round(value);
+        if (rounded == 0 && (value < 0 || Double.doubleToRawLongBits(value) == Long.MIN_VALUE)) {
+            return of(-0.0);
+        }
+        return of(rounded);
+    }
+
+    /**
+     * Exact Java form of an integral value: {@link Long} when it fits,
+     * {@link BigInteger} beyond long range (where
+     * {@link #longValue()} would silently wrap). Call only when
+     * {@link #isIntegral()} holds (fractional values have no exact form).
+     */
+    public Object integralValueExact() {
+        if (isLong) return longVal;
+        try {
+            return decimalValue().longValueExact();
+        } catch (ArithmeticException e) {
+            return decimalValue().toBigIntegerExact();
+        }
+    }
+
+    /**
      * Create a JqNumber from any {@link Number} subtype.
      * {@link Integer}, {@link Long}, {@link Short}, and {@link Byte} are treated as integral (long-backed).
      * {@link Float} and {@link Double} are treated as floating-point.
-     * {@link BigDecimal} preserves its exact value.
+     * {@link BigDecimal} preserves its exact value; {@link BigInteger}
+     * stays exact through BigDecimal (never demoted through {@code double}).
      * Other Number types are converted via {@link Number#doubleValue()}.
      */
     public static JqNumber of(Number value) {
@@ -78,9 +122,10 @@ public final class JqNumber implements JqValue {
         if (value instanceof Double d) return of(d.doubleValue());
         if (value instanceof Float f) return of((double) f.floatValue());
         if (value instanceof BigDecimal bd) return of(bd);
+        if (value instanceof BigInteger bi) return of(new BigDecimal(bi));
         if (value instanceof Short s) return of((long) s.shortValue());
         if (value instanceof Byte b) return of((long) b.byteValue());
-        // Fallback for AtomicInteger, AtomicLong, BigInteger, etc.
+        // Fallback for AtomicInteger, AtomicLong, etc.
         double d = value.doubleValue();
         if (d == Math.floor(d) && !Double.isInfinite(d) && d >= Long.MIN_VALUE && d <= Long.MAX_VALUE) {
             return of(value.longValue());
@@ -243,6 +288,7 @@ public final class JqNumber implements JqValue {
 
     /** Format a double for JSON output, matching jq's plain notation for common values. */
     private static String formatDouble(double d) {
+        if (Double.doubleToRawLongBits(d) == Long.MIN_VALUE) return "-0";
         long asLong = (long) d;
         if ((double) asLong == d) {
             return Long.toString(asLong); // 3.0 -> "3"
@@ -316,6 +362,10 @@ public final class JqNumber implements JqValue {
 
     /** Append a double to StringBuilder, matching jq's plain notation for common values. */
     public static void appendDouble(StringBuilder sb, double d) {
+        if (Double.doubleToRawLongBits(d) == Long.MIN_VALUE) {
+            sb.append("-0");
+            return;
+        }
         long asLong = (long) d;
         if ((double) asLong == d) {
             sb.append(asLong); // 3.0 -> "3"
@@ -335,6 +385,11 @@ public final class JqNumber implements JqValue {
     public boolean equals(Object o) {
         if (o instanceof JqNumber n) {
             if (this.isLong && n.isLong) return this.longVal == n.longVal;
+            // Signed zero equals any zero (jq numeric equality: -0.0 == +0).
+            // Field reads first — virtual calls only when -0.0 is involved.
+            if (isNegativeZero() || n.isNegativeZero()) {
+                return this.doubleValue() == 0.0 && n.doubleValue() == 0.0;
+            }
             if (this.isSpecial() || n.isSpecial()) {
                 return Double.compare(this.doubleValue(), n.doubleValue()) == 0;
             }
@@ -358,6 +413,8 @@ public final class JqNumber implements JqValue {
     public int hashCode() {
         if (isLong) return Long.hashCode(longVal);
         if (isSpecial()) return Double.hashCode(rawDouble);
+        // Zeroes hash alike (matches the equals collapse above).
+        if (decimalVal == null && rawDouble == 0.0) return 0;
         if (decimalVal == null) return Double.hashCode(rawDouble);
         return decimalVal.stripTrailingZeros().hashCode();
     }

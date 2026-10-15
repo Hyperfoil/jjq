@@ -248,7 +248,8 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
         return switch (this) {
             case JqNull ignored -> null;
             case JqBoolean b -> b.booleanValue();
-            case JqNumber n -> n.isIntegral() ? (Object) n.longValue() : n.doubleValue();
+            case JqNumber n when n.isNegativeZero() -> (Object) n.doubleValue();
+            case JqNumber n -> n.isIntegral() ? n.integralValueExact() : n.doubleValue();
             case JqString s -> s.stringValue();
             case JqArray a -> {
                 var list = new java.util.ArrayList<>(a.size());
@@ -812,6 +813,11 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
                 case JqBoolean ab -> { return Boolean.compare(ab.booleanValue(), b.booleanValue()); }
                 case JqNumber n -> {
                     JqNumber m = (JqNumber) b;
+                    // Signed zero compares equal to any zero (jq numeric order).
+                    if ((n.isNegativeZero() || m.isNegativeZero())
+                            && n.doubleValue() == 0.0 && m.doubleValue() == 0.0) {
+                        return 0;
+                    }
                     if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
                         return Double.compare(n.doubleValue(), m.doubleValue());
                     }

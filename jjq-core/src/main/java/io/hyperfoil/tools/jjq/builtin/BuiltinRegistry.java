@@ -292,7 +292,9 @@ public final class BuiltinRegistry {
             case "length/0" -> (input, args, env, eval, out) -> {
 
             if (input instanceof JqNumber n) {
-                out.accept((n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
+                // abs(-0.0) is -0.0 in jq (x is not < 0, returned unchanged).
+                out.accept(n.isNegativeZero() ? n
+                        : (n.isNaN() || n.isInfinite()) ? JqNumber.of(Math.abs(n.doubleValue())) : JqNumber.of(n.decimalValue().abs()));
             } else {
                 out.accept(JqNumber.of(input.length()));
             }
@@ -576,7 +578,11 @@ public final class BuiltinRegistry {
             });
             for (JqValue elem : sortedList) {
                 JqValue key = eval.eval(args.getFirst(), elem, env).getFirst();
-                groups.computeIfAbsent(key.toJsonString(), k -> new ArrayList<>()).add(elem);
+                // Group keys are rendered text; -0.0 would split from +0,
+                // but jq groups zeros together (numeric equality).
+                String ks = key.toJsonString();
+                if (key instanceof JqNumber n && n.isNegativeZero()) ks = "0";
+                groups.computeIfAbsent(ks, k -> new ArrayList<>()).add(elem);
             }
             var result = groups.values().stream()
                     .map(g -> (JqValue) JqArray.of(g))
@@ -1216,7 +1222,7 @@ public final class BuiltinRegistry {
             if (input instanceof JqNumber n && (n.isNaN() || n.isInfinite())) {
                 out.accept(input);
             } else {
-                out.accept(JqNumber.of(Math.round(input.doubleValue())));
+                out.accept(JqNumber.ofRounded(input.doubleValue()));
             }
         };
             case "sqrt/0" -> (input, args, env, eval, out) -> {

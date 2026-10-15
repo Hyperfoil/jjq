@@ -3409,6 +3409,8 @@ final class YamlParser {
             // Fold the final part (single-part values fold trivially).
             if (total > (Long.MAX_VALUE - part) / 60) throw new NumberFormatException("overflow");
             total = total * 60 + part;
+            // Explicit negative zero is a float (matches JSON parsing).
+            if (neg && total == 0) return JqNumber.of(-0.0);
             return JqNumber.of(neg ? -total : total);
         } catch (NumberFormatException ex) {
             return convertIntegerFallback(value);
@@ -3441,7 +3443,10 @@ final class YamlParser {
             // hold them, and Double.parseDouble silently truncates.
             String clean = value.indexOf('_') < 0 ? value : value.replace("_", "");
             try {
-                return JqNumber.of(new java.math.BigDecimal(clean));
+                java.math.BigDecimal parsed = new java.math.BigDecimal(clean);
+                // Explicit negative zero is a float (matches JSON parsing).
+                if (parsed.signum() == 0 && clean.charAt(0) == '-') return JqNumber.of(-0.0);
+                return JqNumber.of(parsed);
             } catch (NumberFormatException e) {
                 // Forms BigDecimal rejects but doubles accept (trailing dot).
                 return JqNumber.of(Double.parseDouble(clean));

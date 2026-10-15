@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.4
 
+- Signed-zero and beyond-long number fidelity: `-0.0` parses to a distinct
+  double-backed value (renders `-0`, binds as float) instead of folding to
+  long `0`; integers beyond long stay exact end to end (`toJavaObject`
+  yields `BigInteger` instead of wrapping); equality, sort, unique, and
+  group_by stay numeric (`-0.0 == 0`); math builtins, `abs`,
+  `floor`/`ceil`/`round`, `tonumber`, negation, and `min`/`max` match jq
+  1.8.1 signed-zero behavior verbatim (verified against the binary)
 - Configurable strict-parse options: `ParseOptions` with `maxDepth`
   (default 10000), BOM `STRIP`/`REJECT`, and raw-NUL `ALLOW`/`REJECT`
   policies on new `parseStrict(doc, options)` overloads — defaults match

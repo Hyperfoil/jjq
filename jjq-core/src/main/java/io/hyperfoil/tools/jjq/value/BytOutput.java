@@ -70,6 +70,10 @@ public final class BytOutput {
      * Integral values serialize without a decimal point (3.0 becomes "3").
      */
     public void writeDouble(double d) {
+        if (Double.doubleToRawLongBits(d) == Long.MIN_VALUE) {
+            writeAsciiString("-0");
+            return;
+        }
         long asLong = (long) d;
         if ((double) asLong == d) {
             writeLong(asLong);

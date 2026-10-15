@@ -175,6 +175,78 @@ class VirtualMachineTest {
     }
 
     @Nested
+    class SignedZero {
+        // Genuine -0.0 enters through input documents (program literals
+        // cannot spell it). jq 1.8.1 behaviors pinned here.
+        @Test void passthrough() {
+            assertEquals("-0", vmOne(".neg", "{\"neg\":-0}").toJsonString());
+        }
+
+        @Test void equalsZero() {
+            assertEquals(JqBoolean.TRUE, vmOne(".neg == 0", "{\"neg\":-0}"));
+            assertEquals(JqBoolean.TRUE, vmOne("0 == .neg", "{\"neg\":-0}"));
+        }
+
+        @Test void uniqueDedupes() {
+            assertEquals(JqValues.parse("[-0]"), vmOne("unique", "[-0,0,0]"));
+        }
+
+        @Test void sortKeepsOrder() {
+            assertEquals(JqValues.parse("[-0,0]"), vmOne("sort", "[-0,0]"));
+            assertEquals(JqValues.parse("[0,-0]"), vmOne("sort", "[0,-0]"));
+        }
+
+        @Test void groupBySingle() {
+            assertEquals(JqValues.parse("[[-0,0]]"), vmOne("group_by(.)", "[-0,0]"));
+        }
+
+        @Test void minMax() {
+            assertEquals(JqValues.parse("-0"), vmOne("min", "[-0,0]"));
+            assertEquals(JqValues.parse("0"), vmOne("max", "[-0,0]"));
+        }
+
+        @Test void tostringPreserves() {
+            assertEquals(JqString.of("-0"), vmOne("tostring", "-0"));
+        }
+
+        @Test void interpolationPreserves() {
+            assertEquals(JqString.of("-0"), vmOne("\"\\(.a)\"", "{\"a\":-0}"));
+        }
+
+        @Test void tonumberPreserves() {
+            assertEquals(JqValues.parse("-0"), vmOne("tonumber", "\"-0\""));
+            assertEquals(JqValues.parse("-0"), vmOne("tonumber", "\"-0.0\""));
+        }
+
+        @Test void floorCeilPreserve() {
+            assertEquals(JqValues.parse("-0"), vmOne("floor", "-0"));
+            assertEquals(JqValues.parse("-0"), vmOne("ceil", "-0"));
+        }
+
+        @Test void roundPreserves() {
+            assertEquals(JqValues.parse("-0"), vmOne("round", "-0"));
+            assertEquals(JqValues.parse("-0"), vmOne("round", "-0.4"));
+        }
+
+        @Test void absPreserves() {
+            assertEquals(JqValues.parse("-0"), vmOne("abs", "-0"));
+        }
+
+        @Test void sqrtPreserves() {
+            assertEquals(JqValues.parse("-0"), vmOne("sqrt", "-0"));
+        }
+
+        @Test void negateNormalizes() {
+            assertEquals(JqValues.parse("0"), vmOne("-.", "-0"));
+        }
+
+        @Test void arithmeticPreserves() {
+            assertEquals(JqValues.parse("-0"), vmOne(". * -1", "0"));
+            assertEquals(JqValues.parse("-0"), vmOne(". * 2", "-0"));
+        }
+    }
+
+    @Nested
     class CompoundFieldAccess {
         @Test void dotField2() {
             assertEquals(JqNumber.of(3), vmOne(".a.b", "{\"a\":{\"b\":3}}"));

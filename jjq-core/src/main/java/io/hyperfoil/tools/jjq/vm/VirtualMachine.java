@@ -796,20 +796,28 @@ public final class VirtualMachine {
                 } else throw builtinTypeError(val, "cannot be uniquified");
             }
             case BUILTIN_FLOOR -> {
-                if (val instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
-                else throw builtinTypeError(val, "cannot be floored");
+                // (long) saturates huge values (issue #142); the zero check
+                // preserves -0.0 (jq renders it signed).
+                if (val instanceof JqNumber n) {
+                    double floored = Math.floor(n.doubleValue());
+                    push(floored == 0.0 ? JqNumber.of(floored) : JqNumber.of((long) floored));
+                } else throw builtinTypeError(val, "cannot be floored");
             }
             case BUILTIN_CEIL -> {
-                if (val instanceof JqNumber n) push(JqNumber.of((long) Math.ceil(n.doubleValue())));
-                else throw builtinTypeError(val, "cannot be ceiled");
+                if (val instanceof JqNumber n) {
+                    double ceiled = Math.ceil(n.doubleValue());
+                    push(ceiled == 0.0 ? JqNumber.of(ceiled) : JqNumber.of((long) ceiled));
+                } else throw builtinTypeError(val, "cannot be ceiled");
             }
             case BUILTIN_ROUND -> {
-                if (val instanceof JqNumber n) push(JqNumber.of(Math.round(n.doubleValue())));
+                if (val instanceof JqNumber n) push(JqNumber.ofRounded(n.doubleValue()));
                 else throw builtinTypeError(val, "cannot be rounded");
             }
             case BUILTIN_ABS -> {
                 if (val instanceof JqNumber n) {
-                    if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
+                    // abs(-0.0) is -0.0 in jq (x is not < 0, returned unchanged).
+                    if (n.isNegativeZero()) push(n);
+                    else if (n.isNaN() || n.isInfinite()) push(JqNumber.of(Math.abs(n.doubleValue())));
                     else if (n.isIntegral()) push(JqNumber.of(Math.abs(n.longValue())));
                     else push(JqNumber.of(n.decimalValue().abs()));
                 } else if (val instanceof JqNull) push(JqNull.NULL);
@@ -833,9 +841,14 @@ public final class VirtualMachine {
             String str = s.stringValue().trim();
             try {
                 if (str.contains(".") || str.contains("e") || str.contains("E")) {
-                    push(JqNumber.of(new java.math.BigDecimal(str)));
+                    java.math.BigDecimal parsed = new java.math.BigDecimal(str);
+                    // Negative-zero text is a float (jq: "-0.0" stays signed).
+                    if (parsed.signum() == 0 && str.charAt(0) == '-') push(JqNumber.of(-0.0));
+                    else push(JqNumber.of(parsed));
                 } else {
-                    push(JqNumber.of(Long.parseLong(str)));
+                    long parsed = Long.parseLong(str);
+                    if (parsed == 0 && str.charAt(0) == '-') push(JqNumber.of(-0.0));
+                    else push(JqNumber.of(parsed));
                 }
             } catch (NumberFormatException e) {
                 throw new JqException("string (" + JqString.formatForError(s.stringValue()) + ") cannot be parsed as a number");

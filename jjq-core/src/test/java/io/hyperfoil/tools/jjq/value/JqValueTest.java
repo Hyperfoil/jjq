@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.value;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1358,6 +1359,63 @@ class JqValueTest {
                     () -> JqValues.parseStrict(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
                     "strict bytes accepted dups: " + s);
         }
+    }
+
+    // ---- Signed zero and beyond-long integers (issue #145) ----
+
+    @Test
+    void parsePreservesNegativeZero() {
+        JqNumber negZero = (JqNumber) JqValues.parseStrict("-0");
+        assertTrue(negZero.isNegativeZero());
+        assertFalse(((JqNumber) JqValues.parseStrict("0")).isNegativeZero());
+        assertFalse(JqNumber.of(0).isNegativeZero());
+        assertFalse(JqNumber.of(0.0).isNegativeZero());
+        // Decimal spellings preserve too.
+        assertTrue(((JqNumber) JqValues.parseStrict("-0.0")).isNegativeZero());
+    }
+
+    @Test
+    void negativeZeroRendersSigned() {
+        assertEquals("-0", JqValues.parseStrict("-0").toJsonString());
+        assertEquals("-0", JqValues.parseStrict("-0.0").toJsonString());
+        assertEquals("0", JqValues.parseStrict("0").toJsonString());
+        // Value round-trips hold (text normalizes like other scale forms).
+        assertEquals(JqValues.parseStrict("-0"), JqValues.parseStrict(
+                JqValues.parseStrict("-0.0").toJsonString()));
+    }
+
+    @Test
+    void negativeZeroEqualsZero() {
+        // jq numeric equality: -0.0 == +0 across every representation.
+        assertEquals(JqNumber.of(0), JqValues.parseStrict("-0"));
+        assertEquals(JqValues.parseStrict("-0"), JqNumber.of(0));
+        assertEquals(JqValues.parseStrict("-0").hashCode(), JqNumber.of(0).hashCode());
+        assertNotEquals(JqValues.parseStrict("-0"), JqNumber.of(1));
+    }
+
+    @Test
+    void toJavaObjectPreservesNegativeZero() {
+        assertEquals(Double.valueOf(-0.0), JqValues.parseStrict("-0").toJavaObject());
+        assertEquals(Long.valueOf(0), JqValues.parseStrict("0").toJavaObject());
+        assertEquals(Double.valueOf(3.14), JqValues.parseStrict("3.14").toJavaObject());
+    }
+
+    @Test
+    void toJavaObjectKeepsBeyondLongExact() {
+        // BigDecimal-backed integrals beyond long must not wrap through longValue().
+        assertEquals(new BigInteger("18446744073709551615"),
+                JqValues.parseStrict("18446744073709551615").toJavaObject());
+        assertEquals(new BigInteger("-9223372036854775809"),
+                JqValues.parseStrict("-9223372036854775809").toJavaObject());
+        // Long range still yields Long.
+        assertEquals(Long.valueOf(Long.MAX_VALUE),
+                JqValues.parseStrict("9223372036854775807").toJavaObject());
+    }
+
+    @Test
+    void ofNumberKeepsBigIntegerExact() {
+        assertEquals(new BigInteger("18446744073709551615"),
+                JqNumber.of(new BigInteger("18446744073709551615")).toJavaObject());
     }
 
     @Test

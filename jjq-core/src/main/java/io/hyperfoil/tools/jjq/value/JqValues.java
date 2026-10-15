@@ -1889,6 +1889,8 @@ public final class JqValues {
 
         if (!isDecimal && !overflow && intDigitCount <= 18) {
             // Integer that fits in a long — no string allocation needed
+            // Integer-lexed negative zero is a float (serde/jq distinguish -0 from 0).
+            if (negative && acc == 0) return JqNumber.of(-0.0);
             return JqNumber.of(negative ? -acc : acc);
         }
 
@@ -1922,7 +1924,9 @@ public final class JqValues {
             }
         }
         try {
-            return JqNumber.of(Long.parseLong(numStr));
+            long parsed = Long.parseLong(numStr);
+            if (parsed == 0 && negative) return JqNumber.of(-0.0);
+            return JqNumber.of(parsed);
         } catch (NumberFormatException e) {
             try {
                 return JqNumber.of(new BigDecimal(numStr));
@@ -2672,6 +2676,8 @@ public final class JqValues {
         }
 
         if (!isDecimal && !overflow && intDigitCount <= 18) {
+            // Integer-lexed negative zero is a float (serde/jq distinguish -0 from 0).
+            if (negative && acc == 0) return JqNumber.of(-0.0);
             return JqNumber.of(negative ? -acc : acc);
         }
 
@@ -2693,7 +2699,11 @@ public final class JqValues {
             try { return JqNumber.of(new BigDecimal(numStr)); }
             catch (NumberFormatException | ArithmeticException e) { return JqNumber.of(Double.parseDouble(numStr)); }
         }
-        try { return JqNumber.of(Long.parseLong(numStr)); }
+        try {
+            long parsed = Long.parseLong(numStr);
+            if (parsed == 0 && negative) return JqNumber.of(-0.0);
+            return JqNumber.of(parsed);
+        }
         catch (NumberFormatException e) {
             try { return JqNumber.of(new BigDecimal(numStr)); }
             catch (NumberFormatException | ArithmeticException e2) { return JqNumber.of(Double.parseDouble(numStr)); }
