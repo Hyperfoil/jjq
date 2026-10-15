@@ -1533,6 +1533,114 @@ class JqValueTest {
         assertEquals(JqValues.parse("\"a\0b\""), JqValues.parse("\"a\0b\""));
     }
 
+    // ---- Lone surrogates in strict mode (issue #146) ----
+
+    @Test
+    void strictRejectsLoneLeadingSurrogate() {
+        for (String doc : new String[]{"[\"\\uD800\"]", "[\"\\uD83DABC\"]", "[\"\\uD83D\"]"}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parseStrict(doc), "accepted lone leading: " + doc);
+            assertTrue(e.getMessage().contains("urrogate"), e.getMessage());
+            assertTrue(e.getMessage().contains("column"), e.getMessage());
+            assertThrows(IllegalArgumentException.class, () -> JqValues.parseStrict(
+                    doc.getBytes(StandardCharsets.UTF_8)), "bytes accepted: " + doc);
+        }
+    }
+
+    @Test
+    void strictRejectsLoneTrailingSurrogate() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("[\"\\uDC00\"]"));
+        assertTrue(e.getMessage().contains("urrogate"), e.getMessage());
+        assertTrue(e.getMessage().contains("column"), e.getMessage());
+    }
+
+    @Test
+    void strictRejectsSurrogateInKey() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"\\uD800\":1}"));
+        assertTrue(e.getMessage().contains("urrogate"), e.getMessage());
+    }
+
+    @Test
+    void strictAcceptsPairedSurrogates() {
+        // 😀 round-trips through the pair escape.
+        assertEquals(JqValues.parse("[\"\\uD83D\\uDE00\"]"),
+                JqValues.parseStrict("[\"\\uD83D\\uDE00\"]"));
+        assertEquals(JqValues.parse("[\"\\uD83D\\uDE00\"]"), JqValues.parseStrict(
+                "[\"\\uD83D\\uDE00\"]".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void strictRejectsTruncatedPairEscape() {
+        // A cut-off second escape is malformed hex, not a pairing issue.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("[\"\\uD83D\\uDE0\"]"));
+        assertTrue(e.getMessage().contains("\\u escape"), e.getMessage());
+    }
+
+    @Test
+    void lenientKeepsLoneSurrogates() {
+        // Lenient mode skips escape validation entirely (unchanged contract).
+        assertDoesNotThrow(() -> JqValues.parse("[\"\\uD800\"]"));
+        assertDoesNotThrow(() -> JqValues.parse("[\"\\uD800\"]".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void strictSignalsInvalidOnlyAsIAE() {
+        // Pinned umbrella: no malformed document escapes strict parsing as
+        // anything but IllegalArgumentException — adapters catch-umbrella
+        // instead of matching messages. Fixed seed: deterministic.
+        java.util.Random rnd = new java.util.Random(0xC0FFEE);
+        String[] seeds = {"{\"a\":[1,2,{\"b\":null}]}", "\"\\uD83D\\uDE00\"",
+                "[1e30,{\"x\":\"y\"}]", "{\"k\":\"v\"}"};
+        for (String seed : seeds) {
+            for (int i = 0; i < 250; i++) {
+                byte[] bytes = seed.getBytes(StandardCharsets.UTF_8);
+                int cuts = 1 + rnd.nextInt(3);
+                for (int m = 0; m < cuts; m++) {
+                    bytes[rnd.nextInt(bytes.length)] = (byte) rnd.nextInt(256);
+                }
+                byte[] input = bytes;
+                try {
+                    JqValues.parseStrict(input);
+                } catch (IllegalArgumentException expected) {
+                    // The documented invalid-document signal.
+                } catch (RuntimeException e) {
+                    fail("non-IAE from strict parse of mutated input: " + e);
+                }
+                if (rnd.nextBoolean()) {
+                    input = java.util.Arrays.copyOf(input, rnd.nextInt(input.length + 1));
+                    try {
+                        JqValues.parseStrict(input);
+                    } catch (IllegalArgumentException expected) {
+                    } catch (RuntimeException e) {
+                        fail("non-IAE from strict parse of truncated input: " + e);
+                    }
+                }
+                String text = new String(bytes, StandardCharsets.UTF_8);
+                try {
+                    JqValues.parseStrict(text);
+                } catch (IllegalArgumentException expected) {
+                } catch (RuntimeException e) {
+                    fail("non-IAE from strict string parse: " + e);
+                }
+                // Char-level mutations reach lone surrogates that byte
+                // decoding would replace (no exception from the decoder).
+                char[] chars = seed.toCharArray();
+                for (int m = 0; m < 1 + rnd.nextInt(3); m++) {
+                    chars[rnd.nextInt(chars.length)] = (char) rnd.nextInt(0xE000);
+                }
+                try {
+                    JqValues.parseStrict(new String(chars));
+                } catch (IllegalArgumentException expected) {
+                } catch (RuntimeException e) {
+                    fail("non-IAE from strict char-mutated parse: " + e);
+                }
+            }
+        }
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================

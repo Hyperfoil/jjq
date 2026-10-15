@@ -1206,6 +1206,9 @@ public final class JqValues {
      * with line/column positions. Used by fromjson; suitable for API responses
      * and files that must fail loudly instead of reading as partial values.
      * Empty input still yields null, matching {@code parse}.
+     * Every malformed document surfaces exclusively as
+     * {@code IllegalArgumentException} (positions included) — adapters map
+     * invalid input by catch-umbrella instead of matching messages.
      */
     public static JqValue parseStrict(String json) {
         return parseStrict(json, ParseOptions.defaults());
@@ -1222,6 +1225,9 @@ public final class JqValues {
      * @return the parsed value ({@code null} for empty input)
      * @throws IllegalArgumentException with line/column position on malformed
      *         input or policy violation
+     * Every malformed document surfaces exclusively as
+     * {@code IllegalArgumentException} (positions included) — adapters map
+     * invalid input by catch-umbrella instead of matching messages.
      */
     public static JqValue parseStrict(String json, ParseOptions options) {
         if (options.nulPolicy() == ParseOptions.NulPolicy.REJECT) {
@@ -1267,6 +1273,9 @@ public final class JqValues {
      * @param bytes the UTF-8 JSON document
      * @return the parsed value ({@code null} for empty input)
      * @throws IllegalArgumentException with line/column position on malformed input
+     * Every malformed document surfaces exclusively as
+     * {@code IllegalArgumentException} (positions included) — adapters map
+     * invalid input by catch-umbrella instead of matching messages.
      */
     public static JqValue parseStrict(byte[] bytes) {
         return parseStrict(bytes, ParseOptions.defaults());
@@ -1284,6 +1293,9 @@ public final class JqValues {
      * @return the parsed value ({@code null} for empty input)
      * @throws IllegalArgumentException with line/column position on malformed
      *         input or policy violation
+     * Every malformed document surfaces exclusively as
+     * {@code IllegalArgumentException} (positions included) — adapters map
+     * invalid input by catch-umbrella instead of matching messages.
      */
     public static JqValue parseStrict(byte[] bytes, ParseOptions options) {
         int bad = Utf8.validate(bytes, 0, bytes.length);
@@ -1412,6 +1424,13 @@ public final class JqValues {
         return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F');
     }
 
+    /** Numeric value of an ASCII hex digit (call only after {@link #isHexByte}). */
+    private static int hexVal(int b) {
+        if (b <= '9') return b - '0';
+        if (b <= 'F') return b - 'A' + 10;
+        return b - 'a' + 10;
+    }
+
     /**
      * Validate one escape sequence with the reader positioned at the escape
      * character (backslash already consumed). Advances past the sequence,
@@ -1430,7 +1449,35 @@ public final class JqValues {
                         throw strictError(r, "Invalid \\u escape sequence");
                     }
                 }
+                int unit = (hexVal(r.data[r.pos + 1] & 0xFF) << 12)
+                        | (hexVal(r.data[r.pos + 2] & 0xFF) << 8)
+                        | (hexVal(r.data[r.pos + 3] & 0xFF) << 4)
+                        | hexVal(r.data[r.pos + 4] & 0xFF);
                 r.pos += 4;
+                if (unit >= 0xD800 && unit <= 0xDBFF) {
+                    // High surrogate: the low half must follow immediately
+                    // (a missing follower is unpaired just as surely as a
+                    // truncated document is). It is consumed inline, so a
+                    // low escape standing alone below is by definition
+                    // unpaired — no cross-call state.
+                    if (r.pos + 2 >= r.end
+                            || (r.data[r.pos + 1] & 0xFF) != '\\'
+                            || (r.data[r.pos + 2] & 0xFF) != 'u') {
+                        throw strictError(r, "Unpaired surrogate escape");
+                    }
+                    boolean pair = r.pos + 6 < r.end;
+                    int low = 0;
+                    for (int i = 3; pair && i <= 6; i++) {
+                        int h = r.data[r.pos + i] & 0xFF;
+                        if (!isHexByte(h)) pair = false;
+                        else low = (low << 4) | hexVal(h);
+                    }
+                    if (!pair) throw strictError(r, "Invalid \\u escape sequence");
+                    if (low < 0xDC00 || low > 0xDFFF) throw strictError(r, "Unpaired surrogate escape");
+                    r.pos += 6;
+                } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+                    throw strictError(r, "Unpaired surrogate escape");
+                }
             }
             default -> throw strictError(r, "Invalid escape '\\" + (char) e + "'");
         }
@@ -2202,6 +2249,10 @@ public final class JqValues {
             if (r.pos < r.end && (r.data[r.pos] & 0xFF) == ']') {
                 r.pos++;
                 return unwindArrayStackBytes(stack, stackCounts, stackDepth, JqArray.EMPTY, r, depth);
+            }
+            if (r.pos >= r.end) {
+                if (r.strict) throw strictError(r, "Unterminated array");
+                break;
             }
             if ((r.data[r.pos] & 0xFF) == '[') {
                 if (stack == null) { stack = new ArrayDeque<>(); stackCounts = new int[16]; }

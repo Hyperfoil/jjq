@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 0.2.4
 
+- Strict-mode lone surrogates: `\uD800`-style escapes fail fast unless
+  paired (`\uD83D\uDE00` binds), in values and keys, with the usual
+  positions — plus a documented contract that every malformed document
+  surfaces exclusively as `IllegalArgumentException` (pinned by a
+  fixed-seed fuzz test), so adapters catch-umbrella instead of matching
+  messages; also fixed truncated arrays crashing with
+  `ArrayIndexOutOfBoundsException` instead of failing (strict) or reading
+  partial (lenient)
 - Signed-zero and beyond-long number fidelity: `-0.0` parses to a distinct
   double-backed value (renders `-0`, binds as float) instead of folding to
   long `0`; integers beyond long stay exact end to end (`toJavaObject`
