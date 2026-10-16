@@ -2362,9 +2362,11 @@ public final class JqValues {
     }
 
     // Linear duplicate-scan range: at most MAX compares per key with no
-    // allocation. Past it, promotion builds the HashSet once. Aligned with
-    // the inline key/value arrays (8) so promotion and scratch growth agree.
-    private static final int DUP_LINEAR_MAX = 8;
+    // allocation. Past it, promotion builds a presized HashSet once.
+    // Aligned above the inline key/value arrays (8) so small objects never
+    // promote; wide objects pay a bounded linear head, then a set sized to
+    // skip the early doubling resizes.
+    private static final int DUP_LINEAR_MAX = 32;
 
     private static JqObject parseObjectBytes(JsonByteReader r, int depth) {
         if (depth > r.maxDepth) throw new IllegalArgumentException("Exceeds depth limit for parsing");
@@ -2416,10 +2418,11 @@ public final class JqValues {
                     }
                     if (!dup && count == DUP_LINEAR_MAX) {
                         // Genuinely growing past the linear range: build the
-                        // set once with everything stored so far. A dup at
-                        // exactly MAX leaves count frozen, so count can never
-                        // exceed MAX with seen == null after this point.
-                        seen = new java.util.HashSet<>();
+                        // set once with everything stored so far, presized to
+                        // skip the early doubling resizes. A dup at exactly
+                        // MAX leaves count frozen, so count can never exceed
+                        // MAX with seen == null after this point.
+                        seen = new java.util.HashSet<>(count * 2 + 1);
                         for (int i = 0; i <= count; i++) seen.add(keys[i]);
                     }
                 }

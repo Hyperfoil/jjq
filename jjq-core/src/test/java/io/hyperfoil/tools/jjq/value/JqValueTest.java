@@ -1766,6 +1766,34 @@ class JqValueTest {
     }
 
     @Test
+    void strictDuplicatesPastPromotionStayOrdered() {
+        // 40 distinct keys force HashSet promotion; duplicates past the
+        // promotion point (raw, boundary, and escaped) still honor KEEP_LAST
+        // first-seen order, and REJECT still reports the first duplicate.
+        StringBuilder doc = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) doc.append(',');
+            doc.append("\"k").append(i).append("\":").append(i);
+        }
+        doc.append(",\"k35\":\"dup-late\",\"k0\":\"dup-first\",\"\\u006b39\":\"dup-escaped\"}");
+        StringBuilder expected = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) expected.append(',');
+            expected.append("\"k").append(i).append("\":");
+            if (i == 0) expected.append("\"dup-first\"");
+            else if (i == 35) expected.append("\"dup-late\"");
+            else if (i == 39) expected.append("\"dup-escaped\"");
+            else expected.append(i);
+        }
+        expected.append('}');
+        assertEquals(expected.toString(),
+                JqValues.parseStrict(doc.toString(), keepLast()).toJsonString());
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(doc.toString()));
+        assertTrue(e.getMessage().contains("\"k35\""), e.getMessage());
+    }
+
+    @Test
     void strictKeepLastEndingAtEightKeysOwnsItsValues() {
         // Eight unique keys plus a duplicate grows scratch, but the final
         // count stays 8. The completed object must keep its own values even

@@ -2,6 +2,9 @@
 
 ## [Unreleased] - 0.2.4
 
+- Duplicate scan stays linear to 32 keys with a presized promoted set
+  (−7% strict 14MB allocation, byte-exact across forks; latency flat on
+  small, 1MB, and production guards).
 - Digit loop no longer tracks overflow per digit (18 digits cannot overflow
   a long; the count gates reject longer runs): lenient u64 parse −12%,
   fresh end-to-end number paths −4 to −6%, strict edge document −6%, no
