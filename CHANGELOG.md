@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.4
 
+- Digit loop no longer tracks overflow per digit (18 digits cannot overflow
+  a long; the count gates reject longer runs): lenient u64 parse −12%,
+  fresh end-to-end number paths −4 to −6%, strict edge document −6%, no
+  regressions on small-int, conversion, or 1MB controls.
 - Strict duplicate detection scans small objects linearly, promoting to a
   `HashSet` past 8 keys (single-key strict parse −32% with lower
   allocation; `KEEP_LAST` order and escaped-key equality unchanged,

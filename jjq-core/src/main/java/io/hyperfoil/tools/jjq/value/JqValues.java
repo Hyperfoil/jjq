@@ -2771,16 +2771,14 @@ public final class JqValues {
         }
 
         long acc = 0;
-        boolean overflow = false;
         int intDigitCount = 0;
         while (r.pos < r.end) {
             int d = (r.data[r.pos] & 0xFF) - '0';
             if (d < 0 || d > 9) break;
-            if (!overflow) {
-                long next = acc * 10 + d;
-                if (next < acc) overflow = true;
-                else acc = next;
-            }
+            // No overflow bookkeeping: at most 18 digits reach the fast
+            // paths below and 10^18-1 fits in a long, so any wraparound
+            // implies 19+ digits, which the count gates reject anyway.
+            acc = acc * 10 + d;
             intDigitCount++;
             r.pos++;
         }
@@ -2828,13 +2826,13 @@ public final class JqValues {
             throw strictError(r, "Invalid number");
         }
 
-        if (!isDecimal && !overflow && intDigitCount <= 18) {
+        if (!isDecimal && intDigitCount <= 18) {
             // Integer-lexed negative zero is a float (serde/jq distinguish -0 from 0).
             if (negative && acc == 0) return JqNumber.of(-0.0, true);
             return JqNumber.of(negative ? -acc : acc);
         }
 
-        if (isDecimal && !overflow && intDigitCount <= 15 && fracCount <= 15) {
+        if (isDecimal && intDigitCount <= 15 && fracCount <= 15) {
             int totalDigits = intDigitCount + fracCount;
             if (totalDigits <= 15 && expValue >= -18 && expValue <= 18) {
                 double value = (double) acc;
