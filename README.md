@@ -693,13 +693,13 @@ mvn package -pl jjq-core,jjq-cli -Pnative -DskipTests
 
 # Run benchmarks
 mvn package -pl jjq-core,jjq-jackson,jjq-fastjson2,jjq-benchmark -DskipTests
-java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.13-SNAPSHOT.jar
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-*.jar
 
 # Run specific benchmark class
 ./scripts/run-benchmarks.sh JsonParseComparisonBenchmark
 
 # Run with allocation profiling
-java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-0.1.13-SNAPSHOT.jar \
+java --enable-preview -jar jjq-benchmark/target/jjq-benchmark-*.jar \
   JsonProductionBenchmark -prof gc -rf json -rff results.json
 ```
 
