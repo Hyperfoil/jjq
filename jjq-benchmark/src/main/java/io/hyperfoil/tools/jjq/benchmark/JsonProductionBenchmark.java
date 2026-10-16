@@ -88,6 +88,11 @@ public class JsonProductionBenchmark {
     }
 
     @Benchmark
+    public JqValue parse_jjq_strict_bytes() {
+        return JqValues.parseStrict(productionJsonBytes);
+    }
+
+    @Benchmark
     public Object parse_fastjson2() {
         return JSON.parse(productionJson);
     }
