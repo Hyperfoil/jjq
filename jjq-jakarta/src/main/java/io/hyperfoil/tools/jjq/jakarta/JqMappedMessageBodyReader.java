@@ -15,6 +15,8 @@ import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
 
+import jakarta.inject.Inject;
+
 /**
  * JAX-RS {@link MessageBodyReader} that deserializes JSON request bodies directly
  * into {@link JqMapped @JqMapped} records using jjq's mapper — bypassing Jackson entirely.
@@ -60,9 +62,12 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
 
     /**
      * Creates a new reader with the given JqMapper (for pre-registered generated mappings).
+     * CDI runtimes (including the {@code jjq-quarkus} extension) inject the
+     * shared mapper through this constructor.
      *
      * @param mapper the JqMapper to use for deserialization
      */
+    @Inject
     public JqMappedMessageBodyReader(JqMapper mapper) {
         this.mapper = mapper;
     }

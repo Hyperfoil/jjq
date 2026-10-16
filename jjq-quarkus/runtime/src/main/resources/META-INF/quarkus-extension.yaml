@@ -1,0 +1,14 @@
+---
+artifact: ${project.groupId}:${project.artifactId}:${project.version}
+name: "jjq"
+metadata:
+  short-name: "jjq"
+  description: "High-performance jq execution and JSON mapping for Quarkus"
+  keywords:
+  - "jjq"
+  - "jq"
+  - "json"
+  - "mapper"
+  categories:
+  - "serialization"
+  status: "experimental"

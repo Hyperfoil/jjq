@@ -56,6 +56,7 @@
         <module>jjq-mapper-jackson</module>
         <module>jjq-mapper-jsonb</module>
         <module>jjq-yaml</module>
+        <module>jjq-quarkus</module>
     </modules>
 
     <properties>
@@ -119,6 +120,16 @@
             <dependency>
                 <groupId>io.hyperfoil.tools</groupId>
                 <artifactId>jjq-yaml</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-quarkus</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.hyperfoil.tools</groupId>
+                <artifactId>jjq-quarkus-deployment</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

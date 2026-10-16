@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 0.2.4
 
+- New `jjq-quarkus` extension (issue #65, phases 1+2): Jandex discovery of
+  `@JqMapped` types with generated mappings pre-registered on a CDI
+  `@Singleton JqMapper`; RESTEasy Reactive providers picked up through
+  standard `@Provider` scanning plus explicit serialiser entries;
+  RESTEasy Classic providers registered explicitly; Hibernate
+  `FormatMapper` wired when Jackson is absent. Tested against Quarkus
+  3.40.1 (REST round-trip, mapper singleton sharing, Jackson-free JSON
+  column persistence).
 - Strict UTF-8 validation splits into a tiny scalar path and a bulk ASCII
   word-skip helper, each under the 325-byte hot-inline budget (strict 14MB
   parse +4%, strings/nested 1MB +5-8%, edge document −5%; tiny documents

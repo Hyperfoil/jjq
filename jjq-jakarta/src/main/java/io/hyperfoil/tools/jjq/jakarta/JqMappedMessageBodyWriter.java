@@ -16,6 +16,8 @@ import java.io.OutputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
 
+import jakarta.inject.Inject;
+
 /**
  * JAX-RS {@link MessageBodyWriter} that serializes {@link JqMapped @JqMapped}
  * records directly to JSON response bodies using jjq's mapper and serializer —
@@ -61,9 +63,12 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
 
     /**
      * Creates a new writer with the given JqMapper (for pre-registered generated mappings).
+     * CDI runtimes (including the {@code jjq-quarkus} extension) inject the
+     * shared mapper through this constructor.
      *
      * @param mapper the JqMapper to use for serialization
      */
+    @Inject
     public JqMappedMessageBodyWriter(JqMapper mapper) {
         this.mapper = mapper;
     }

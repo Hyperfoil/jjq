@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.hyperfoil.tools</groupId>
+        <artifactId>jjq-parent</artifactId>
+        <version>0.2.4-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jjq-quarkus-parent</artifactId>
+    <name>jjq :: Quarkus Extension (parent)</name>
+    <description>Quarkus extension for jjq — build-time integration for mapper, Jakarta providers, and Hibernate (issue #65)</description>
+    <packaging>pom</packaging>
+
+    <modules>
+        <module>runtime</module>
+        <module>deployment</module>
+    </modules>
+
+    <properties>
+        <quarkus.version>3.40.1</quarkus.version>
+        <!-- Mirrors jjq-jakarta's provided-dep versions (not visible here);
+             kept in sync manually. -->
+        <hibernate.version>7.3.2.Final</hibernate.version>
+        <jakarta.ws.rs.version>4.0.0</jakarta.ws.rs.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.quarkus.platform</groupId>
+                <artifactId>quarkus-bom</artifactId>
+                <version>${quarkus.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>
