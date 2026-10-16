@@ -91,6 +91,27 @@ class NumberParsingBoundaryTest {
     }
 
     @Test
+    void hugeExponentsMatchDoubleReferenceWithoutWraparound() {
+        // 10-digit exponents overflow int accumulation; the value must match
+        // Double.parseDouble (infinity/zero), like the 3-digit "1e999" case,
+        // in both strict and lenient modes and on both input paths.
+        for (String literal : new String[]{"1e4294967296", "1e9999999999", "1e-4294967296"}) {
+            double expected = Double.parseDouble(literal);
+            for (JqValue parsed : new JqValue[]{
+                    JqValues.parseStrict(literal),
+                    JqValues.parseStrict(literal.getBytes(StandardCharsets.UTF_8)),
+                    JqValues.parse(literal),
+                    JqValues.parse(literal.getBytes(StandardCharsets.UTF_8))}) {
+                JqNumber number = assertInstanceOf(JqNumber.class, parsed);
+                assertEquals(expected, number.doubleValue(), literal);
+                assertEquals(Double.toString(expected), Double.toString(number.doubleValue()), literal);
+            }
+        }
+        assertEquals("null", JqValues.parseStrict("1e4294967296").toJsonString());
+        assertEquals("0", JqValues.parseStrict("1e-4294967296").toJsonString());
+    }
+
+    @Test
     void integralJavaConversionKeepsTypesAcrossDecimalScales() {
         for (String literal : new String[]{"18446744073709551615.000", "-9223372036854775809.0",
                 "1e20", "1000000000000000000000000000000000000000"}) {

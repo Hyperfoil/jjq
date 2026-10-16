@@ -1766,6 +1766,20 @@ class JqValueTest {
     }
 
     @Test
+    void strictKeepLastEndingAtEightKeysOwnsItsValues() {
+        // Eight unique keys plus a duplicate grows scratch, but the final
+        // count stays 8. The completed object must keep its own values even
+        // when a later wide sibling reuses the same scratch depth.
+        String first = "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"a\":9}";
+        String second = "{\"a\":10,\"b\":20,\"c\":30,\"d\":40,\"e\":50,\"f\":60,\"g\":70,\"h\":80,\"i\":90}";
+        assertEquals("{\"a\":9,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8}",
+                JqValues.parseStrict(first, keepLast()).toJsonString());
+        assertEquals("[{\"a\":9,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8},"
+                + "{\"a\":10,\"b\":20,\"c\":30,\"d\":40,\"e\":50,\"f\":60,\"g\":70,\"h\":80,\"i\":90}]",
+                JqValues.parseStrict("[" + first + "," + second + "]", keepLast()).toJsonString());
+    }
+
+    @Test
     void strictRejectDefaultUnchanged() {
         // REJECT stays the default with the same error text and positions.
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,

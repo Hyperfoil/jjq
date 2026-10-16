@@ -305,7 +305,9 @@ public final class JqNumber implements JqValue {
      * Long.MIN_VALUE/MAX_VALUE; for 20+ digits it never fits.</p>
      */
     private static boolean fitsInLong(BigDecimal value, int scale) {
-        int integerDigits = value.precision() + (-scale);
+        // Long arithmetic: huge negative scales (e.g. 1e4294967296) would
+        // overflow an int digit count and wrongly report "fits".
+        long integerDigits = (long) value.precision() + (-(long) scale);
         if (integerDigits <= 18) return true;
         if (integerDigits >= 20) return false;
         // Exactly 19 digits — some fit, some don't. Range-check.

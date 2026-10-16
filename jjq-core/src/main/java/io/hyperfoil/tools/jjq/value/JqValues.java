@@ -1950,6 +1950,7 @@ public final class JqValues {
 
         // Parse exponent with value accumulation
         int expValue = 0;
+        int expCount = 0;
         boolean hasExp = false;
         if (r.pos < len && (s.charAt(r.pos) == 'e' || s.charAt(r.pos) == 'E')) {
             isDecimal = true;
@@ -1961,7 +1962,10 @@ public final class JqValues {
             while (r.pos < len) {
                 int d = s.charAt(r.pos) - '0';
                 if (d < 0 || d > 9) break;
-                expValue = expValue * 10 + d;
+                // Past 9 digits the magnitude is decisive; keep counting for
+                // validation but stop accumulating so the int cannot wrap.
+                if (expCount < 9) expValue = expValue * 10 + d;
+                expCount++;
                 r.pos++;
             }
             if (expNegative) expValue = -expValue;
@@ -2371,6 +2375,12 @@ public final class JqValues {
         String[] keys = new String[8];
         JqValue[] values = new JqValue[8];
         int count = 0;
+        // Whether the arrays ever grew into scratch buffers. KEEP_LAST can
+        // leave the final count at or below 8 after growing, so the scratch
+        // decision must not be inferred from the count alone — otherwise the
+        // finished object would retain a reusable scratch array that a later
+        // wide sibling overwrites.
+        boolean grew = false;
         // Strict duplicate tracking: linear scan while the object stays
         // small (no set, no per-key nodes), promoted to a HashSet once past
         // DUP_LINEAR_MAX. Lenient parsing skips detection entirely, so it
@@ -2385,6 +2395,7 @@ public final class JqValues {
                 // Large object: continue in per-depth scratch buffers, no doubling garbage
                 keys = r.growKeys(depth, keys, count);
                 values = r.growValues(depth, values, count);
+                grew = true;
             }
             int keyStart = r.pos;
             // Keys interned for deduplication and reference equality in JqObject.get()
@@ -2449,7 +2460,7 @@ public final class JqValues {
         }
         // Objects that overflowed into the scratch buffers get exact-size arrays; small
         // objects keep the arrays they were built in, as before.
-        boolean scratch = count > 8;
+        boolean scratch = grew;
         if (scratch) values = java.util.Arrays.copyOf(values, count);
         if (scratch) r.releaseScratchIfWasteful(depth, keys.length, count);
         // Reference equality is safe because all keys are interned.
@@ -2800,7 +2811,10 @@ public final class JqValues {
             while (r.pos < r.end) {
                 int d = (r.data[r.pos] & 0xFF) - '0';
                 if (d < 0 || d > 9) break;
-                expValue = expValue * 10 + d;
+                // Past 9 digits the magnitude is decisive (far outside the
+                // ±18 fast-path window); keep counting digits for validation
+                // but stop accumulating so the int cannot wrap around.
+                if (expCount < 9) expValue = expValue * 10 + d;
                 expCount++;
                 r.pos++;
             }
