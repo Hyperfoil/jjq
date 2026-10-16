@@ -81,6 +81,11 @@ public class JsonParseComparisonBenchmark {
     }
 
     @Benchmark
+    public JqValue parse_jjq_strict_bytes() {
+        return JqValues.parseStrict(paramJsonBytes);
+    }
+
+    @Benchmark
     public Object parse_fastjson2() {
         return JSON.parse(paramJson);
     }
