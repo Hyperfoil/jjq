@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.4
 
+- Strict UTF-8 validation splits into a tiny scalar path and a bulk ASCII
+  word-skip helper, each under the 325-byte hot-inline budget (strict 14MB
+  parse +4%, strings/nested 1MB +5-8%, edge document −5%; tiny documents
+  flat with inlining verified on both levels).
 - Duplicate scan stays linear to 32 keys with a presized promoted set
   (−7% strict 14MB allocation, byte-exact across forks; latency flat on
   small, 1MB, and production guards).

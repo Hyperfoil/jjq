@@ -26,7 +26,30 @@ public final class Utf8 {
      */
     public static int validate(byte[] bytes, int offset, int length) {
         int end = offset + length;
+        // Tiny inputs stay on the original scalar path verbatim so its
+        // compiled shape (and inline budget) does not change; larger inputs
+        // skip 8 ASCII bytes per iteration in a separate helper.
+        if (length < 64) return validateScalar(bytes, offset, end);
         int i = offset;
+        while (i + 8 <= end) {
+            if (!SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i))) break;
+            i += 8;
+        }
+        return validateScalar(bytes, i, end);
+    }
+
+    /**
+     * Validate a byte range as UTF-8: ASCII, 2-byte, 3-byte (rejecting
+     * overlongs and surrogates) and 4-byte (rejecting overlongs and
+     * codepoints above U+10FFFF) sequences.
+     *
+     * @param bytes the buffer
+     * @param i     the first byte to check
+     * @param end   one past the last byte to check
+     * @return -1 when valid, otherwise the offset of the first malformed
+     *         sequence's lead byte (truncated sequences report their start)
+     */
+    private static int validateScalar(byte[] bytes, int i, int end) {
         while (i < end) {
             int b = bytes[i] & 0xFF;
             if (b < 0x80) {

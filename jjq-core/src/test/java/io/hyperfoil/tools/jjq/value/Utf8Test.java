@@ -69,6 +69,37 @@ class Utf8Test {
         assertEquals(0, Utf8.validate(bad, 0, 1));
     }
 
+    @Test
+    void wordBoundariesKeepOffsets() {
+        // Multibyte sequences straddling 8-byte lanes, invalid leads at
+        // every lane offset, and truncated tails: the word skip must never
+        // move or mask an error offset.
+        StringBuilder prefix = new StringBuilder();
+        for (int i = 0; i < 100; i++) prefix.append('x');
+        String twoByte = "\u00e9"; // C3 A9
+        String threeByte = "\u20ac"; // E2 82 AC
+        String fourByte = "\uD83D\uDE00"; // F0 9F 98 80
+        assertEquals(-1, Utf8.validate((prefix + twoByte + "yyyyyyyy" + threeByte
+                + "zzzzzzzz" + fourByte + "0123456789").getBytes(StandardCharsets.UTF_8), 0, 135));
+        for (int lane = 0; lane < 8; lane++) {
+            byte[] bytes = new byte[64];
+            java.util.Arrays.fill(bytes, (byte) 'a');
+            bytes[lane] = (byte) 0x80; // lone continuation
+            assertEquals(lane, Utf8.validate(bytes, 0, 64), "lane " + lane);
+        }
+        for (int i = 56; i < 64; i++) {
+            byte[] truncated = new byte[64];
+            java.util.Arrays.fill(truncated, (byte) 'a');
+            truncated[i] = (byte) 0xE2; // 3-byte lead with no continuations
+            assertEquals(i, Utf8.validate(truncated, 0, 64), "truncated at " + i);
+        }
+        byte[] overlong = new byte[72];
+        java.util.Arrays.fill(overlong, (byte) 'a');
+        overlong[63] = (byte) 0xC0;
+        overlong[64] = (byte) 0xAF;
+        assertEquals(63, Utf8.validate(overlong, 0, 72));
+    }
+
     private static void assertValid(String s) {
         byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
         assertEquals(-1, Utf8.validate(bytes, 0, bytes.length), s);
