@@ -35,6 +35,10 @@
             <artifactId>quarkus-resteasy-common-spi</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.quarkus.gizmo</groupId>
+            <artifactId>gizmo2</artifactId>
+        </dependency>
+        <dependency>
             <groupId>jakarta.ws.rs</groupId>
             <artifactId>jakarta.ws.rs-api</artifactId>
             <version>${jakarta.ws.rs.version}</version>

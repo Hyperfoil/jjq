@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- `jjq-quarkus` generates its mapper producer with Gizmo2: the augmentation
+  emits a CDI `@Singleton` bean whose producer method constructs every
+  mapping and bridge with direct constructor calls (verified at the
+  bytecode level to contain no reflective loading). The reflective
+  recorder is deleted; missing generated mappings still fall back to
+  runtime reflection with a build-time warning.
 - `jjq-quarkus` registers bridge modules automatically: when
   `jjq-mapper-jackson` or `jjq-mapper-jsonb` are application dependencies,
   the deployment module resolves them from the application model and the

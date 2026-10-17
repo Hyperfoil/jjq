@@ -1,0 +1,61 @@
+package io.hyperfoil.tools.jjq.quarkus.deployment;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+/**
+ * The augmentation-time mapper producer must construct mappings and bridges
+ * with direct constructor calls: {@code Class.forName} /
+ * {@code getDeclaredConstructor} / {@code newInstance} have no place in the
+ * default startup path. Inspected at the bytecode level because behavior
+ * tests alone cannot tell direct construction from reflective loading.
+ */
+class JjqProducerGenerationTest {
+
+    @Test
+    void generatedProducerConstructsDirectly() {
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        JjqProcessor.generateMapperProducer((name, data) -> classes.put(name, data),
+                List.of("com.example.Foo_JqMapping"), true,
+                List.of("com.example.TestBridge"));
+
+        assertEquals(
+                List.of("io/hyperfoil/tools/jjq/quarkus/generated/JjqMapperProducer.class"),
+                List.copyOf(classes.keySet()));
+        String pool = new String(classes.values().iterator().next(), StandardCharsets.ISO_8859_1);
+        for (String expected : List.of(
+                "com/example/Foo_JqMapping",
+                "com/example/TestBridge",
+                "failOnUnknownProperties",
+                "produceMapper")) {
+            assertTrue(pool.contains(expected), "emitted class should reference " + expected);
+        }
+        for (String banned : List.of(
+                "java/lang/Class",
+                "forName",
+                "getDeclaredConstructor",
+                "newInstance")) {
+            assertFalse(pool.contains(banned), "emitted class must not reference " + banned);
+        }
+    }
+
+    @Test
+    void generatedProducerHandlesEmptyModel() {
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        JjqProcessor.generateMapperProducer((name, data) -> classes.put(name, data),
+                List.of(), false, List.of());
+
+        assertEquals(1, classes.size());
+        String pool = new String(classes.values().iterator().next(), StandardCharsets.ISO_8859_1);
+        assertTrue(pool.contains("produceMapper"));
+        assertFalse(pool.contains("forName"));
+    }
+}
