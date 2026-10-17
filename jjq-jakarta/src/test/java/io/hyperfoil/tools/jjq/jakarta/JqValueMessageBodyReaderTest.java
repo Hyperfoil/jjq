@@ -72,6 +72,38 @@ class JqValueMessageBodyReaderTest {
         assertInstanceOf(JqBoolean.class, readJson("true"));
     }
 
+    @Test
+    void readFrom_malformedJson_isBadRequest() {
+        JqBadRequestException e = assertThrows(JqBadRequestException.class, () -> readJson("{bad"));
+        assertEquals(400, e.status());
+        assertFalse(e.getMessage().isBlank());
+    }
+
+    @Test
+    void readFrom_trailingContent_isBadRequest() {
+        assertThrows(JqBadRequestException.class, () -> readJson("{} {}"));
+    }
+
+    @Test
+    void readFrom_duplicateKeys_isBadRequest() {
+        assertThrows(JqBadRequestException.class, () -> readJson("{\"a\":1,\"a\":2}"));
+    }
+
+    @Test
+    void readFrom_invalidUtf8_isBadRequest() {
+        byte[] bad = {(byte) 0xC3, (byte) 0x28};
+        assertThrows(JqBadRequestException.class, () -> reader.readFrom(
+                JqValue.class, null, null, null, null, new ByteArrayInputStream(bad)));
+    }
+
+    @Test
+    void badRequestMessage_doesNotEchoLargeBodies() {
+        String big = "{\"a\":" + "x".repeat(5000);
+        JqBadRequestException e = assertThrows(JqBadRequestException.class, () -> readJson(big));
+        assertTrue(e.getMessage().length() < 1000, "message length: " + e.getMessage().length());
+        assertFalse(e.getMessage().contains("x".repeat(1000)));
+    }
+
     private JqValue readJson(String json) throws IOException {
         return reader.readFrom(JqValue.class, null, null, null, null,
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));

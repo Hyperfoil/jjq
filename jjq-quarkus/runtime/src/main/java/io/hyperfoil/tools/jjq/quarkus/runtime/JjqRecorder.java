@@ -23,8 +23,8 @@ public class JjqRecorder {
     private static final Logger LOG = Logger.getLogger(JjqRecorder.class);
 
     /** Creates a mapper with all discovered generated mappings pre-registered. */
-    public RuntimeValue<JqMapper> createMapper(List<String> mappingClassNames) {
-        JqMapper.Builder builder = JqMapper.builder();
+    public RuntimeValue<JqMapper> createMapper(List<String> mappingClassNames, boolean failOnUnknownProperties) {
+        JqMapper.Builder builder = JqMapper.builder().failOnUnknownProperties(failOnUnknownProperties);
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
         for (String name : mappingClassNames) {
             try {

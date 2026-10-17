@@ -2,6 +2,9 @@ package io.hyperfoil.tools.jjq.jakarta;
 
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqMapperException;
+import io.hyperfoil.tools.jjq.value.JqNull;
+import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.WebApplicationException;
@@ -25,7 +28,11 @@ import jakarta.inject.Inject;
  * fall through to Jackson or other registered readers.</p>
  *
  * <p>Uses jjq's byte[]-based parser for zero-intermediate-String parsing,
- * then maps to the target record via {@link JqMapper}. If a generated
+ * then maps to the target record via {@link JqMapper}. Request bodies are
+ * parsed strictly: malformed JSON, invalid UTF-8, duplicate keys, and
+ * trailing content are rejected with {@code 400 Bad Request}, as are
+ * values that cannot bind to the target type. A JSON {@code null} body
+ * binds to a {@code null} reference, mirroring Jackson. If a generated
  * {@code _JqMapping} class exists (from {@code jjq-mapper-processor}),
  * the mapping executes in ~20 ns per 5-field record. Otherwise, the
  * reflection-based mapper is used (~37 ns).</p>
@@ -87,6 +94,19 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
         if (bytes.length == 0) {
             return null;
         }
-        return mapper.fromJqValue(JqValues.parse(bytes), type);
+        final JqValue value;
+        try {
+            value = JqValues.parseStrict(bytes);
+        } catch (IllegalArgumentException e) {
+            throw JqBadRequestException.of("Invalid JSON request body", e);
+        }
+        if (value instanceof JqNull) {
+            return null;
+        }
+        try {
+            return mapper.fromJqValue(value, type);
+        } catch (JqMapperException e) {
+            throw JqBadRequestException.of("Cannot bind JSON request body", e);
+        }
     }
 }

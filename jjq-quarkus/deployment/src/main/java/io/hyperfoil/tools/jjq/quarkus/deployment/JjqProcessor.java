@@ -7,6 +7,8 @@ import org.jboss.jandex.AnnotationTarget;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
 
+import io.hyperfoil.tools.jjq.jakarta.JqBadRequestException;
+import io.hyperfoil.tools.jjq.jakarta.JqBadRequestExceptionMapper;
 import io.hyperfoil.tools.jjq.jakarta.JqMappedMessageBodyReader;
 import io.hyperfoil.tools.jjq.jakarta.JqMappedMessageBodyWriter;
 import io.hyperfoil.tools.jjq.jakarta.JqValueMessageBodyReader;
@@ -15,11 +17,11 @@ import io.hyperfoil.tools.jjq.jakarta.JqValueParamConverterProvider;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqFormatMapper;
+import io.hyperfoil.tools.jjq.quarkus.runtime.JjqBuildTimeConfig;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqRecorder;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
-import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.deployment.ValidationPhaseBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
@@ -33,6 +35,7 @@ import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyReaderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyWriterBuildItem;
+import io.quarkus.resteasy.reactive.spi.ExceptionMapperBuildItem;
 import io.quarkus.resteasy.reactive.spi.ParamConverterBuildItem;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import jakarta.inject.Singleton;
@@ -73,6 +76,7 @@ public class JjqProcessor {
             JqValueMessageBodyReader.class.getName(),
             JqValueMessageBodyWriter.class.getName(),
             JqValueParamConverterProvider.class.getName(),
+            JqBadRequestExceptionMapper.class.getName(),
     };
 
     @BuildStep
@@ -148,7 +152,7 @@ public class JjqProcessor {
 
     @BuildStep
     @Record(ExecutionTime.STATIC_INIT)
-    void createMapperBean(JjqRecorder recorder,
+    void createMapperBean(JjqRecorder recorder, JjqBuildTimeConfig config,
             List<JjqMappedTypeBuildItem> mappedTypes,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeans) {
         List<String> mappingClassNames = mappedTypes.stream()
@@ -157,25 +161,29 @@ public class JjqProcessor {
         syntheticBeans.produce(SyntheticBeanBuildItem.configure(JqMapper.class)
                 .scope(Singleton.class)
                 .unremovable()
-                .runtimeValue(recorder.createMapper(mappingClassNames))
+                .runtimeValue(recorder.createMapper(mappingClassNames, config.failOnUnknownProperties()))
                 .done());
     }
 
     @BuildStep
     void registerRestProviders(Capabilities capabilities,
-            BuildProducer<UnremovableBeanBuildItem> unremovableBeans,
+            BuildProducer<AdditionalBeanBuildItem> additionalBeans,
             BuildProducer<MessageBodyReaderBuildItem> additionalReaders,
             BuildProducer<MessageBodyWriterBuildItem> additionalWriters,
-            BuildProducer<ParamConverterBuildItem> paramConverters) {
+            BuildProducer<ParamConverterBuildItem> paramConverters,
+            BuildProducer<ExceptionMapperBuildItem> exceptionMappers) {
         if (capabilities.isMissing(Capability.REST)) {
             return;
         }
-        // The providers are already CDI beans through RESTEasy's @Provider
-        // bean-defining annotation; pin them unremovable (programmatic lookup
-        // does not protect from unused-bean removal) and register explicit
-        // serialiser entries (application scanning only covers app classes,
-        // not providers from dependency jars).
-        unremovableBeans.produce(UnremovableBeanBuildItem.beanClassNames(BODY_PROVIDER_CLASSES));
+        // Providers from dependency jars are outside application scanning,
+        // so register them as beans explicitly (this is what carries the
+        // injected shared mapper to the serving instances); the serialiser
+        // entries below need explicit registration for the same reason.
+        additionalBeans.produce(AdditionalBeanBuildItem.builder()
+                .addBeanClasses(List.of(BODY_PROVIDER_CLASSES))
+                .setDefaultScope(SINGLETON)
+                .setUnremovable()
+                .build());
         additionalReaders.produce(new MessageBodyReaderBuildItem.Builder(
                 JqMappedMessageBodyReader.class.getName(), Object.class.getName())
                 .setMediaTypeStrings(List.of(JSON))
@@ -202,6 +210,11 @@ public class JjqProcessor {
                 .build());
         paramConverters.produce(new ParamConverterBuildItem(
                 JqValueParamConverterProvider.class.getName(), Priorities.USER, true));
+        // Scoped to JqBadRequestException only: request-driven rejections
+        // render as 400 here, everything else keeps container defaults.
+        exceptionMappers.produce(new ExceptionMapperBuildItem(
+                JqBadRequestExceptionMapper.class.getName(),
+                JqBadRequestException.class.getName(), Priorities.USER, true));
     }
 
     @BuildStep

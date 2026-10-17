@@ -3,6 +3,7 @@ package io.hyperfoil.tools.jjq.jakarta;
 import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.junit.jupiter.api.Test;
@@ -105,6 +106,51 @@ class JqMappedMessageBodyTest {
         assertNull(result);
     }
 
+    @Test
+    void readFrom_nullLiteral_returnsNull() throws IOException {
+        assertNull(readJson("null", SimpleUser.class));
+    }
+
+    @Test
+    void readFrom_malformedJson_isBadRequest() {
+        JqBadRequestException e = assertThrows(JqBadRequestException.class,
+                () -> readJson("{bad", SimpleUser.class));
+        assertEquals(400, e.status());
+        assertFalse(e.getMessage().isBlank());
+    }
+
+    @Test
+    void readFrom_trailingContent_isBadRequest() {
+        assertThrows(JqBadRequestException.class,
+                () -> readJson("{\"name\":\"Alice\",\"age\":30,\"active\":true} trailing", SimpleUser.class));
+    }
+
+    @Test
+    void readFrom_duplicateKeys_isBadRequest() {
+        assertThrows(JqBadRequestException.class,
+                () -> readJson("{\"name\":\"Alice\",\"name\":\"Bob\",\"age\":30,\"active\":true}", SimpleUser.class));
+    }
+
+    @Test
+    void readFrom_shapeMismatch_isBadRequest() {
+        assertThrows(JqBadRequestException.class, () -> readJson("[1,2,3]", SimpleUser.class));
+    }
+
+    @Test
+    void readFrom_unknownField_ignoredByDefault() throws IOException {
+        Object result = readJson(
+                "{\"name\":\"Alice\",\"age\":30,\"active\":true,\"nickname\":\"Al\"}", SimpleUser.class);
+        assertEquals(new SimpleUser("Alice", 30, true), result);
+    }
+
+    @Test
+    void readFrom_unknownField_strictMapper_isBadRequest() {
+        var strictReader = new JqMappedMessageBodyReader(
+                JqMapper.builder().failOnUnknownProperties(true).build());
+        assertThrows(JqBadRequestException.class, () -> readJson(strictReader,
+                "{\"name\":\"Alice\",\"age\":30,\"active\":true,\"nickname\":\"Al\"}", SimpleUser.class));
+    }
+
     // ---- Write (serialize) ----
 
     @Test
@@ -146,6 +192,11 @@ class JqMappedMessageBodyTest {
 
     @SuppressWarnings("unchecked")
     private Object readJson(String json, Class<?> type) throws IOException {
+        return readJson(reader, json, type);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object readJson(JqMappedMessageBodyReader reader, String json, Class<?> type) throws IOException {
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         return reader.readFrom(
                 (Class<Object>) type, type, null, null, null,

@@ -18,8 +18,11 @@ import java.lang.reflect.Type;
  * JAX-RS {@link MessageBodyReader} that parses JSON request bodies directly
  * into {@link JqValue} instances using jjq's byte[]-based parser.
  *
- * <p>Uses {@link JqValues#parse(byte[])} for zero-intermediate-String parsing
- * directly from the HTTP input stream.</p>
+ * <p>Uses {@link JqValues#parseStrict(byte[])} for zero-intermediate-String
+ * parsing directly from the HTTP input stream. Strict parsing is the
+ * default: malformed JSON, invalid UTF-8, duplicate keys, and trailing
+ * content are rejected with {@link JqBadRequestException} (rendered as
+ * {@code 400 Bad Request}; diagnostics truncated, never stack traces).</p>
  *
  * <p>Annotated with {@code @Provider} for automatic discovery by JAX-RS
  * implementations (Quarkus RESTEasy, Jersey, etc.).</p>
@@ -46,6 +49,10 @@ public class JqValueMessageBodyReader implements MessageBodyReader<JqValue> {
         if (bytes.length == 0) {
             return null;
         }
-        return JqValues.parse(bytes);
+        try {
+            return JqValues.parseStrict(bytes);
+        } catch (IllegalArgumentException e) {
+            throw JqBadRequestException.of("Invalid JSON request body", e);
+        }
     }
 }

@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 0.2.4
 
+- HTTP boundary defaults to strict parsing with 400s for bad input:
+  both JAX-RS readers use `parseStrict` (malformed JSON, invalid UTF-8,
+  duplicate keys, trailing content rejected) and map parse/bind failures
+  to a container-free `JqBadRequestException` (truncated diagnostics,
+  rendered as 400 by a scoped mapper); JSON `null` binds to null.
+  New `quarkus.jjq.fail-on-unknown-properties` build-time flag (default
+  false), applied once to the CDI mapper. Providers are registered as
+  explicit CDI beans so the serving instances carry the shared mapper.
 - New `jjq-quarkus` extension (issue #65, phases 1+2): Jandex discovery of
   `@JqMapped` types with generated mappings pre-registered on a CDI
   `@Singleton JqMapper`; RESTEasy Reactive providers picked up through
