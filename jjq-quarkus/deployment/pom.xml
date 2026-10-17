@@ -56,6 +56,16 @@
             <artifactId>rest-assured</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Plain Jackson library for the conflict test's augmentation classpath.
+             Explicit version must match quarkus-bom (jjq root manages an older
+             databind for its own modules). A bare library provides no Quarkus
+             capability, so the positive tests are unaffected. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.21.7</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-hibernate-orm</artifactId>

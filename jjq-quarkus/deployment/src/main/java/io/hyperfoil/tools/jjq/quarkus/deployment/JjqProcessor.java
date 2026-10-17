@@ -20,6 +20,7 @@ import io.hyperfoil.tools.jjq.value.JqValue;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
+import io.quarkus.arc.deployment.ValidationPhaseBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.annotations.BuildProducer;
@@ -33,6 +34,7 @@ import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyReaderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyWriterBuildItem;
 import io.quarkus.resteasy.reactive.spi.ParamConverterBuildItem;
+import io.quarkus.runtime.configuration.ConfigurationException;
 import jakarta.inject.Singleton;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.RuntimeType;
@@ -48,7 +50,8 @@ import jakarta.ws.rs.RuntimeType;
  * unremovable and adds explicit serialiser entries (application scanning
  * only covers app classes, not providers from dependency jars). RESTEasy
  * Classic needs fully explicit provider registration, and the Hibernate
- * {@code FormatMapper} is wired when Jackson is absent.</p>
+ * {@code FormatMapper} is wired for Jackson-free applications (the build
+ * fails fast when the Jackson extension is present).</p>
  */
 public class JjqProcessor {
 
@@ -75,6 +78,28 @@ public class JjqProcessor {
     @BuildStep
     FeatureBuildItem feature() {
         return new FeatureBuildItem("jjq");
+    }
+
+    /**
+     * Fail the build when the Jackson extension shares the classpath: both
+     * extensions register JSON serializers for the same types, and silent
+     * provider-selection order would make behavior nondeterministic.
+     * Plain Jackson library jars carry no capability and are unaffected.
+     */
+    @BuildStep
+    void rejectJacksonExtension(Capabilities capabilities, ValidationPhaseBuildItem validationPhase,
+            BuildProducer<ValidationPhaseBuildItem.ValidationErrorBuildItem> validationErrors) {
+        // quarkus-rest-jackson and quarkus-resteasy-jackson both depend on
+        // quarkus-jackson, so the single JACKSON capability covers every variant.
+        if (capabilities.isPresent(Capability.JACKSON)) {
+            validationErrors.produce(new ValidationPhaseBuildItem.ValidationErrorBuildItem(new ConfigurationException(
+                    "jjq-quarkus and quarkus-jackson were both detected on the classpath,"
+                            + " but they cannot be used together.\n"
+                            + "These two JSON mapping extensions are mutually exclusive: please use only one of them.\n"
+                            + "Either remove quarkus-jackson (including quarkus-rest-jackson or quarkus-resteasy-jackson,"
+                            + " which depend on it) and keep jjq-quarkus,"
+                            + " or remove jjq-quarkus and keep Jackson.")));
+        }
     }
 
     /**
@@ -202,11 +227,8 @@ public class JjqProcessor {
         if (capabilities.isMissing(Capability.HIBERNATE_ORM)) {
             return;
         }
-        // Jackson's own FormatMapper keeps precedence when both are present;
-        // ours fills the gap for Jackson-free applications.
-        if (capabilities.isPresent(Capability.JACKSON)) {
-            return;
-        }
+        // Jackson coexistence is rejected above, so reaching here means a
+        // Jackson-free application where ours is the only FormatMapper.
         additionalBeans.produce(AdditionalBeanBuildItem.unremovableOf(JjqFormatMapper.class));
     }
 }
