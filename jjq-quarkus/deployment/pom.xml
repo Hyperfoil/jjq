@@ -90,6 +90,19 @@
             <artifactId>jjq-mapper-processor</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Bridge modules under test: their presence on the test classpath
+             is what the extension must detect (no bridge = no registration).
+             They bring jackson-annotations / jsonb-api for fixtures. -->
+        <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-mapper-jackson</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-mapper-jsonb</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

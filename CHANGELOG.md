@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 0.2.4
 
+- `jjq-quarkus` registers bridge modules automatically: when
+  `jjq-mapper-jackson` or `jjq-mapper-jsonb` are application dependencies,
+  the deployment module resolves them from the application model and the
+  recorder instantiates them directly (no ServiceLoader), so generated
+  and reflective mappings honor the same annotations. Order is fixed
+  (Jackson, then JSON-B) to match the annotation processor; native
+  annotations keep precedence. New conversions still belong in the
+  `jjq-mapper-*` modules.
 - HTTP boundary defaults to strict parsing with 400s for bad input:
   both JAX-RS readers use `parseStrict` (malformed JSON, invalid UTF-8,
   duplicate keys, trailing content rejected) and map parse/bind failures

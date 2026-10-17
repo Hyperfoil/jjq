@@ -6,6 +6,7 @@ import org.jboss.logging.Logger;
 
 import io.hyperfoil.tools.jjq.mapper.GeneratedMapping;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
+import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.annotations.Recorder;
 
@@ -22,10 +23,31 @@ public class JjqRecorder {
 
     private static final Logger LOG = Logger.getLogger(JjqRecorder.class);
 
-    /** Creates a mapper with all discovered generated mappings pre-registered. */
-    public RuntimeValue<JqMapper> createMapper(List<String> mappingClassNames, boolean failOnUnknownProperties) {
+    /**
+     * Creates a mapper with all discovered generated mappings pre-registered
+     * and the given annotation bridges active.
+     *
+     * @param mappingClassNames      generated {@code _JqMapping} classes
+     * @param failOnUnknownProperties mapper strictness flag
+     * @param bridgeClassNames       {@link AnnotationBridge} implementations,
+     *                               resolved at build time from application
+     *                               dependencies (never ServiceLoader)
+     */
+    public RuntimeValue<JqMapper> createMapper(List<String> mappingClassNames, boolean failOnUnknownProperties,
+            List<String> bridgeClassNames) {
         JqMapper.Builder builder = JqMapper.builder().failOnUnknownProperties(failOnUnknownProperties);
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        for (String name : bridgeClassNames) {
+            try {
+                Class<?> cls = Class.forName(name, true, cl);
+                builder.bridge((AnnotationBridge) cls.getDeclaredConstructor().newInstance());
+            } catch (ReflectiveOperationException e) {
+                // An explicitly included bridge module must load: a missing
+                // class means a broken application, not an optional feature.
+                throw new IllegalStateException("jjq: cannot instantiate annotation bridge " + name
+                        + " — check the bridge module dependency", e);
+            }
+        }
         for (String name : mappingClassNames) {
             try {
                 Class<?> cls = Class.forName(name, true, cl);

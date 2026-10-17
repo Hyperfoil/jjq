@@ -1,5 +1,6 @@
 package io.hyperfoil.tools.jjq.quarkus.deployment;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.jboss.jandex.AnnotationInstance;
@@ -32,6 +33,7 @@ import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
+import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
 import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyReaderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyWriterBuildItem;
@@ -78,6 +80,20 @@ public class JjqProcessor {
             JqValueParamConverterProvider.class.getName(),
             JqBadRequestExceptionMapper.class.getName(),
     };
+
+    /**
+     * Annotation bridges auto-registered when their modules are application
+     * dependencies. Order is load-bearing: bridges are consulted in
+     * registration order after native annotations, matching the annotation
+     * processor's precedence (Jackson before JSON-B).
+     */
+    private record BridgeModule(String group, String artifact, String bridgeClass) {}
+
+    private static final List<BridgeModule> BRIDGE_MODULES = List.of(
+            new BridgeModule("io.hyperfoil.tools", "jjq-mapper-jackson",
+                    "io.hyperfoil.tools.jjq.mapper.jackson.JacksonAnnotationBridge"),
+            new BridgeModule("io.hyperfoil.tools", "jjq-mapper-jsonb",
+                    "io.hyperfoil.tools.jjq.mapper.jsonb.JsonbAnnotationBridge"));
 
     @BuildStep
     FeatureBuildItem feature() {
@@ -153,15 +169,35 @@ public class JjqProcessor {
     @BuildStep
     @Record(ExecutionTime.STATIC_INIT)
     void createMapperBean(JjqRecorder recorder, JjqBuildTimeConfig config,
+            CurateOutcomeBuildItem curateOutcome,
             List<JjqMappedTypeBuildItem> mappedTypes,
-            BuildProducer<SyntheticBeanBuildItem> syntheticBeans) {
+            BuildProducer<SyntheticBeanBuildItem> syntheticBeans,
+            BuildProducer<ReflectiveClassBuildItem> reflective) {
         List<String> mappingClassNames = mappedTypes.stream()
                 .map(JjqMappedTypeBuildItem::getMappingClassName)
                 .toList();
+        // Bridges come from explicit module dependencies only: presence in
+        // the application model is the opt-in (never transitive-only
+        // guessing, never ServiceLoader at runtime).
+        var dependencies = curateOutcome.getApplicationModel().getDependencies();
+        List<String> bridgeClassNames = new ArrayList<>();
+        for (BridgeModule bridge : BRIDGE_MODULES) {
+            if (dependencies.stream().anyMatch(d -> d.getGroupId().equals(bridge.group())
+                    && d.getArtifactId().equals(bridge.artifact()))) {
+                bridgeClassNames.add(bridge.bridgeClass());
+                // Instantiation only: the bridge reads app annotations through
+                // member reflection covered by the mapped-type registrations.
+                reflective.produce(ReflectiveClassBuildItem.builder(bridge.bridgeClass())
+                        .weak(true).constructors()
+                        .reason("jjq: annotation bridge instantiated by JjqRecorder")
+                        .build());
+            }
+        }
         syntheticBeans.produce(SyntheticBeanBuildItem.configure(JqMapper.class)
                 .scope(Singleton.class)
                 .unremovable()
-                .runtimeValue(recorder.createMapper(mappingClassNames, config.failOnUnknownProperties()))
+                .runtimeValue(recorder.createMapper(mappingClassNames, config.failOnUnknownProperties(),
+                        bridgeClassNames))
                 .done());
     }
 
