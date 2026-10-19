@@ -284,6 +284,10 @@
   `toJsonString` -24%, flat -7%; object stays 32 bytes)
 - `floor`/`ceil`/`round` preserve non-finite (and huge finite) doubles
   instead of saturating through a `long` cast (#142)
+- YAML multiline quoted scalars gather in linear time (#159):
+  the close check scans only each new chunk (prior quotes always
+  pair up, appended chunks never end mid-escape) instead of
+  re-copying and re-scanning the whole prefix per line
 - YAML block scalars keep indented `---`/`...` lines as content (#150):
   only column-0 markers terminate the scalar (YAML 1.2 §9.1.2/§8.1.1),
   matching SnakeYAML byte-for-byte; real column-0 markers still end

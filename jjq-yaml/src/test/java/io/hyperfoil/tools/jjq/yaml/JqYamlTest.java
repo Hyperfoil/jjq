@@ -631,6 +631,49 @@ class JqYamlTest {
         }
     }
 
+    // ---- Multiline quoted scalars (issue #159 behavior pins) ----
+
+    @Test
+    void multilineDoubleQuotedInMapping() {
+        JqValue result = JqYaml.parse("key: \"first\n  second\n  third\"\nnext: 1\n");
+        assertEquals("first second third", result.getField("key").stringValue());
+        assertEquals(1L, result.getField("next").longValue());
+    }
+
+    @Test
+    void multilineSingleQuotedInMapping() {
+        JqValue result = JqYaml.parse("key: 'first\n  second'\n");
+        assertEquals("first second", result.getField("key").stringValue());
+    }
+
+    @Test
+    void multilineQuotedInSequence() {
+        JqValue result = JqYaml.parse("- \"a\n  b\"\n- 'c\n  d'\n");
+        assertEquals("a b", result.getElement(0).stringValue());
+        assertEquals("c d", result.getElement(1).stringValue());
+    }
+
+    @Test
+    void multilineQuotedAtDocRoot() {
+        assertEquals("a b", JqYaml.parse("\"a\nb\"\n").stringValue());
+        assertEquals("a b", JqYaml.parse("'a\nb'\n").stringValue());
+    }
+
+    @Test
+    void multilineQuotedDoublingAndContinuation() {
+        // Single-quote doubling survives folding; backslash-newline joins directly.
+        JqValue single = JqYaml.parse("key: 'it''s\n  here'\n");
+        assertEquals("it's here", single.getField("key").stringValue());
+        JqValue dbl = JqYaml.parse("key: \"a\\\n  b\"\n");
+        assertEquals("ab", dbl.getField("key").stringValue());
+    }
+
+    @Test
+    void multilineQuotedBlankAndEscapes() {
+        JqValue result = JqYaml.parse("key: \"a\n\n  b\\nLINE\"\n");
+        assertEquals("a\nb\nLINE", result.getField("key").stringValue());
+    }
+
     // ---- Second-sighting key admission ----
 
     @Test

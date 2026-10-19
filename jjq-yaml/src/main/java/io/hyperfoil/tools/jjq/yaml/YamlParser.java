@@ -1992,26 +1992,57 @@ final class YamlParser {
                 }
             }
             continued = literalGap ? null : quote == '"' ? stripContinuation(content) : null;
+            String chunk;
             if (continued != null) {
+                chunk = continued;
                 sb.append(continued);
                 prevBreak = false;
             } else if (content.isEmpty()) {
+                chunk = "\n";
                 sb.append('\n');
                 prevBreak = true;
             } else if (prevContinued || prevBreak) {
+                chunk = content;
                 sb.append(content);
                 prevBreak = false;
             } else {
+                // The ' ' separator is quote-inert: scan content alone.
+                chunk = content;
                 sb.append(' ').append(content);
                 prevBreak = false;
             }
             prevContinued = continued != null;
-            String joined = sb.toString();
-            if (isClosedQuote(joined, quote)) return joined;
-            // Keep the raw text for the next iteration (re-scan from the joined form)
-            first = joined;
-            sb = new StringBuilder(joined);
+            if (chunkClosesScalar(chunk, quote)) return sb.toString();
         }
+    }
+
+    /**
+     * True when a newly appended chunk closes the scalar (issue #159).
+     * Scans only the chunk: every quote in the prior accumulation pairs
+     * up (a lone one would already have closed, and boundary pairing is
+     * impossible since a trailing quote is always the paired second half),
+     * and appended chunks never end mid-escape (stripContinuation consumed
+     * odd trailing backslashes; even runs are complete). This keeps
+     * gathering linear instead of re-scanning the whole prefix per line.
+     */
+    private static boolean chunkClosesScalar(String chunk, char quote) {
+        if (quote == '"') {
+            boolean esc = false;
+            for (int i = 0; i < chunk.length(); i++) {
+                char c = chunk.charAt(i);
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') return true;
+            }
+            return false;
+        }
+        for (int i = 0; i < chunk.length(); i++) {
+            if (chunk.charAt(i) == '\'') {
+                if (i + 1 < chunk.length() && chunk.charAt(i + 1) == '\'') i++;
+                else return true;
+            }
+        }
+        return false;
     }
 
     /**
