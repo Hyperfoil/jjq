@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.4
 
+- New `jjq-quarkus/integration-tests` consumer application follows the core
+  Quarkus HTTP test pattern: one `@QuarkusTest` contract reused by a packaged
+  `@QuarkusIntegrationTest`. All 21 checks pass with Quarkus REST and Classic
+  RESTEasy, both JVM and native. The native profile is opt-in; the test app
+  adds no manual model reflection registration and does not enable Hibernate
+  or a Jackson/JSON-B engine. Includes local run instructions and is excluded
+  from publishing.
 - Compiled enum bindings remove member reflection from annotated-enum
   conversion: new `EnumBinding` seam (`registerEnum`, consulted on every
   enum path before reflective resolution), with Quarkus augmentation
