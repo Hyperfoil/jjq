@@ -176,7 +176,7 @@ final class MappingCodeGenerator {
             sb.append("    @SuppressWarnings(\"unchecked\")\n");
             sb.append("    private static <E> java.util.List<E> _toList(JqValue value, JqMapper mapper, Class<E> elementType) {\n");
             sb.append("        io.hyperfoil.tools.jjq.value.JqArray arr = requireArray(value, \"List<\" + elementType.getSimpleName() + \">\");\n");
-            sb.append("        if (arr == null) return java.util.List.of();\n");
+            sb.append("        if (arr == null) return null;\n");
             sb.append("        var kind = io.hyperfoil.tools.jjq.mapper.TypeConverter.resolveKind(elementType, elementType);\n");
             sb.append("        var list = new java.util.ArrayList<E>(arr.size());\n");
             sb.append("        for (int _i = 0; _i < arr.size(); _i++) {\n");

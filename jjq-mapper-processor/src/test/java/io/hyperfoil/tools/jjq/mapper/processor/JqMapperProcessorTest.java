@@ -916,11 +916,49 @@ class JqMapperProcessorTest {
         Object back = mapper.fromJqValue(mapper.toJqValue(original), recordClass);
         assertEquals(mapper.toJqValue(original).toJsonString(), mapper.toJqValue(back).toJsonString());
 
-        // Nulls: arrays stay null, collections stay null on ser (empty
-        // defaults are deser-only leniency)
+        // Nulls: arrays and collections stay null on ser and deser
+        // (issue #155 Jackson parity — no empty defaults).
         Object withNulls = ctor.newInstance(null, null, null, null, null);
         String nullJson = mapper.toJson(withNulls);
         assertEquals("{\"names\":null,\"counts\":null,\"items\":null,\"index\":null,\"tags\":null}", nullJson);
+    }
+
+    @Test
+    void generatedMapping_nullCollectionsBindNull() throws Exception {
+        // Issue #155: explicit nulls and absent keys bind null on the
+        // generated path too — List via _toList, Set/Map via the mapper.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.util.List;
+                import java.util.Map;
+                import java.util.Set;
+
+                @JqMapped
+                public record Colls(List<String> tags, Set<String> flags, Map<String, Integer> scores) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.Colls", source);
+        JqMapper mapper = JqMapper.create();
+
+        Object nulled = mapper.fromJqValue(
+                JqValues.parse("{\"tags\":null,\"flags\":null,\"scores\":null}"), recordClass);
+        assertNull(recordClass.getMethod("tags").invoke(nulled));
+        assertNull(recordClass.getMethod("flags").invoke(nulled));
+        assertNull(recordClass.getMethod("scores").invoke(nulled));
+
+        Object absent = mapper.fromJqValue(JqValues.parse("{}"), recordClass);
+        assertNull(recordClass.getMethod("tags").invoke(absent));
+        assertNull(recordClass.getMethod("flags").invoke(absent));
+        assertNull(recordClass.getMethod("scores").invoke(absent));
+
+        // Present values still bind (typed, not just non-null).
+        Object full = mapper.fromJqValue(
+                JqValues.parse("{\"tags\":[\"a\"],\"flags\":[\"f\"],\"scores\":{\"k\":1}}"), recordClass);
+        assertEquals(List.of("a"), recordClass.getMethod("tags").invoke(full));
+        assertEquals(java.util.Set.of("f"), recordClass.getMethod("flags").invoke(full));
+        assertEquals(Map.of("k", 1), recordClass.getMethod("scores").invoke(full));
     }
 
     @Test

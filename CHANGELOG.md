@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 0.2.4
 
+- Absent/explicit-null collections bind null (issue #155, Jackson/JSON-B
+  parity): `List`/`Set`/`Map` fields, absent keys, and top-level generic
+  collections bind `null` instead of empty on the reflective and generated
+  paths (arrays already bound null). POJO absent keys still keep field
+  initializers; explicit nulls overwrite. Null elements inside present
+  collections bind per-element as before.
 - Document the SmallRye OpenAPI limitation (issue #154, docs minimum):
   jjq-native annotations (`@JqName`, `@JqIgnore`/skipped accessors, naming,
   inclusion, access-direction, `@JqField`, `@JqType`/`@JqKeys`) affect

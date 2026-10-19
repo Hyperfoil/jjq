@@ -302,7 +302,7 @@ public final class TypeConverter {
                 yield coerceZoneOffset(value);
             }
             case LIST -> {
-                if (value == null || value instanceof JqNull) yield newListFor(targetType, 0);
+                if (value == null || value instanceof JqNull) yield null;
                 if (!(value instanceof JqArray arr)) {
                     throw mismatch(JqValue.Type.ARRAY, "array for " + listTarget(targetType, genericType), value);
                 }
@@ -322,7 +322,7 @@ public final class TypeConverter {
             case SET -> {
                 Type elementType = extractTypeArgument(genericType, 0);
                 Class<?> elementClass = rawClass(elementType);
-                if (value == null || value instanceof JqNull) yield emptySetFor(targetType, elementClass);
+                if (value == null || value instanceof JqNull) yield null;
                 if (!(value instanceof JqArray arr)) {
                     throw mismatch(JqValue.Type.ARRAY, "array for " + setTarget(targetType, genericType), value);
                 }
@@ -338,7 +338,7 @@ public final class TypeConverter {
                 yield set;
             }
             case MAP -> {
-                if (value == null || value instanceof JqNull) yield newMapFor(targetType, 0);
+                if (value == null || value instanceof JqNull) yield null;
                 if (!(value instanceof JqObject obj)) {
                     throw mismatch(JqValue.Type.OBJECT, "object for " + mapTarget(targetType, genericType), value);
                 }
@@ -1338,19 +1338,6 @@ public final class TypeConverter {
     private static String setTarget(Class<?> targetType, Type genericType) {
         Type elementType = extractTypeArgument(genericType, 0);
         return "Set<" + rawClass(elementType).getSimpleName() + ">";
-    }
-
-    /** Empty set matching the declared implementation (null inputs). */
-    private static Object emptySetFor(Class<?> targetType, Class<?> elementClass) {
-        if (targetType == EnumSet.class) return newSetFor(targetType, elementClass, 0);
-        if (targetType == TreeSet.class || targetType == SortedSet.class
-                || targetType == java.util.NavigableSet.class) return new TreeSet<>();
-        if (!targetType.isInterface() && !java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())
-                && targetType != Set.class && targetType != HashSet.class && targetType != LinkedHashSet.class) {
-            Object custom = newNoArg(targetType);
-            if (custom instanceof java.util.Set<?>) return custom;
-        }
-        return Set.of();
     }
 
     /**

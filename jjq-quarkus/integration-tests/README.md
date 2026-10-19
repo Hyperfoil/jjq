@@ -110,6 +110,16 @@ uses JSON-B because http-problem 3.38.2 requires a JSON provider. The lean
 consumer app has no such dependency and tests jjq's standalone rendering on
 both REST stacks, packaged JVM and native.
 
+## Null handling (Jackson parity, issue #155)
+
+Absent keys and explicit JSON nulls bind `null` for reference collection
+types (`List`/`Set`/`Map`, including nested positions like `[[null]]` →
+`[null]`), on the reflective and generated paths alike. Arrays already bound
+null, so this also removes an internal inconsistency. POJO fields instead
+keep their initializers when the key is absent; explicit nulls overwrite
+with null. Null elements inside a present collection bind per-element as
+before (null for boxed targets, zero-values for primitives).
+
 ## OpenAPI limitation (SmallRye)
 
 SmallRye OpenAPI's schema scanner reads Jackson/JSON-B annotations plus

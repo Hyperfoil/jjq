@@ -277,10 +277,52 @@ class JqMapperTest {
     }
 
     @Test
-    void fromJqValue_setNullBindsEmpty() {
+    void fromJqValue_setNullBindsNull() {
+        // Issue #155 (Jackson/JSON-B parity): explicit null binds null,
+        // not an empty set — same as arrays and boxed scalars.
         JqValue json = JqValues.parse("{\"name\":\"Alice\",\"tags\":null}");
         WithSet r = mapper.fromJqValue(json, WithSet.class);
-        assertEquals(Set.of(), r.tags());
+        assertNull(r.tags());
+    }
+
+    record WithCollections(String name, List<String> tags, Set<String> flags, Map<String, Integer> scores) {}
+
+    @Test
+    void fromJqValue_nullCollectionsBindNull() {
+        // Issue #155: explicit nulls bind null for every collection kind.
+        WithCollections r = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\",\"tags\":null,\"flags\":null,\"scores\":null}"),
+                WithCollections.class);
+        assertNull(r.tags());
+        assertNull(r.flags());
+        assertNull(r.scores());
+    }
+
+    @Test
+    void fromJqValue_absentCollectionsBindNull() {
+        // Issue #155: absent keys bind null, matching Jackson/JSON-B
+        // (POJOs instead keep their field initializers — see issue #82).
+        WithCollections r = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"t\"}"), WithCollections.class);
+        assertNull(r.tags());
+        assertNull(r.flags());
+        assertNull(r.scores());
+    }
+
+    @Test
+    void fromJqValue_topLevelNullCollectionsBindNull() {
+        // Issue #155: the container itself binds null; only its elements
+        // keep per-element conversion (null elements still bind null).
+        java.lang.reflect.Type listType = new TypeToken<List<String>>(){}.getType();
+        assertNull(mapper.fromJqValue(JqNull.NULL, listType));
+        java.lang.reflect.Type setType = new TypeToken<Set<String>>(){}.getType();
+        assertNull(mapper.fromJqValue(JqNull.NULL, setType));
+        java.lang.reflect.Type mapType = new TypeToken<Map<String, Integer>>(){}.getType();
+        assertNull(mapper.fromJqValue(JqNull.NULL, mapType));
+        // Present-but-null element inside a present collection still binds.
+        java.lang.reflect.Type boxedList = new TypeToken<List<Integer>>(){}.getType();
+        assertEquals(java.util.Arrays.asList(1, null, 3),
+                mapper.fromJqValue(JqValues.parse("[1,null,3]"), boxedList));
     }
 
     @Test
