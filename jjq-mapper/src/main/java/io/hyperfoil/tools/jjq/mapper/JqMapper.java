@@ -613,6 +613,25 @@ public final class JqMapper {
         return (Mapping<T>) resolved.mapping();
     }
 
+    /**
+     * Whether a pre-registered family mapping exists for the type: a peek,
+     * never a creation. Nested positions (collection elements, fields)
+     * consult this first so native images dispatch through baked tables
+     * instead of sealed permits reflection, which they do not retain.
+     *
+     * @param type the base class to inspect
+     * @return true when a registered {@code PolyMapping}/{@code KeyPolyMapping} is cached
+     */
+    boolean hasFamilyMapping(Class<?> type) {
+        LastHit hit = lastHit;
+        if (hit != null && hit.type() == type) {
+            return hit.mapping() instanceof PolyMapping || hit.mapping() instanceof KeyPolyMapping;
+        }
+        LastHit resolved = cache.get(type);
+        return resolved != null
+                && (resolved.mapping() instanceof PolyMapping || resolved.mapping() instanceof KeyPolyMapping);
+    }
+
     private <T> Mapping<T> createMapping(Class<T> type) {
         // Arrays have no no-arg constructor: neither reflection field mapping
         // nor generated mappings apply (privateLookupIn rejects array classes).

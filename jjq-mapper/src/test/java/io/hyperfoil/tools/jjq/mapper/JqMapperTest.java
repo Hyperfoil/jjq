@@ -5124,6 +5124,7 @@ class JqMapperTest {
 
     @Test
     void preRegisteredFamiliesDispatchWithoutRuntimeResolution() {
+
         // Build-time pre-resolution (the jjq-quarkus augmentation path):
         // configs resolved once, then registered directly. Dispatch must
         // behave identically to the reflective path.
@@ -5137,6 +5138,21 @@ class JqMapperTest {
                 m.fromJqValue(JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001}"), NodeCfg.class));
         assertEquals(new FixedCfg(1.0, 2.0),
                 m.fromJqValue(JqValues.parse("{\"min\":1.0,\"max\":2.0}"), NodeCfg.class));
+    }
+
+    @Test
+    void familyMappingPeekNeverCreates() {
+        // The nested-position fast path consults the cache only: unknown
+        // interfaces stay unknown without throwing or populating.
+        assertFalse(mapper.hasFamilyMapping(Runnable.class));
+        // Lazily created mappings show up too: the peek sees the cache.
+        mapper.fromJqValue(JqValues.parse("{\"method\":\"SLACK\",\"token\":\"t\"}"), Secret.class);
+        assertTrue(mapper.hasFamilyMapping(Secret.class));
+        JqMapper m = JqMapper.builder()
+                .registerPoly(Secret.class, PolyMapping.resolvePolyConfig(Secret.class, List.of()))
+                .build();
+        assertTrue(m.hasFamilyMapping(Secret.class));
+        assertFalse(m.hasFamilyMapping(NodeCfg.class));
     }
 
     // ---- POJO field inheritance ----

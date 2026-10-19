@@ -23,6 +23,14 @@ public class GreetingResource {
         return greeting;
     }
 
+    @POST
+    @Path("/batch")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public java.util.List<Greeting> batch(java.util.List<Greeting> greetings) {
+        return greetings;
+    }
+
     @GET
     @Path("/mapper-id")
     @Produces(MediaType.TEXT_PLAIN)

@@ -26,7 +26,9 @@ import jakarta.inject.Inject;
  * JAX-RS {@link MessageBodyReader} that deserializes JSON request bodies directly
  * into {@link JqMapped @JqMapped} records using jjq's mapper — bypassing Jackson entirely.
  *
- * <p>Only activates for types annotated with {@code @JqMapped}. Other types
+ * <p>Only activates for types annotated with {@code @JqMapped} (including
+ * {@code @JqType}/{@code @JqKeys} families) and for homogeneous
+ * collections, maps, and arrays of such types. Other types
  * fall through to Jackson or other registered readers.</p>
  *
  * <p>Uses jjq's byte[]-based parser for zero-intermediate-String parsing,
@@ -84,9 +86,8 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
     @Override
     public boolean isReadable(Class<?> type, Type genericType,
                                Annotation[] annotations, MediaType mediaType) {
-        return type.isAnnotationPresent(JqMapped.class)
-                || type.isAnnotationPresent(JqType.class)
-                || type.isAnnotationPresent(JqKeys.class);
+        return CollectionSupport.isDirectlyMappable(type)
+                || CollectionSupport.bindsThroughMapper(genericType);
     }
 
     @Override
@@ -108,7 +109,12 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
             return null;
         }
         try {
-            return mapper.fromJqValue(value, type);
+            if (CollectionSupport.isDirectlyMappable(type)) {
+                return mapper.fromJqValue(value, type);
+            }
+            // Homogeneous collections and maps (accepted above) bind through
+            // the generic overload: per-element conversion with indexed paths.
+            return mapper.fromJqValue(value, genericType);
         } catch (JqMapperException e) {
             throw JqBadRequestException.of("Cannot bind JSON request body", e);
         }

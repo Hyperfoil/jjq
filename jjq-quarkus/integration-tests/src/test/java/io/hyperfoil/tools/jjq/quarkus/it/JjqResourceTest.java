@@ -337,6 +337,7 @@ public class JjqResourceTest {
 
     @Test
     public void nodeOverlappingKeysAreRejectedWhenStrict() {
+
         // Priority (first rule wins) is covered by the mapper unit tests on a
         // lenient mapper. This application enables failOnUnknownProperties, so
         // an input carrying two families' keys fails on the non-selected
@@ -347,5 +348,61 @@ public class JjqResourceTest {
                 .when().post("/jjq/node")
                 .then()
                 .statusCode(400);
+    }
+
+    @Test
+    public void recordListRoundTrips() {
+        given()
+                .contentType("application/json")
+                .body("[{\"message\":\"hello\",\"count\":3},{\"message\":\"hi\",\"count\":1}]")
+                .when().post("/jjq/records")
+                .then()
+                .statusCode(200)
+                .body("[0].message", equalTo("hello"))
+                .body("[1].count", equalTo(1));
+    }
+
+    @Test
+    public void recordListElementFailureIsBadRequest() {
+        given()
+                .contentType("application/json")
+                .body("[{\"message\":\"hello\",\"count\":3},{\"message\":\"hi\",\"count\":{}}]")
+                .when().post("/jjq/records")
+                .then()
+                .statusCode(400)
+                .body(containsString("[1]"));
+    }
+
+    @Test
+    public void recordListNullIsNoContent() {
+        given()
+                .contentType("application/json")
+                .body("null")
+                .when().post("/jjq/records")
+                .then()
+                .statusCode(204);
+    }
+
+    @Test
+    public void recordListEmptyBindsEmpty() {
+        given()
+                .contentType("application/json")
+                .body("[]")
+                .when().post("/jjq/records")
+                .then()
+                .statusCode(200)
+                .body("size()", equalTo(0));
+    }
+
+    @Test
+    public void channelListRoundTrips() {
+        given()
+                .contentType("application/json")
+                .body("[{\"method\":\"EMAIL\",\"to\":\"a@x.y\"},{\"method\":\"SLACK\",\"channel\":\"#ops\"}]")
+                .when().post("/jjq/channels")
+                .then()
+                .statusCode(200)
+                .body("[0].method", equalTo("EMAIL"))
+                .body("[1].channel", equalTo("#ops"));
     }
 }

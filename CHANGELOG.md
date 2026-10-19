@@ -28,9 +28,16 @@
   `FormatMapper` supports exactly `JqValue` and `String` columns (raw JSON
   text both ways for `String`, e.g. native queries selecting jsonb
   aggregates); anything else fails fast instead of guessing a conversion.
+- JAX-RS providers bind collections of mapped types (issue #152):
+  homogeneous `Collection`/`Map`/`array` endpoints whose element/value
+  type is `@JqMapped`/`@JqType`/`@JqKeys` (or `JqValue`) bind element-wise
+  through the shared mapper with indexed failure paths; everything else
+  keeps declining to the container default. Nested positions reuse the
+  pre-registered family tables via a cache peek so native images never
+  touch sealed permits reflection there either.
 - New `jjq-quarkus/integration-tests` consumer application follows the core
   Quarkus HTTP test pattern: one `@QuarkusTest` contract reused by a packaged
-  `@QuarkusIntegrationTest`. All 28 checks pass with Quarkus REST and Classic
+  `@QuarkusIntegrationTest`. All 33 checks pass with Quarkus REST and Classic
   RESTEasy, on JVM and native — including discriminator-as-field,
   many-to-one, and key-presence families modeled on h5m's notification and
   node configurations. The native profile is opt-in; the test app

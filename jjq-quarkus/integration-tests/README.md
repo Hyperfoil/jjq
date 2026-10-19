@@ -83,13 +83,18 @@ and `/jjq/node` (key-presence dispatch with a default). Dispatch priority
 across overlapping keys is covered by mapper unit tests on a lenient mapper:
 this strict application rejects overlapping inputs as unknown properties.
 
+Collections of mapped types (issue #152) are covered at `/jjq/records`
+and `/jjq/channels`, including per-element failure paths, null and empty
+inputs.
+
 ## What the tests prove
 
-The 28 shared HTTP tests cover record and bridge round-trips, enum creator
+The 33 shared HTTP tests cover record and bridge round-trips, enum creator
 failures, strict JSON syntax and UTF-8 validation, binding paths, null and empty
 bodies, configured unknown-property rejection, bounded diagnostics, the
-framework's 413, 415, and 500 status handling, and the three family shapes
-above (round-trips plus 400s for unmapped, missing, and overlapping inputs).
+framework's 413, 415, and 500 status handling, the three family shapes
+above (round-trips plus 400s for unmapped, missing, and overlapping inputs),
+and homogeneous collection round-trips with indexed element failures.
 
 Records use `jjq-mapper-processor` at application compilation. The extension
 generates `AuthType_EnumBinding` during augmentation. No application model has

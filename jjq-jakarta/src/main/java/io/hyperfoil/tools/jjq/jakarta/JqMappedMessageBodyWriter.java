@@ -4,6 +4,7 @@ import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqType;
 import io.hyperfoil.tools.jjq.mapper.JqKeys;
+import io.hyperfoil.tools.jjq.mapper.TypeConverter;
 import io.hyperfoil.tools.jjq.value.BytOutput;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import jakarta.ws.rs.Produces;
@@ -25,7 +26,9 @@ import jakarta.inject.Inject;
  * records directly to JSON response bodies using jjq's mapper and serializer —
  * bypassing Jackson entirely.
  *
- * <p>Only activates for types annotated with {@code @JqMapped}. Other types
+ * <p>Only activates for types annotated with {@code @JqMapped} (including
+ * {@code @JqType}/{@code @JqKeys} families) and for homogeneous
+ * collections, maps, and arrays of such types. Other types
  * fall through to Jackson or other registered writers.</p>
  *
  * <p>Serializes via {@link JqMapper#appendJsonBytes(Object, io.hyperfoil.tools.jjq.value.BytOutput)}
@@ -78,9 +81,8 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
     @Override
     public boolean isWriteable(Class<?> type, Type genericType,
                                 Annotation[] annotations, MediaType mediaType) {
-        return type.isAnnotationPresent(JqMapped.class)
-                || type.isAnnotationPresent(JqType.class)
-                || type.isAnnotationPresent(JqKeys.class);
+        return CollectionSupport.isDirectlyMappable(type)
+                || CollectionSupport.bindsThroughMapper(genericType);
     }
 
     @Override
@@ -92,7 +94,15 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
             return;
         }
         BytOutput out = JqValues.acquireByteBuffer();
-        mapper.appendJsonBytes(value, out);
+        if (CollectionSupport.isDirectlyMappable(type)) {
+            mapper.appendJsonBytes(value, out);
+        } else {
+            // Collections serialize element-wise through the tree: per-element
+            // mappings (including polymorphic injection) resolve on the
+            // runtime type. The direct-to-bytes fast path stays reserved for
+            // directly mapped types until measured otherwise.
+            TypeConverter.toJqValue(value, mapper).appendToBytes(out);
+        }
         JqValues.writeByteBuffer(out, entityStream);
     }
 }

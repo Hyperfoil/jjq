@@ -654,11 +654,13 @@ public final class TypeConverter {
         if (kind != Kind.DEFAULT) {
             return convert(value, kind, targetType, genericType, mapper);
         }
-        // Polymorphic abstract/interface targets dispatch on the discriminator
-        // or key presence (heterogeneous lists via TypeToken); anything else
-        // keeps leniency.
+        // Polymorphic abstract/interface targets dispatch through the
+        // pre-registered family mapping when present (native images keep
+        // baked tables, not sealed permits), else resolve reflectively;
+        // anything else keeps leniency.
         if (targetType.isInterface() || java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())) {
-            if (KeyPolyMapping.resolveKeyConfig(targetType) != null
+            if (mapper.hasFamilyMapping(targetType)
+                    || KeyPolyMapping.resolveKeyConfig(targetType) != null
                     || PolyMapping.resolvePolyConfig(targetType, mapper.bridges()) != null) {
                 return mapper.fromJqValue(value, targetType);
             }

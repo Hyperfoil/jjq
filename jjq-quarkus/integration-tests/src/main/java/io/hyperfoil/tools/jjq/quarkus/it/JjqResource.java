@@ -68,6 +68,18 @@ public class JjqResource {
     }
 
     @POST
+    @Path("/records")
+    public java.util.List<Greeting> records(java.util.List<Greeting> greetings) {
+        return greetings;
+    }
+
+    @POST
+    @Path("/channels")
+    public java.util.List<Channel> channels(java.util.List<Channel> channels) {
+        return channels;
+    }
+
+    @POST
     @Path("/mapper")
     public Greeting mapper(JqValue value) {
         return mapper.fromJqValue(value, Greeting.class);

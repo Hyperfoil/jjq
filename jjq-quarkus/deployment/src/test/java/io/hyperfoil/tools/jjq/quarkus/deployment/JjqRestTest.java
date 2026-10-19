@@ -137,4 +137,36 @@ class JjqRestTest {
                 .then()
                 .statusCode(400);
     }
+
+    @Test
+    void mappedListRoundTrip() {
+        given()
+                .contentType("application/json")
+                .body("[{\"message\":\"hello\",\"count\":3},{\"message\":\"hi\",\"count\":1}]")
+                .when().post("/greeting/batch")
+                .then()
+                .statusCode(200)
+                .body("[0].message", equalTo("hello"))
+                .body("[1].count", equalTo(1));
+    }
+
+    @Test
+    void mappedListElementFailure_isBadRequest() {
+        given()
+                .contentType("application/json")
+                .body("[{\"message\":\"hello\",\"count\":3},{\"message\":\"hi\",\"count\":{}}]")
+                .when().post("/greeting/batch")
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
+    void mappedListNullBody_bindsNull() {
+        given()
+                .contentType("application/json")
+                .body("null")
+                .when().post("/greeting/batch")
+                .then()
+                .statusCode(204);
+    }
 }

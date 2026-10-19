@@ -4,6 +4,7 @@ import io.hyperfoil.tools.jjq.mapper.JqField;
 import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
+import io.hyperfoil.tools.jjq.mapper.JqType;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.junit.jupiter.api.Test;
@@ -228,11 +229,171 @@ class JqMappedMessageBodyTest {
         assertEquals(original, restored);
     }
 
+    // ---- Collections of mapped types (issue #152) ----
+
+    @JqType
+    sealed interface Pet permits Cat, Dog {}
+
+    record Cat(int lives) implements Pet {}
+
+    record Dog(boolean good) implements Pet {}
+
+    private static java.lang.reflect.Type listOfUsers() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<SimpleUser>>() {}.getType();
+    }
+
+    private static java.lang.reflect.Type setOfUsers() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.Set<SimpleUser>>() {}.getType();
+    }
+
+    private static java.lang.reflect.Type mapOfUsers() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.Map<String, SimpleUser>>() {}.getType();
+    }
+
+    private static java.lang.reflect.Type listOfPets() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<Pet>>() {}.getType();
+    }
+
+    private static java.lang.reflect.Type listOfJqValues() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<JqValue>>() {}.getType();
+    }
+
+    @Test
+    void isReadable_collectionOfMapped() {
+        assertTrue(reader.isReadable(java.util.List.class, listOfUsers(), null, null));
+        assertTrue(reader.isReadable(java.util.Set.class, setOfUsers(), null, null));
+        assertTrue(reader.isReadable(java.util.Map.class, mapOfUsers(), null, null));
+        assertTrue(reader.isReadable(SimpleUser[].class, SimpleUser[].class, null, null));
+        assertTrue(reader.isReadable(java.util.List.class, listOfPets(), null, null));
+        assertTrue(reader.isReadable(java.util.List.class, listOfJqValues(), null, null));
+    }
+
+    @Test
+    void isReadable_collectionOfScalarsDeclines() {
+        java.lang.reflect.Type strings =
+                new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<String>>() {}.getType();
+        java.lang.reflect.Type stringMap =
+                new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.Map<String, String>>() {}.getType();
+        java.lang.reflect.Type nested =
+                new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<java.util.List<SimpleUser>>>() {}.getType();
+        java.lang.reflect.Type objectKeys =
+                new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.Map<Object, SimpleUser>>() {}.getType();
+        assertFalse(reader.isReadable(java.util.List.class, strings, null, null));
+        assertFalse(reader.isReadable(java.util.Map.class, stringMap, null, null));
+        assertFalse(reader.isReadable(java.util.List.class, nested, null, null));
+        assertFalse(reader.isReadable(java.util.Map.class, objectKeys, null, null));
+        assertFalse(reader.isReadable(java.util.List.class, java.util.List.class, null, null));
+        assertFalse(reader.isReadable(String.class, String.class, null, null));
+    }
+
+    @Test
+    void isWriteable_collectionOfMapped() {
+        assertTrue(writer.isWriteable(java.util.List.class, listOfUsers(), null, null));
+        assertTrue(writer.isWriteable(java.util.Map.class, mapOfUsers(), null, null));
+        assertFalse(writer.isWriteable(java.util.List.class, java.util.List.class, null, null));
+    }
+
+    @Test
+    void readFrom_listRoundTrips() throws IOException {
+        Object result = readGeneric(
+                "[{\"name\":\"Alice\",\"age\":30,\"active\":true},{\"name\":\"Bob\",\"age\":25,\"active\":false}]",
+                java.util.List.class, listOfUsers());
+        assertEquals(java.util.List.of(
+                new SimpleUser("Alice", 30, true),
+                new SimpleUser("Bob", 25, false)), result);
+    }
+
+    @Test
+    void readFrom_setAndMapRoundTrip() throws IOException {
+        Object set = readGeneric("[{\"name\":\"Alice\",\"age\":30,\"active\":true}]",
+                java.util.Set.class, setOfUsers());
+        assertEquals(java.util.Set.of(new SimpleUser("Alice", 30, true)), set);
+        Object map = readGeneric("{\"lead\":{\"name\":\"Alice\",\"age\":30,\"active\":true}}",
+                java.util.Map.class, mapOfUsers());
+        assertEquals(java.util.Map.of("lead", new SimpleUser("Alice", 30, true)), map);
+    }
+
+    @Test
+    void readFrom_arrayRoundTrips() throws IOException {
+        Object result = readGeneric("[{\"name\":\"Alice\",\"age\":30,\"active\":true}]",
+                SimpleUser[].class, SimpleUser[].class);
+        assertTrue(result instanceof SimpleUser[]);
+        assertEquals(1, ((SimpleUser[]) result).length);
+        assertEquals(new SimpleUser("Alice", 30, true), ((SimpleUser[]) result)[0]);
+    }
+
+    @Test
+    void readFrom_familyListDispatchesPerElement() throws IOException {
+        Object result = readGeneric(
+                "[{\"type\":\"Cat\",\"lives\":9},{\"type\":\"Dog\",\"good\":true}]",
+                java.util.List.class, listOfPets());
+        assertEquals(java.util.List.of(new Cat(9), new Dog(true)), result);
+    }
+
+    @Test
+    void readFrom_elementFailureCarriesIndexPath() {
+        JqBadRequestException e = assertThrows(JqBadRequestException.class, () -> readGeneric(
+                "[{\"name\":\"Alice\",\"age\":30,\"active\":true},{\"name\":\"Bob\",\"age\":{}}]",
+                java.util.List.class, listOfUsers()));
+        assertTrue(e.getMessage().contains("[1]"), e.getMessage());
+        assertTrue(e.getMessage().contains("age"), e.getMessage());
+    }
+
+    @Test
+    void readFrom_nullLiteralList_returnsNull() throws IOException {
+        assertNull(readGeneric("null", java.util.List.class, listOfUsers()));
+    }
+
+    @Test
+    void readFrom_emptyArray_bindsEmpty() throws IOException {
+        assertEquals(java.util.List.of(), readGeneric("[]", java.util.List.class, listOfUsers()));
+    }
+
+    @Test
+    void readFrom_strictUnknownInElement_isBadRequest() {
+        var strictReader = new JqMappedMessageBodyReader(
+                JqMapper.builder().failOnUnknownProperties(true).build());
+        JqBadRequestException e = assertThrows(JqBadRequestException.class, () -> readGeneric(strictReader,
+                "[{\"name\":\"Alice\",\"age\":30,\"active\":true,\"nickname\":\"Al\"}]",
+                java.util.List.class, listOfUsers()));
+        assertTrue(e.getMessage().contains("nickname"), e.getMessage());
+    }
+
+    @Test
+    void writeTo_listRoundTrips() throws IOException {
+        String json = writeGeneric(
+                java.util.List.of(new SimpleUser("Alice", 30, true), new SimpleUser("Bob", 25, false)),
+                java.util.List.class, listOfUsers());
+        assertEquals(java.util.List.of(
+                new SimpleUser("Alice", 30, true),
+                new SimpleUser("Bob", 25, false)),
+                readGeneric(json, java.util.List.class, listOfUsers()));
+    }
+
+    @Test
+    void writeTo_injectedDiscriminatorSurvivesList() throws IOException {
+        String json = writeGeneric(java.util.List.of(new Cat(9), new Dog(true)),
+                java.util.List.class, listOfPets());
+        assertTrue(json.contains("\"type\":\"Cat\""), json);
+        assertTrue(json.contains("\"type\":\"Dog\""), json);
+        assertEquals(java.util.List.of(new Cat(9), new Dog(true)),
+                readGeneric(json, java.util.List.class, listOfPets()));
+    }
+
+    @Test
+    void writeTo_mapAndJqValueList() throws IOException {
+        String map = writeGeneric(java.util.Map.of("lead", new SimpleUser("Alice", 30, true)),
+                java.util.Map.class, mapOfUsers());
+        assertTrue(map.contains("\"lead\""), map);
+        String values = writeGeneric(java.util.List.of(JqValues.parse("{\"a\":1}")),
+                java.util.List.class, listOfJqValues());
+        assertEquals("[{\"a\":1}]", values);
+    }
+
     // ---- Helpers ----
 
-    @SuppressWarnings("unchecked")
     private Object readJson(String json, Class<?> type) throws IOException {
-        return readJson(reader, json, type);
+        return readGeneric(json, type, type);
     }
 
     @SuppressWarnings("unchecked")
@@ -243,9 +404,29 @@ class JqMappedMessageBodyTest {
                 new ByteArrayInputStream(bytes));
     }
 
+    @SuppressWarnings("unchecked")
+    private Object readGeneric(String json, Class<?> type, java.lang.reflect.Type genericType)
+            throws IOException {
+        return readGeneric(reader, json, type, genericType);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object readGeneric(JqMappedMessageBodyReader reader, String json,
+                               Class<?> type, java.lang.reflect.Type genericType) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        return reader.readFrom(
+                (Class<Object>) type, genericType, null, null, null,
+                new ByteArrayInputStream(bytes));
+    }
+
     private String writeJson(Object value) throws IOException {
+        return writeGeneric(value, value.getClass(), value.getClass());
+    }
+
+    private String writeGeneric(Object value, Class<?> type, java.lang.reflect.Type genericType)
+            throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        writer.writeTo(value, value.getClass(), value.getClass(), null, null, null, out);
+        writer.writeTo(value, type, genericType, null, null, null, out);
         return out.toString(StandardCharsets.UTF_8);
     }
 }
