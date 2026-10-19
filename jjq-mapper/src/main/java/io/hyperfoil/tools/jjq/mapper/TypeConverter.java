@@ -162,6 +162,28 @@ public final class TypeConverter {
     }
 
     /**
+     * True when the value is absent: Java null (missing key) or JSON null.
+     * Both bind null for reference targets.
+     *
+     * @param value the JqValue to test (may be null)
+     * @return true for null or {@code JqNull}
+     */
+    static boolean isNull(JqValue value) {
+        return value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull;
+    }
+
+    /**
+     * True when the target is a JVM primitive (null cannot bind; the
+     * zero-value applies instead).
+     *
+     * @param targetType the raw target class (may be null)
+     * @return true for primitive targets
+     */
+    static boolean isPrimitive(Class<?> targetType) {
+        return targetType != null && targetType.isPrimitive();
+    }
+
+    /**
      * Convert a JqValue to the target Java type using the pre-resolved kind.
      * Single switch dispatch -- no if/else chains, no lambda classes.
      *
@@ -191,27 +213,35 @@ public final class TypeConverter {
                 yield value instanceof JqString s ? s.stringValue() : value.toJsonString();
             }
             case INT -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceInt(value);
             }
             case LONG -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceLong(value, "long");
             }
             case DOUBLE -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceDouble(value, "double");
             }
             case FLOAT -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield (float) coerceDouble(value, "float");
             }
             case BOOLEAN -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceBoolean(value);
             }
             case SHORT -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceShort(value);
             }
             case BYTE -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceByte(value);
             }
             case CHAR -> {
+                if (isNull(value) && !isPrimitive(targetType)) yield null;
                 yield coerceChar(value);
             }
             case BIG_DECIMAL -> {

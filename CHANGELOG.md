@@ -16,6 +16,15 @@
   augmentation and bakes the dispatch tables into the mapper producer
   (`Builder.registerPoly`/`registerKeys`); malformed families fail the
   build. JAX-RS providers accept `@JqType`/`@JqKeys` bases directly.
+- Boxed scalar nullability matches Jackson/JSON-B: absent keys and explicit
+  JSON nulls bind `null` for boxed targets (`Integer`, `Long`, `Double`,
+  `Float`, `Boolean`, `Short`, `Byte`, `Character`, boxed array elements)
+  on both the reflective and generated paths; primitives keep JVM
+  zero-values and non-null inputs convert exactly as before. The annotation
+  processor strips type-use annotations (e.g. bean-validation `@Pattern`)
+  from emitted type names instead of generating invalid Java. The Hibernate
+  `FormatMapper` yields raw JSON text for `String` targets and writes it
+  back verbatim (native queries selecting jsonb aggregates as `String`).
 - New `jjq-quarkus/integration-tests` consumer application follows the core
   Quarkus HTTP test pattern: one `@QuarkusTest` contract reused by a packaged
   `@QuarkusIntegrationTest`. All 28 checks pass with Quarkus REST and Classic

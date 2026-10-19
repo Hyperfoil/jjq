@@ -2283,8 +2283,9 @@ class JqMapperTest {
         java.util.UUID id = java.util.UUID.randomUUID();
         BoxedArrayHolder h = mapper.fromJqValue(JqValues.parse(
                 "{\"nums\":[1,null,3],\"ids\":[\"" + id + "\"]}"), BoxedArrayHolder.class);
-        // Null elements follow the same leniency as List<Integer> (nulls stay zero)
-        assertArrayEquals(new Integer[]{1, 0, 3}, h.nums());
+        // Null elements bind null for boxed targets (Jackson/JSON-B parity);
+        // only primitive arrays keep JVM zero-defaults
+        assertArrayEquals(new Integer[]{1, null, 3}, h.nums());
         assertArrayEquals(new java.util.UUID[]{id}, h.ids());
         BigIntArrayHolder b = mapper.fromJqValue(JqValues.parse(
                 "{\"values\":[12345678901234567890123]}"), BigIntArrayHolder.class);
@@ -4299,11 +4300,13 @@ class JqMapperTest {
 
     @Test
     void fromJqValue_charDefaults() {
-        // Missing fields should get default char values
+        // Missing fields: primitives get JVM defaults, boxed types bind null
+        // (Jackson/JSON-B parity — a missing optional value must stay absent,
+        // never silently become zero)
         JqValue json = JqValues.parse("{\"name\":\"Alice\"}");
         CharRecord r = mapper.fromJqValue(json, CharRecord.class);
         assertEquals('\0', r.initial());
-        assertEquals('\0', r.grade()); // Character (boxed) gets '\0' default from TypeConverter
+        assertNull(r.grade());
     }
 
     // ---- Optional with non-String scalar types ----

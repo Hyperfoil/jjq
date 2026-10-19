@@ -479,21 +479,30 @@ final class MappingCodeGenerator {
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append("asStringChecked(").append(apply).append(")");
             case "int" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
-            case "java.lang.Integer" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
+            // Boxed scalars route through the shared convert() path so
+            // absent/null keys bind null (JSON-B parity) instead of the
+            // primitive zero-value; generated and reflective behavior stay
+            // identical by construction. Non-null inputs convert exactly
+            // like the static helpers (same coerce functions). fromJqValue
+            // itself cannot be used: it only serves records/POJOs/enums.
+            case "java.lang.Integer" -> appendBoxedScalar(sb, apply, "Integer", "INT");
             case "long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
-            case "java.lang.Long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
+            case "java.lang.Long" -> appendBoxedScalar(sb, apply, "Long", "LONG");
             case "double" -> sb.append("asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\"))");
-            case "java.lang.Double" -> sb.append("asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\"))");
+            case "java.lang.Double" -> appendBoxedScalar(sb, apply, "Double", "DOUBLE");
             case "float" -> sb.append("(float) asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\"))");
-            case "java.lang.Float" -> sb.append("(float) asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\"))");
+            case "java.lang.Float" -> appendBoxedScalar(sb, apply, "Float", "FLOAT");
             case "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
-            case "java.lang.Boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
+            case "java.lang.Boolean" -> appendBoxedScalar(sb, apply, "Boolean", "BOOLEAN");
             case "short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
-            case "java.lang.Short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
+            case "java.lang.Short" -> appendBoxedScalar(sb, apply, "Short", "SHORT");
             case "byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
-            case "java.lang.Byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
-            case "char", "java.lang.Character" -> {
+            case "java.lang.Byte" -> appendBoxedScalar(sb, apply, "Byte", "BYTE");
+            case "char" -> {
                 sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
+            }
+            case "java.lang.Character" -> {
+                appendBoxedScalar(sb, apply, "Character", "CHAR");
             }
             case "java.math.BigDecimal" -> {
                 sb.append("asBigDecimalChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\"))");
@@ -1321,6 +1330,26 @@ final class MappingCodeGenerator {
     private static String typeLiteral(String typeName) {
         if (typeName.contains("<")) return typeTokenExpr(typeName);
         return typeName + ".class";
+    }
+
+    /**
+     * Deserialization expression for a boxed scalar component (e.g.
+     * {@code Long}, {@code Boolean}): the shared {@code TypeConverter}
+     * path, which binds absent/null keys to null for reference targets
+     * while converting non-null inputs exactly like the static helpers.
+     * Single evaluation, no allocation beyond the boxing itself.
+     *
+     * @param sb        where to emit
+     * @param apply     the value expression (evaluated once)
+     * @param boxedName the simple boxed class name (e.g. {@code "Long"})
+     * @param kind      the {@code TypeConverter.Kind} name (e.g. {@code "LONG"})
+     */
+    private static void appendBoxedScalar(StringBuilder sb, String apply, String boxedName, String kind) {
+        sb.append("(java.lang.").append(boxedName).append(") ")
+          .append("io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(").append(apply)
+          .append(", io.hyperfoil.tools.jjq.mapper.TypeConverter.Kind.").append(kind)
+          .append(", java.lang.").append(boxedName).append(".class")
+          .append(", java.lang.").append(boxedName).append(".class, mapper)");
     }
 
     /** {@code new TypeToken<T>(){}.getType()} for a parameterized type string. */

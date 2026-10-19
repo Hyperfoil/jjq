@@ -30,6 +30,14 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ErrorType;
+import javax.lang.model.type.PrimitiveType;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVariable;
+import javax.lang.model.type.WildcardType;
+import javax.lang.model.util.SimpleTypeVisitor9;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
@@ -51,6 +59,83 @@ public class JqMapperProcessor extends AbstractProcessor {
 
     /** Creates a new JqMapperProcessor. */
     public JqMapperProcessor() {}
+
+    /**
+     * Renders a {@link TypeMirror} as a source-level type name without
+     * annotations. {@code TypeMirror.toString()} includes type-use
+     * annotations (e.g. bean-validation annotations on record components),
+     * which is invalid Java in generated code.
+     *
+     * @param mirror the type to render
+     * @return the annotation-free type name
+     */
+    static String unannotatedTypeName(TypeMirror mirror) {
+        return mirror.accept(new SimpleTypeVisitor9<String, Void>() {
+            @Override
+            public String visitDeclared(DeclaredType t, Void unused) {
+                StringBuilder sb = new StringBuilder(
+                        ((TypeElement) t.asElement()).getQualifiedName().toString());
+                if (!t.getTypeArguments().isEmpty()) {
+                    sb.append('<');
+                    boolean first = true;
+                    for (TypeMirror arg : t.getTypeArguments()) {
+                        if (!first) sb.append(", ");
+                        first = false;
+                        sb.append(arg.accept(this, null));
+                    }
+                    sb.append('>');
+                }
+                return sb.toString();
+            }
+
+            @Override
+            public String visitArray(ArrayType t, Void unused) {
+                return t.getComponentType().accept(this, null) + "[]";
+            }
+
+            @Override
+            public String visitPrimitive(PrimitiveType t, Void unused) {
+                // toString() would carry type-use annotations; map by kind instead.
+                return switch (t.getKind()) {
+                    case BOOLEAN -> "boolean";
+                    case BYTE -> "byte";
+                    case SHORT -> "short";
+                    case INT -> "int";
+                    case LONG -> "long";
+                    case CHAR -> "char";
+                    case FLOAT -> "float";
+                    case DOUBLE -> "double";
+                    default -> t.toString();
+                };
+            }
+
+            @Override
+            public String visitTypeVariable(TypeVariable t, Void unused) {
+                return t.asElement().getSimpleName().toString();
+            }
+
+            @Override
+            public String visitWildcard(WildcardType t, Void unused) {
+                if (t.getExtendsBound() != null) {
+                    return "? extends " + t.getExtendsBound().accept(this, null);
+                }
+                if (t.getSuperBound() != null) {
+                    return "? super " + t.getSuperBound().accept(this, null);
+                }
+                return "?";
+            }
+
+            @Override
+            public String visitError(ErrorType t, Void unused) {
+                return t.toString();
+            }
+
+            @Override
+            protected String defaultAction(TypeMirror t, Void unused) {
+                return t.toString();
+            }
+        }, null);
+    }
 
     @Override
     public SourceVersion getSupportedSourceVersion() {
@@ -113,7 +198,7 @@ public class JqMapperProcessor extends AbstractProcessor {
         for (Element enclosed : recordType.getEnclosedElements()) {
             if (enclosed instanceof RecordComponentElement rc) {
                 String name = rc.getSimpleName().toString();
-                String typeName = rc.asType().toString();
+                String typeName = unannotatedTypeName(rc.asType());
                 boolean ignored = rc.getAnnotation(JqIgnore.class) != null;
                 if (!ignored && recordAnyInfo.hasGetter()
                         && (name.equals(recordAnyInfo.getterName())
@@ -303,7 +388,7 @@ public class JqMapperProcessor extends AbstractProcessor {
             if (field.getModifiers().contains(Modifier.STATIC)) continue;
 
             String name = field.getSimpleName().toString();
-            String typeName = field.asType().toString();
+            String typeName = unannotatedTypeName(field.asType());
             boolean ignored = field.getAnnotation(JqIgnore.class) != null;
 
             // Apply naming strategy

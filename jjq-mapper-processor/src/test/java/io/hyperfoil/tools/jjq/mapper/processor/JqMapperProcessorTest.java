@@ -73,6 +73,56 @@ class JqMapperProcessorTest {
         assertEquals(30, ageMethod.invoke(result));
     }
 
+    // ---- Type-use annotations must not leak into generated code ----
+
+    @Test
+    void typeUseAnnotations_doNotLeakIntoGeneratedCode() throws Exception {
+        // Mirrors bean-validation-annotated domain records (e.g. h5m's
+        // @Pattern(regexp=...) name): TypeMirror.toString() carries the
+        // annotations, which is invalid Java where the generator emits
+        // declared types, casts, and .class literals.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import java.lang.annotation.*;
+                import java.util.List;
+
+                @Target(ElementType.TYPE_USE)
+                @Retention(RetentionPolicy.RUNTIME)
+                @interface Pattern {
+                    String regexp();
+                    String message() default "";
+                }
+
+                @Target(ElementType.TYPE_USE)
+                @Retention(RetentionPolicy.RUNTIME)
+                @interface NotEmpty {
+                }
+
+                @JqMapped
+                public record ValidatedFolder(
+                        @Pattern(regexp = "^(?![hH]5[mM]\\\\.).*$", message = "reserved") String name,
+                        List<@NotEmpty String> labels,
+                        Long count,
+                        int age) {}
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.ValidatedFolder", source);
+        JqMapper mapper = JqMapper.create();
+        Object result = mapper.fromJqValue(
+                JqValues.parse("{\"name\":\"x\",\"labels\":[\"a\"],\"count\":3,\"age\":4}"), recordClass);
+        assertEquals("x", recordClass.getMethod("name").invoke(result));
+        assertEquals(List.of("a"), recordClass.getMethod("labels").invoke(result));
+        assertEquals(3L, recordClass.getMethod("count").invoke(result));
+        assertEquals(4, recordClass.getMethod("age").invoke(result));
+
+        // Boxed absence binds null on the generated path too; primitives keep zero.
+        Object sparse = mapper.fromJqValue(JqValues.parse("{\"name\":\"x\"}"), recordClass);
+        assertNull(recordClass.getMethod("count").invoke(sparse));
+        assertEquals(0, recordClass.getMethod("age").invoke(sparse));
+    }
+
     // ---- Scalar-for-object shape gate, generated path (issue #128.3) ----
 
     @Test

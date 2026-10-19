@@ -40,7 +40,24 @@ public class JqValueFormatMapper implements FormatMapper {
         if (charSequence == null) {
             return null;
         }
-        return javaType.getJavaTypeClass().cast(JqValues.parse(charSequence.toString()));
+        Class<T> target = javaType.getJavaTypeClass();
+        // A JSON column read as String yields its raw JSON text (native
+        // queries select jsonb aggregates as String and re-parse them).
+        if (target == String.class) {
+            return target.cast(charSequence.toString());
+        }
+        JqValue parsed = JqValues.parse(charSequence.toString());
+        if (target.isInstance(parsed)) {
+            return target.cast(parsed);
+        }
+        // Best effort for other targets: plain Java values (String, Long,
+        // Double, Boolean, List, Map) with a checked cast.
+        Object plain = parsed.toJavaObject();
+        if (target.isInstance(plain)) {
+            return target.cast(plain);
+        }
+        throw new org.hibernate.HibernateException(
+                "JqValueFormatMapper cannot bind JSON to " + target.getName());
     }
 
     @Override
@@ -49,6 +66,15 @@ public class JqValueFormatMapper implements FormatMapper {
         if (value == null) {
             return null;
         }
-        return ((JqValue) value).toJsonString();
+        // Mirror fromString: a String column carries raw JSON text, JqValue
+        // serializes canonically; anything else cannot be written.
+        if (value instanceof String text) {
+            return text;
+        }
+        if (value instanceof JqValue json) {
+            return json.toJsonString();
+        }
+        throw new org.hibernate.HibernateException(
+                "JqValueFormatMapper cannot write " + value.getClass().getName() + " as JSON");
     }
 }
