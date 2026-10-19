@@ -2371,8 +2371,11 @@ final class YamlParser {
             if (pos >= end) break;
             int saved = pos;
             int savedLine = line;
-            // Document markers always terminate block scalar content
-            if (classifyLine(pos, lineEnd(pos)) == LINE_MARKER) break;
+            // Document markers terminate block scalar content only at
+            // column 0 (YAML 1.2 §9.1.2/§8.1.1): indented `---`/`...`
+            // lines are ordinary content (issue #150). pos is at line
+            // start here, so a leading `-`/`.` means column 0.
+            if ((d[pos] == '-' || d[pos] == '.') && isMarkerAt(pos, lineEnd(pos))) break;
             int ls = pos;
             while (ls < end && (d[ls] == ' ' || d[ls] == '\t')) ls++;
             boolean blank = ls >= end || d[ls] == '\n' || d[ls] == '\r';

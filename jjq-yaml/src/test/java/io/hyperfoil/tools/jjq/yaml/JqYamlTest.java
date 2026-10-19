@@ -13,6 +13,36 @@ class JqYamlTest {
     // ---- Basic types ----
 
     @Test
+    void indentedMarkerInsideBlockScalarIsContent() {
+        // Issue #150 (YAML 1.2 §9.1.2/§8.1.1): `---` is a document
+        // marker only at column 0; indented lines are scalar content.
+        JqValue result = JqYaml.parse(
+                "description: |\n  harmless\n  --- README.md ---\n  more\nparent: minimal\n");
+        assertEquals("harmless\n--- README.md ---\nmore\n",
+                result.getField("description").stringValue());
+        assertEquals("minimal", result.getField("parent").stringValue());
+    }
+
+    @Test
+    void bareIndentedMarkerInsideBlockScalarIsContent() {
+        JqValue result = JqYaml.parse(
+                "description: |\n  harmless\n  ---\n  more\nparent: minimal\n");
+        assertEquals("harmless\n---\nmore\n",
+                result.getField("description").stringValue());
+        assertEquals("minimal", result.getField("parent").stringValue());
+    }
+
+    @Test
+    void columnZeroMarkerStillEndsBlockScalar() {
+        // A real column-0 marker still terminates the scalar document.
+        List<JqValue> docs = JqYaml.parseAll(
+                "description: |\n  kept\n---\nparent: minimal\n");
+        assertEquals(2, docs.size());
+        assertEquals("kept\n", docs.get(0).getField("description").stringValue());
+        assertEquals("minimal", docs.get(1).getField("parent").stringValue());
+    }
+
+    @Test
     void parseSimpleMapping() {
         JqValue result = JqYaml.parse("name: Alice\nage: 30");
         assertEquals("Alice", result.getField("name").stringValue());

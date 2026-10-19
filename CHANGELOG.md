@@ -284,6 +284,10 @@
   `toJsonString` -24%, flat -7%; object stays 32 bytes)
 - `floor`/`ceil`/`round` preserve non-finite (and huge finite) doubles
   instead of saturating through a `long` cast (#142)
+- YAML block scalars keep indented `---`/`...` lines as content (#150):
+  only column-0 markers terminate the scalar (YAML 1.2 §9.1.2/§8.1.1),
+  matching SnakeYAML byte-for-byte; real column-0 markers still end
+  the scalar and start a new document
 
 ## [0.2.3] - 2026-10-11
 
