@@ -100,6 +100,32 @@ class Utf8Test {
         assertEquals(63, Utf8.validate(overlong, 0, 72));
     }
 
+    @Test
+    void bulkReentryKeepsOffsets() {
+        // Issue #160: complete 2/3/4-byte sequences starting at every lane
+        // offset exercise the bulk re-entry loop; a malformed lead after
+        // several sequences must still report its exact offset.
+        for (String ch : new String[]{"\u00e9", "\u20ac", "\uD83D\uDE00"}) {
+            byte[] enc = ch.getBytes(StandardCharsets.UTF_8);
+            for (int at = 60; at < 76; at++) {
+                byte[] bytes = new byte[at + enc.length + 20];
+                java.util.Arrays.fill(bytes, (byte) 'q');
+                System.arraycopy(enc, 0, bytes, at, enc.length);
+                assertEquals(-1, Utf8.validate(bytes, 0, bytes.length), ch + " at " + at);
+            }
+        }
+        String doc = "x".repeat(100) + "\u00e9" + "y".repeat(100) + "\u20ac"
+                + "z".repeat(100) + "\uD83D\uDE00" + "w".repeat(100);
+        byte[] good = doc.getBytes(StandardCharsets.UTF_8);
+        assertEquals(-1, Utf8.validate(good, 0, good.length));
+        byte[] bad = good.clone();
+        bad[250] = (byte) 0x80; // lone continuation past several sequences
+        assertEquals(250, Utf8.validate(bad, 0, bad.length));
+        bad = good.clone();
+        bad[bad.length - 1] = (byte) 0xC3; // truncated tail past re-entries
+        assertEquals(bad.length - 1, Utf8.validate(bad, 0, bad.length));
+    }
+
     private static void assertValid(String s) {
         byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
         assertEquals(-1, Utf8.validate(bytes, 0, bytes.length), s);
