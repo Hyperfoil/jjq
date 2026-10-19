@@ -18,8 +18,17 @@ public final class BytOutput {
     private static final byte[] TRUE_BYTES = {'t', 'r', 'u', 'e'};
     private static final byte[] FALSE_BYTES = {'f', 'a', 'l', 's', 'e'};
 
+    /**
+     * Retained scratch for getChars-based string encoding (issue #157):
+     * 8K chars (16 KB) per buffer, so retention stays bounded no matter
+     * how large any single string is. Longer strings encode in windows;
+     * windows never split a surrogate pair (back off one char).
+     */
+    private static final int CHAR_SCRATCH_SIZE = 8192;
+
     byte[] buf;
     int pos;
+    private char[] charScratch;
 
     public BytOutput(int initialCapacity) {
         this.buf = new byte[initialCapacity];
@@ -118,6 +127,11 @@ public final class BytOutput {
     /**
      * Encode a Java String as UTF-8 bytes (raw, no JSON escaping).
      * Used for number formatting and other non-string contexts.
+     *
+     * <p>Stays on the charAt loop for now (issue #157 round 2): the
+     * getChars variant recovered the primed-profile regression here
+     * but cost +12.6% on clean long ASCII against tight bars — a real
+     * tradeoff for a follow-up, not a ride-along on the escape path.</p>
      */
     public void writeUTF8(String s) {
         int len = s.length();
@@ -156,23 +170,57 @@ public final class BytOutput {
 
     /**
      * JSON-escape a string and write as UTF-8 bytes (without quotes).
-     * Uses segment-based scanning: scans for the next escape character without
-     * writing, then bulk-flushes the clean segment. This keeps the scan loop
-     * tight (no buf/pos updates, no ensureCapacity) for the common case of
-     * clean ASCII strings.
+     * Copies the string through a bounded scratch buffer with
+     * {@code getChars} (an intrinsic, no per-call-site coder profile) and
+     * runs the segment scan/encode over the array (issue #157 experiment).
+     * Semantics match the previous charAt loop exactly, including lone
+     * surrogates (3-byte form) and window-boundary behavior.
      */
     public void escapeJsonToBytes(String s) {
         final int len = s.length();
         ensureCapacity(len * 3 + 12); // worst case: all escaped + UTF-8 expansion
-        int segStart = 0;
+        if (len <= CHAR_SCRATCH_SIZE) {
+            char[] scratch = charScratch();
+            s.getChars(0, len, scratch, 0);
+            escapeWindow(scratch, 0, len);
+            return;
+        }
+        char[] scratch = charScratch();
+        int off = 0;
+        while (off < len) {
+            int wEnd = Math.min(off + CHAR_SCRATCH_SIZE, len);
+            if (wEnd < len && Character.isHighSurrogate(s.charAt(wEnd - 1))) {
+                wEnd--; // never split a surrogate pair across windows
+            }
+            s.getChars(off, wEnd, scratch, 0);
+            escapeWindow(scratch, 0, wEnd - off);
+            off = wEnd;
+        }
+    }
 
-        for (int i = 0; i < len; i++) {
-            char c = s.charAt(i);
+    /** Lazily-created bounded scratch (retained with the buffer). */
+    private char[] charScratch() {
+        char[] c = charScratch;
+        if (c == null) {
+            charScratch = c = new char[CHAR_SCRATCH_SIZE];
+        }
+        return c;
+    }
+
+    /**
+     * Segment-based escape scan over a scratch window: scans for the next
+     * escape character without writing, then bulk-flushes the clean segment.
+     */
+    private void escapeWindow(char[] a, int start, int end) {
+        int segStart = start;
+
+        for (int i = start; i < end; i++) {
+            char c = a[i];
             if (c >= 0x20 && c != '"' && c != '\\') continue; // scan — no writes
 
             // Found escape character — flush clean segment before it
             if (i > segStart) {
-                writeStringSegmentAsUTF8(s, segStart, i);
+                writeSegmentChars(a, segStart, i);
             }
             // Emit escape sequence
             ensureCapacity(6);
@@ -197,27 +245,27 @@ public final class BytOutput {
             segStart = i + 1;
         }
         // Flush remaining clean segment
-        if (segStart < len) {
-            writeStringSegmentAsUTF8(s, segStart, len);
+        if (segStart < end) {
+            writeSegmentChars(a, segStart, end);
         }
     }
 
     /**
-     * Bulk-write a clean string segment (no escape characters) as UTF-8.
+     * Bulk-write a clean scratch segment (no escape characters) as UTF-8.
      * Most JSON string values are ASCII, so the inner loop is a simple byte cast.
      */
-    private void writeStringSegmentAsUTF8(String s, int start, int end) {
+    private void writeSegmentChars(char[] a, int start, int end) {
         int segLen = end - start;
         ensureCapacity(segLen * 3); // worst case UTF-8
         for (int i = start; i < end; i++) {
-            char c = s.charAt(i);
+            char c = a[i];
             if (c < 0x80) {
                 buf[pos++] = (byte) c;
             } else if (c < 0x800) {
                 buf[pos++] = (byte) (0xC0 | (c >> 6));
                 buf[pos++] = (byte) (0x80 | (c & 0x3F));
             } else if (Character.isHighSurrogate(c) && i + 1 < end) {
-                char low = s.charAt(++i);
+                char low = a[++i];
                 int cp = Character.toCodePoint(c, low);
                 buf[pos++] = (byte) (0xF0 | (cp >> 18));
                 buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
