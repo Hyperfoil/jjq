@@ -28,6 +28,19 @@ import java.util.concurrent.TimeUnit;
  * accurate for this workload. This benchmark explores what happens at
  * non-zero densities for other jjq users.</p>
  *
+ * <p>Issue #156 matrix: {@code script} varies the String coder case
+ * (ASCII Latin-1 vs true UTF-16 BMP vs supplementary pairs), {@code
+ * escapePosition} plants the first escape early or late, and {@code
+ * profileMode} primes the process-wide {@code String.charAt} profile
+ * before warmup. The default matrix stays small; select wider sweeps
+ * explicitly, for example:</p>
+ * <pre>
+ * -p script=ascii,latin1,bmp,supplementary,mixed -p profileMode=clean,primed,mixed
+ * -p stringLength=16,100,512 -p escapePosition=random,early,late
+ * </pre>
+ * <p>Evidence runs use at least 3 forks, {@code -prof gc}, and JSON output;
+ * compare supported JDK 21/25 with JDK 27 where available.</p>
+ *
  * <h3>Running</h3>
  * <pre>
  * mvn package -pl jjq-core,jjq-jackson,jjq-fastjson2,jjq-mapper,jjq-mapper-processor,jjq-benchmark -DskipTests -Pbenchmark
@@ -44,7 +57,7 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @Warmup(iterations = 5, time = 1)
 @Measurement(iterations = 5, time = 1)
-@Fork(value = 2, jvmArgsPrepend = {"-XX:-UseOnStackReplacement"})
+@Fork(value = 3, jvmArgsPrepend = {"-XX:-UseOnStackReplacement"})
 @State(Scope.Benchmark)
 public class JqEscapeBenchmark {
 
@@ -66,6 +79,25 @@ public class JqEscapeBenchmark {
         }
     }
 
+    /** Non-ASCII Latin-1 clean characters (single UTF-16 units, non-ASCII coder). */
+    private static final char[] LATIN1_CLEAN =
+            {'\u00e9', '\u00fc', '\u00f1', '\u00a9', '\u00ae', '\u00e0', '\u00e8', '\u00ea',
+             '\u00f4', '\u00fb', '\u00e7', '\u00df', '\u00e6', '\u00f8', '\u00e5'};
+
+    /** BMP clean characters (CJK, true UTF-16 coder). */
+    private static final char[] BMP_CLEAN =
+            {'\u4e16', '\u754c', '\u4e2d', '\u6587', '\u65e5', '\u8bed', '\uac00', '\ub098'};
+
+    /** Supplementary clean code points (surrogate pairs). */
+    private static final int[] SUPPLEMENTARY_CLEAN =
+            {0x1F600, 0x1F601, 0x1F602, 0x1F923, 0x1F680, 0x1F4A1};
+
+    /** UTF-16 sample for profile priming and mixed-profile warmup. */
+    private static final String UTF16_PRIME = "\u4e16\u754c\u754c\u4e16\u00e9\u0141";
+
+    // Sink for priming work so setup-time loops are not eliminated.
+    private int primeSink;
+
     // ========================================================================
     //  Parameters
     // ========================================================================
@@ -74,13 +106,40 @@ public class JqEscapeBenchmark {
     @Param({"0", "1", "3", "5", "10"})
     int escapePercentage;
 
-    /** Length of each generated string. */
-    @Param({"100"})
+    /** Length of each generated string, in chars. */
+    @Param({"16", "100", "512"})
     int stringLength;
 
     /** Number of distinct inputs to cycle through. */
     @Param({"10000"})
     int samples;
+
+    /**
+     * Clean-character pool: {@code ascii} (Latin-1 coder), {@code latin1}
+     * (non-ASCII Latin-1, still single UTF-16 units), {@code bmp} (CJK),
+     * {@code supplementary} (surrogate pairs), {@code mixed} (all of them).
+     * Latin-1 non-ASCII and true UTF-16 are different coder cases.
+     */
+    @Param({"ascii", "mixed"})
+    String script;
+
+    /**
+     * Where the first escape lands when {@code escapePercentage > 0}:
+     * {@code random} (probabilistic draw only), {@code early} (forced at
+     * index 0), {@code late} (forced at the last char boundary).
+     */
+    @Param({"random"})
+    String escapePosition;
+
+    /**
+     * JIT profile priming in setup, before warmup compiles the loops:
+     * {@code clean} (nothing), {@code primed} (UTF-16 {@code charAt} calls,
+     * poisoning the process-wide profile), {@code mixed} (primed plus UTF-16
+     * traffic through the measured methods). Verify compiled behavior with
+     * assembly inspection rather than assuming the prime took effect.
+     */
+    @Param({"clean"})
+    String profileMode;
 
     // ========================================================================
     //  State
@@ -100,6 +159,7 @@ public class JqEscapeBenchmark {
 
     @Setup
     public void setup() {
+        primeCharAtProfile();
         Random rnd = new Random(SEED);
 
         stringDataSet = new String[samples];
@@ -107,7 +167,7 @@ public class JqEscapeBenchmark {
         jqValueDataSet = new JqValue[samples];
 
         for (int i = 0; i < samples; i++) {
-            stringDataSet[i] = generateString(rnd, stringLength, escapePercentage);
+            stringDataSet[i] = generateString(rnd, stringLength, escapePercentage, script, escapePosition);
             // Build JSON string: "value" — for the parse benchmark
             String jsonStr = "\"" + JqString.escapeForBenchmark(stringDataSet[i]) + "\"";
             bytesDataSet[i] = jsonStr.getBytes(StandardCharsets.UTF_8);
@@ -124,6 +184,31 @@ public class JqEscapeBenchmark {
             sb.setLength(0);
             JqString.escapeJson(stringDataSet[i], sb);
         }
+
+        if ("mixed".equals(profileMode)) {
+            // Realistic mixed steady state: UTF-16 traffic through the
+            // measured methods during setup, before warmup compiles them.
+            for (int i = 0; i < 200; i++) {
+                sb.setLength(0);
+                JqString.escapeJson(UTF16_PRIME, sb);
+                JqValues.serializeToBytes(JqString.of(UTF16_PRIME));
+            }
+        }
+    }
+
+    /**
+     * Poison the process-wide {@code String.charAt} profile before warmup
+     * compiles the measured loops (unless {@code profileMode} is clean).
+     * A single interpreter-era UTF-16 call is the documented pollution
+     * mechanism; the sink field keeps the loop from being eliminated.
+     */
+    private void primeCharAtProfile() {
+        if ("clean".equals(profileMode)) return;
+        int sink = 0;
+        for (int i = 0; i < 1000; i++) {
+            sink += UTF16_PRIME.charAt(i & (UTF16_PRIME.length() - 1));
+        }
+        primeSink = sink;
     }
 
     // ========================================================================
@@ -199,6 +284,30 @@ public class JqEscapeBenchmark {
         return JqValues.parse(nextBytes());
     }
 
+    /** jjq byte parser plus forced materialization (unescaping, if any). */
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @Benchmark
+    public String parse_jjq_bytes_materialized() {
+        return JqValues.parse(nextBytes()).stringValue();
+    }
+
+    /** Untouched parse-to-bytes round trip (deferred source-copy path). */
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @Benchmark
+    public byte[] roundtrip_jjq_parseSerialize() {
+        return JqValues.serializeToBytes(JqValues.parse(nextBytes()));
+    }
+
+    /**
+     * First-use serialization: construction is part of the measured op,
+     * so no memoized escape verdict carries over between invocations.
+     */
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @Benchmark
+    public byte[] ser_jjq_serializeToBytes_firstUse() {
+        return JqValues.serializeToBytes(JqString.of(nextString()));
+    }
+
     // ========================================================================
     //  Baseline — measure cycling overhead
     // ========================================================================
@@ -216,17 +325,63 @@ public class JqEscapeBenchmark {
     /**
      * Generate a string with the given escape character probability.
      * Escape characters are drawn randomly from ESCAPE_CHARS.
-     * Non-escape characters are drawn from printable ASCII (0x20-0x7E, excluding " and \).
+     * Non-escape characters come from the {@code script} pool; supplementary
+     * code points append as surrogate pairs without splitting.
+     * Package-visible for scratch verification of dataset round-trips.
      */
-    private static String generateString(Random rnd, int length, int escapePercentage) {
-        char[] chars = new char[length];
-        for (int i = 0; i < length; i++) {
+    static String generateString(Random rnd, int length, int escapePercentage,
+            String script, String escapePosition) {
+        StringBuilder sb = new StringBuilder(length + 8);
+        while (sb.length() < length) {
             if (rnd.nextInt(100) < escapePercentage) {
-                chars[i] = ESCAPE_CHARS[rnd.nextInt(ESCAPE_CHARS.length)];
+                sb.append(ESCAPE_CHARS[rnd.nextInt(ESCAPE_CHARS.length)]);
+            } else if (sb.length() + 1 >= length
+                    && ("supplementary".equals(script) || "mixed".equals(script))) {
+                // No surrogate pair at the boundary: exact nominal length.
+                sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
             } else {
-                chars[i] = CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)];
+                appendCleanChar(rnd, sb, script);
             }
         }
-        return new String(chars);
+        if (escapePercentage > 0 && !"random".equals(escapePosition) && sb.length() > 0) {
+            // Plant one escape on a whole code point, never inside a pair.
+            char esc = ESCAPE_CHARS[rnd.nextInt(ESCAPE_CHARS.length)];
+            int[] cps = sb.toString().codePoints().toArray();
+            cps["early".equals(escapePosition) ? 0 : cps.length - 1] = esc;
+            sb.setLength(0);
+            for (int cp : cps) sb.appendCodePoint(cp);
+            while (sb.length() < length) {
+                // Replacing a pair with one escape shortens the string;
+                // refill with ASCII to hold the nominal length.
+                sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Append one clean character from the script pool (pairs stay whole). */
+    private static void appendCleanChar(Random rnd, StringBuilder sb, String script) {
+        switch (script) {
+            case "latin1" -> {
+                if (rnd.nextBoolean()) sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
+                else sb.append(LATIN1_CLEAN[rnd.nextInt(LATIN1_CLEAN.length)]);
+            }
+            case "bmp" -> {
+                if (rnd.nextBoolean()) sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
+                else sb.append(BMP_CLEAN[rnd.nextInt(BMP_CLEAN.length)]);
+            }
+            case "supplementary" -> {
+                if (rnd.nextInt(10) < 7) sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
+                else sb.appendCodePoint(SUPPLEMENTARY_CLEAN[rnd.nextInt(SUPPLEMENTARY_CLEAN.length)]);
+            }
+            case "mixed" -> {
+                int pick = rnd.nextInt(100);
+                if (pick < 60) sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
+                else if (pick < 75) sb.append(LATIN1_CLEAN[rnd.nextInt(LATIN1_CLEAN.length)]);
+                else if (pick < 90) sb.append(BMP_CLEAN[rnd.nextInt(BMP_CLEAN.length)]);
+                else sb.appendCodePoint(SUPPLEMENTARY_CLEAN[rnd.nextInt(SUPPLEMENTARY_CLEAN.length)]);
+            }
+            default -> sb.append(CLEAN_CHARS[rnd.nextInt(CLEAN_CHARS.length)]);
+        }
     }
 }
