@@ -7,7 +7,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Reader;
-import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.math.BigDecimal;
@@ -52,7 +51,7 @@ public final class JqYaml {
      * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
      */
     public static JqValue parse(String yaml) {
-        return parse(new StringReader(yaml));
+        return parse(yaml, YamlOptions.LENIENT);
     }
 
     /**
@@ -134,7 +133,7 @@ public final class JqYaml {
      * @return list of parsed JqValues (empty list for empty input)
      */
     public static List<JqValue> parseAll(String yaml) {
-        return parseAll(new StringReader(yaml));
+        return parseAll(yaml, YamlOptions.LENIENT);
     }
 
     /**
