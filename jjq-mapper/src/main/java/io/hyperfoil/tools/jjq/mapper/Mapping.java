@@ -13,7 +13,7 @@ import io.hyperfoil.tools.jjq.value.JqValue;
  *
  * @param <T> the Java type being mapped
  */
-sealed interface Mapping<T> permits ClassMapping, GeneratedMapping, PolyMapping, ArrayMapping {
+sealed interface Mapping<T> permits ClassMapping, GeneratedMapping, PolyMapping, KeyPolyMapping, ArrayMapping {
 
     /**
      * Identity configuration for {@code @JqId} types (null for standalone

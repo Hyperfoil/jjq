@@ -25,7 +25,12 @@ class JjqProducerGenerationTest {
         Map<String, byte[]> classes = new LinkedHashMap<>();
         JjqProcessor.generateMapperProducer((name, data) -> classes.put(name, data),
                 List.of("com.example.Foo_JqMapping"), true,
-                List.of("com.example.TestBridge"), List.of("com.example.Foo_EnumBinding"));
+                List.of("com.example.TestBridge"), List.of("com.example.Foo_EnumBinding"),
+                Map.of(ShapeBase.class, new io.hyperfoil.tools.jjq.mapper.PolyConfig("method",
+                        Map.of("A", ShapeA.class, "B", ShapeB.class), true)),
+                Map.of(NodeBase.class, new io.hyperfoil.tools.jjq.mapper.KeyPolyConfig(
+                        List.of(new io.hyperfoil.tools.jjq.mapper.KeyPolyConfig.KeyRule("a", NodeA.class)),
+                        NodeB.class)));
 
         assertEquals(
                 List.of("io/hyperfoil/tools/jjq/quarkus/generated/JjqMapperProducer.class"),
@@ -37,14 +42,19 @@ class JjqProducerGenerationTest {
                 "com/example/Foo_EnumBinding",
                 "failOnUnknownProperties",
                 "registerEnum",
+                "registerPoly",
+                "registerKeys",
+                "PolyConfig",
+                "KeyPolyConfig",
                 "produceMapper")) {
             assertTrue(pool.contains(expected), "emitted class should reference " + expected);
         }
         for (String banned : List.of(
-                "java/lang/Class",
                 "forName",
                 "getDeclaredConstructor",
-                "newInstance")) {
+                "newInstance",
+                "getAnnotation",
+                "getPermittedSubclasses")) {
             assertFalse(pool.contains(banned), "emitted class must not reference " + banned);
         }
     }
@@ -53,11 +63,26 @@ class JjqProducerGenerationTest {
     void generatedProducerHandlesEmptyModel() {
         Map<String, byte[]> classes = new LinkedHashMap<>();
         JjqProcessor.generateMapperProducer((name, data) -> classes.put(name, data),
-                List.of(), false, List.of(), List.of());
+                List.of(), false, List.of(), List.of(), Map.of(), Map.of());
 
         assertEquals(1, classes.size());
         String pool = new String(classes.values().iterator().next(), StandardCharsets.ISO_8859_1);
         assertTrue(pool.contains("produceMapper"));
         assertFalse(pool.contains("forName"));
     }
+
+    sealed interface ShapeBase permits ShapeA, ShapeB {}
+
+    record ShapeA(String method, String a) implements ShapeBase {}
+
+    record ShapeB(String method, String b) implements ShapeBase {}
+
+    @io.hyperfoil.tools.jjq.mapper.JqKeys(value = {
+            @io.hyperfoil.tools.jjq.mapper.JqKey(value = "a", type = NodeA.class)
+    }, defaultSubtype = NodeB.class)
+    sealed interface NodeBase permits NodeA, NodeB {}
+
+    record NodeA(int a) implements NodeBase {}
+
+    record NodeB(int b) implements NodeBase {}
 }

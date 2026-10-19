@@ -237,4 +237,115 @@ public class JjqResourceTest {
                 .then()
                 .statusCode(500);
     }
+
+    @Test
+    public void channelEmailRoundTrips() {
+        given()
+                .contentType("application/json")
+                .body("{\"method\":\"EMAIL\",\"to\":\"a@x.y\"}")
+                .when().post("/jjq/channel")
+                .then()
+                .statusCode(200)
+                .body("method", equalTo("EMAIL"))
+                .body("to", equalTo("a@x.y"));
+    }
+
+    @Test
+    public void channelSlackRoundTrips() {
+        given()
+                .contentType("application/json")
+                .body("{\"method\":\"SLACK\",\"channel\":\"#ops\"}")
+                .when().post("/jjq/channel")
+                .then()
+                .statusCode(200)
+                .body("method", equalTo("SLACK"))
+                .body("channel", equalTo("#ops"));
+    }
+
+    @Test
+    public void secretSlackAndGithubShareTokenBinding() {
+        given()
+                .contentType("application/json")
+                .body("{\"method\":\"SLACK\",\"token\":\"t1\"}")
+                .when().post("/jjq/secret")
+                .then()
+                .statusCode(200)
+                .body("method", equalTo("SLACK"))
+                .body("token", equalTo("t1"));
+        given()
+                .contentType("application/json")
+                .body("{\"method\":\"GITHUB_ISSUE\",\"token\":\"t2\"}")
+                .when().post("/jjq/secret")
+                .then()
+                .statusCode(200)
+                .body("method", equalTo("GITHUB_ISSUE"))
+                .body("token", equalTo("t2"));
+    }
+
+    @Test
+    public void secretUnmappedEmailIsBadRequest() {
+        given()
+                .contentType("application/json")
+                .body("{\"method\":\"EMAIL\",\"token\":\"t\"}")
+                .when().post("/jjq/secret")
+                .then()
+                .statusCode(400)
+                .body(containsString("EMAIL"));
+    }
+
+    @Test
+    public void secretMissingMethodIsBadRequest() {
+        given()
+                .contentType("application/json")
+                .body("{\"token\":\"t\"}")
+                .when().post("/jjq/secret")
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
+    public void nodeSelectsByKeysWithDefault() {
+        given()
+                .contentType("application/json")
+                .body("{\"windowLen\":50,\"maxPvalue\":0.001}")
+                .when().post("/jjq/node")
+                .then()
+                .statusCode(200)
+                .body("windowLen", equalTo(50));
+        given()
+                .contentType("application/json")
+                .body("{\"windowSize\":20,\"deviations\":2.0}")
+                .when().post("/jjq/node")
+                .then()
+                .statusCode(200)
+                .body("windowSize", equalTo(20));
+        given()
+                .contentType("application/json")
+                .body("{\"threshold\":0.5,\"window\":10}")
+                .when().post("/jjq/node")
+                .then()
+                .statusCode(200)
+                .body("threshold", equalTo(0.5F));
+        given()
+                .contentType("application/json")
+                .body("{\"min\":1.5,\"max\":2.5}")
+                .when().post("/jjq/node")
+                .then()
+                .statusCode(200)
+                .body("min", equalTo(1.5F));
+    }
+
+    @Test
+    public void nodeOverlappingKeysAreRejectedWhenStrict() {
+        // Priority (first rule wins) is covered by the mapper unit tests on a
+        // lenient mapper. This application enables failOnUnknownProperties, so
+        // an input carrying two families' keys fails on the non-selected
+        // family's keys instead of silently picking the first.
+        given()
+                .contentType("application/json")
+                .body("{\"windowLen\":50,\"maxPvalue\":0.001,\"windowSize\":20,\"deviations\":2.0}")
+                .when().post("/jjq/node")
+                .then()
+                .statusCode(400);
+    }
 }

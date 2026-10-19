@@ -2,10 +2,26 @@
 
 ## [Unreleased] - 0.2.4
 
+- Mapper polymorphism covers key-presence and discriminator-as-field
+  families (issue #151): `@JqType` gains `existingProperty` (the
+  discriminator is a real mapped field — reads dispatch on it, writes emit
+  it, no injection or strict-mode stripping) with explicit `mappings`
+  (`@JqSubtype` entries, many-to-one allowed), and `@JqKeys`/`@JqKey`
+  dispatch ordered key-presence rules with an optional default subtype.
+  Missing, null, non-string, unknown, and unmapped discriminator values
+  fail fast naming the family, property, and offending value. The Jackson
+  bridge maps `As.EXISTING_PROPERTY` to the same behavior. Sealed permits
+  metadata does not survive into native images (measured empty even with
+  reachable subtypes), so `jjq-quarkus` resolves every family during
+  augmentation and bakes the dispatch tables into the mapper producer
+  (`Builder.registerPoly`/`registerKeys`); malformed families fail the
+  build. JAX-RS providers accept `@JqType`/`@JqKeys` bases directly.
 - New `jjq-quarkus/integration-tests` consumer application follows the core
   Quarkus HTTP test pattern: one `@QuarkusTest` contract reused by a packaged
-  `@QuarkusIntegrationTest`. All 21 checks pass with Quarkus REST and Classic
-  RESTEasy, both JVM and native. The native profile is opt-in; the test app
+  `@QuarkusIntegrationTest`. All 28 checks pass with Quarkus REST and Classic
+  RESTEasy, on JVM and native — including discriminator-as-field,
+  many-to-one, and key-presence families modeled on h5m's notification and
+  node configurations. The native profile is opt-in; the test app
   adds no manual model reflection registration and does not enable Hibernate
   or a Jackson/JSON-B engine. Includes local run instructions and is excluded
   from publishing.

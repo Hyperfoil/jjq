@@ -2,6 +2,8 @@ package io.hyperfoil.tools.jjq.jakarta;
 
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqType;
+import io.hyperfoil.tools.jjq.mapper.JqKeys;
 import io.hyperfoil.tools.jjq.value.BytOutput;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import jakarta.ws.rs.Produces;
@@ -76,7 +78,9 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
     @Override
     public boolean isWriteable(Class<?> type, Type genericType,
                                 Annotation[] annotations, MediaType mediaType) {
-        return type.isAnnotationPresent(JqMapped.class);
+        return type.isAnnotationPresent(JqMapped.class)
+                || type.isAnnotationPresent(JqType.class)
+                || type.isAnnotationPresent(JqKeys.class);
     }
 
     @Override

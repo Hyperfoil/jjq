@@ -352,14 +352,21 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
 
     @Override
     public io.hyperfoil.tools.jjq.mapper.PolyConfig resolvePolymorphism(Class<?> type) {
-        // Supported subset only: As.PROPERTY with Id.NAME. Anything else
-        // (WRAPPER_OBJECT, CLASS ids, missing subtypes) returns null and
-        // keeps today's behavior.
+        // Supported subset: As.PROPERTY (injected) and As.EXISTING_PROPERTY
+        // (field-driven) with Id.NAME. Anything else (WRAPPER_OBJECT, CLASS
+        // ids, missing subtypes) returns null and keeps today's behavior.
         com.fasterxml.jackson.annotation.JsonTypeInfo info =
                 type.getAnnotation(com.fasterxml.jackson.annotation.JsonTypeInfo.class);
         if (info == null) return null;
         if (info.use() != com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME) return null;
-        if (info.include() != com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY) return null;
+        boolean existingProperty;
+        if (info.include() == com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY) {
+            existingProperty = false;
+        } else if (info.include() == com.fasterxml.jackson.annotation.JsonTypeInfo.As.EXISTING_PROPERTY) {
+            existingProperty = true;
+        } else {
+            return null;
+        }
         String property = info.property();
         if (property == null || property.isEmpty()) property = "type";
         com.fasterxml.jackson.annotation.JsonSubTypes subs =
@@ -379,7 +386,7 @@ public class JacksonAnnotationBridge implements AnnotationBridge {
                         + type.getName() + ": duplicate type name '" + wire + "'");
             }
         }
-        return new io.hyperfoil.tools.jjq.mapper.PolyConfig(property, wireToSub);
+        return new io.hyperfoil.tools.jjq.mapper.PolyConfig(property, wireToSub, existingProperty);
     }
 
     @Override

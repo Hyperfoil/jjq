@@ -202,6 +202,8 @@ public final class JqMapper {
         private final java.util.List<GeneratedMapping<?>> mappings = new java.util.ArrayList<>();
         private final java.util.List<AnnotationBridge> bridges = new java.util.ArrayList<>();
         private final java.util.List<EnumBinding<?>> enumBindings = new java.util.ArrayList<>();
+        private final java.util.Map<Class<?>, PolyConfig> polyFamilies = new java.util.LinkedHashMap<>();
+        private final java.util.Map<Class<?>, KeyPolyConfig> keyFamilies = new java.util.LinkedHashMap<>();
         private boolean failOnUnknownProperties;
 
         private Builder() {}
@@ -232,6 +234,35 @@ public final class JqMapper {
             return this;
         }
 
+        /**
+         * Pre-register a discriminator family resolved at build time.
+         * The base dispatches through the given configuration without
+         * sealed permits reflection, which native images do not retain.
+         *
+         * @param base the family base type
+         * @param config the pre-resolved family configuration
+         * @return this builder for chaining
+         */
+        public Builder registerPoly(Class<?> base, PolyConfig config) {
+            polyFamilies.put(
+                    java.util.Objects.requireNonNull(base, "base"),
+                    java.util.Objects.requireNonNull(config, "config"));
+            return this;
+        }
+
+        /**
+         * Pre-register a key-presence family resolved at build time.
+         *
+         * @param base the family base type
+         * @param config the pre-resolved family configuration
+         * @return this builder for chaining
+         */
+        public Builder registerKeys(Class<?> base, KeyPolyConfig config) {
+            keyFamilies.put(
+                    java.util.Objects.requireNonNull(base, "base"),
+                    java.util.Objects.requireNonNull(config, "config"));
+            return this;
+        }
         /**
          * Register an annotation bridge for reading external framework annotations
          * (Jackson, JSON-B, etc.) as jjq-mapper configuration.
@@ -278,6 +309,14 @@ public final class JqMapper {
             }
             for (var b : enumBindings) {
                 mapper.compiledEnums.put(b.type(), b);
+            }
+            for (var family : polyFamilies.entrySet()) {
+                mapper.cache.put(family.getKey(),
+                        new LastHit(family.getKey(), new PolyMapping<>(family.getKey(), family.getValue())));
+            }
+            for (var family : keyFamilies.entrySet()) {
+                mapper.cache.put(family.getKey(),
+                        new LastHit(family.getKey(), new KeyPolyMapping<>(family.getKey(), family.getValue())));
             }
             return mapper;
         }
@@ -579,7 +618,10 @@ public final class JqMapper {
         // nor generated mappings apply (privateLookupIn rejects array classes).
         if (type.isArray()) return new ArrayMapping<>(type);
         // Polymorphic families dispatch before anything else: a @JqType (or
-        // bridge-declared) base never binds directly.
+        // bridge-declared) base and a @JqKeys base never bind directly.
+        // Both annotations on one type fail fast (resolved inside).
+        KeyPolyConfig keys = KeyPolyMapping.resolveKeyConfig(type);
+        if (keys != null) return new KeyPolyMapping<>(type, keys);
         PolyConfig poly = PolyMapping.resolvePolyConfig(type, bridges);
         if (poly != null) return new PolyMapping<>(type, poly);
         PolySerInfo serInfo = PolyMapping.resolvePolyMember(type, bridges);

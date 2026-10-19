@@ -75,12 +75,21 @@ to exercise the opt-in configuration. The extension's default remains false.
 `/jjq/failure` deliberately throws an application exception to verify that it
 remains a 500 rather than being translated into a client error.
 
+Polymorphic families modeled on h5m's notification and node configurations
+(issue #151) are covered at `/jjq/channel` (discriminator as a real
+`method` field), `/jjq/secret` (many-to-one: `SLACK` and `GITHUB_ISSUE`
+both bind the token secret; unmapped `EMAIL` and missing `method` are 400),
+and `/jjq/node` (key-presence dispatch with a default). Dispatch priority
+across overlapping keys is covered by mapper unit tests on a lenient mapper:
+this strict application rejects overlapping inputs as unknown properties.
+
 ## What the tests prove
 
-The shared HTTP tests cover record and bridge round-trips, enum creator
+The 28 shared HTTP tests cover record and bridge round-trips, enum creator
 failures, strict JSON syntax and UTF-8 validation, binding paths, null and empty
-bodies, configured unknown-property rejection, bounded diagnostics, and the
-framework's 413, 415, and 500 status handling.
+bodies, configured unknown-property rejection, bounded diagnostics, the
+framework's 413, 415, and 500 status handling, and the three family shapes
+above (round-trips plus 400s for unmapped, missing, and overlapping inputs).
 
 Records use `jjq-mapper-processor` at application compilation. The extension
 generates `AuthType_EnumBinding` during augmentation. No application model has

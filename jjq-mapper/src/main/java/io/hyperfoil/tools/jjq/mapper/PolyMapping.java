@@ -17,21 +17,25 @@ import java.util.Set;
  * Dispatching mapping for a polymorphic family ({@link JqType} base or
  * bridge-declared equivalent). Deserialization reads the discriminator
  * property and delegates to the matching subtype mapping; serialization
- * re-dispatches on the runtime type (which carries its own injection).
- * Missing, non-string, or unknown discriminator values fail fast.
+ * re-dispatches on the runtime type (which carries its own injection,
+ * unless the discriminator is an existing property). Missing, non-string,
+ * or unknown discriminator values fail fast naming the family, property,
+ * and offending value.
  *
  * @param <T> the base type
  */
-final class PolyMapping<T> implements Mapping<T> {
+public final class PolyMapping<T> implements Mapping<T> {
 
     private final Class<T> base;
     private final String discriminator;
     private final Map<String, Class<?>> subtypes;
+    private final boolean existingProperty;
 
     PolyMapping(Class<T> base, PolyConfig config) {
         this.base = base;
         this.discriminator = config.property();
         this.subtypes = config.subtypes();
+        this.existingProperty = config.existingProperty();
     }
 
     @Override
@@ -49,12 +53,14 @@ final class PolyMapping<T> implements Mapping<T> {
         Class<?> sub = subtypes.get(s.stringValue());
         if (sub == null) {
             throw TypeConverter.mismatch(JqValue.Type.STRING,
-                    "one of " + new ArrayList<>(subtypes.keySet()) + " for " + base.getSimpleName(), disc);
+                    "one of " + new ArrayList<>(subtypes.keySet()) + " for discriminator '"
+                            + discriminator + "' of " + base.getSimpleName(), disc);
         }
-        if (mapper.isFailOnUnknownProperties()) {
-            // The discriminator is consumed here: without stripping, the
-            // subtype mapping would flag it as unrecognized. Rebuilt only in
-            // strict mode; lenient keeps the zero-copy delegation.
+        if (mapper.isFailOnUnknownProperties() && !existingProperty) {
+            // The injected discriminator is consumed here: without stripping,
+            // the subtype mapping would flag it as unrecognized. Rebuilt only
+            // in strict mode; lenient keeps the zero-copy delegation. An
+            // existing property stays: it is a real field the subtype binds.
             var stripped = JqObject.builder(obj.size());
             obj.forEach((k, v) -> {
                 if (!k.equals(discriminator)) stripped.putUnchecked(k, v);
@@ -73,12 +79,15 @@ final class PolyMapping<T> implements Mapping<T> {
     /**
      * Resolve the family configuration for a base type: native
      * {@link JqType} first, then bridges in order. Native wins.
+     * Public for build-time tooling (e.g. the {@code jjq-quarkus}
+     * extension pre-resolves families during augmentation so native
+     * images never query sealed permits at runtime).
      *
      * @param base    the base class being mapped
      * @param bridges the mapper bridges
      * @return the configuration, or null when not polymorphic
      */
-    static PolyConfig resolvePolyConfig(Class<?> base, List<AnnotationBridge> bridges) {
+    public static PolyConfig resolvePolyConfig(Class<?> base, List<AnnotationBridge> bridges) {
         PolyConfig nativeConfig = nativePolyConfig(base);
         if (nativeConfig != null) return nativeConfig;
         for (AnnotationBridge bridge : bridges) {
@@ -90,7 +99,9 @@ final class PolyMapping<T> implements Mapping<T> {
 
     /**
      * Native configuration from {@link JqType}. Returns null when absent;
-     * fails fast when present on a non-sealed type or on duplicate wire values.
+     * fails fast when present on a non-sealed type, on duplicate wire values,
+     * on explicit mappings without {@code existingProperty}, or when an
+     * explicit type is not permitted.
      */
     private static PolyConfig nativePolyConfig(Class<?> base) {
         JqType spec = base.getAnnotation(JqType.class);
@@ -100,6 +111,10 @@ final class PolyMapping<T> implements Mapping<T> {
             throw new JqMapperException("@JqType on " + base.getName()
                     + " needs a sealed type (no permitted subclasses found)");
         }
+        JqSubtype[] explicit = spec.mappings();
+        if (explicit != null && explicit.length > 0) {
+            return explicitPolyConfig(base, spec, explicit, permitted);
+        }
         var subtypes = new LinkedHashMap<String, Class<?>>();
         for (Class<?> sub : permitted) {
             String wire = polyWireValue(sub);
@@ -108,7 +123,40 @@ final class PolyMapping<T> implements Mapping<T> {
                         + ": duplicate discriminator value '" + wire + "'");
             }
         }
-        return new PolyConfig(spec.discriminator(), subtypes);
+        return new PolyConfig(spec.discriminator(), subtypes, spec.existingProperty());
+    }
+
+    /**
+     * Configuration from explicit {@code mappings}: every wire must be
+     * non-blank and unique, every type a permitted subtype. Explicit
+     * mappings require {@code existingProperty} (field-driven
+     * serialization keeps many-to-one unambiguous).
+     */
+    private static PolyConfig explicitPolyConfig(Class<?> base, JqType spec,
+            JqSubtype[] explicit, Class<?>[] permitted) {
+        if (!spec.existingProperty()) {
+            throw new JqMapperException("@JqType on " + base.getName()
+                    + ": explicit mappings need existingProperty = true"
+                    + " (the discriminator is a real field, serialization is field-driven)");
+        }
+        var allowed = new java.util.HashSet<Class<?>>(List.of(permitted));
+        var subtypes = new LinkedHashMap<String, Class<?>>();
+        for (JqSubtype mapping : explicit) {
+            if (mapping == null || mapping.value() == null || mapping.value().isEmpty()
+                    || mapping.type() == null) {
+                throw new JqMapperException("@JqType on " + base.getName()
+                        + " needs non-empty wire values and subtype classes");
+            }
+            if (!allowed.contains(mapping.type())) {
+                throw new JqMapperException("@JqType on " + base.getName()
+                        + ": " + mapping.type().getName() + " is not a permitted subtype");
+            }
+            if (subtypes.putIfAbsent(mapping.value(), mapping.type()) != null) {
+                throw new JqMapperException("@JqType on " + base.getName()
+                        + ": duplicate discriminator value '" + mapping.value() + "'");
+            }
+        }
+        return new PolyConfig(spec.discriminator(), subtypes, true);
     }
 
     /**
@@ -147,7 +195,9 @@ final class PolyMapping<T> implements Mapping<T> {
     /**
      * Membership of {@code type} under one ancestor: native {@link JqType}
      * (sealed enforces permits, so presence implies membership) else the
-     * first bridge configuration listing it.
+     * first bridge configuration listing it. Existing-property families
+     * carry no injection (the field value drives serialization), so they
+     * resolve to null like standalone types.
      */
     private static PolySerInfo memberOf(Class<?> type, Class<?> ancestor, List<AnnotationBridge> bridges) {
         JqType spec = ancestor.getAnnotation(JqType.class);
@@ -156,16 +206,29 @@ final class PolyMapping<T> implements Mapping<T> {
                 throw new JqMapperException("@JqType on " + ancestor.getName()
                         + " needs a sealed type (no permitted subclasses found)");
             }
+            if (spec.existingProperty() || (spec.mappings() != null && spec.mappings().length > 0)) {
+                return null;
+            }
             return new PolySerInfo(spec.discriminator(), polyWireValue(type));
         }
         for (AnnotationBridge bridge : bridges) {
             PolyConfig config = bridge.resolvePolymorphism(ancestor);
             if (config == null) continue;
+            boolean listed = false;
+            String wire = null;
             for (var entry : config.subtypes().entrySet()) {
                 if (entry.getValue() == type) {
-                    return new PolySerInfo(config.property(), entry.getKey());
+                    listed = true;
+                    wire = entry.getKey();
+                    break;
                 }
             }
+            if (!listed) continue;
+            if (config.existingProperty()) {
+                // Field-driven serialization: no injection.
+                return null;
+            }
+            return new PolySerInfo(config.property(), wire);
         }
         return null;
     }

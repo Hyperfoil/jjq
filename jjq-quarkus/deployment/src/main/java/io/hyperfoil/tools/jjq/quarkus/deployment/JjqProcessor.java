@@ -23,6 +23,10 @@ import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.EnumBinding;
 import io.hyperfoil.tools.jjq.mapper.JqMapperException;
 import io.hyperfoil.tools.jjq.mapper.GeneratedMapping;
+import io.hyperfoil.tools.jjq.mapper.KeyPolyConfig;
+import io.hyperfoil.tools.jjq.mapper.KeyPolyMapping;
+import io.hyperfoil.tools.jjq.mapper.PolyConfig;
+import io.hyperfoil.tools.jjq.mapper.PolyMapping;
 import io.hyperfoil.tools.jjq.mapper.TypeConverter;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqFormatMapper;
@@ -44,6 +48,7 @@ import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
 import io.quarkus.maven.dependency.ResolvedDependency;
 import io.quarkus.gizmo2.ClassOutput;
 import io.quarkus.gizmo2.Const;
+import io.quarkus.gizmo2.Expr;
 import io.quarkus.gizmo2.Gizmo;
 import io.quarkus.gizmo2.LocalVar;
 import io.quarkus.gizmo2.creator.BlockCreator;
@@ -80,6 +85,8 @@ public class JjqProcessor {
     static final String PRODUCER_CLASS = "io.hyperfoil.tools.jjq.quarkus.generated.JjqMapperProducer";
 
     private static final DotName JQ_MAPPED = DotName.createSimple(JqMapped.class.getName());
+    private static final DotName JQ_TYPE = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqType");
+    private static final DotName JQ_KEYS = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqKeys");
     private static final DotName SINGLETON = DotName.createSimple(Singleton.class.getName());
 
     private static final String JSON = "application/json";
@@ -187,13 +194,34 @@ public class JjqProcessor {
     @BuildStep
     void discoverMappedTypes(CombinedIndexBuildItem combinedIndex,
             BuildProducer<JjqMappedTypeBuildItem> mappedTypes) {
+        for (String className : annotatedClassNames(combinedIndex.getIndex(), JQ_MAPPED)) {
+            mappedTypes.produce(new JjqMappedTypeBuildItem(className, mappingClassNameFor(className)));
+        }
+    }
+
+    @BuildStep
+    void discoverPolyFamilies(CombinedIndexBuildItem combinedIndex,
+            BuildProducer<JjqPolyFamilyBuildItem> families) {
         IndexView index = combinedIndex.getIndex();
-        for (AnnotationInstance annotation : index.getAnnotations(JQ_MAPPED)) {
-            if (annotation.target().kind() == AnnotationTarget.Kind.CLASS) {
-                String className = annotation.target().asClass().name().toString();
-                mappedTypes.produce(new JjqMappedTypeBuildItem(className, mappingClassNameFor(className)));
+        for (DotName name : List.of(JQ_TYPE, JQ_KEYS)) {
+            for (String className : annotatedClassNames(index, name)) {
+                families.produce(new JjqPolyFamilyBuildItem(className));
             }
         }
+    }
+
+    /**
+     * Class names carrying an annotation (Jandex dotted form, CLASS targets
+     * only — the shape every jjq annotation uses).
+     */
+    private static List<String> annotatedClassNames(IndexView index, DotName annotation) {
+        List<String> names = new ArrayList<>();
+        for (AnnotationInstance instance : index.getAnnotations(annotation)) {
+            if (instance.target().kind() == AnnotationTarget.Kind.CLASS) {
+                names.add(instance.target().asClass().name().toString());
+            }
+        }
+        return names;
     }
 
     @BuildStep
@@ -426,6 +454,7 @@ public class JjqProcessor {
             CurateOutcomeBuildItem curateOutcome,
             List<JjqMappedTypeBuildItem> mappedTypes,
             List<JjqEnumBindingBuildItem> enumBindings,
+            List<JjqPolyFamilyBuildItem> polyFamilyItems,
             BuildProducer<GeneratedBeanBuildItem> generatedBeans) {
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
         List<String> mappingClassNames = new ArrayList<>();
@@ -443,11 +472,48 @@ public class JjqProcessor {
         }
         // Bridges come from explicit module dependencies only.
         List<String> bridgeClassNames = bridgeClassNames(curateOutcome.getApplicationModel().getDependencies());
+        List<AnnotationBridge> bridges = new ArrayList<>();
+        for (String name : bridgeClassNames) {
+            try {
+                Class<?> cls = Class.forName(name, true, cl);
+                bridges.add((AnnotationBridge) cls.getDeclaredConstructor().newInstance());
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("jjq: cannot instantiate annotation bridge " + name
+                        + " — check the bridge module dependency", e);
+            }
+        }
+        java.util.Map<Class<?>, PolyConfig> polyFamilies = new java.util.LinkedHashMap<>();
+        java.util.Map<Class<?>, KeyPolyConfig> keyFamilies = new java.util.LinkedHashMap<>();
+        for (JjqPolyFamilyBuildItem family : polyFamilyItems) {
+            Class<?> base;
+            try {
+                base = Class.forName(family.getClassName(), false, cl);
+            } catch (ClassNotFoundException | LinkageError e) {
+                LOG.warnf("jjq: polymorphic family %s not found, type will use reflection-based mapping",
+                        family.getClassName());
+                continue;
+            }
+            try {
+                KeyPolyConfig keys = KeyPolyMapping.resolveKeyConfig(base);
+                if (keys != null) {
+                    keyFamilies.put(base, keys);
+                    continue;
+                }
+                PolyConfig poly = PolyMapping.resolvePolyConfig(base, bridges);
+                if (poly != null) {
+                    polyFamilies.put(base, poly);
+                }
+            } catch (JqMapperException e) {
+                throw new IllegalStateException(
+                        "jjq: invalid polymorphic family " + base.getName() + ": " + e.getMessage(), e);
+            }
+        }
         List<String> enumBindingClassNames = enumBindings.stream()
                 .map(JjqEnumBindingBuildItem::getBindingClassName)
                 .toList();
         generateMapperProducer(new GeneratedBeanGizmo2Adaptor(generatedBeans),
-                mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames, enumBindingClassNames);
+                mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames, enumBindingClassNames,
+                polyFamilies, keyFamilies);
     }
 
     /**
@@ -462,9 +528,12 @@ public class JjqProcessor {
      * @param failOnUnknownProperties mapper strictness flag, baked in as a constant
      * @param bridgeClassNames        {@code AnnotationBridge} implementations to construct directly
      * @param enumBindingClassNames   generated {@code _EnumBinding} classes to register directly
+     * @param polyFamilies            discriminator family bases to dispatch tables (discovery order)
+     * @param keyFamilies             key-presence family bases to dispatch tables (discovery order)
      */
     static void generateMapperProducer(ClassOutput output, List<String> mappingClassNames,
-            boolean failOnUnknownProperties, List<String> bridgeClassNames, List<String> enumBindingClassNames) {
+            boolean failOnUnknownProperties, List<String> bridgeClassNames, List<String> enumBindingClassNames,
+            java.util.Map<Class<?>, PolyConfig> polyFamilies, java.util.Map<Class<?>, KeyPolyConfig> keyFamilies) {
         Gizmo gizmo = Gizmo.create(output).withDebugInfo(false).withParameters(false);
         gizmo.class_(PRODUCER_CLASS, cc -> {
             cc.defaultConstructor();
@@ -499,11 +568,71 @@ public class JjqProcessor {
                                         JqMapper.Builder.class, EnumBinding.class),
                                 builder, bc.new_(java.lang.constant.ClassDesc.of(binding))));
                     }
+                    for (var poly : polyFamilies.entrySet()) {
+                        bc.set(builder, bc.invokeVirtual(
+                                MethodDesc.of(JqMapper.Builder.class, "registerPoly",
+                                        JqMapper.Builder.class, Class.class, PolyConfig.class),
+                                builder, Const.of(poly.getKey()), emitPolyConfig(bc, poly.getValue())));
+                    }
+                    for (var keys : keyFamilies.entrySet()) {
+                        bc.set(builder, bc.invokeVirtual(
+                                MethodDesc.of(JqMapper.Builder.class, "registerKeys",
+                                        JqMapper.Builder.class, Class.class, KeyPolyConfig.class),
+                                builder, Const.of(keys.getKey()), emitKeyConfig(bc, keys.getValue())));
+                    }
                     bc.return_(bc.invokeVirtual(
                             MethodDesc.of(JqMapper.Builder.class, "build", JqMapper.class), builder));
                 });
             });
         });
+    }
+
+    /**
+     * Fixed-arity {@code Map.of}/{@code List.of} call: every argument erases
+     * to {@code Object}, so the overload resolves by arity. Larger
+     * collections need chunked fallbacks the producer avoids.
+     */
+    private static Expr emitOfCall(BlockCreator bc, Class<?> owner, String what, List<Expr> args, int max) {
+        if (args.size() > max) {
+            throw new IllegalStateException("jjq: " + what + " has " + args.size()
+                    + " entries, producer codegen supports up to " + max);
+        }
+        Class<?>[] params = args.stream().map(a -> Object.class).toArray(Class[]::new);
+        return bc.invokeStatic(MethodDesc.of(owner, "of", owner, params), args);
+    }
+
+    /**
+     * Emit a {@code new PolyConfig(property, Map.of(...), existing)} expression.
+     * Wire entries ride as string and class literals: direct linkage, no
+     * reflective lookup, and the subtype classes stay reachable in native.
+     */
+    private static Expr emitPolyConfig(BlockCreator bc, PolyConfig config) {
+        List<Expr> mapArgs = new ArrayList<>();
+        for (var entry : config.subtypes().entrySet()) {
+            mapArgs.add(Const.of(entry.getKey()));
+            mapArgs.add(Const.of(entry.getValue()));
+        }
+        Expr map = emitOfCall(bc, java.util.Map.class,
+                "family '" + config.property() + "' wire values", mapArgs, 20);
+        return bc.new_(PolyConfig.class,
+                List.of(Const.of(config.property()), map, Const.of(config.existingProperty())));
+    }
+
+    /**
+     * Emit a {@code new KeyPolyConfig(List.of(new KeyRule(...)), default)}
+     * expression. A missing default emits a typed null.
+     */
+    private static Expr emitKeyConfig(BlockCreator bc, KeyPolyConfig config) {
+        List<Expr> ruleExprs = new ArrayList<>();
+        for (var rule : config.rules()) {
+            ruleExprs.add(bc.new_(KeyPolyConfig.KeyRule.class,
+                    List.of(Const.of(rule.key()), Const.of(rule.subtype()))));
+        }
+        Expr list = emitOfCall(bc, java.util.List.class, "key-presence family rules", ruleExprs, 10);
+        Expr def = config.defaultSubtype() == null
+                ? Const.ofNull(Class.class)
+                : Const.of(config.defaultSubtype());
+        return bc.new_(KeyPolyConfig.class, List.of(list, def));
     }
 
     @BuildStep

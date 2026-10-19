@@ -4823,6 +4823,319 @@ class JqMapperTest {
         assertEquals(viaTree, sb.toString());
     }
 
+    // ---- Discriminator as existing property (issue #151) ----
+
+    enum ChannelMethod { EMAIL, SLACK, GITHUB_ISSUE, WEBHOOK }
+
+    @JqType(discriminator = "method", existingProperty = true, mappings = {
+            @JqSubtype(value = "EMAIL", type = EmailCh.class),
+            @JqSubtype(value = "SLACK", type = SlackCh.class),
+            @JqSubtype(value = "WEBHOOK", type = WebhookCh.class)
+    })
+    sealed interface Channel permits EmailCh, SlackCh, WebhookCh {}
+
+    record EmailCh(ChannelMethod method, String to) implements Channel {
+        public EmailCh {
+            method = ChannelMethod.EMAIL;
+        }
+        static EmailCh of(String to) {
+            return new EmailCh(null, to);
+        }
+    }
+
+    record SlackCh(ChannelMethod method, String channel) implements Channel {}
+
+    record WebhookCh(ChannelMethod method, String url) implements Channel {}
+
+    @JqType(discriminator = "method", existingProperty = true, mappings = {
+            @JqSubtype(value = "SLACK", type = TokenSec.class),
+            @JqSubtype(value = "GITHUB_ISSUE", type = TokenSec.class),
+            @JqSubtype(value = "WEBHOOK", type = HeaderSec.class)
+    })
+    sealed interface Secret permits TokenSec, HeaderSec {}
+
+    record TokenSec(ChannelMethod method, String token) implements Secret {}
+
+    record HeaderSec(ChannelMethod method, String authHeader) implements Secret {}
+
+    @Test
+    void existingPropertyDeserSelectsByField() {
+        Channel c = mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"EMAIL\",\"to\":\"a@x.y\"}"), Channel.class);
+        assertEquals(EmailCh.of("a@x.y"), c);
+        Channel s = mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"SLACK\",\"channel\":\"#ops\"}"), Channel.class);
+        assertEquals(new SlackCh(ChannelMethod.SLACK, "#ops"), s);
+    }
+
+    @Test
+    void existingPropertySerEmitsFieldWithoutInjection() {
+        JqValue tree = mapper.toJqValue(EmailCh.of("a@x.y"));
+        assertEquals("EMAIL", tree.getField("method").stringValue());
+        assertEquals("a@x.y", tree.getField("to").stringValue());
+        JqValue slack = mapper.toJqValue(new SlackCh(ChannelMethod.SLACK, "#ops"));
+        assertEquals("SLACK", slack.getField("method").stringValue());
+    }
+
+    @Test
+    void existingPropertyManyToOneRoundTripsBothWires() {
+        Secret slack = mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"SLACK\",\"token\":\"t1\"}"), Secret.class);
+        assertEquals(new TokenSec(ChannelMethod.SLACK, "t1"), slack);
+        Secret gh = mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"GITHUB_ISSUE\",\"token\":\"t2\"}"), Secret.class);
+        assertEquals(new TokenSec(ChannelMethod.GITHUB_ISSUE, "t2"), gh);
+        // Field-driven serialization preserves the wire that arrived.
+        assertEquals("SLACK", mapper.toJqValue(slack).getField("method").stringValue());
+        assertEquals("GITHUB_ISSUE", mapper.toJqValue(gh).getField("method").stringValue());
+        assertEquals("{\"method\":\"SLACK\",\"token\":\"t1\"}", mapper.toJson(slack));
+        assertEquals("{\"method\":\"GITHUB_ISSUE\",\"token\":\"t2\"}", mapper.toJson(gh));
+    }
+
+    @Test
+    void existingPropertyUnmappedValueFailsNamingFamilyPropertyAndValue() {
+        JqMapperException e = assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"EMAIL\",\"token\":\"t\"}"), Secret.class));
+        String msg = e.getMessage();
+        assertTrue(msg.contains("Secret"), msg);
+        assertTrue(msg.contains("method"), msg);
+        assertTrue(msg.contains("EMAIL"), msg);
+    }
+
+    @Test
+    void existingPropertyMissingDiscriminatorFails() {
+        JqMapperException e = assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"token\":\"t\"}"), Secret.class));
+        String msg = e.getMessage();
+        assertTrue(msg.contains("Secret"), msg);
+        assertTrue(msg.contains("method"), msg);
+    }
+
+    @Test
+    void existingPropertyStrictKeepsFieldButFlagsUnknown() {
+        Secret s = strictMapper.fromJqValue(
+                JqValues.parse("{\"method\":\"SLACK\",\"token\":\"t\"}"), Secret.class);
+        assertEquals(new TokenSec(ChannelMethod.SLACK, "t"), s);
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"method\":\"SLACK\",\"token\":\"t\",\"zzz\":1}"), Secret.class));
+        assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
+    }
+
+    @Test
+    void existingPropertyExplicitMappingsNeedFlag() {
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"EMAIL\",\"to\":\"a\"}"), BadExplicit.class));
+    }
+
+    @Test
+    void existingPropertyNonStringDiscriminatorFails() {
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"method\":42,\"token\":\"t\"}"), Secret.class));
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"method\":null,\"token\":\"t\"}"), Secret.class));
+    }
+
+    @Test
+    void existingPropertyDuplicateWireFailsFast() {
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"A\"}"), BadDup.class));
+    }
+
+    record DupA(String method) implements BadDup {}
+
+    record DupB(String method) implements BadDup {}
+
+    @JqType(discriminator = "method", existingProperty = true, mappings = {
+            @JqSubtype(value = "A", type = DupA.class),
+            @JqSubtype(value = "A", type = DupB.class)
+    })
+    sealed interface BadDup permits DupA, DupB {}
+
+    static class ExistingStubMapping extends GeneratedMapping<TokenSec> {
+        @Override
+        public Class<TokenSec> type() { return TokenSec.class; }
+
+        @Override
+        public TokenSec fromJqValue(JqValue input, JqMapper mapper) {
+            return new TokenSec(ChannelMethod.valueOf(input.getField("method").stringValue()),
+                    input.getField("token").stringValue());
+        }
+
+        @Override
+        public JqValue toJqValue(TokenSec instance, JqMapper mapper) {
+            return JqObject.builder(2)
+                    .put("method", instance.method().name())
+                    .put("token", instance.token())
+                    .build();
+        }
+    }
+
+    @Test
+    void existingPropertyDelegatesToGeneratedWithoutInjection() {
+        var stub = new ExistingStubMapping();
+        JqMapper m = JqMapper.builder().register(stub).build();
+        Secret s = m.fromJqValue(JqValues.parse("{\"method\":\"SLACK\",\"token\":\"t\"}"), Secret.class);
+        assertEquals(new TokenSec(ChannelMethod.SLACK, "t"), s);
+        // No wrapper injection: the stub tree rides through unchanged.
+        assertEquals("{\"method\":\"SLACK\",\"token\":\"t\"}", m.toJson(new TokenSec(ChannelMethod.SLACK, "t")));
+        assertEquals(m.toJqValue(s).toJsonString(), m.toJson(s));
+    }
+
+    record BadExplicitSub(String method, String v) implements BadExplicit {}
+
+    @JqType(discriminator = "method", mappings = {
+            @JqSubtype(value = "EMAIL", type = BadExplicitSub.class)
+    })
+    sealed interface BadExplicit permits BadExplicitSub {}
+
+    // ---- Key-presence polymorphism (issue #151) ----
+
+    @JqKeys(value = {
+            @JqKey(value = "windowLen", type = EDivCfg.class),
+            @JqKey(value = "windowSize", type = StdDevCfg.class),
+            @JqKey(value = "threshold", type = RelDiffCfg.class)
+    }, defaultSubtype = FixedCfg.class)
+    sealed interface NodeCfg permits FixedCfg, RelDiffCfg, StdDevCfg, EDivCfg {}
+
+    record FixedCfg(Double min, Double max) implements NodeCfg {}
+
+    record RelDiffCfg(double threshold, int window) implements NodeCfg {}
+
+    record StdDevCfg(int windowSize, double deviations) implements NodeCfg {}
+
+    record EDivCfg(int windowLen, double maxPvalue) implements NodeCfg {}
+
+    record NoDefA(int a) implements NodeNoDefault {}
+
+    record NoDefB(int b) implements NodeNoDefault {}
+
+    @JqKeys(value = {
+            @JqKey(value = "a", type = NoDefA.class)
+    })
+    sealed interface NodeNoDefault permits NoDefA, NoDefB {}
+
+    @Test
+    void keysDeserSelectsByPresenceInOrder() {
+        assertEquals(new EDivCfg(50, 0.001), mapper.fromJqValue(
+                JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001}"), NodeCfg.class));
+        assertEquals(new StdDevCfg(20, 2.0), mapper.fromJqValue(
+                JqValues.parse("{\"windowSize\":20,\"deviations\":2.0}"), NodeCfg.class));
+        assertEquals(new RelDiffCfg(0.5, 10), mapper.fromJqValue(
+                JqValues.parse("{\"threshold\":0.5,\"window\":10}"), NodeCfg.class));
+        assertEquals(new FixedCfg(1.0, 2.0), mapper.fromJqValue(
+                JqValues.parse("{\"min\":1.0,\"max\":2.0}"), NodeCfg.class));
+        // First rule wins when several keys are present.
+        NodeCfg both = mapper.fromJqValue(
+                JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001,\"windowSize\":20,\"deviations\":2.0}"),
+                NodeCfg.class);
+        assertEquals(new EDivCfg(50, 0.001), both);
+    }
+
+    @Test
+    void keysNullCountsAsPresent() {
+        // Explicit null is still presence: selects EDiv, lenient int binds 0.
+        NodeCfg c = mapper.fromJqValue(
+                JqValues.parse("{\"windowLen\":null,\"maxPvalue\":0.001}"), NodeCfg.class);
+        assertEquals(new EDivCfg(0, 0.001), c);
+    }
+
+    @Test
+    void keysSerHasNoDiscriminator() {
+        JqValue tree = mapper.toJqValue(new EDivCfg(50, 0.001));
+        assertEquals(50L, tree.getField("windowLen").longValue());
+        assertTrue(mapper.toJson(new FixedCfg(1.0, 2.0)).contains("\"min\""));
+    }
+
+    @Test
+    void keysNoMatchWithoutDefaultFails() {
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"b\":1}"), NodeNoDefault.class));
+    }
+
+    record BadBothA(int windowLen, double maxPvalue) implements BadBoth {}
+
+    record BadBothB(Double min) implements BadBoth {}
+
+    @JqType
+    @JqKeys(value = {@JqKey(value = "windowLen", type = BadBothA.class)})
+    sealed interface BadBoth permits BadBothA, BadBothB {}
+
+    @Test
+    void keysBothAnnotationsFailFast() {
+        assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"windowLen\":1,\"maxPvalue\":0}"), BadBoth.class));
+    }
+
+    @Test
+    void keysStrictFlagsUnknownButKeepsDispatch() {
+        NodeCfg c = strictMapper.fromJqValue(
+                JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001}"), NodeCfg.class);
+        assertEquals(new EDivCfg(50, 0.001), c);
+        JqMapperException e = assertThrows(JqMapperException.class, () -> strictMapper.fromJqValue(
+                JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001,\"zzz\":1}"), NodeCfg.class));
+        assertTrue(e.getMessage().contains("\"zzz\""), e.getMessage());
+    }
+
+    record NodeHolder(NodeCfg config, String name) {}
+
+    @Test
+    void keysNestedAndListRoundTrip() {
+        NodeHolder h = mapper.fromJqValue(
+                JqValues.parse("{\"config\":{\"threshold\":0.5,\"window\":10},\"name\":\"n\"}"),
+                NodeHolder.class);
+        assertEquals(new NodeHolder(new RelDiffCfg(0.5, 10), "n"), h);
+        assertEquals(h, mapper.fromJqValue(mapper.toJqValue(h), NodeHolder.class));
+        java.lang.reflect.Type listType = new TypeToken<java.util.List<NodeCfg>>() {}.getType();
+        var list = mapper.fromJqValue(JqValues.parse(
+                "[{\"windowLen\":50,\"maxPvalue\":0.001},{\"min\":1.0,\"max\":2.0}]"), listType);
+        assertEquals(java.util.List.of(new EDivCfg(50, 0.001), new FixedCfg(1.0, 2.0)), list);
+    }
+
+    static class KeysStubMapping extends GeneratedMapping<EDivCfg> {
+        @Override
+        public Class<EDivCfg> type() { return EDivCfg.class; }
+
+        @Override
+        public EDivCfg fromJqValue(JqValue input, JqMapper mapper) {
+            return new EDivCfg((int) input.getField("windowLen").longValue(),
+                    input.getField("maxPvalue").doubleValue());
+        }
+
+        @Override
+        public JqValue toJqValue(EDivCfg instance, JqMapper mapper) {
+            return JqObject.builder(2)
+                    .put("windowLen", (long) instance.windowLen())
+                    .put("maxPvalue", instance.maxPvalue())
+                    .build();
+        }
+    }
+
+    @Test
+    void keysDelegatesToGeneratedWithoutInjection() {
+        var stub = new KeysStubMapping();
+        JqMapper m = JqMapper.builder().register(stub).build();
+        NodeCfg c = m.fromJqValue(JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001}"), NodeCfg.class);
+        assertEquals(new EDivCfg(50, 0.001), c);
+        assertEquals("{\"windowLen\":50,\"maxPvalue\":0.001}", m.toJson(new EDivCfg(50, 0.001)));
+    }
+
+    @Test
+    void preRegisteredFamiliesDispatchWithoutRuntimeResolution() {
+        // Build-time pre-resolution (the jjq-quarkus augmentation path):
+        // configs resolved once, then registered directly. Dispatch must
+        // behave identically to the reflective path.
+        JqMapper m = JqMapper.builder()
+                .registerPoly(Secret.class, PolyMapping.resolvePolyConfig(Secret.class, List.of()))
+                .registerKeys(NodeCfg.class, KeyPolyMapping.resolveKeyConfig(NodeCfg.class))
+                .build();
+        assertEquals(new TokenSec(ChannelMethod.GITHUB_ISSUE, "t"),
+                m.fromJqValue(JqValues.parse("{\"method\":\"GITHUB_ISSUE\",\"token\":\"t\"}"), Secret.class));
+        assertEquals(new EDivCfg(50, 0.001),
+                m.fromJqValue(JqValues.parse("{\"windowLen\":50,\"maxPvalue\":0.001}"), NodeCfg.class));
+        assertEquals(new FixedCfg(1.0, 2.0),
+                m.fromJqValue(JqValues.parse("{\"min\":1.0,\"max\":2.0}"), NodeCfg.class));
+    }
+
     // ---- POJO field inheritance ----
 
     static class Animal {

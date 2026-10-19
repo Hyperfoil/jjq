@@ -67,6 +67,46 @@ class JqMappedMessageBodyTest {
         assertFalse(writer.isWriteable(PlainRecord.class, PlainRecord.class, null, null));
     }
 
+    @io.hyperfoil.tools.jjq.mapper.JqType(discriminator = "method",
+            existingProperty = true, mappings = {
+                    @io.hyperfoil.tools.jjq.mapper.JqSubtype(value = "A", type = PolyA.class),
+                    @io.hyperfoil.tools.jjq.mapper.JqSubtype(value = "B", type = PolyB.class)
+            })
+    sealed interface PolyFamily permits PolyA, PolyB {}
+
+    record PolyA(String method, String a) implements PolyFamily {}
+
+    record PolyB(String method, String b) implements PolyFamily {}
+
+    @io.hyperfoil.tools.jjq.mapper.JqKeys(value = {
+            @io.hyperfoil.tools.jjq.mapper.JqKey(value = "a", type = KeyA.class)
+    }, defaultSubtype = KeyB.class)
+    sealed interface KeyFamily permits KeyA, KeyB {}
+
+    record KeyA(int a) implements KeyFamily {}
+
+    record KeyB(int b) implements KeyFamily {}
+
+    @Test
+    void isReadable_polyFamilies() {
+        assertTrue(reader.isReadable(PolyFamily.class, PolyFamily.class, null, null));
+        assertTrue(reader.isReadable(KeyFamily.class, KeyFamily.class, null, null));
+    }
+
+    @Test
+    void isWriteable_polyFamilies() {
+        assertTrue(writer.isWriteable(PolyFamily.class, PolyFamily.class, null, null));
+        assertTrue(writer.isWriteable(KeyFamily.class, KeyFamily.class, null, null));
+    }
+
+    @Test
+    void readFrom_polyFamilyDispatches() throws IOException {
+        Object result = readJson("{\"method\":\"B\",\"b\":\"x\"}", PolyFamily.class);
+        assertEquals(new PolyB("B", "x"), result);
+        Object keys = readJson("{\"a\":1}", KeyFamily.class);
+        assertEquals(new KeyA(1), keys);
+    }
+
     // ---- Read (deserialize) ----
 
     @Test

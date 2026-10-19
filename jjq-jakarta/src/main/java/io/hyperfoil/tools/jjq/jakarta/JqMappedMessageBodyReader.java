@@ -2,6 +2,8 @@ package io.hyperfoil.tools.jjq.jakarta;
 
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
+import io.hyperfoil.tools.jjq.mapper.JqType;
+import io.hyperfoil.tools.jjq.mapper.JqKeys;
 import io.hyperfoil.tools.jjq.mapper.JqMapperException;
 import io.hyperfoil.tools.jjq.value.JqNull;
 import io.hyperfoil.tools.jjq.value.JqValue;
@@ -82,7 +84,9 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
     @Override
     public boolean isReadable(Class<?> type, Type genericType,
                                Annotation[] annotations, MediaType mediaType) {
-        return type.isAnnotationPresent(JqMapped.class);
+        return type.isAnnotationPresent(JqMapped.class)
+                || type.isAnnotationPresent(JqType.class)
+                || type.isAnnotationPresent(JqKeys.class);
     }
 
     @Override

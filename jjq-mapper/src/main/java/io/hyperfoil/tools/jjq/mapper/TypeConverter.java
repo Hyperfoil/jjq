@@ -625,9 +625,11 @@ public final class TypeConverter {
             return convert(value, kind, targetType, genericType, mapper);
         }
         // Polymorphic abstract/interface targets dispatch on the discriminator
-        // (heterogeneous lists via TypeToken); anything else keeps leniency.
+        // or key presence (heterogeneous lists via TypeToken); anything else
+        // keeps leniency.
         if (targetType.isInterface() || java.lang.reflect.Modifier.isAbstract(targetType.getModifiers())) {
-            if (PolyMapping.resolvePolyConfig(targetType, mapper.bridges()) != null) {
+            if (KeyPolyMapping.resolveKeyConfig(targetType) != null
+                    || PolyMapping.resolvePolyConfig(targetType, mapper.bridges()) != null) {
                 return mapper.fromJqValue(value, targetType);
             }
         }

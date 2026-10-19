@@ -492,6 +492,39 @@ class JacksonAnnotationBridgeTest {
         assertTrue(mapper.toJqValue(s).toJsonString().contains("\"kind\":\"NativeWinsCircle\""));
     }
 
+    // ---- @JsonTypeInfo As.EXISTING_PROPERTY (issue #151) ----
+
+    @com.fasterxml.jackson.annotation.JsonTypeInfo(
+            use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME,
+            include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.EXISTING_PROPERTY,
+            property = "method")
+    @com.fasterxml.jackson.annotation.JsonSubTypes({
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = ExistingEmail.class, name = "EMAIL"),
+            @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = ExistingSlack.class, name = "SLACK")
+    })
+    interface ExistingChannel {}
+
+    record ExistingEmail(String method, String to) implements ExistingChannel {}
+
+    record ExistingSlack(String method, String channel) implements ExistingChannel {}
+
+    @Test
+    void jsonTypeInfoExistingPropertyBindsFieldWithoutInjection() {
+        ExistingChannel c = mapper.fromJqValue(
+                JqValues.parse("{\"method\":\"EMAIL\",\"to\":\"a\"}"), ExistingChannel.class);
+        assertEquals(new ExistingEmail("EMAIL", "a"), c);
+        // No injection: serialization emits the field as-is.
+        assertEquals("{\"method\":\"EMAIL\",\"to\":\"a\"}", mapper.toJson(c));
+        // Strict mode keeps the field (no stripping) and still flags extras.
+        var strict = io.hyperfoil.tools.jjq.mapper.JqMapper.builder()
+                .bridge(new JacksonAnnotationBridge()).failOnUnknownProperties(true).build();
+        ExistingChannel s = strict.fromJqValue(
+                JqValues.parse("{\"method\":\"SLACK\",\"channel\":\"#ops\"}"), ExistingChannel.class);
+        assertEquals(new ExistingSlack("SLACK", "#ops"), s);
+        assertThrows(io.hyperfoil.tools.jjq.mapper.JqMapperException.class, () -> strict.fromJqValue(
+                JqValues.parse("{\"method\":\"SLACK\",\"channel\":\"#ops\",\"zzz\":1}"), ExistingChannel.class));
+    }
+
     @com.fasterxml.jackson.annotation.JsonTypeInfo(
             use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME,
             include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.WRAPPER_OBJECT)

@@ -11,13 +11,16 @@ import java.util.Map;
  *
  * @param property the JSON property carrying the discriminator value
  * @param subtypes wire value to subtype class (declaration order)
+ * @param existingProperty whether the discriminator is a real mapped field
+ *        (no injection, no strict-mode stripping, collision allowed)
  */
-public record PolyConfig(String property, Map<String, Class<?>> subtypes) {
+public record PolyConfig(String property, Map<String, Class<?>> subtypes, boolean existingProperty) {
     /**
      * Validate and defensively copy.
      *
      * @param property the discriminator property (must be non-blank)
      * @param subtypes wire value to subtype (must be non-empty, no nulls)
+     * @param existingProperty whether the discriminator is an existing field
      */
     public PolyConfig {
         if (property == null || property.isEmpty()) {
@@ -32,5 +35,15 @@ public record PolyConfig(String property, Map<String, Class<?>> subtypes) {
             }
         }
         subtypes = Map.copyOf(subtypes);
+    }
+
+    /**
+     * Injected-metadata configuration (discriminator is not a mapped field).
+     *
+     * @param property the discriminator property (must be non-blank)
+     * @param subtypes wire value to subtype (must be non-empty, no nulls)
+     */
+    public PolyConfig(String property, Map<String, Class<?>> subtypes) {
+        this(property, subtypes, false);
     }
 }
