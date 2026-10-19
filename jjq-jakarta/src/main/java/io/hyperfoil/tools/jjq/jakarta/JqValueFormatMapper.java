@@ -50,14 +50,11 @@ public class JqValueFormatMapper implements FormatMapper {
         if (target.isInstance(parsed)) {
             return target.cast(parsed);
         }
-        // Best effort for other targets: plain Java values (String, Long,
-        // Double, Boolean, List, Map) with a checked cast.
-        Object plain = parsed.toJavaObject();
-        if (target.isInstance(plain)) {
-            return target.cast(plain);
-        }
+        // Only JqValue (and its subtypes) and String columns are supported:
+        // anything else fails fast instead of guessing a conversion.
         throw new org.hibernate.HibernateException(
-                "JqValueFormatMapper cannot bind JSON to " + target.getName());
+                "JqValueFormatMapper cannot bind JSON to " + target.getName()
+                        + ": map the column as JqValue or String");
     }
 
     @Override

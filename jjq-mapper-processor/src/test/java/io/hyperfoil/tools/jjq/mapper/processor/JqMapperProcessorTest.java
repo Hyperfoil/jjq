@@ -19,6 +19,7 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -121,6 +122,86 @@ class JqMapperProcessorTest {
         Object sparse = mapper.fromJqValue(JqValues.parse("{\"name\":\"x\"}"), recordClass);
         assertNull(recordClass.getMethod("count").invoke(sparse));
         assertEquals(0, recordClass.getMethod("age").invoke(sparse));
+    }
+
+    @Test
+    void typeUseAnnotations_onCreatorParamsBind() throws Exception {
+        // Property-based creators read parameter types for extraction: an
+        // annotated parameter must resolve like its plain type.
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqCreator;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+                import java.lang.annotation.*;
+
+                @Target(ElementType.TYPE_USE)
+                @Retention(RetentionPolicy.RUNTIME)
+                @interface NotEmpty {
+                }
+
+                @JqMapped
+                public record VUser(@NotEmpty String name, int age) {
+                    @JqCreator
+                    public static VUser create(@NotEmpty @JqName("user_name") String name,
+                                               @JqName("age") int age) {
+                        return new VUser(name, age);
+                    }
+                }
+                """;
+
+        Class<?> recordClass = compileAndLoad("test.VUser", source);
+        JqMapper mapper = JqMapper.create();
+        Object u = mapper.fromJqValue(
+                JqValues.parse("{\"user_name\":\"Ann\",\"age\":3}"), recordClass);
+        assertEquals("Ann", recordClass.getMethod("name").invoke(u));
+        assertEquals(3, recordClass.getMethod("age").invoke(u));
+    }
+
+    @Test
+    void typeUseAnnotations_onAnySetterParamsBind() throws Exception {
+        // Any-setter recognition compares parameter types: annotated
+        // parameters must still match (String, JqValue|Object).
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqAnySetter;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.lang.annotation.*;
+                import java.util.Map;
+                import java.util.LinkedHashMap;
+
+                @Target(ElementType.TYPE_USE)
+                @Retention(RetentionPolicy.RUNTIME)
+                @interface NotEmpty {
+                }
+
+                @JqMapped
+                public class Bag {
+                    private String name;
+                    private final Map<String, JqValue> extras = new LinkedHashMap<>();
+
+                    public Bag() {}
+
+                    public String getName() { return name; }
+                    public void setName(String name) { this.name = name; }
+                    public Map<String, JqValue> getExtras() { return extras; }
+
+                    @JqAnySetter
+                    public void setExtra(@NotEmpty String key, JqValue value) { extras.put(key, value); }
+                }
+                """;
+
+        Class<?> cls = compileAndLoad("test.Bag", source);
+        JqMapper mapper = JqMapper.create();
+        Object bag = mapper.fromJqValue(JqValues.parse("{\"name\":\"t\",\"zzz\":42}"), cls);
+        assertEquals("t", cls.getMethod("getName").invoke(bag));
+        @SuppressWarnings("unchecked")
+        Map<String, JqValue> extras =
+                (Map<String, JqValue>) cls.getMethod("getExtras").invoke(bag);
+        assertEquals(42L, extras.get("zzz").longValue());
     }
 
     // ---- Scalar-for-object shape gate, generated path (issue #128.3) ----

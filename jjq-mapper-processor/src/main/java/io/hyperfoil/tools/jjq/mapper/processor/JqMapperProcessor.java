@@ -810,7 +810,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                     && method.getParameters().size() == 1
                     && method.getReturnType().getKind()
                         != javax.lang.model.type.TypeKind.VOID) {
-                String param = method.getParameters().get(0).asType().toString();
+                String param = unannotatedTypeName(method.getParameters().get(0).asType());
                 if (param.equals("io.hyperfoil.tools.jjq.value.JqValue") && fromJq == null) {
                     fromJq = method;
                 } else if (param.equals("java.lang.String") && fromString == null) {
@@ -855,7 +855,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                     annotated);
             return null;
         }
-        String toReturn = to.getReturnType().toString();
+        String toReturn = unannotatedTypeName(to.getReturnType());
         boolean toStringForm;
         if (toReturn.equals("java.lang.String")) {
             toStringForm = true;
@@ -1481,7 +1481,7 @@ public class JqMapperProcessor extends AbstractProcessor {
             String paramName = param.getSimpleName().toString();
             String jsonName = wire != null ? wire : paramName;
             if (wire != null) anyExplicitName = true;
-            String paramType = param.asType().toString();
+            String paramType = unannotatedTypeName(param.asType());
             String converterClass = resolveConverterClass(param);
             if (converterClass != null && !validateConverter(param, mappingPackage)) return null;
             String converterField = converterClass != null
@@ -1673,7 +1673,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                 if (!(enclosed instanceof javax.lang.model.element.ExecutableElement method)
                         || method.getParameters().size() != 1
                         || method.getModifiers().contains(Modifier.STATIC)) continue;
-                String paramType = method.getParameters().get(0).asType().toString();
+                String paramType = unannotatedTypeName(method.getParameters().get(0).asType());
                 if (!paramType.equals(prop.typeName()) && !boxedEquals(paramType, prop.typeName())) continue;
                 found = true;
                 isVoid = method.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID;
@@ -2042,12 +2042,12 @@ public class JqMapperProcessor extends AbstractProcessor {
             var params = method.getParameters();
             if (!method.getModifiers().contains(Modifier.STATIC)
                     && params.size() == 2
-                    && params.get(0).asType().toString().equals("java.lang.String")
-                    && (params.get(1).asType().toString().equals("io.hyperfoil.tools.jjq.value.JqValue")
-                        || params.get(1).asType().toString().equals("java.lang.Object"))
+                    && unannotatedTypeName(params.get(0).asType()).equals("java.lang.String")
+                    && (unannotatedTypeName(params.get(1).asType()).equals("io.hyperfoil.tools.jjq.value.JqValue")
+                        || unannotatedTypeName(params.get(1).asType()).equals("java.lang.Object"))
                     && method.getReturnType().toString().equals("void")) {
                 acc.setterName = method.getSimpleName().toString();
-                acc.setterTakesJqValue = params.get(1).asType().toString()
+                acc.setterTakesJqValue = unannotatedTypeName(params.get(1).asType())
                         .equals("io.hyperfoil.tools.jjq.value.JqValue");
             } else {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,

@@ -22,9 +22,12 @@
   on both the reflective and generated paths; primitives keep JVM
   zero-values and non-null inputs convert exactly as before. The annotation
   processor strips type-use annotations (e.g. bean-validation `@Pattern`)
-  from emitted type names instead of generating invalid Java. The Hibernate
-  `FormatMapper` yields raw JSON text for `String` targets and writes it
-  back verbatim (native queries selecting jsonb aggregates as `String`).
+  from every emitted or compared type name — components, creator
+  parameters, adapter signatures, builder binders, any-setters — instead
+  of generating invalid Java or misrecognizing members. The Hibernate
+  `FormatMapper` supports exactly `JqValue` and `String` columns (raw JSON
+  text both ways for `String`, e.g. native queries selecting jsonb
+  aggregates); anything else fails fast instead of guessing a conversion.
 - New `jjq-quarkus/integration-tests` consumer application follows the core
   Quarkus HTTP test pattern: one `@QuarkusTest` contract reused by a packaged
   `@QuarkusIntegrationTest`. All 28 checks pass with Quarkus REST and Classic

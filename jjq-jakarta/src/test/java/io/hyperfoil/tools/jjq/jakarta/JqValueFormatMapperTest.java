@@ -110,6 +110,39 @@ class JqValueFormatMapperTest {
     }
 
     /**
+     * The Hibernate {@code FormatMapper} supports exactly two column shapes:
+     * {@code JqValue} (parsed tree) and {@code String} (raw JSON text).
+     * Anything else fails fast on both paths instead of guessing a conversion.
+     */
+    @Test
+    void stringTargetYieldsRawTextWithoutParsing() {
+        // Not even valid JSON: String columns carry text, not trees.
+        assertEquals("not json at all", mapper.fromString("not json at all",
+                org.hibernate.type.descriptor.java.StringJavaType.INSTANCE, null));
+        assertEquals("{\"a\":1}", mapper.fromString("{\"a\":1}",
+                org.hibernate.type.descriptor.java.StringJavaType.INSTANCE, null));
+    }
+
+    @Test
+    void unsupportedTargetFailsFast() {
+        org.hibernate.HibernateException read = assertThrows(org.hibernate.HibernateException.class,
+                () -> mapper.fromString("42",
+                        org.hibernate.type.descriptor.java.LongJavaType.INSTANCE, null));
+        assertTrue(read.getMessage().contains("java.lang.Long"), read.getMessage());
+        org.hibernate.HibernateException write = assertThrows(org.hibernate.HibernateException.class,
+                () -> mapper.toString(42L,
+                        org.hibernate.type.descriptor.java.LongJavaType.INSTANCE, null));
+        assertTrue(write.getMessage().contains("java.lang.Long"), write.getMessage());
+    }
+
+    @Test
+    void supportedStringWriteMirrorsRead() {
+        assertEquals("{\"a\":1}",
+                mapper.toString("{\"a\":1}",
+                        org.hibernate.type.descriptor.java.StringJavaType.INSTANCE, null));
+    }
+
+    /**
      * Minimal JavaType implementation for testing.
      * Only {@code getReturnedClass()} is used by JqValueFormatMapper.
      */
