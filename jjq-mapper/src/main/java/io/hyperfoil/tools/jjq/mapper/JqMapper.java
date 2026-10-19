@@ -87,6 +87,8 @@ public final class JqMapper {
     // Resolved @JsonValue/@JsonCreator handlers per enum class (empty = none present).
     private final ConcurrentHashMap<Class<?>, Optional<TypeConverter.EnumHandlers>> enumHandlers =
             new ConcurrentHashMap<>();
+    // Compiled enum bindings per enum class (empty = reflective resolution).
+    private final ConcurrentHashMap<Class<?>, EnumBinding<?>> compiledEnums = new ConcurrentHashMap<>();
 
     private JqMapper(List<AnnotationBridge> bridges) {
         this(bridges, false);
@@ -131,6 +133,20 @@ public final class JqMapper {
      */
     Optional<TypeConverter.EnumHandlers> enumHandlers(Class<?> type) {
         return enumHandlers.computeIfAbsent(type, t -> TypeConverter.resolveEnumHandlers(t, bridges));
+    }
+
+    /**
+     * Compiled enum binding for a class, or {@code null} when none was
+     * registered (reflective resolution applies). Consulted before
+     * {@link #enumHandlers(Class)} on every enum conversion path, so direct
+     * mapper calls, nested fields, and collections all reach it uniformly.
+     *
+     * @param type the enum class
+     * @return the compiled binding, or {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    <E extends Enum<E>> EnumBinding<E> compiledEnumBinding(Class<E> type) {
+        return (EnumBinding<E>) compiledEnums.get(type);
     }
 
     /**
@@ -185,6 +201,7 @@ public final class JqMapper {
     public static final class Builder {
         private final java.util.List<GeneratedMapping<?>> mappings = new java.util.ArrayList<>();
         private final java.util.List<AnnotationBridge> bridges = new java.util.ArrayList<>();
+        private final java.util.List<EnumBinding<?>> enumBindings = new java.util.ArrayList<>();
         private boolean failOnUnknownProperties;
 
         private Builder() {}
@@ -199,6 +216,19 @@ public final class JqMapper {
          */
         public Builder register(GeneratedMapping<?> mapping) {
             mappings.add(mapping);
+            return this;
+        }
+
+        /**
+         * Register a compile-time enum binding. Compiled bindings take
+         * priority over reflective {@code @JsonValue}/{@code @JsonCreator}
+         * resolution for the bound type on every conversion path.
+         *
+         * @param binding the compiled binding to register
+         * @return this builder for chaining
+         */
+        public Builder registerEnum(EnumBinding<?> binding) {
+            enumBindings.add(java.util.Objects.requireNonNull(binding, "binding"));
             return this;
         }
 
@@ -245,6 +275,9 @@ public final class JqMapper {
             for (var m : mappings) {
                 mapper.cache.put(m.type(),
                         new LastHit(m.type(), wrapId(wrapPoly(m, mapper.bridges), mapper.bridges)));
+            }
+            for (var b : enumBindings) {
+                mapper.compiledEnums.put(b.type(), b);
             }
             return mapper;
         }

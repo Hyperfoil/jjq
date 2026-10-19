@@ -349,6 +349,9 @@ public final class TypeConverter {
             }
             case ENUM -> {
                 if (value == null || value instanceof JqNull) yield null;
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                EnumBinding compiled = mapper.compiledEnumBinding((Class) targetType);
+                if (compiled != null) yield compiled.read(value, mapper);
                 java.util.Optional<EnumHandlers> handlers = mapper.enumHandlers(targetType);
                 if (handlers.isPresent() && handlers.get().creator() != null) {
                     yield invokeCreator(handlers.get(), value, targetType, mapper);
@@ -1487,6 +1490,9 @@ public final class TypeConverter {
             return builder.build();
         }
         if (value.getClass().isEnum()) {
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            EnumBinding compiled = mapper.compiledEnumBinding((Class) value.getClass());
+            if (compiled != null) return compiled.write((Enum) value, mapper);
             JqValue wire = enumWireValue(value, mapper);
             if (wire != null) return wire;
             String wireName = enumWireName((Enum<?>) value, mapper);
@@ -1551,6 +1557,10 @@ public final class TypeConverter {
      * Null members mean absent. Resolved once per (mapper, class) via
      * {@link JqMapper#enumHandlers(Class)}; discovery failures throw at first use.
      *
+     * <p>Public for build tools (annotation processor, Quarkus augmentation)
+     * that resolve the same description at build time to emit direct calls.
+     * Application code should prefer {@link JqMapper} and {@link EnumBinding}.</p>
+     *
      * @param valueAccessor zero-arg instance method whose result is the wire form (may be null)
      * @param creator       single-arg static factory or constructor (may be null)
      * @param creatorArgClass raw creator parameter class (null when no creator)
@@ -1558,7 +1568,7 @@ public final class TypeConverter {
      * @param wireNames     constant name to wire name from per-constant renames
      *                      (e.g. Jackson {@code @JsonProperty}; empty when none)
      */
-    record EnumHandlers(Method valueAccessor, Executable creator,
+    public record EnumHandlers(Method valueAccessor, Executable creator,
                         Class<?> creatorArgClass, Type creatorArgType,
                         java.util.Map<String, String> wireNames, EnumLeniency leniency) {}
 
@@ -1566,8 +1576,10 @@ public final class TypeConverter {
      * Native {@code @JqEnum} leniency policy (null when the annotation is
      * absent — strict behavior). The normalized map goes from normalized wire
      * name to constant name, built once at handler resolution.
+     *
+     * <p>Public alongside {@link #EnumHandlers} for build-time resolution.</p>
      */
-    record EnumLeniency(java.util.Set<JqEnum.Normalize> normalizations,
+    public record EnumLeniency(java.util.Set<JqEnum.Normalize> normalizations,
                         JqEnum.OnUnknown onUnknown,
                         java.util.Map<String, String> normalizedWire) {}
 
@@ -1576,9 +1588,13 @@ public final class TypeConverter {
      * always consulted first — currently no native equivalent exists, so this
      * is bridge-driven). Malformed signatures fail fast.
      *
+     * <p>Public for build tools that must resolve the exact description the
+     * runtime would compute, in order to emit direct calls instead of
+     * reflective invocation.</p>
+     *
      * @return the handlers, or empty when the class declares neither
      */
-    static java.util.Optional<EnumHandlers> resolveEnumHandlers(
+    public static java.util.Optional<EnumHandlers> resolveEnumHandlers(
             Class<?> type, List<io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge> bridges) {
         EnumLeniency leniency = resolveEnumLeniency(type, bridges);
         Method accessor = null;

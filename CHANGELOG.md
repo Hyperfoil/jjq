@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.4
 
+- Compiled enum bindings remove member reflection from annotated-enum
+  conversion: new `EnumBinding` seam (`registerEnum`, consulted on every
+  enum path before reflective resolution), with Quarkus augmentation
+  emitting direct accessor/creator calls plus baked wire-name fallbacks.
+  Verified by execution of loaded bytecode, constant-pool assertions, and
+  the unchanged behavior suite. Unsupported shapes (lenient enums,
+  non-public members, generic creator args) keep the reflective fallback.
 - `jjq-quarkus` generates its mapper producer with Gizmo2: the augmentation
   emits a CDI `@Singleton` bean whose producer method constructs every
   mapping and bridge with direct constructor calls (verified at the

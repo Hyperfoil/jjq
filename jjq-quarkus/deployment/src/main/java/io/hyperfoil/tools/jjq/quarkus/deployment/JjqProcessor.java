@@ -1,6 +1,8 @@
 package io.hyperfoil.tools.jjq.quarkus.deployment;
 
+import java.lang.constant.ClassDesc;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import org.jboss.jandex.AnnotationInstance;
@@ -18,10 +20,14 @@ import io.hyperfoil.tools.jjq.jakarta.JqValueMessageBodyWriter;
 import io.hyperfoil.tools.jjq.jakarta.JqValueParamConverterProvider;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
+import io.hyperfoil.tools.jjq.mapper.EnumBinding;
+import io.hyperfoil.tools.jjq.mapper.JqMapperException;
 import io.hyperfoil.tools.jjq.mapper.GeneratedMapping;
+import io.hyperfoil.tools.jjq.mapper.TypeConverter;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqFormatMapper;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqBuildTimeConfig;
+import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.GeneratedBeanBuildItem;
@@ -35,10 +41,12 @@ import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
+import io.quarkus.maven.dependency.ResolvedDependency;
 import io.quarkus.gizmo2.ClassOutput;
 import io.quarkus.gizmo2.Const;
 import io.quarkus.gizmo2.Gizmo;
 import io.quarkus.gizmo2.LocalVar;
+import io.quarkus.gizmo2.creator.BlockCreator;
 import io.quarkus.gizmo2.desc.MethodDesc;
 import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyReaderBuildItem;
@@ -106,6 +114,34 @@ public class JjqProcessor {
             new BridgeModule("io.hyperfoil.tools", "jjq-mapper-jsonb",
                     "io.hyperfoil.tools.jjq.mapper.jsonb.JsonbAnnotationBridge"));
 
+    /**
+     * Bridge classes for explicitly included bridge modules, in precedence
+     * order. Presence in the application model is the opt-in (never
+     * transitive-only guessing, never ServiceLoader at runtime).
+     */
+    static List<String> bridgeClassNames(Collection<ResolvedDependency> dependencies) {
+        List<String> names = new ArrayList<>();
+        for (BridgeModule bridge : BRIDGE_MODULES) {
+            if (dependencies.stream().anyMatch(d -> d.getGroupId().equals(bridge.group())
+                    && d.getArtifactId().equals(bridge.artifact()))) {
+                names.add(bridge.bridgeClass());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Binding class name for an enum, colocated in the enum's package like
+     * {@code _JqMapping} classes (same package keeps future member access
+     * options open; nested {@code $} becomes {@code _}).
+     */
+    static String enumBindingClassNameFor(String className) {
+        int dot = className.lastIndexOf('.');
+        String pkg = dot < 0 ? "" : className.substring(0, dot + 1);
+        String binary = dot < 0 ? className : className.substring(dot + 1);
+        return pkg + binary.replace('$', '_') + "_EnumBinding";
+    }
+
     @BuildStep
     FeatureBuildItem feature() {
         return new FeatureBuildItem("jjq");
@@ -161,6 +197,206 @@ public class JjqProcessor {
     }
 
     @BuildStep
+    void discoverEnumBindings(CombinedIndexBuildItem combinedIndex, CurateOutcomeBuildItem curateOutcome,
+            BuildProducer<JjqEnumBindingBuildItem> enumBindings,
+            BuildProducer<GeneratedBeanBuildItem> generatedBeans) {
+        List<String> selectedBridges = bridgeClassNames(curateOutcome.getApplicationModel().getDependencies());
+        if (selectedBridges.isEmpty()) {
+            return;
+        }
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        List<AnnotationBridge> bridges = new ArrayList<>();
+        for (String name : selectedBridges) {
+            try {
+                Class<?> cls = Class.forName(name, true, cl);
+                bridges.add((AnnotationBridge) cls.getDeclaredConstructor().newInstance());
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("jjq: cannot instantiate annotation bridge " + name
+                        + " — check the bridge module dependency", e);
+            }
+        }
+        ClassOutput output = new GeneratedBeanGizmo2Adaptor(generatedBeans);
+        for (var clazz : combinedIndex.getIndex().getKnownClasses()) {
+            if (!clazz.isEnum() || clazz.name().toString().startsWith("java.")) {
+                continue;
+            }
+            String enumName = clazz.name().toString();
+            Class<?> enumType;
+            try {
+                enumType = Class.forName(enumName, false, cl);
+            } catch (ClassNotFoundException | LinkageError e) {
+                continue;
+            }
+            if (!enumType.isEnum()) {
+                continue;
+            }
+            TypeConverter.EnumHandlers handlers;
+            try {
+                var resolved = TypeConverter.resolveEnumHandlers(enumType, bridges);
+                if (resolved.isEmpty()) {
+                    continue;
+                }
+                handlers = resolved.get();
+            } catch (JqMapperException e) {
+                // Malformed bridge metadata: keep the reflective timing
+                // (failure at first use) instead of failing the build.
+                continue;
+            }
+            try {
+                generateEnumBinding(output, enumType, handlers);
+            } catch (IllegalArgumentException e) {
+                LOG.warnf("jjq: %s, type will use reflection-based enum handling", e.getMessage());
+                continue;
+            }
+            enumBindings.produce(new JjqEnumBindingBuildItem(enumName, enumBindingClassNameFor(enumName)));
+        }
+    }
+
+    /**
+     * Emit a compiled enum binding: direct accessor/creator calls with the
+     * same failure attribution as the reflective path. Anything this method
+     * cannot express (lenient enums, non-public members, generic creator
+     * arguments, self-returning accessors) throws, and the caller keeps the
+     * reflective fallback — never silently partial.
+     *
+     * @param output    where the generated class bytes go
+     * @param enumType  the bound enum class (already loaded)
+     * @param handlers  the resolved description (creator required)
+     */
+    static void generateEnumBinding(ClassOutput output, Class<?> enumType, TypeConverter.EnumHandlers handlers) {
+        if (handlers.creator() == null) {
+            throw new IllegalArgumentException(
+                    "jjq: enum binding needs a creator for " + enumType.getName());
+        }
+        if (handlers.leniency() != null) {
+            throw new IllegalArgumentException(
+                    "jjq: lenient enums use the reflective path: " + enumType.getName());
+        }
+        if (!java.lang.reflect.Modifier.isPublic(enumType.getModifiers())) {
+            throw new IllegalArgumentException(
+                    "jjq: enum must be public for direct binding: " + enumType.getName());
+        }
+        java.lang.reflect.Method accessor = handlers.valueAccessor();
+        if (accessor != null) {
+            if (!java.lang.reflect.Modifier.isPublic(accessor.getModifiers())) {
+                throw new IllegalArgumentException(
+                        "jjq: value accessor must be public for direct binding: " + enumType.getName());
+            }
+            if (accessor.getReturnType().isPrimitive()) {
+                throw new IllegalArgumentException(
+                        "jjq: primitive-returning accessors use the reflective path: " + enumType.getName());
+            }
+        }
+        // Enum constructors are implicitly private (explicit public or
+        // protected is a compile error), so direct construction from
+        // generated code is never valid: constructor creators stay on the
+        // reflective path, which already handles accessibility.
+        if (handlers.creator() instanceof java.lang.reflect.Constructor<?>) {
+            throw new IllegalArgumentException(
+                    "jjq: constructor creators use the reflective path: " + enumType.getName());
+        }
+        java.lang.reflect.Member member = (java.lang.reflect.Member) handlers.creator();
+        if (!java.lang.reflect.Modifier.isPublic(member.getModifiers())) {
+            throw new IllegalArgumentException(
+                    "jjq: creator must be public for direct binding: " + enumType.getName());
+        }
+        if (!(handlers.creatorArgType() instanceof Class<?> argClass)) {
+            throw new IllegalArgumentException(
+                    "jjq: generic creator arguments use the reflective path: " + enumType.getName());
+        }
+        // Resolved once here, baked as a constant: the generated code never
+        // re-resolves the kind per conversion.
+        TypeConverter.Kind argKind = TypeConverter.resolveKind(argClass, argClass);
+        String creatorName = ((java.lang.reflect.Method) handlers.creator()).getName();
+        String failureMessage = "Failed to invoke @JsonCreator for " + enumType.getName();
+        Gizmo gizmo = Gizmo.create(output).withDebugInfo(false).withParameters(false);
+        gizmo.class_(enumBindingClassNameFor(enumType.getName()), cc -> {
+            cc.defaultConstructor();
+            cc.implements_(EnumBinding.class);
+            cc.method("type", mc -> {
+                mc.returning(Class.class);
+                mc.body(bc -> bc.return_(Const.of(enumType)));
+            });
+            cc.method("read", mc -> {
+                // Erased signature (Enum, not E): the JVM resolves
+                // interface dispatch by exact descriptor, so a covariant
+                // return here would need a synthetic bridge method.
+                mc.returning(Enum.class);
+                var value = mc.parameter("value", JqValue.class);
+                var mapper = mc.parameter("mapper", JqMapper.class);
+                mc.body(bc -> {
+                    LocalVar arg = bc.localVar("arg", bc.invokeStatic(
+                            MethodDesc.of(TypeConverter.class, "convert", Object.class, JqValue.class,
+                                    TypeConverter.Kind.class, Class.class, java.lang.reflect.Type.class,
+                                    JqMapper.class),
+                            List.of(value, Const.of(argKind),
+                                    Const.of(argClass), Const.of(argClass), mapper)));
+                    LocalVar typed = bc.localVar("typed", bc.cast(arg, argClass));
+                    bc.try_(tc -> {
+                        tc.body(b -> b.return_(b.invokeStatic(
+                                MethodDesc.of(enumType, creatorName, enumType, argClass),
+                                List.of(typed))));
+                        tc.catch_(RuntimeException.class, "e", (b2, ex) -> b2.throw_(
+                                b2.new_(ClassDesc.of(
+                                        "io.hyperfoil.tools.jjq.mapper.JqMapperException"),
+                                        List.of(Const.of(failureMessage),
+                                                b2.cast(ex, Throwable.class)))));
+                    });
+                });
+            });
+            cc.method("write", mc -> {
+                mc.returning(JqValue.class);
+                var value = mc.parameter("value", Enum.class);
+                var mapper = mc.parameter("mapper", JqMapper.class);
+                mc.body(bc -> {
+                    LocalVar bound = bc.localVar("bound", bc.cast(value, enumType));
+                    if (accessor != null) {
+                        LocalVar wire = bc.localVar("wire", bc.invokeVirtual(
+                                MethodDesc.of(enumType, accessor.getName(), accessor.getReturnType()), bound));
+                        bc.if_(bc.isNull(wire), then -> emitWriteFallback(then, bound, handlers));
+                        if (enumType.isAssignableFrom(accessor.getReturnType())) {
+                            bc.if_(bc.invokeVirtual(
+                                    MethodDesc.of(Enum.class, "equals", boolean.class, Object.class),
+                                    bound, wire),
+                                    then -> emitWriteFallback(then, bound, handlers));
+                        }
+                        bc.return_(bc.invokeStatic(
+                                MethodDesc.of(TypeConverter.class, "toJqValue", JqValue.class, Object.class,
+                                        JqMapper.class),
+                                List.of(wire, mapper)));
+                    } else {
+                        emitWriteFallback(bc, bound, handlers);
+                    }
+                });
+            });
+        });
+    }
+
+    /**
+     * Emit the serialization fallback both paths share: per-constant wire
+     * names first (baked if-chain, no map allocation), else {@code name()}.
+     * The caller must invoke this in tail position: every path returns.
+     * Mirrors {@code TypeConverter} exactly, including the accessor-absent
+     * shape.
+     */
+    private static void emitWriteFallback(BlockCreator bc, LocalVar bound,
+            TypeConverter.EnumHandlers handlers) {
+        LocalVar name = bc.localVar("name", bc.invokeVirtual(
+                MethodDesc.of(Enum.class, "name", String.class), bound));
+        for (var entry : handlers.wireNames().entrySet()) {
+            bc.if_(bc.invokeVirtual(
+                    MethodDesc.of(String.class, "equals", boolean.class, Object.class),
+                    name, Const.of(entry.getKey())),
+                    then -> then.return_(bc.invokeStatic(
+                            MethodDesc.of(JqString.class, "of", JqString.class, String.class),
+                            List.of(Const.of(entry.getValue())))));
+        }
+        bc.return_(bc.invokeStatic(
+                MethodDesc.of(JqString.class, "of", JqString.class, String.class),
+                List.of(name)));
+    }
+
+    @BuildStep
     void registerForReflection(List<JjqMappedTypeBuildItem> mappedTypes,
             BuildProducer<ReflectiveClassBuildItem> reflective) {
         for (JjqMappedTypeBuildItem type : mappedTypes) {
@@ -189,6 +425,7 @@ public class JjqProcessor {
     void createMapperBean(JjqBuildTimeConfig config,
             CurateOutcomeBuildItem curateOutcome,
             List<JjqMappedTypeBuildItem> mappedTypes,
+            List<JjqEnumBindingBuildItem> enumBindings,
             BuildProducer<GeneratedBeanBuildItem> generatedBeans) {
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
         List<String> mappingClassNames = new ArrayList<>();
@@ -204,19 +441,13 @@ public class JjqProcessor {
                         type.getMappingClassName());
             }
         }
-        // Bridges come from explicit module dependencies only: presence in
-        // the application model is the opt-in (never transitive-only
-        // guessing, never ServiceLoader at runtime).
-        var dependencies = curateOutcome.getApplicationModel().getDependencies();
-        List<String> bridgeClassNames = new ArrayList<>();
-        for (BridgeModule bridge : BRIDGE_MODULES) {
-            if (dependencies.stream().anyMatch(d -> d.getGroupId().equals(bridge.group())
-                    && d.getArtifactId().equals(bridge.artifact()))) {
-                bridgeClassNames.add(bridge.bridgeClass());
-            }
-        }
+        // Bridges come from explicit module dependencies only.
+        List<String> bridgeClassNames = bridgeClassNames(curateOutcome.getApplicationModel().getDependencies());
+        List<String> enumBindingClassNames = enumBindings.stream()
+                .map(JjqEnumBindingBuildItem::getBindingClassName)
+                .toList();
         generateMapperProducer(new GeneratedBeanGizmo2Adaptor(generatedBeans),
-                mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames);
+                mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames, enumBindingClassNames);
     }
 
     /**
@@ -230,9 +461,10 @@ public class JjqProcessor {
      * @param mappingClassNames       generated {@code _JqMapping} classes present on the classpath
      * @param failOnUnknownProperties mapper strictness flag, baked in as a constant
      * @param bridgeClassNames        {@code AnnotationBridge} implementations to construct directly
+     * @param enumBindingClassNames   generated {@code _EnumBinding} classes to register directly
      */
     static void generateMapperProducer(ClassOutput output, List<String> mappingClassNames,
-            boolean failOnUnknownProperties, List<String> bridgeClassNames) {
+            boolean failOnUnknownProperties, List<String> bridgeClassNames, List<String> enumBindingClassNames) {
         Gizmo gizmo = Gizmo.create(output).withDebugInfo(false).withParameters(false);
         gizmo.class_(PRODUCER_CLASS, cc -> {
             cc.defaultConstructor();
@@ -260,6 +492,12 @@ public class JjqProcessor {
                                 MethodDesc.of(JqMapper.Builder.class, "register",
                                         JqMapper.Builder.class, GeneratedMapping.class),
                                 builder, bc.new_(java.lang.constant.ClassDesc.of(mapping))));
+                    }
+                    for (String binding : enumBindingClassNames) {
+                        bc.set(builder, bc.invokeVirtual(
+                                MethodDesc.of(JqMapper.Builder.class, "registerEnum",
+                                        JqMapper.Builder.class, EnumBinding.class),
+                                builder, bc.new_(java.lang.constant.ClassDesc.of(binding))));
                     }
                     bc.return_(bc.invokeVirtual(
                             MethodDesc.of(JqMapper.Builder.class, "build", JqMapper.class), builder));
