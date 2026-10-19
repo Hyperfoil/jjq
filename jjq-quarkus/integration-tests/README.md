@@ -87,14 +87,38 @@ Collections of mapped types (issue #152) are covered at `/jjq/records`
 and `/jjq/channels`, including per-element failure paths, null and empty
 inputs.
 
+## Problem details
+
+For parse/bind errors as RFC 9457 JSON, send
+`Accept: application/json, application/problem+json`. Success responses stay
+`application/json`; jjq errors use `application/problem+json` with `type`,
+`title`, `status`, `detail`, and the request path as `instance`. The detail
+keeps the existing diagnostic size bound. Query parameters are not echoed
+in `instance`.
+
+Without an explicit problem Accept, errors keep the existing `text/plain`
+format. A zero-quality problem Accept does not opt in, and a higher explicit
+`text/plain` preference wins. An Accept containing only `application/problem+json`
+can cause JAX-RS to return 406 before reading the body, because the endpoint
+only produces `application/json`. The extension does not change that routing.
+
+When `io.quarkiverse.httpproblem:quarkus-http-problem` is installed, Quarkus
+bakes a `JqProblemPolicy(true)` bean so jjq errors use problem details without
+client opt-in. jjq still builds these responses itself; it does not delegate
+to http-problem's custom post-processors. The real-extension deployment test
+uses JSON-B because http-problem 3.38.2 requires a JSON provider. The lean
+consumer app has no such dependency and tests jjq's standalone rendering on
+both REST stacks, packaged JVM and native.
+
 ## What the tests prove
 
-The 33 shared HTTP tests cover record and bridge round-trips, enum creator
+The 41 shared HTTP tests cover record and bridge round-trips, enum creator
 failures, strict JSON syntax and UTF-8 validation, binding paths, null and empty
 bodies, configured unknown-property rejection, bounded diagnostics, the
 framework's 413, 415, and 500 status handling, the three family shapes
 above (round-trips plus 400s for unmapped, missing, and overlapping inputs),
-and homogeneous collection round-trips with indexed element failures.
+homogeneous collection round-trips with indexed element failures, negotiated
+problem responses, Accept preferences, bounded details, and path-only instances.
 
 Records use `jjq-mapper-processor` at application compilation. The extension
 generates `AuthType_EnumBinding` during augmentation. No application model has

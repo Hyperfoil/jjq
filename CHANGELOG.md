@@ -2,6 +2,15 @@
 
 ## [Unreleased] - 0.2.4
 
+- Request parse/bind failures support RFC 9457 problem details (issue #153).
+  An explicit `application/problem+json` Accept enables the JSON error shape;
+  `q=0` and a higher explicit `text/plain` preference keep plain text.
+  The default remains plain text. With `quarkus-http-problem` installed,
+  Quarkus automatically produces a policy making jjq errors problem details
+  without client opt-in. jjq writes the response itself without another JSON
+  engine; http-problem's own JSON-provider requirement is unchanged.
+  Details retain the existing diagnostic size bound, `instance` contains
+  only the request URI path, and other exception mappings stay untouched.
 - Mapper polymorphism covers key-presence and discriminator-as-field
   families (issue #151): `@JqType` gains `existingProperty` (the
   discriminator is a real mapped field — reads dispatch on it, writes emit
@@ -37,8 +46,8 @@
   touch sealed permits reflection there either.
 - New `jjq-quarkus/integration-tests` consumer application follows the core
   Quarkus HTTP test pattern: one `@QuarkusTest` contract reused by a packaged
-  `@QuarkusIntegrationTest`. All 33 checks pass with Quarkus REST and Classic
-  RESTEasy, on JVM and native — including discriminator-as-field,
+  `@QuarkusIntegrationTest`. The 41 checks cover Quarkus REST and Classic
+  RESTEasy, on JVM and native — including problem details, discriminator-as-field,
   many-to-one, and key-presence families modeled on h5m's notification and
   node configurations. The native profile is opt-in; the test app
   adds no manual model reflection registration and does not enable Hibernate

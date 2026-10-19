@@ -27,6 +27,7 @@ import io.hyperfoil.tools.jjq.mapper.KeyPolyConfig;
 import io.hyperfoil.tools.jjq.mapper.KeyPolyMapping;
 import io.hyperfoil.tools.jjq.mapper.PolyConfig;
 import io.hyperfoil.tools.jjq.mapper.PolyMapping;
+import io.hyperfoil.tools.jjq.jakarta.JqProblemPolicy;
 import io.hyperfoil.tools.jjq.mapper.TypeConverter;
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqFormatMapper;
@@ -120,6 +121,18 @@ public class JjqProcessor {
                     "io.hyperfoil.tools.jjq.mapper.jackson.JacksonAnnotationBridge"),
             new BridgeModule("io.hyperfoil.tools", "jjq-mapper-jsonb",
                     "io.hyperfoil.tools.jjq.mapper.jsonb.JsonbAnnotationBridge"));
+
+    /**
+     * Whether the http-problem extension renders the application's errors:
+     * when {@code quarkus-http-problem} is an application dependency, bind
+     * failures render problem details unconditionally for consistency with
+     * every other 4xx (issue #153). Pure presence check on the application
+     * model, without loading http-problem classes at runtime.
+     */
+    static boolean httpProblemPresent(Collection<ResolvedDependency> dependencies) {
+        return dependencies.stream().anyMatch(d -> d.getGroupId().equals("io.quarkiverse.httpproblem")
+                && d.getArtifactId().equals("quarkus-http-problem"));
+    }
 
     /**
      * Bridge classes for explicitly included bridge modules, in precedence
@@ -513,7 +526,8 @@ public class JjqProcessor {
                 .toList();
         generateMapperProducer(new GeneratedBeanGizmo2Adaptor(generatedBeans),
                 mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames, enumBindingClassNames,
-                polyFamilies, keyFamilies);
+                polyFamilies, keyFamilies,
+                httpProblemPresent(curateOutcome.getApplicationModel().getDependencies()));
     }
 
     /**
@@ -530,10 +544,12 @@ public class JjqProcessor {
      * @param enumBindingClassNames   generated {@code _EnumBinding} classes to register directly
      * @param polyFamilies            discriminator family bases to dispatch tables (discovery order)
      * @param keyFamilies             key-presence family bases to dispatch tables (discovery order)
+     * @param alwaysProblemDetails    whether the http-problem extension owns error rendering
      */
     static void generateMapperProducer(ClassOutput output, List<String> mappingClassNames,
             boolean failOnUnknownProperties, List<String> bridgeClassNames, List<String> enumBindingClassNames,
-            java.util.Map<Class<?>, PolyConfig> polyFamilies, java.util.Map<Class<?>, KeyPolyConfig> keyFamilies) {
+            java.util.Map<Class<?>, PolyConfig> polyFamilies, java.util.Map<Class<?>, KeyPolyConfig> keyFamilies,
+            boolean alwaysProblemDetails) {
         Gizmo gizmo = Gizmo.create(output).withDebugInfo(false).withParameters(false);
         gizmo.class_(PRODUCER_CLASS, cc -> {
             cc.defaultConstructor();
@@ -583,6 +599,13 @@ public class JjqProcessor {
                     bc.return_(bc.invokeVirtual(
                             MethodDesc.of(JqMapper.Builder.class, "build", JqMapper.class), builder));
                 });
+            });
+            cc.method("produceProblemPolicy", mc -> {
+                mc.returning(JqProblemPolicy.class);
+                mc.addAnnotation(jakarta.enterprise.inject.Produces.class);
+                mc.addAnnotation(Singleton.class);
+                mc.body(bc -> bc.return_(bc.new_(JqProblemPolicy.class,
+                        List.of(Const.of(alwaysProblemDetails)))));
             });
         });
     }

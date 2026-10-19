@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.quarkus.deployment;
 
 import static io.restassured.RestAssured.get;
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -168,5 +169,32 @@ class JjqRestTest {
                 .when().post("/greeting/batch")
                 .then()
                 .statusCode(204);
+    }
+
+    @Test
+    void malformedBody_problemAccept_rendersProblem() {
+        given()
+                .contentType("application/json")
+                .accept("application/json, application/problem+json")
+                .body("{bad")
+                .when().post("/greeting")
+                .then()
+                .statusCode(400)
+                .contentType("application/problem+json")
+                .body("title", equalTo("Bad Request"))
+                .body("status", equalTo(400))
+                .body("detail", containsString("Invalid JSON request body"));
+    }
+
+    @Test
+    void malformedBody_jsonAccept_staysText() {
+        given()
+                .contentType("application/json")
+                .accept("application/json")
+                .body("{bad")
+                .when().post("/greeting")
+                .then()
+                .statusCode(400)
+                .contentType("text/plain");
     }
 }

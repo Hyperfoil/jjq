@@ -405,4 +405,115 @@ public class JjqResourceTest {
                 .body("[0].method", equalTo("EMAIL"))
                 .body("[1].channel", equalTo("#ops"));
     }
+
+    @Test
+    public void malformedJsonProblemAcceptRendersProblem() {
+        given()
+                .contentType("application/json")
+                .accept("application/json, application/problem+json")
+                .body("{bad")
+                .when().post("/jjq/record")
+                .then()
+                .statusCode(400)
+                .contentType("application/problem+json")
+                .body("type", equalTo("about:blank"))
+                .body("title", equalTo("Bad Request"))
+                .body("status", equalTo(400))
+                .body("detail", containsString("Invalid JSON request body"))
+                .body("instance", equalTo("/jjq/record"));
+    }
+
+    @Test
+    public void higherTextPreferenceKeepsPlainTextError() {
+        given()
+                .contentType("application/json")
+                .accept("application/json, text/plain;q=0.9, application/problem+json;q=0.2")
+                .body("{bad")
+                .when().post("/jjq/record")
+                .then()
+                .statusCode(400)
+                .contentType("text/plain")
+                .body(containsString("Invalid JSON request body"));
+    }
+
+    @Test
+    public void problemDetailsPreserveCollectionElementPath() {
+        given()
+                .contentType("application/json")
+                .accept("application/json, application/problem+json")
+                .body("[{\"message\":\"ok\",\"count\":1},{\"message\":\"bad\",\"count\":{}}]")
+                .when().post("/jjq/records")
+                .then()
+                .statusCode(400)
+                .contentType("application/problem+json")
+                .body("status", equalTo(400))
+                .body("detail", containsString("$[1].count"))
+                .body("instance", equalTo("/jjq/records"));
+    }
+
+    @Test
+    public void jqValueParseFailureUsesProblemDetails() {
+        given()
+                .contentType("application/json")
+                .accept("application/json, application/problem+json")
+                .body("[1,")
+                .when().post("/jjq/value")
+                .then()
+                .statusCode(400)
+                .contentType("application/problem+json")
+                .body("detail", containsString("Invalid JSON request body"));
+    }
+
+    @Test
+    public void zeroQualityProblemAcceptKeepsPlainTextError() {
+        given()
+                .contentType("application/json")
+                .accept("application/json, application/problem+json;q=0")
+                .body("{bad")
+                .when().post("/jjq/record")
+                .then()
+                .statusCode(400)
+                .contentType("text/plain");
+    }
+
+    @Test
+    public void jsonOnlyAcceptKeepsPlainTextError() {
+        given()
+                .contentType("application/json")
+                .accept("application/json")
+                .body("{bad")
+                .when().post("/jjq/record")
+                .then()
+                .statusCode(400)
+                .contentType("text/plain");
+    }
+
+    @Test
+    public void problemOnlyAcceptKeepsFrameworkNotAcceptableResponse() {
+        // The endpoint produces application/json. JAX-RS rejects this Accept
+        // before reading the body, so our exception mapper must not run.
+        given()
+                .contentType("application/json")
+                .accept("application/problem+json")
+                .body("{bad")
+                .when().post("/jjq/record")
+                .then()
+                .statusCode(406);
+    }
+
+    @Test
+    public void problemDetailsStayBoundedAndOmitQueryParameters() {
+        String detail = given()
+                .contentType("application/json")
+                .accept("application/json, application/problem+json")
+                .body("{} " + "x".repeat(5000))
+                .when().post("/jjq/value?token=not-for-instance")
+                .then()
+                .statusCode(400)
+                .contentType("application/problem+json")
+                .body("instance", equalTo("/jjq/value"))
+                .extract().jsonPath().getString("detail");
+        assertTrue(detail.length() < 600, "Problem detail must retain the request-error size bound");
+        assertFalse(detail.contains("x".repeat(1000)));
+    }
 }
