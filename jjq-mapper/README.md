@@ -519,6 +519,24 @@ public interface AnnotationBridge {
 Implementations must be stateless and thread-safe, with a public no-arg constructor
 for `ServiceLoader` discovery.
 
+### OpenAPI limitation (SmallRye)
+
+SmallRye OpenAPI's schema scanner reads Jackson/JSON-B annotations plus
+MicroProfile `@Schema`. None of the jjq-native annotations above are visible
+to it — they affect runtime binding only. Concretely: `@JqName` renames bind
+at runtime while the spec shows the field name; `@JqIgnore` / skipped
+accessors are omitted at runtime while the spec still includes them; naming,
+inclusion, access-direction, and `@JqField` programs likewise change only the
+wire shape. `@JqType` / `@JqKeys` families dispatch at runtime only.
+
+For polymorphic families, keep hand-maintaining
+`@Schema(oneOf = ..., discriminatorMapping = ...)` on the base type. That is
+a second source of truth by construction — guard it with a spec-vs-mapper
+test that binds each declared wire value/discriminator through `JqMapper`
+and fails when the annotations and the `@Schema` disagree. A SmallRye
+customizer synthesizing schemas from the resolved mapping metadata is the
+full fix and is not implemented.
+
 ## Supported Types
 
 | Java type | JSON type | Notes |

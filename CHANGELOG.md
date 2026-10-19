@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.4
 
+- Document the SmallRye OpenAPI limitation (issue #154, docs minimum):
+  jjq-native annotations (`@JqName`, `@JqIgnore`/skipped accessors, naming,
+  inclusion, access-direction, `@JqField`, `@JqType`/`@JqKeys`) affect
+  runtime binding only and are invisible to the schema scanner. Polymorphic
+  families still need hand-maintained `@Schema(oneOf/discriminatorMapping)`,
+  guarded by a spec-vs-mapper test. A synthesizing SmallRye customizer is
+  the deferred full fix.
 - Request parse/bind failures support RFC 9457 problem details (issue #153).
   An explicit `application/problem+json` Accept enables the JSON error shape;
   `q=0` and a higher explicit `text/plain` preference keep plain text.

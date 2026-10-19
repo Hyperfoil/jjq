@@ -274,6 +274,19 @@ With the `jjq-mapper-processor` annotation processor on the classpath, mapping
 executes in ~20 ns per 5-field record (~11x faster than Jackson 3). Without the
 processor, reflection-based mapping is used (~39 ns, ~6x faster than Jackson 3).
 
+### OpenAPI limitation (SmallRye)
+
+SmallRye OpenAPI's schema scanner reads Jackson/JSON-B annotations plus
+MicroProfile `@Schema` — jjq-native annotations are invisible to it. `@JqName`
+renames, `@JqIgnore` / skipped accessors, and the naming/inclusion/access
+annotations change the runtime wire shape only; the generated spec keeps
+showing field names and omitted properties unless told otherwise.
+`@JqType` / `@JqKeys` families dispatch at runtime only: keep
+hand-maintaining `@Schema(oneOf = ..., discriminatorMapping = ...)` on the
+base type, and guard it with a spec-vs-mapper test so the two sources cannot
+drift silently. A SmallRye customizer synthesizing schemas from the resolved
+mapping metadata is the full fix and is not implemented.
+
 ## Jakarta JSON-B Support
 
 For pure Jakarta EE environments that use JSON-B instead of Jackson (Open Liberty, Payara,

@@ -110,6 +110,20 @@ uses JSON-B because http-problem 3.38.2 requires a JSON provider. The lean
 consumer app has no such dependency and tests jjq's standalone rendering on
 both REST stacks, packaged JVM and native.
 
+## OpenAPI limitation (SmallRye)
+
+SmallRye OpenAPI's schema scanner reads Jackson/JSON-B annotations plus
+MicroProfile `@Schema` — jjq-native annotations are invisible to it. `@JqName`
+renames, `@JqIgnore` / skipped accessors, and the naming/inclusion/access
+annotations change the runtime wire shape only; the served
+`/q/openapi` spec keeps showing field names and omitted properties unless
+told otherwise. `@JqType` / `@JqKeys` families dispatch at runtime only:
+keep hand-maintaining `@Schema(oneOf = ..., discriminatorMapping = ...)`
+on the base type, and guard it with a spec-vs-mapper test so the two sources
+cannot drift silently. A SmallRye customizer synthesizing schemas from the
+augmentation-resolved mapping metadata is the full fix and is not implemented
+here.
+
 ## What the tests prove
 
 The 41 shared HTTP tests cover record and bridge round-trips, enum creator
