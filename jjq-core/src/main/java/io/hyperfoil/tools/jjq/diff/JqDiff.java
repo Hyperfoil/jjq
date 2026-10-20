@@ -7,33 +7,35 @@ import io.hyperfoil.tools.jjq.value.JqValue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
- * Strict structural diff over {@link JqValue} producing RFC 6902 JSON
- * Patch documents (issue #168).
+ * Structural diff over {@link JqValue} (issue #168): strict RFC 6902
+ * patches plus human-readable comparison reports.
  *
- * <p>The one invariant: {@code apply(source, diff(source, target))}
- * is exactly {@code target}. Key order is insignificant, array order
- * is significant, {@code null} and missing are distinct, and numbers
- * compare mathematically ({@code 1} equals {@code 1.0}).</p>
+ * <p>The one invariant, unconditional: {@code apply(source,
+ * diff(source, target))} is exactly {@code target}. Key order is
+ * insignificant, array order is significant, {@code null} and missing
+ * are distinct, and numbers compare mathematically ({@code 1} equals
+ * {@code 1.0}).</p>
  *
- * <p>Arrays align by trimming equal prefixes/suffixes, then a greedy
- * walk over a live copy: equal advances, pull-forward moves, nested
- * recursion for same-type containers, insertion when the current
- * element is still needed later, replacement, removal. Every emitted
- * index is computed against live state, so validity holds by
- * construction; termination is structural. Regions over
- * {@value #ALIGN_LIMIT} total elements fall back to whole-array
- * replacement, and minimality is not promised.</p>
+ * <p>Leniency lives only in {@link #compare} / {@link #render} via
+ * {@link JqDiffOptions} (ignored subtrees): a filtered comparison can
+ * never produce a patch that reconstructs the target, so options must
+ * not reach {@link #diff}. Report paths locate values in the target
+ * document (source document for removals and move sources).</p>
  */
 public final class JqDiff {
 
     /**
      * Middle regions larger than this (elements on both sides combined)
-     * skip alignment and replace the whole array. Bounds the greedy
-     * walk's quadratic worst case; prefix/suffix trimming still applies.
+     * skip alignment: diff replaces the whole array, comparison reports
+     * a single wholesale change. Bounds the alignment's quadratic worst
+     * case; prefix/suffix trimming still applies.
      */
     static final int ALIGN_LIMIT = 1024;
+
+    private static final Pattern IDENT = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     private JqDiff() {}
 
@@ -51,6 +53,76 @@ public final class JqDiff {
         List<JqValue> ops = new ArrayList<>();
         diffInto(source, target, "", ops);
         return JqArray.of(ops);
+    }
+
+    /**
+     * Compare two documents, reporting every difference.
+     *
+     * @param source the base document
+     * @param target the document to compare against
+     * @return the differences, empty when exactly equal
+     */
+    public static List<JqDiffEntry> compare(JqValue source, JqValue target) {
+        return compare(source, target, JqDiffOptions.EMPTY);
+    }
+
+    /**
+     * Compare two documents with leniency options.
+     *
+     * @param source the base document
+     * @param target the document to compare against
+     * @param options ignored subtrees (jq-style paths)
+     * @return the differences outside ignored subtrees
+     */
+    public static List<JqDiffEntry> compare(JqValue source, JqValue target,
+            JqDiffOptions options) {
+        Objects.requireNonNull(source, "source must not be null");
+        Objects.requireNonNull(target, "target must not be null");
+        Objects.requireNonNull(options, "options must not be null");
+        List<JqDiffEntry> out = new ArrayList<>();
+        compareInto(source, target, "$", options, out);
+        return out;
+    }
+
+    /**
+     * Render the differences between two documents as human-readable
+     * text: {@code ~ path: old -> new}, {@code + path: value},
+     * {@code - path: value}, {@code > from -> to: value}. Empty when equal.
+     *
+     * @param source the base document
+     * @param target the document to compare against
+     * @return the report, lines joined without a trailing newline
+     */
+    public static String render(JqValue source, JqValue target) {
+        return render(source, target, JqDiffOptions.EMPTY);
+    }
+
+    /**
+     * Render the differences with leniency options.
+     *
+     * @param source the base document
+     * @param target the document to compare against
+     * @param options ignored subtrees (jq-style paths)
+     * @return the report, lines joined without a trailing newline
+     */
+    public static String render(JqValue source, JqValue target, JqDiffOptions options) {
+        StringBuilder sb = new StringBuilder();
+        for (JqDiffEntry entry : compare(source, target, options)) {
+            if (!sb.isEmpty()) sb.append('\n');
+            switch (entry.kind()) {
+                case ADDED -> sb.append("+ ").append(entry.path()).append(": ")
+                        .append(entry.newValue().toJsonString());
+                case REMOVED -> sb.append("- ").append(entry.path()).append(": ")
+                        .append(entry.oldValue().toJsonString());
+                case REPLACED -> sb.append("~ ").append(entry.path()).append(": ")
+                        .append(entry.oldValue().toJsonString())
+                        .append(" -> ").append(entry.newValue().toJsonString());
+                case MOVED -> sb.append("> ").append(entry.fromPath()).append(" -> ")
+                        .append(entry.path()).append(": ")
+                        .append(entry.oldValue().toJsonString());
+            }
+        }
+        return sb.toString();
     }
 
     static void diffInto(JqValue source, JqValue target, String path, List<JqValue> ops) {
@@ -85,103 +157,108 @@ public final class JqDiff {
 
     private static void diffArray(JqArray source, JqArray target, String path,
             List<JqValue> ops) {
-        int n = source.size();
-        int m = target.size();
-        int start = 0;
-        while (start < n && start < m
-                && Exact.equal(source.get(start), target.get(start))) {
-            start++;
-        }
-        int aEnd = n - 1;
-        int bEnd = m - 1;
-        while (aEnd >= start && bEnd >= start
-                && Exact.equal(source.get(aEnd), target.get(bEnd))) {
-            aEnd--;
-            bEnd--;
-        }
-        if (start > aEnd && start > bEnd) return;
-        if (aEnd - start + 1 + (bEnd - start + 1) > ALIGN_LIMIT) {
+        ArrayAligner.Span span = ArrayAligner.trim(source, target);
+        int middle = span.aEnd() - span.aStart() + 1 + (span.bEnd() - span.bStart() + 1);
+        if (middle <= 0) return;
+        if (middle > ALIGN_LIMIT) {
             ops.add(replaceOp(path, target));
             return;
         }
-        // Live copy; every emitted index is live.
-        List<JqValue> cur = new ArrayList<>(aEnd - start + 1);
-        for (int i = start; i <= aEnd; i++) {
-            cur.add(source.get(i));
-        }
-        int i = 0;
-        int j = start;
-        while (j <= bEnd) {
-            if (i < cur.size() && Exact.equal(cur.get(i), target.get(j))) {
-                i++;
-                j++;
-                continue;
+        for (ArrayAligner.Edit edit : ArrayAligner.align(source, span, target)) {
+            String live = path + "/" + (span.aStart() + edit.live());
+            switch (edit.kind()) {
+                case REMOVE -> ops.add(removeOp(live));
+                case ADD -> ops.add(addOp(live, edit.valB()));
+                case MOVE -> ops.add(moveOp(path + "/" + (span.aStart() + edit.fromLive()), live));
+                case RECURSE -> diffInto(edit.valA(), edit.valB(), live, ops);
+                case REPLACE -> ops.add(replaceOp(live, edit.valB()));
             }
-            int k = -1;
-            if (i < cur.size()) {
-                for (int t = i + 1; t < cur.size(); t++) {
-                    if (Exact.equal(cur.get(t), target.get(j))) {
-                        k = t;
-                        break;
+        }
+    }
+
+    private static void compareInto(JqValue source, JqValue target, String path,
+            JqDiffOptions options, List<JqDiffEntry> out) {
+        if (options.ignorePaths().contains(path)) return;
+        if (Exact.equal(source, target)) return;
+        if (source instanceof JqObject a && target instanceof JqObject b) {
+            for (String key : a.keys()) {
+                String child = fieldPath(path, key);
+                if (!b.has(key)) {
+                    if (!options.ignorePaths().contains(child)) {
+                        out.add(new JqDiffEntry(JqDiffEntry.Kind.REMOVED, child, null,
+                                a.get(key), null));
+                    }
+                } else {
+                    compareInto(a.get(key), b.get(key), child, options, out);
+                }
+            }
+            for (String key : b.keys()) {
+                if (!a.has(key)) {
+                    String child = fieldPath(path, key);
+                    if (!options.ignorePaths().contains(child)) {
+                        out.add(new JqDiffEntry(JqDiffEntry.Kind.ADDED, child, null,
+                                null, b.get(key)));
                     }
                 }
             }
-            if (k >= 0) {
-                ops.add(moveOp(path + "/" + (start + k), path + "/" + (start + i)));
-                JqValue moved = cur.remove(k);
-                cur.add(i, moved);
-                i++;
-                j++;
-                continue;
-            }
-            if (i < cur.size() && sameContainer(cur.get(i), target.get(j))) {
-                diffInto(cur.get(i), target.get(j), path + "/" + (start + i), ops);
-                cur.set(i, target.get(j));
-                i++;
-                j++;
-                continue;
-            }
-            if (i < cur.size() && neededLater(cur.get(i), target, j + 1, bEnd)) {
-                ops.add(addOp(path + "/" + (start + i), target.get(j)));
-                cur.add(i, target.get(j));
-                i++;
-                j++;
-                continue;
-            }
-            if (i < cur.size()) {
-                if (target.get(j).isScalar() || cur.get(i).isScalar()
-                        || target.get(j).type() != cur.get(i).type()) {
-                    ops.add(replaceOp(path + "/" + (start + i), target.get(j)));
-                    cur.set(i, target.get(j));
-                    i++;
-                    j++;
-                    continue;
+            return;
+        }
+        if (source instanceof JqArray a && target instanceof JqArray b) {
+            compareArray(a, b, path, options, out);
+            return;
+        }
+        out.add(new JqDiffEntry(JqDiffEntry.Kind.REPLACED, path, null, source, target));
+    }
+
+    private static void compareArray(JqArray source, JqArray target, String path,
+            JqDiffOptions options, List<JqDiffEntry> out) {
+        ArrayAligner.Span span = ArrayAligner.trim(source, target);
+        int middle = span.aEnd() - span.aStart() + 1 + (span.bEnd() - span.bStart() + 1);
+        if (middle <= 0) return;
+        if (middle > ALIGN_LIMIT) {
+            out.add(new JqDiffEntry(JqDiffEntry.Kind.REPLACED, path, null, source, target));
+            return;
+        }
+        for (ArrayAligner.Edit edit : ArrayAligner.align(source, span, target)) {
+            switch (edit.kind()) {
+                case REMOVE -> {
+                    String child = path + "[" + edit.origA() + "]";
+                    if (!options.ignorePaths().contains(child)) {
+                        out.add(new JqDiffEntry(JqDiffEntry.Kind.REMOVED, child, null,
+                                edit.valA(), null));
+                    }
                 }
-                ops.add(removeOp(path + "/" + (start + i)));
-                cur.remove(i);
-                continue;
+                case ADD -> {
+                    String child = path + "[" + edit.bIdx() + "]";
+                    if (!options.ignorePaths().contains(child)) {
+                        out.add(new JqDiffEntry(JqDiffEntry.Kind.ADDED, child, null,
+                                null, edit.valB()));
+                    }
+                }
+                case MOVE -> {
+                    String child = path + "[" + edit.bIdx() + "]";
+                    if (!options.ignorePaths().contains(child)) {
+                        out.add(new JqDiffEntry(JqDiffEntry.Kind.MOVED, child,
+                                path + "[" + edit.origA() + "]", edit.valB(), edit.valB()));
+                    }
+                }
+                case REPLACE -> {
+                    String child = path + "[" + edit.bIdx() + "]";
+                    if (!options.ignorePaths().contains(child)) {
+                        out.add(new JqDiffEntry(JqDiffEntry.Kind.REPLACED, child, null,
+                                edit.valA(), edit.valB()));
+                    }
+                }
+                case RECURSE -> compareInto(edit.valA(), edit.valB(),
+                        path + "[" + edit.bIdx() + "]", options, out);
             }
-            ops.add(addOp(path + "/" + (start + i), target.get(j)));
-            cur.add(target.get(j));
-            i++;
-            j++;
-        }
-        while (cur.size() > bEnd - start + 1) {
-            ops.add(removeOp(path + "/" + (start + cur.size() - 1)));
-            cur.remove(cur.size() - 1);
         }
     }
 
-    private static boolean sameContainer(JqValue a, JqValue b) {
-        return a instanceof JqObject && b instanceof JqObject
-                || a instanceof JqArray && b instanceof JqArray;
-    }
-
-    private static boolean neededLater(JqValue value, JqArray target, int from, int to) {
-        for (int l = from; l <= to; l++) {
-            if (Exact.equal(value, target.get(l))) return true;
-        }
-        return false;
+    /** Display path segment for an object key from a base path. */
+    static String fieldPath(String base, String key) {
+        if (IDENT.matcher(key).matches()) return base + "." + key;
+        return base + "[\"" + key.replace("\\", "\\\\").replace("\"", "\\\"") + "\"]";
     }
 
     /** Escape a reference token ({@code ~} then {@code /}). */
