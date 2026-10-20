@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 0.2.4
 
+- New opt-in `jjq-schema` module: zero-dependency JSON Schema
+  validation over `JqValue` (issue #167, pragmatic 2020-12 subset
+  with draft-07 compatibility). Schemas compile once into an
+  immutable graph shared across documents and threads; boolean and
+  reporting execution share assertion semantics, with bounded
+  diagnostics only on failure. Local `$ref`/`$defs` with cycle
+  rejection; exact numeric equality; official test suite run
+  report-only (1648 passed, 0 mismatched).
 - Lenient JSON parsing rejects single-quoted strings (#166):
   a bare `'` in value position throws instead of silently
   misparsing into garbage numbers (zero-digit numbers fell
