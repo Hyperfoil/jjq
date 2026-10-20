@@ -288,6 +288,10 @@
   the close check scans only each new chunk (prior quotes always
   pair up, appended chunks never end mid-escape) instead of
   re-copying and re-scanning the whole prefix per line
+- JSON strings resume block scanning after escapes (#161): the
+  escape remainder re-enters the SWAR quote/backslash scan per
+  handled escape, with a density gate (scalar burst after 8
+  consecutive hit-words) keeping escape-dense input at parity
 - YAML block scalars keep indented `---`/`...` lines as content (#150):
   only column-0 markers terminate the scalar (YAML 1.2 §9.1.2/§8.1.1),
   matching SnakeYAML byte-for-byte; real column-0 markers still end

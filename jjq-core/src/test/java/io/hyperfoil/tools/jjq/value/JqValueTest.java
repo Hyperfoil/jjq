@@ -2796,6 +2796,30 @@ class JqValueTest {
     }
 
     @Test
+    void testByteParserEarlyEscapeLongTail() {
+        // Issue #161: early escape followed by a long clean suffix
+        // exercises SWAR resumption past the first backslash.
+        assertByteParseSame("\"\n" + "a".repeat(200) + "\"");
+        assertByteParseSame("\"\\\"tail" + "c".repeat(200) + "\"");
+        assertByteParseSame("\"\u00e9\\ntail" + "e".repeat(200) + "\"");
+    }
+
+    @Test
+    void testByteParserEscapesAcrossWordBoundaries() {
+        // Escapes landing at every offset of the second and third words.
+        for (int at = 8; at < 24; at++) {
+            String json = "\"" + "a".repeat(at) + "\\n" + "b".repeat(32 - at) + "\"";
+            assertByteParseSame(json);
+        }
+        // Strict mode keeps positions past resumption points: the bad
+        // escape's backslash is at doc offset 5, reported as column 7.
+        String bad = "\"\\nok\\q\"";
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(bad.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertTrue(e.getMessage().contains("column 7"), e.getMessage());
+    }
+
+    @Test
     void testByteParserManyShortStrings() {
         // Array of very short strings -- each string is < 8 bytes,
         // exercises the scalar tail path exclusively

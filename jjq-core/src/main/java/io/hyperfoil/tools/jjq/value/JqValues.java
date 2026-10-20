@@ -2519,9 +2519,50 @@ public final class JqValues {
     }
 
     private static JqString parseDeferredWithEscapesBytes(JsonByteReader r, int contentStart) {
-        // After hitting a backslash, scan for closing quote.
-        // Can't use pure SWAR here because backslash-escaped quotes must be
-        // skipped. Use SWAR to find the next quote or backslash, then handle.
+        // SWAR resume (issue #161): scan 8 bytes at a time for the next
+        // quote or backslash, exactly like the clean fast path. An escaped
+        // quote still opens with a backslash, so landing on either marker
+        // is exact — handle the escape with the identical landing positions
+        // as the scalar path, then resume block scanning. UTF-8 safety is
+        // the same argument: continuation bytes never match either marker.
+        //
+        // Density gate: SWAR setup per hit-word is pure overhead when
+        // nearly every word hits (escape-dense strings), so after 4
+        // consecutive hit-words take one bounded scalar burst (same body as
+        // the tail loop, via scanScalar) and re-check. Sparse shapes almost
+        // never trip the gate; dense shapes approach scalar parity instead
+        // of paying word setup per escape. Both constants are heuristics.
+        int streak = 0;
+        while (r.pos + 8 <= r.end) {
+            if (streak >= 8) {
+                JqString burst = scanScalar(r, contentStart, Math.min(r.pos + 256, r.end));
+                if (burst != null) return burst;
+                streak = 0;
+                continue;
+            }
+            long word = SwarUtil.loadLong(r.data, r.pos);
+            long anyHit = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN)
+                    | SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
+            if (anyHit == 0) {
+                r.pos += 8;
+                streak = 0;
+                continue;
+            }
+            streak++;
+            r.pos += SwarUtil.getIndex(anyHit);
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') {
+                int contentEnd = r.pos;
+                r.pos++;
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
+            }
+            // Must be backslash: same handling as the scalar tail below.
+            r.pos++; // skip backslash
+            if (r.strict) validateEscapeBytes(r);
+            else if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
+            r.pos++;
+        }
+        // Scalar tail for remaining < 8 bytes.
         while (r.pos < r.end) {
             int b = r.data[r.pos] & 0xFF;
             if (b == '"') {
@@ -2537,6 +2578,31 @@ public final class JqValues {
             r.pos++;
         }
         throw new IllegalArgumentException("Unterminated string");
+    }
+
+    /**
+     * Scalar quote/backslash scan to {@code bound}, sharing the exact body
+     * of the tail loop above (keep the two in sync: quote returns the
+     * deferred string, backslash handling lands identically, anything else
+     * advances one). Returns null when the bound is reached with no quote
+     * so the caller resumes block scanning.
+     */
+    private static JqString scanScalar(JsonByteReader r, int contentStart, int bound) {
+        while (r.pos < bound) {
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') {
+                int contentEnd = r.pos;
+                r.pos++;
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
+            }
+            if (b == '\\') {
+                r.pos++; // skip backslash
+                if (r.strict) validateEscapeBytes(r);
+                else if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
+            }
+            r.pos++;
+        }
+        return null;
     }
 
     /** Parse a JSON string from bytes and return the raw Java String (for object keys). */
