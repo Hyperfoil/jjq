@@ -142,32 +142,34 @@ public final class BytOutput {
                 wEnd--; // never split a surrogate pair across windows
             }
             s.getChars(off, wEnd, scratch, 0);
-            // Inline segment encode: identical body to writeSegmentChars,
-            // kept inline because the 356-byte helper exceeds the
-            // hot-inline budget and the call boundary cost the
-            // clean-profile delta (issue #162 measurement).
-            int wLen = wEnd - off;
-            ensureCapacity(wLen * 3); // worst case UTF-8
-            for (int i = 0; i < wLen; i++) {
+            // Hand-inlined segment encode with locals (issue #162): the
+            // shared helper must stay callable from the escape path, but
+            // inlining it here regressed mixed strings while forbidding
+            // the inline won everywhere. Local buffer/position copies;
+            // buf already sized above and scratch never aliases it.
+            byte[] dst = buf;
+            int p = pos;
+            for (int i = 0; i < wEnd - off; i++) {
                 char c = scratch[i];
                 if (c < 0x80) {
-                    buf[pos++] = (byte) c;
+                    dst[p++] = (byte) c;
                 } else if (c < 0x800) {
-                    buf[pos++] = (byte) (0xC0 | (c >> 6));
-                    buf[pos++] = (byte) (0x80 | (c & 0x3F));
-                } else if (Character.isHighSurrogate(c) && i + 1 < wLen) {
+                    dst[p++] = (byte) (0xC0 | (c >> 6));
+                    dst[p++] = (byte) (0x80 | (c & 0x3F));
+                } else if (Character.isHighSurrogate(c) && i + 1 < wEnd - off) {
                     char low = scratch[++i];
                     int cp = Character.toCodePoint(c, low);
-                    buf[pos++] = (byte) (0xF0 | (cp >> 18));
-                    buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
-                    buf[pos++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-                    buf[pos++] = (byte) (0x80 | (cp & 0x3F));
+                    dst[p++] = (byte) (0xF0 | (cp >> 18));
+                    dst[p++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+                    dst[p++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+                    dst[p++] = (byte) (0x80 | (cp & 0x3F));
                 } else {
-                    buf[pos++] = (byte) (0xE0 | (c >> 12));
-                    buf[pos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-                    buf[pos++] = (byte) (0x80 | (c & 0x3F));
+                    dst[p++] = (byte) (0xE0 | (c >> 12));
+                    dst[p++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+                    dst[p++] = (byte) (0x80 | (c & 0x3F));
                 }
             }
+            pos = p;
             off = wEnd;
         }
     }
@@ -267,32 +269,36 @@ public final class BytOutput {
     /**
      * Bulk-write a clean scratch segment (no escape characters) as UTF-8.
      * Most JSON string values are ASCII, so the inner loop is a simple byte cast.
-     * Shares its body with the inline loop in {@link #writeUTF8} (kept inline
-     * there because this helper exceeds the hot-inline budget — keep in sync).
      */
     private void writeSegmentChars(char[] a, int start, int end) {
         int segLen = end - start;
         ensureCapacity(segLen * 3); // worst case UTF-8
+        // Local buffer/position copies: every buf[pos++] is two field
+        // accesses in bytecode, and this loop is almost all stores.
+        // Capture buf after ensureCapacity, which may replace the array.
+        byte[] dst = buf;
+        int p = pos;
         for (int i = start; i < end; i++) {
             char c = a[i];
             if (c < 0x80) {
-                buf[pos++] = (byte) c;
+                dst[p++] = (byte) c;
             } else if (c < 0x800) {
-                buf[pos++] = (byte) (0xC0 | (c >> 6));
-                buf[pos++] = (byte) (0x80 | (c & 0x3F));
+                dst[p++] = (byte) (0xC0 | (c >> 6));
+                dst[p++] = (byte) (0x80 | (c & 0x3F));
             } else if (Character.isHighSurrogate(c) && i + 1 < end) {
                 char low = a[++i];
                 int cp = Character.toCodePoint(c, low);
-                buf[pos++] = (byte) (0xF0 | (cp >> 18));
-                buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
-                buf[pos++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-                buf[pos++] = (byte) (0x80 | (cp & 0x3F));
+                dst[p++] = (byte) (0xF0 | (cp >> 18));
+                dst[p++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+                dst[p++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+                dst[p++] = (byte) (0x80 | (cp & 0x3F));
             } else {
-                buf[pos++] = (byte) (0xE0 | (c >> 12));
-                buf[pos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-                buf[pos++] = (byte) (0x80 | (c & 0x3F));
+                dst[p++] = (byte) (0xE0 | (c >> 12));
+                dst[p++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+                dst[p++] = (byte) (0x80 | (c & 0x3F));
             }
         }
+        pos = p;
     }
 
     public byte[] toByteArray() {
