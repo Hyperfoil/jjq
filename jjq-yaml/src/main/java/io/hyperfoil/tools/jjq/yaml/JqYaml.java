@@ -68,6 +68,32 @@ public final class JqYaml {
     }
 
     /**
+     * Parse a single YAML document with custom tag constructors.
+     *
+     * @param yaml         the YAML string to parse
+     * @param constructors handlers for explicitly tagged nodes
+     *                     ({@link YamlTagConstructors#EMPTY} keeps historical behavior)
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     */
+    public static JqValue parse(String yaml, YamlTagConstructors constructors) {
+        return parse(yaml, YamlOptions.LENIENT, constructors);
+    }
+
+    /**
+     * Parse a single YAML document with explicit options and custom tags.
+     *
+     * @param yaml         the YAML string to parse
+     * @param options      parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param constructors handlers for explicitly tagged nodes
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqValue parse(String yaml, YamlOptions options, YamlTagConstructors constructors) {
+        byte[] bytes = yaml.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return YamlParser.parse(bytes, 0, bytes.length, options, constructors);
+    }
+
+    /**
      * Parse a single YAML document from an InputStream.
      *
      * @param in the InputStream to read YAML from
@@ -86,10 +112,35 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static JqValue parse(InputStream in, YamlOptions options) {
+        return parse(in, options, YamlTagConstructors.EMPTY);
+    }
+
+    /**
+     * Parse a single YAML document from an InputStream with custom tags.
+     *
+     * @param in           the InputStream to read YAML from
+     * @param constructors handlers for explicitly tagged nodes
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     */
+    public static JqValue parse(InputStream in, YamlTagConstructors constructors) {
+        return parse(in, YamlOptions.LENIENT, constructors);
+    }
+
+    /**
+     * Parse a single YAML document from an InputStream with explicit
+     * options and custom tags.
+     *
+     * @param in           the InputStream to read YAML from
+     * @param options      parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param constructors handlers for explicitly tagged nodes
+     * @return the parsed JqValue, or {@link JqNull#NULL} for empty/null documents
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static JqValue parse(InputStream in, YamlOptions options, YamlTagConstructors constructors) {
         try {
             byte[] bytes = in.readAllBytes();
             requireValidUtf8(bytes);
-            return YamlParser.parse(bytes, 0, bytes.length, options);
+            return YamlParser.parse(bytes, 0, bytes.length, options, constructors);
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
         }
@@ -145,8 +196,33 @@ public final class JqYaml {
      * @throws JqYamlException on duplicate mapping keys in strict mode
      */
     public static List<JqValue> parseAll(String yaml, YamlOptions options) {
+        return parseAll(yaml, options, YamlTagConstructors.EMPTY);
+    }
+
+    /**
+     * Parse all YAML documents from a multi-document stream with custom tags.
+     *
+     * @param yaml         the YAML string containing one or more documents
+     * @param constructors handlers for explicitly tagged nodes
+     * @return list of parsed JqValues (empty list for empty input)
+     */
+    public static List<JqValue> parseAll(String yaml, YamlTagConstructors constructors) {
+        return parseAll(yaml, YamlOptions.LENIENT, constructors);
+    }
+
+    /**
+     * Parse all YAML documents from a multi-document stream with explicit
+     * options and custom tags.
+     *
+     * @param yaml         the YAML string containing one or more documents
+     * @param options      parse options ({@link YamlOptions#STRICT} rejects duplicate keys)
+     * @param constructors handlers for explicitly tagged nodes
+     * @return list of parsed JqValues (empty list for empty input)
+     * @throws JqYamlException on duplicate mapping keys in strict mode
+     */
+    public static List<JqValue> parseAll(String yaml, YamlOptions options, YamlTagConstructors constructors) {
         byte[] bytes = yaml.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return YamlParser.parseAll(bytes, 0, bytes.length, options);
+        return YamlParser.parseAll(bytes, 0, bytes.length, options, constructors);
     }
 
     /**

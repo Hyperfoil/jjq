@@ -545,6 +545,69 @@ class JqYamlTest {
         assertEquals(v.toJsonString(), JqYaml.parse(yaml).toJsonString());
     }
 
+    // ---- Custom tag constructors (issue #165, explicit tags only) ----
+
+    @Test
+    void customScalarTagDispatches() {
+        YamlTagConstructors ctors = YamlTagConstructors.EMPTY
+                .with("greet", (tag, v) -> JqString.of("hello " + v.stringValue()));
+        JqValue v = JqYaml.parse("msg: !greet World\n", ctors);
+        assertEquals("hello World", v.getField("msg").stringValue());
+    }
+
+    @Test
+    void customMappingTagReceivesDecodedMap() {
+        YamlTagConstructors ctors = YamlTagConstructors.EMPTY
+                .with("point", (tag, v) -> JqString.of(
+                        v.getField("x").longValue() + "," + v.getField("y").longValue()));
+        JqValue v = JqYaml.parse("p: !point {x: 1, y: 2}\n", ctors);
+        assertEquals("1,2", v.getField("p").stringValue());
+    }
+
+    @Test
+    void customSequenceTagReceivesDecodedList() {
+        YamlTagConstructors ctors = YamlTagConstructors.EMPTY
+                .with("vec", (tag, v) -> {
+                    long sum = 0;
+                    for (JqValue e : (JqArray) v) sum += e.longValue();
+                    return JqNumber.of(sum);
+                });
+        JqValue v = JqYaml.parse("v: !vec\n  - 1\n  - 2\n", ctors);
+        assertEquals(3L, v.getField("v").longValue());
+    }
+
+    @Test
+    void customVerbatimTagNormalizes() {
+        YamlTagConstructors ctors = YamlTagConstructors.EMPTY
+                .with("shout", (tag, v) -> JqString.of(v.stringValue() + "!"));
+        JqValue v = JqYaml.parse("msg: !<tag:example.com,2024:shout> hi\n", ctors);
+        assertEquals("hi!", v.getField("msg").stringValue());
+    }
+
+    @Test
+    void unknownTagWithoutHandlerKeepsDefault() {
+        JqValue v = JqYaml.parse("k: !nope x\n", YamlTagConstructors.EMPTY);
+        assertEquals("x", v.getField("k").stringValue());
+    }
+
+    @Test
+    void untaggedScalarsNeverConsultHandlers() {
+        // Even a `str` handler only fires on explicitly tagged nodes;
+        // untagged scalars keep core-schema resolution (no global hook).
+        YamlTagConstructors ctors = YamlTagConstructors.EMPTY
+                .with("str", (tag, v) -> JqString.of("SHADOWED"));
+        assertEquals("plain", JqYaml.parse("k: plain\n", ctors).getField("k").stringValue());
+        assertEquals("SHADOWED", JqYaml.parse("k: !!str 42\n", ctors).getField("k").stringValue());
+    }
+
+    @Test
+    void handlerExceptionPropagates() {
+        YamlTagConstructors ctors = YamlTagConstructors.EMPTY
+                .with("boom", (tag, v) -> { throw new IllegalStateException("nope"); });
+        assertThrows(IllegalStateException.class,
+                () -> JqYaml.parse("k: !boom x\n", ctors));
+    }
+
     @Test
     void toYamlMultilineStringsRoundTrip() {
         JqValue original = JqObject.builder(2)

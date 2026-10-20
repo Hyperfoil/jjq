@@ -37,6 +37,8 @@ final class YamlParser {
     private Map<String, JqValue> anchors = new HashMap<>();
     /** `%TAG` handles defined by the current document's directives. */
     private Map<String, String> tagHandles = new HashMap<>();
+    /** Custom constructors for explicitly tagged nodes (issue #165). */
+    private final YamlTagConstructors constructors;
     /** A `%YAML` directive was seen in this stream (duplicates are errors). */
     private boolean seenYamlDirective;
     /** Whether the last parsed document ended with an explicit `...`. */
@@ -72,6 +74,11 @@ final class YamlParser {
     private boolean outerValueAnchorPending;
 
     private YamlParser(byte[] data, int offset, int length, YamlOptions options) {
+        this(data, offset, length, options, YamlTagConstructors.EMPTY);
+    }
+
+    private YamlParser(byte[] data, int offset, int length, YamlOptions options,
+            YamlTagConstructors constructors) {
         int start = offset;
         int end = offset + length;
         if (end - start >= 3
@@ -82,18 +89,31 @@ final class YamlParser {
         this.pos = start;
         this.end = end;
         this.options = options;
+        this.constructors = constructors;
     }
 
     /** Parse a single document (first of a stream). Empty input yields {@link JqNull#NULL}. */
     static JqValue parse(byte[] data, int offset, int length, YamlOptions options) {
-        YamlParser p = new YamlParser(data, offset, length, options);
+        return parse(data, offset, length, options, YamlTagConstructors.EMPTY);
+    }
+
+    /** Parse a single document with custom tag constructors (issue #165). */
+    static JqValue parse(byte[] data, int offset, int length, YamlOptions options,
+            YamlTagConstructors constructors) {
+        YamlParser p = new YamlParser(data, offset, length, options, constructors);
         JqValue doc = p.parseDocument(true);
         return doc == null ? JqNull.NULL : doc;
     }
 
     /** Parse all documents of a {@code ---}-separated stream. */
     static List<JqValue> parseAll(byte[] data, int offset, int length, YamlOptions options) {
-        YamlParser p = new YamlParser(data, offset, length, options);
+        return parseAll(data, offset, length, options, YamlTagConstructors.EMPTY);
+    }
+
+    /** Parse all documents of a stream with custom tag constructors (issue #165). */
+    static List<JqValue> parseAll(byte[] data, int offset, int length, YamlOptions options,
+            YamlTagConstructors constructors) {
+        YamlParser p = new YamlParser(data, offset, length, options, constructors);
         var docs = new ArrayList<JqValue>();
         boolean anyDoc = false;
         for (;;) {
@@ -2289,12 +2309,13 @@ final class YamlParser {
             t = rest;
             if (t.isEmpty()) {
                 JqValue value = parseAnchoredNested(indent, sameIndentSeq);
-                if (anchorName != null) anchors.put(anchorName, value);
                 // An explicit `!!str` with no value is an empty string
                 // (suite LE5A); other tags fall through to null.
                 if (value.isNull() && "str".equals(normalizeTag(tag))) {
-                    return JqString.of("");
+                    value = JqString.of("");
                 }
+                value = applyConstructor(tag, value);
+                if (anchorName != null) anchors.put(anchorName, value);
                 return value;
             }
         }
@@ -2307,16 +2328,17 @@ final class YamlParser {
         t = gatherValueText(t, indent, quotedGate);
         JqValue value;
         if (startsBlockScalar(t)) {
-            value = parseBlockScalar(t, indent);
+            value = applyConstructor(tag, parseBlockScalar(t, indent));
         } else if (t.startsWith("{")) {
-            value = parseFlowMap(t);
+            value = applyConstructor(tag, parseFlowMap(t));
         } else if (t.startsWith("[")) {
-            value = parseFlowSeq(t);
+            value = applyConstructor(tag, parseFlowSeq(t));
         } else if (t.length() >= 2 && ((t.startsWith("'") && t.endsWith("'"))
                 || (t.startsWith("\"") && t.endsWith("\"")))) {
-            value = JqString.of(unquoteScalar(t.substring(1, t.length() - 1), t.charAt(0)));
+            value = applyConstructor(tag,
+                    JqString.of(unquoteScalar(t.substring(1, t.length() - 1), t.charAt(0))));
         } else {
-            value = convertScalar(t, tag, line);
+            value = applyConstructor(tag, convertScalar(t, tag, line));
         }
         if (anchorName != null) anchors.put(anchorName, value);
         return value;
@@ -2955,14 +2977,14 @@ final class YamlParser {
             JqValue value;
             if (c == '{') {
                 i++;
-                value = parseFlowMapRest();
+                value = applyConstructor(tag, parseFlowMapRest());
             } else if (c == '[') {
                 i++;
-                value = parseFlowSeqRest();
+                value = applyConstructor(tag, parseFlowSeqRest());
             } else if (c == '\'' || c == '"') {
                 char q = c;
                 i++;
-                value = JqString.of(unquoteScalar(quoted(q), q));
+                value = applyConstructor(tag, JqString.of(unquoteScalar(quoted(q), q)));
             } else {
                 String plainText = plain();
                 // A bare `-` is not a value in flow (suite G5U8/YJV2 parity;
@@ -2970,7 +2992,7 @@ final class YamlParser {
                 if (plainText.equals("-")) {
                     throw new YamlParseException("dashes are not allowed as flow values", line);
                 }
-                value = convertScalar(plainText, tag, line);
+                value = applyConstructor(tag, convertScalar(plainText, tag, line));
             }
             if (anchor != null) anchors.put(anchor, value);
             return value;
@@ -3119,8 +3141,12 @@ final class YamlParser {
                 || v.equalsIgnoreCase("false") || v.equalsIgnoreCase("off");
     }
 
-    /** Normalize `!foo` / `!!str` / `!<uri>` to a short tag name. */
-    private static String normalizeTag(String token) {
+    /**
+     * Normalize `!foo` / `!!str` / `!<uri>` to a short tag name.
+     * Shared with {@link YamlTagConstructors} registration so lookup
+     * keys cannot drift from node-tag keys.
+     */
+    static String normalizeTag(String token) {
         String t = token;
         while (t.startsWith("!")) t = t.substring(1);
         if (t.startsWith("<") && t.endsWith(">") && t.length() > 2) {
@@ -3203,6 +3229,18 @@ final class YamlParser {
         } catch (YamlParseException e) {
             return false;
         }
+    }
+
+    /**
+     * Run the registered custom constructor for an explicitly tagged node
+     * (issue #165): the node is decoded normally first, then the handler
+     * replaces it. Untagged nodes and empty registries skip the lookup.
+     */
+    private JqValue applyConstructor(String tag, JqValue decoded) {
+        if (tag == null || constructors.isEmpty()) return decoded;
+        String norm = normalizeTag(tag);
+        YamlConstructor ctor = constructors.find(norm);
+        return ctor == null ? decoded : ctor.construct(norm, decoded);
     }
 
     /**

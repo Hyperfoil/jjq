@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 0.2.4
 
+- Pluggable YAML tag constructors (issue #165, SnakeYAML
+  `Constructor` parity for explicit tags): new `YamlConstructor`
+  handler plus immutable `YamlTagConstructors` registry, with
+  `parse`/`parseAll` overloads. Nodes decode normally first, then
+  the registered handler replaces the value (anchors see the
+  result). Untagged scalars never consult handlers and mapping
+  keys stay strings, so default parsing is unchanged.
 - YAML emitter options (issue #164): new `YamlEmitOptions` (indent
   width 1-10, block/flow style per sequences and mappings) with
   `toYaml` overloads for values, streams, and writers. Defaults
