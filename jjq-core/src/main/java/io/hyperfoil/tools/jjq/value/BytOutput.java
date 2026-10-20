@@ -127,34 +127,48 @@ public final class BytOutput {
     /**
      * Encode a Java String as UTF-8 bytes (raw, no JSON escaping).
      * Used for number formatting and other non-string contexts.
-     *
-     * <p>Stays on the charAt loop for now (issue #157 round 2): the
-     * getChars variant recovered the primed-profile regression here
-     * but cost +12.6% on clean long ASCII against tight bars — a real
-     * tradeoff for a follow-up, not a ride-along on the escape path.</p>
+     * Copies through the bounded scratch via {@code getChars} like the
+     * escape path (issue #162 experiment): same pollution immunity,
+     * same window discipline for surrogate pairs.
      */
     public void writeUTF8(String s) {
         int len = s.length();
         ensureCapacity(len * 3); // worst case UTF-8
-        for (int i = 0; i < len; i++) {
-            char c = s.charAt(i);
-            if (c < 0x80) {
-                buf[pos++] = (byte) c;
-            } else if (c < 0x800) {
-                buf[pos++] = (byte) (0xC0 | (c >> 6));
-                buf[pos++] = (byte) (0x80 | (c & 0x3F));
-            } else if (Character.isHighSurrogate(c) && i + 1 < len) {
-                char low = s.charAt(++i);
-                int cp = Character.toCodePoint(c, low);
-                buf[pos++] = (byte) (0xF0 | (cp >> 18));
-                buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
-                buf[pos++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-                buf[pos++] = (byte) (0x80 | (cp & 0x3F));
-            } else {
-                buf[pos++] = (byte) (0xE0 | (c >> 12));
-                buf[pos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-                buf[pos++] = (byte) (0x80 | (c & 0x3F));
+        char[] scratch = charScratch();
+        int off = 0;
+        while (off < len) {
+            int wEnd = Math.min(off + CHAR_SCRATCH_SIZE, len);
+            if (wEnd < len && Character.isHighSurrogate(s.charAt(wEnd - 1))) {
+                wEnd--; // never split a surrogate pair across windows
             }
+            s.getChars(off, wEnd, scratch, 0);
+            // Inline segment encode: identical body to writeSegmentChars,
+            // kept inline because the 356-byte helper exceeds the
+            // hot-inline budget and the call boundary cost the
+            // clean-profile delta (issue #162 measurement).
+            int wLen = wEnd - off;
+            ensureCapacity(wLen * 3); // worst case UTF-8
+            for (int i = 0; i < wLen; i++) {
+                char c = scratch[i];
+                if (c < 0x80) {
+                    buf[pos++] = (byte) c;
+                } else if (c < 0x800) {
+                    buf[pos++] = (byte) (0xC0 | (c >> 6));
+                    buf[pos++] = (byte) (0x80 | (c & 0x3F));
+                } else if (Character.isHighSurrogate(c) && i + 1 < wLen) {
+                    char low = scratch[++i];
+                    int cp = Character.toCodePoint(c, low);
+                    buf[pos++] = (byte) (0xF0 | (cp >> 18));
+                    buf[pos++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+                    buf[pos++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+                    buf[pos++] = (byte) (0x80 | (cp & 0x3F));
+                } else {
+                    buf[pos++] = (byte) (0xE0 | (c >> 12));
+                    buf[pos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+                    buf[pos++] = (byte) (0x80 | (c & 0x3F));
+                }
+            }
+            off = wEnd;
         }
     }
 
@@ -253,6 +267,8 @@ public final class BytOutput {
     /**
      * Bulk-write a clean scratch segment (no escape characters) as UTF-8.
      * Most JSON string values are ASCII, so the inner loop is a simple byte cast.
+     * Shares its body with the inline loop in {@link #writeUTF8} (kept inline
+     * there because this helper exceeds the hot-inline budget — keep in sync).
      */
     private void writeSegmentChars(char[] a, int start, int end) {
         int segLen = end - start;
