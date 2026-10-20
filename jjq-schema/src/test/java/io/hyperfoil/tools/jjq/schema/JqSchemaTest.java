@@ -53,6 +53,111 @@ class JqSchemaTest {
         }
     }
 
+    // ---- Scalar slice: type, enum, const (issue #167) ----
+
+    private static JqObject schemaOf(String json) {
+        return (JqObject) JqValues.parse(json);
+    }
+
+    @Test
+    void typeString() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"type\":\"string\"}"));
+        assertTrue(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+        JqArray errors = schema.validate(JqNumber.of(1));
+        assertEquals(1, errors.size());
+        assertEquals("type", ((JqObject) errors.get(0)).getField("keyword").stringValue());
+    }
+
+    @Test
+    void typeArray() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"type\":[\"string\",\"null\"]}"));
+        assertTrue(schema.isValid(JqNull.NULL));
+        assertTrue(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqBoolean.FALSE));
+    }
+
+    @Test
+    void typeIntegerIsZeroFractionalPart() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"type\":\"integer\"}"));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertTrue(schema.isValid(JqValues.parse("1.0")));
+        assertTrue(schema.isValid(JqValues.parse("18446744073709551615")));
+        assertTrue(schema.isValid(JqValues.parse("1e20")));
+        assertFalse(schema.isValid(JqValues.parse("1.5")));
+        assertFalse(schema.isValid(JqString.of("1")));
+    }
+
+    @Test
+    void typeRejectsBadOperands() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"type\":\"strnig\"}")));
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"type\":1}")));
+    }
+
+    @Test
+    void enumMatchesSchemaEquality() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"enum\":[\"a\",1,null]}"));
+        assertTrue(schema.isValid(JqString.of("a")));
+        assertTrue(schema.isValid(JqValues.parse("1.0")));
+        assertTrue(schema.isValid(JqNull.NULL));
+        assertFalse(schema.isValid(JqString.of("b")));
+        assertFalse(schema.isValid(JqNumber.of(2)));
+        assertFalse(schema.isValid(JqBoolean.FALSE));
+    }
+
+    @Test
+    void enumDistinguishesLargeIntegers() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"enum\":[18446744073709551615]}"));
+        assertTrue(schema.isValid(JqValues.parse("18446744073709551615")));
+        assertFalse(schema.isValid(JqValues.parse("18446744073709551616")));
+    }
+
+    @Test
+    void enumRequiresArray() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"enum\":\"a\"}")));
+    }
+
+    @Test
+    void constMatchesStructurally() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"const\":{\"a\":1,\"b\":[1,2]}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"b\":[1,2],\"a\":1.0}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"a\":2,\"b\":[1,2]}")));
+    }
+
+    @Test
+    void enumSnapshotsSuppliedValues() {
+        java.util.Map<String, JqValue> backing = new java.util.LinkedHashMap<>();
+        backing.put("enum", JqArray.of(JqString.of("a")));
+        JqSchema schema = JqSchema.compile(JqObject.ofTrusted(backing));
+        backing.put("enum", JqArray.of(JqString.of("b")));
+        assertTrue(schema.isValid(JqString.of("a")));
+    }
+
+    @Test
+    void annotationsIgnored() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"title\":\"t\",\"description\":\"d\",\"default\":1,\"deprecated\":false,"
+                + "\"readOnly\":false,\"writeOnly\":false,\"examples\":[],"
+                + "\"$comment\":\"c\",\"$id\":\"https://example.com/s\",\"type\":\"string\"}"));
+        assertTrue(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+    }
+
+    @Test
+    void schemaHashAgreesWithEquality() {
+        assertEquals(JsonSemantics.schemaHash(JqValues.parse("1")),
+                JsonSemantics.schemaHash(JqValues.parse("1.0")));
+        assertEquals(JsonSemantics.schemaHash(JqValues.parse("18446744073709551615")),
+                JsonSemantics.schemaHash(JqValues.parse("18446744073709551615.0")));
+        assertEquals(JsonSemantics.schemaHash(JqValues.parse("{\"a\":1,\"b\":2}")),
+                JsonSemantics.schemaHash(JqValues.parse("{\"b\":2,\"a\":1}")));
+        assertEquals(JsonSemantics.schemaHash(JqValues.parse("1e20")),
+                JsonSemantics.schemaHash(JqValues.parse("100000000000000000000")));
+    }
+
     @Test
     void nonSchemaInputFailsCompilation() {        assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNumber.of(1)));
         assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNull.NULL));

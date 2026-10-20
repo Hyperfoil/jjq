@@ -1,5 +1,9 @@
 package io.hyperfoil.tools.jjq.schema;
 
+import io.hyperfoil.tools.jjq.value.JqArray;
+import io.hyperfoil.tools.jjq.value.JqBoolean;
+import io.hyperfoil.tools.jjq.value.JqNull;
+import io.hyperfoil.tools.jjq.value.JqNumber;
 import io.hyperfoil.tools.jjq.value.JqObject;
 import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
@@ -12,32 +16,116 @@ import java.util.List;
  */
 final class SchemaNode {
 
-    private final boolean alwaysFalse;
+    static final int TYPE_NULL = 1;
+    static final int TYPE_BOOLEAN = 2;
+    static final int TYPE_OBJECT = 4;
+    static final int TYPE_ARRAY = 8;
+    static final int TYPE_NUMBER = 16;
+    static final int TYPE_STRING = 32;
+    static final int TYPE_INTEGER = 64;
+    static final int TYPE_ALL = 127;
 
-    private SchemaNode(boolean alwaysFalse) {
+    private final boolean alwaysFalse;
+    private final int typeMask;
+    private final List<JqValue> enumValues;
+    private final JqValue constValue;
+    private final boolean hasConst;
+    private final String schemaLocation;
+
+    private SchemaNode(boolean alwaysFalse, int typeMask, List<JqValue> enumValues,
+            JqValue constValue, boolean hasConst, String schemaLocation) {
         this.alwaysFalse = alwaysFalse;
+        this.typeMask = typeMask;
+        this.enumValues = enumValues;
+        this.constValue = constValue;
+        this.hasConst = hasConst;
+        this.schemaLocation = schemaLocation;
     }
 
     static SchemaNode alwaysTrue() {
-        return new SchemaNode(false);
+        return new SchemaNode(false, TYPE_ALL, null, null, false, "");
     }
 
     static SchemaNode alwaysFalse() {
-        return new SchemaNode(true);
+        return new SchemaNode(true, TYPE_ALL, null, null, false, "");
+    }
+
+    static SchemaNode of(int typeMask, List<JqValue> enumValues,
+            JqValue constValue, boolean hasConst, String schemaLocation) {
+        return new SchemaNode(false, typeMask, enumValues, constValue, hasConst, schemaLocation);
     }
 
     boolean isValid(JqValue instance) {
-        return !alwaysFalse;
+        if (alwaysFalse) return false;
+        if (!matchesType(instance)) return false;
+        if (enumValues != null && !matchesEnum(instance)) return false;
+        return !hasConst || JsonSemantics.schemaEquals(instance, constValue);
     }
 
     void validateInto(JqValue instance, String instanceLocation, List<JqValue> errors) {
         if (alwaysFalse) {
-            errors.add(JqObject.builder(4)
-                    .putUnchecked("instanceLocation", JqString.of(instanceLocation))
-                    .putUnchecked("keywordLocation", JqString.of(""))
-                    .putUnchecked("keyword", JqString.of("false"))
-                    .putUnchecked("message", JqString.of("boolean schema 'false' never validates"))
-                    .build());
+            errors.add(failure(instanceLocation, "false", "boolean schema 'false' never validates"));
+            return;
         }
+        // Every applicable keyword reports independently (no early return):
+        // an instance failing `type` still gets its `enum`/`const` verdicts.
+        if (!matchesType(instance)) {
+            errors.add(failure(instanceLocation, "type",
+                    "expected " + expectedNames() + " but was " + instance.type().jqName()));
+        }
+        if (enumValues != null && !matchesEnum(instance)) {
+            errors.add(failure(instanceLocation, "enum", "value is not one of the allowed enum values"));
+        }
+        if (hasConst && !JsonSemantics.schemaEquals(instance, constValue)) {
+            errors.add(failure(instanceLocation, "const", "value does not equal const"));
+        }
+    }
+
+    private boolean matchesType(JqValue instance) {
+        if (typeMask == TYPE_ALL) return true;
+        if (instance instanceof JqNull) return (typeMask & TYPE_NULL) != 0;
+        if (instance instanceof JqBoolean) return (typeMask & TYPE_BOOLEAN) != 0;
+        if (instance instanceof JqObject) return (typeMask & TYPE_OBJECT) != 0;
+        if (instance instanceof JqArray) return (typeMask & TYPE_ARRAY) != 0;
+        if (instance instanceof JqString) return (typeMask & TYPE_STRING) != 0;
+        if (instance instanceof JqNumber number) {
+            if ((typeMask & TYPE_NUMBER) != 0) return true;
+            return ((typeMask & TYPE_INTEGER) != 0) && number.isIntegral();
+        }
+        return false;
+    }
+
+    private boolean matchesEnum(JqValue instance) {
+        for (JqValue candidate : enumValues) {
+            if (JsonSemantics.schemaEquals(instance, candidate)) return true;
+        }
+        return false;
+    }
+
+    private String expectedNames() {
+        StringBuilder names = new StringBuilder();
+        appendName(names, TYPE_NULL, "null");
+        appendName(names, TYPE_BOOLEAN, "boolean");
+        appendName(names, TYPE_OBJECT, "object");
+        appendName(names, TYPE_ARRAY, "array");
+        appendName(names, TYPE_NUMBER, "number");
+        appendName(names, TYPE_STRING, "string");
+        appendName(names, TYPE_INTEGER, "integer");
+        return names.toString();
+    }
+
+    private void appendName(StringBuilder names, int bit, String name) {
+        if ((typeMask & bit) == 0) return;
+        if (!names.isEmpty()) names.append(", ");
+        names.append(name);
+    }
+
+    private JqValue failure(String instanceLocation, String keyword, String message) {
+        return JqObject.builder(4)
+                .putUnchecked("instanceLocation", JqString.of(instanceLocation))
+                .putUnchecked("keywordLocation", JqString.of(schemaLocation + "/" + keyword))
+                .putUnchecked("keyword", JqString.of(keyword))
+                .putUnchecked("message", JqString.of(message))
+                .build();
     }
 }
