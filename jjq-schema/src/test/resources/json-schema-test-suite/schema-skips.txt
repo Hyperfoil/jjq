@@ -1,0 +1,27 @@
+# Known gaps in JSON-Schema-Test-Suite coverage (issue #167).
+# Format is `path:group:test: reason`, mirroring yaml-skips.txt.
+# Everything not listed here must pass; unlisted mismatches abort as triage.
+# content* assertion behavior is out of scope (annotations only):
+draft7/optional/content.json:0:1: contentMediaType assertion not evaluated
+draft7/optional/content.json:1:1: contentEncoding assertion not evaluated
+draft7/optional/content.json:2:1: contentMediaType assertion not evaluated
+draft7/optional/content.json:2:2: contentEncoding assertion not evaluated
+# ECMA-262 constructs outside Java regex:
+draft7/optional/ecmascript-regex.json:3:1: ECMA \c control escape not in Java regex
+draft7/optional/ecmascript-regex.json:8:4: ECMA Unicode \s class differs in Java regex
+draft7/optional/ecmascript-regex.json:8:5: ECMA Unicode \s class differs in Java regex
+draft7/optional/ecmascript-regex.json:8:7: ECMA Unicode \s class differs in Java regex
+draft7/optional/ecmascript-regex.json:8:8: ECMA Unicode \s class differs in Java regex
+draft7/optional/ecmascript-regex.json:9:4: ECMA Unicode \S class differs in Java regex
+draft7/optional/ecmascript-regex.json:9:5: ECMA Unicode \S class differs in Java regex
+draft7/optional/ecmascript-regex.json:9:7: ECMA Unicode \S class differs in Java regex
+draft7/optional/ecmascript-regex.json:9:8: ECMA Unicode \S class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:3:1: ECMA \c control escape not in Java regex
+draft2020-12/optional/ecmascript-regex.json:8:4: ECMA Unicode \s class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:8:5: ECMA Unicode \s class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:8:7: ECMA Unicode \s class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:8:8: ECMA Unicode \s class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:9:4: ECMA Unicode \S class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:9:5: ECMA Unicode \S class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:9:7: ECMA Unicode \S class differs in Java regex
+draft2020-12/optional/ecmascript-regex.json:9:8: ECMA Unicode \S class differs in Java regex
