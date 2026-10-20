@@ -2,6 +2,10 @@
 
 ## [Unreleased] - 0.2.4
 
+- Structural JSON diff in `jjq-core` (issue #168): strict RFC 6902
+  `diff`/`apply` over `JqValue` (apply round-trips every diff;
+  upstream json-patch-tests green) plus lenient comparison reports
+  with ignore-paths and jq-style rendering. Core jar grows ~7%.
 - New opt-in `jjq-schema` module: zero-dependency JSON Schema
   validation over `JqValue` (issue #167, pragmatic 2020-12 subset
   with draft-07 compatibility). Schemas compile once into an
