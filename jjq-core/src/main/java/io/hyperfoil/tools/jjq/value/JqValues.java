@@ -1412,6 +1412,16 @@ public final class JqValues {
         appendPosition(sb, r.data, r.base, Math.min(pos, r.end));
     }
 
+    /**
+     * Cold constructor for the single-quote rejection (issue #166): kept
+     * out of line so both value dispatches pay only a call-sized arm
+     * against the hot-inline budget.
+     */
+    private static IllegalArgumentException singleQuoteError() {
+        return new IllegalArgumentException(
+                "Single-quoted strings are not valid JSON; use double quotes");
+    }
+
     /** Index of the first non-whitespace char (cold paths only). */
     private static int firstNonWs(String text) {
         int i = 0;
@@ -1567,6 +1577,7 @@ public final class JqValues {
                 r.pos += 3;
                 yield JqNumber.of(Double.NaN);
             }
+            case '\'' -> throw singleQuoteError();
             default -> parseNumber(r);
         };
     }
@@ -2256,6 +2267,11 @@ public final class JqValues {
             }
             case 'I' -> { r.pos += 8; yield JqNumber.of(Double.POSITIVE_INFINITY); }
             case 'N' -> { r.pos += 3; yield JqNumber.of(Double.NaN); }
+            // A single quote can never start a value: without this arm it
+            // falls into parseNumberBytes, which yields 0 consuming nothing,
+            // and the lenient array loop chews the string char-by-char into
+            // garbage (issue #166). Other junk keeps lenient tolerance.
+            case '\'' -> throw singleQuoteError();
             default -> parseNumberBytes(r);
         };
     }

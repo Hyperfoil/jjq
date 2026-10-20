@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 0.2.4
 
+- Lenient JSON parsing rejects single-quoted strings (#166):
+  a bare `'` in value position throws instead of silently
+  misparsing into garbage numbers (zero-digit numbers fell
+  through with nothing consumed while the array loop skipped
+  a byte per element). Other lenient tolerance is unchanged.
 - Pluggable YAML tag constructors (issue #165, SnakeYAML
   `Constructor` parity for explicit tags): new `YamlConstructor`
   handler plus immutable `YamlTagConstructors` registry, with

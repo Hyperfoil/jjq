@@ -1290,6 +1290,22 @@ class JqValueTest {
     }
 
     @Test
+    void testParseRejectsSingleQuotedStrings() {
+        // Issue #166: single quotes must throw, never silently misparse
+        // into garbage numbers (lenient tolerance elsewhere is unchanged).
+        String[] bad = {"['uno','dos']", "['uno']", "{'foo':'bar'}", "{\"k\":'v'}", "'x'"};
+        for (String s : bad) {
+            assertThrows(IllegalArgumentException.class, () -> JqValues.parse(s), "lenient accepted: " + s);
+            assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parse(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                    "lenient bytes accepted: " + s);
+        }
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parse("['uno','dos']"));
+        assertTrue(e.getMessage().contains("Single-quoted"), e.getMessage());
+    }
+
+    @Test
     void testParseStrictErrorCarriesPosition() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> JqValues.parseStrict("[1,]"));
