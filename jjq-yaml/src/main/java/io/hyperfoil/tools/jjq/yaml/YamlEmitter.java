@@ -163,6 +163,11 @@ final class YamlEmitter {
                 default -> {
                     if (c < 0x20 || c == 0x7f) {
                         sb.append(String.format("\\x%02x", (int) c));
+                    } else if (c >= 0x80 && c <= 0x9f) {
+                        // C1 controls are not printable YAML even quoted
+                        // raw (NEL raw would read back as a line break),
+                        // so escape them (issue #163).
+                        sb.append(String.format("\\u%04x", (int) c));
                     } else if (Character.isHighSurrogate(c)
                             && i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1))) {
                         // Valid astral pair: raw UTF-8 round-trips, escaped form bloats.

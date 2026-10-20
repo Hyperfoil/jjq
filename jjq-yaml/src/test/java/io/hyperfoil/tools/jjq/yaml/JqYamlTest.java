@@ -426,6 +426,35 @@ class JqYamlTest {
     }
 
     @Test
+    void toYamlControlCharactersForceDoubleQuotes() {
+        // C0 controls (other than tab), DEL and C1 are not printable
+        // YAML even inside plain scalars: strict parsers reject the
+        // raw bytes, so the emitter must double-quote with escapes
+        // (issue #163). Tab stays bare; LF/CR already force quoting.
+        String[] controls = {"Base \u0001 x", "a\u0000b", "a\u001bb",
+                "a\u007fb", "a\u0080b", "a\u009fb", "a\u0085b"};
+        var builder = JqObject.builder(controls.length + 1);
+        for (int i = 0; i < controls.length; i++) {
+            builder.putUnchecked("k" + i, JqString.of(controls[i]));
+        }
+        builder.putUnchecked("tab", JqString.of("a\tb"));
+        JqValue original = builder.build();
+        String yaml = JqYaml.toYaml(original);
+        for (String s : controls) {
+            assertFalse(yaml.contains(s), "no raw control bytes in output");
+        }
+        assertTrue(yaml.contains("\"Base \\x01 x\""), "C0 escaped: " + yaml);
+        assertTrue(yaml.contains("\\x7f"), "DEL escaped: " + yaml);
+        assertTrue(yaml.contains("\\u0080"), "C1 escaped: " + yaml);
+        assertTrue(yaml.contains("a\tb"), "tab stays bare: " + yaml);
+        JqValue reparsed = JqYaml.parse(yaml);
+        for (int i = 0; i < controls.length; i++) {
+            assertEquals(controls[i], reparsed.getField("k" + i).stringValue(), "field k" + i);
+        }
+        assertEquals("a\tb", reparsed.getField("tab").stringValue());
+    }
+
+    @Test
     void toYamlMultilineStringsRoundTrip() {
         JqValue original = JqObject.builder(2)
                 .putUnchecked("text", JqString.of("line one\nline two\n"))

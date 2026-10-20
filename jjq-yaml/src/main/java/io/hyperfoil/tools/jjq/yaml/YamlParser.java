@@ -3179,7 +3179,17 @@ final class YamlParser {
         // Valid astral pairs stay bare: their UTF-8 round-trips exactly.
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
-            if (Character.isHighSurrogate(c)) {
+            if (c < 0x20) {
+                // Tab is the only C0 control a plain scalar may hold
+                // (LF/CR already rejected above); the rest are not
+                // printable YAML, so they need double-quoted \xXX
+                // escapes (issue #163).
+                if (c != '\t') return false;
+            } else if (c == 0x7f || (c >= 0x80 && c <= 0x9f)) {
+                // DEL and C1 controls (NEL included: raw it would be a
+                // line break) are not printable YAML either.
+                return false;
+            } else if (Character.isHighSurrogate(c)) {
                 if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
                     return false;
                 }
