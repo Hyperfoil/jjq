@@ -382,6 +382,94 @@ class JqSchemaTest {
                 JqValues.parse("[{\"b\":1,\"a\":2},{\"a\":2,\"b\":1}]")));
     }
 
+    // ---- Local references (issue #167) ----
+
+    @Test
+    void localRefSharesDefinition() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$defs\":{\"name\":{\"type\":\"string\"}},"
+                + "\"properties\":{\"a\":{\"$ref\":\"#/$defs/name\"}}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"a\":\"x\"}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"a\":1}")));
+        JqArray errors = schema.validate(JqValues.parse("{\"a\":1}"));
+        assertEquals("#/$defs/name/type",
+                ((JqObject) errors.get(0)).getField("keywordLocation").stringValue());
+        assertEquals("/a",
+                ((JqObject) errors.get(0)).getField("instanceLocation").stringValue());
+    }
+
+    @Test
+    void draft07RefIgnoresSiblings() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$schema\":\"http://json-schema.org/draft-07/schema\","
+                + "\"$ref\":\"#/$defs/x\",\"type\":\"string\","
+                + "\"$defs\":{\"x\":{\"type\":\"integer\"}}}"));
+        assertFalse(schema.isValid(JqString.of("a")));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+    }
+
+    @Test
+    void refEvaluatesSiblingsIn202012() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$ref\":\"#/$defs/x\",\"type\":\"string\","
+                + "\"$defs\":{\"x\":{\"type\":\"integer\"}}}"));
+        assertFalse(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+    }
+
+    @Test
+    void recursiveRefDescends() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"type\":\"object\",\"properties\":{\"child\":{\"$ref\":\"#\"}}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"child\":{}}")));
+        assertTrue(schema.isValid(JqValues.parse("{\"child\":{\"child\":{}}}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"child\":1}")));
+    }
+
+    @Test
+    void cyclicRefWithoutDescentFailsCompilation() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"$ref\":\"#\"}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf(
+                "{\"$defs\":{\"a\":{\"$ref\":\"#/$defs/b\"},\"b\":{\"$ref\":\"#/$defs/a\"}},"
+                + "\"$ref\":\"#/$defs/a\"}")));
+    }
+
+    @Test
+    void unresolvableRefFailsCompilation() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"$ref\":\"#/definitions/missing\"}")));
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"$ref\":\"https://example.com/s\"}")));
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"$ref\":\"#anchor\"}")));
+    }
+
+    @Test
+    void refPointerUnescapesTokens() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$defs\":{\"a/b\":{\"type\":\"string\"}},"
+                + "\"properties\":{\"x\":{\"$ref\":\"#/$defs/a~1b\"}}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"x\":\"v\"}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"x\":1}")));
+    }
+
+    @Test
+    void definitionsAliasWorksInDraft07() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$schema\":\"http://json-schema.org/draft-07/schema\","
+                + "\"$ref\":\"#/definitions/p\","
+                + "\"definitions\":{\"p\":{\"type\":\"integer\"}}}"));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertFalse(schema.isValid(JqString.of("a")));
+    }
+
+    @Test
+    void nestedIdFailsCompilation() {
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf(
+                "{\"properties\":{\"a\":{\"$id\":\"https://example.com/x\",\"type\":\"string\"}}}")));
+    }
+
     @Test
     void nonSchemaInputFailsCompilation() {        assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNumber.of(1)));
         assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNull.NULL));

@@ -20,9 +20,27 @@ final class SchemaCompiler {
 
     /** True while compiling a draft-07 document (tuple items, $ref siblings). */
     private boolean draft07;
+    /** Document root, for local reference resolution. */
+    private JqValue rootSchema;
+    /** Canonical pointer to in-progress target, mapped to its descent depth. */
+    private final java.util.Map<String, Integer> inProgress = new java.util.HashMap<>();
+    /** Placeholder slots for in-progress targets (recursion indirection). */
+    private final java.util.Map<String, SchemaNode[]> slots = new java.util.HashMap<>();
+    /** Finished targets, shared by repeat references (zero overhead). */
+    private final java.util.Map<String, SchemaNode> finished = new java.util.HashMap<>();
+    /** Schema-tree descent depth (properties/items apply to sub-instances). */
+    private int descentDepth;
 
     SchemaNode compile(JqValue schema) {
-        return compileAt(schema, "");
+        this.rootSchema = schema;
+        SchemaNode[] slot = compileRef("#", "");
+        return refResult("#", slot, "");
+    }
+
+    /** Finished target shared directly; only genuine recursion keeps indirection. */
+    private SchemaNode refResult(String canonical, SchemaNode[] slot, String location) {
+        SchemaNode done = finished.get(canonical);
+        return done != null ? done : SchemaNode.ref(slot, location);
     }
 
     private SchemaNode compileAt(JqValue schema, String location) {
@@ -34,6 +52,16 @@ final class SchemaCompiler {
             if (obj.has("$schema")) {
                 checkDialect(obj.get("$schema"), location);
             }
+            if (draft07 && obj.has("$ref")) {
+                // Draft-07 ignores validation siblings of $ref.
+                JqValue ref = obj.get("$ref");
+                if (!(ref instanceof JqString s)) {
+                    throw new JqSchemaException("\"$ref\" must be a string", location);
+                }
+                String canonical = canonicalRef(s.stringValue(), location);
+                return refResult(canonical, compileRef(canonical, location), location);
+            }
+
             int typeMask = SchemaNode.TYPE_ALL;
             List<JqValue> enumValues = null;
             JqValue constValue = null;
@@ -68,9 +96,22 @@ final class SchemaCompiler {
             JqNumber minContains = null;
             JqNumber maxContains = null;
             boolean unique = false;
+            SchemaNode[] refSlot = null;
             for (String key : obj.keys()) {
                 switch (key) {
-                    case "$schema", "$id" -> {}
+                    case "$schema" -> {}
+                    case "$id" -> {
+                        if (!location.isEmpty() && !location.equals("#")) {
+                            throw new JqSchemaException(
+                                    "nested $id is not supported", location);
+                        }
+                        if (!(obj.get(key) instanceof JqString)) {
+                            throw new JqSchemaException("$id must be a string", location);
+                        }
+                    }
+                    case "$defs", "definitions" -> {
+                        // Lazily compiled on reference; see compileRef.
+                    }
                     case "title", "description", "default", "deprecated",
                          "readOnly", "writeOnly", "examples", "$comment" -> {}
                     case "type" -> typeMask = parseType(obj.get(key), location);
@@ -120,7 +161,7 @@ final class SchemaCompiler {
                         }
                         for (String name : props.keys()) {
                             propNames.add(name);
-                            propNodes.add(compileAt(props.get(name),
+                            propNodes.add(compileChild(props.get(name),
                                     location + "/properties/" + Failures.escapePointer(name)));
                         }
                     }
@@ -140,7 +181,7 @@ final class SchemaCompiler {
                                         location);
                             }
                             patterns.add(compiled);
-                            patternNodes.add(compileAt(props.get(name),
+                            patternNodes.add(compileChild(props.get(name),
                                     location + "/patternProperties/" + Failures.escapePointer(name)));
                         }
                     }
@@ -152,7 +193,7 @@ final class SchemaCompiler {
                             additionalNode = b.booleanValue() ? null
                                     : SchemaNode.alwaysFalse(childLocation);
                         } else {
-                            additionalNode = compileAt(additional, childLocation);
+                            additionalNode = compileChild(additional, childLocation);
                         }
                         hasAdditional = true;
                     }
@@ -171,7 +212,7 @@ final class SchemaCompiler {
                     case "maxItems" ->
                         maxItems = parseNonNegativeInt(obj.get(key), "maxItems", location);
                     case "contains" ->
-                        containsNode = compileAt(obj.get(key), location + "/contains");
+                        containsNode = compileChild(obj.get(key), location + "/contains");
                     case "minContains" ->
                         minContains = parseNonNegativeInt(obj.get(key), "minContains", location);
                     case "maxContains" ->
@@ -181,6 +222,14 @@ final class SchemaCompiler {
                             throw new JqSchemaException("\"uniqueItems\" must be a boolean", location);
                         }
                         unique = b.booleanValue();
+                    }
+                    case "$ref" -> {
+                        // Draft-07 returned early above; here siblings apply too.
+                        JqValue ref = obj.get(key);
+                        if (!(ref instanceof JqString s)) {
+                            throw new JqSchemaException("\"$ref\" must be a string", location);
+                        }
+                        refSlot = compileRef(canonicalRef(s.stringValue(), location), location);
                     }
                     default -> throw new JqSchemaException(
                             "unsupported keyword '" + key + "'", location);
@@ -205,7 +254,7 @@ final class SchemaCompiler {
                     hasAdditionalItems, minItems, maxItems,
                     containsNode, minContains, maxContains, unique, location);
             return SchemaNode.of(typeMask, enumValues, constValue, hasConst,
-                    numberPlan, stringPlan, objectPlan, arrayPlan, location);
+                    numberPlan, stringPlan, objectPlan, arrayPlan, refSlot, location);
         }
         throw new JqSchemaException(
                 "schema must be an object or boolean, was " + schema.type().jqName(), location);
@@ -296,6 +345,141 @@ final class SchemaCompiler {
         return bound;
     }
 
+    /**
+     * Resolve a {@code $ref} to a compiled node. Finished targets are
+     * shared directly; a reference to a target still being compiled is
+     * legal only past instance descent (then it gets a placeholder slot
+     * filled when the target completes), otherwise it is a non-progress
+     * cycle and fails compilation.
+     *
+     * @return a single-element slot holding the target node
+     */
+    private SchemaNode[] compileRef(String canonical, String location) {
+        SchemaNode done = finished.get(canonical);
+        if (done != null) return new SchemaNode[]{done};
+        Integer pushDepth = inProgress.get(canonical);
+        if (pushDepth != null) {
+            if (descentDepth <= pushDepth) {
+                throw new JqSchemaException(
+                        "cyclic reference '" + canonical + "' without descent", location);
+            }
+            return slots.get(canonical);
+        }
+        JqValue target = resolvePointer(canonical, location);
+        SchemaNode[] slot = new SchemaNode[1];
+        slots.put(canonical, slot);
+        inProgress.put(canonical, descentDepth);
+        SchemaNode node;
+        try {
+            node = compileAt(target, pointerLocation(canonical));
+        } finally {
+            inProgress.remove(canonical);
+        }
+        slot[0] = node;
+        finished.put(canonical, node);
+        return slot;
+    }
+
+    /** Canonical local reference; rejects remote, anchor, and malformed forms. */
+    private String canonicalRef(String ref, String location) {
+        if (ref.isEmpty()) return "#";
+        if (!ref.startsWith("#")) {
+            throw new JqSchemaException(
+                    "only local references are supported, was '" + ref + "'", location);
+        }
+        if (ref.equals("#")) return "#";
+        if (ref.charAt(1) != '/') {
+            throw new JqSchemaException(
+                    "named anchors are not supported: '" + ref + "'", location);
+        }
+        return ref;
+    }
+
+    /** Schema-document location for a canonical reference (fragment form). */
+    private static String pointerLocation(String canonical) {
+        return canonical;
+    }
+
+    /** Walk a local JSON Pointer from the document root. */
+    private JqValue resolvePointer(String canonical, String location) {
+        if (canonical.equals("#")) return rootSchema;
+        String[] tokens = percentDecode(canonical.substring(1), location)
+                .substring(1).split("/", -1);
+        JqValue current = rootSchema;
+        for (String raw : tokens) {
+            String token = raw.replace("~1", "/").replace("~0", "~");
+            if (current instanceof JqObject obj) {
+                if (!obj.has(token)) {
+                    throw new JqSchemaException(
+                            "unresolved reference '" + canonical + "'", location);
+                }
+                current = obj.get(token);
+            } else if (current instanceof JqArray arr) {
+                int index = arrayIndex(token, location);
+                if (index >= arr.size()) {
+                    throw new JqSchemaException(
+                            "unresolved reference '" + canonical + "'", location);
+                }
+                current = arr.get(index);
+            } else {
+                throw new JqSchemaException(
+                        "unresolved reference '" + canonical + "'", location);
+            }
+        }
+        return current;
+    }
+
+    private int arrayIndex(String token, String location) {
+        if (token.equals("-") || token.isEmpty()
+                || (token.length() > 1 && token.charAt(0) == '0')) {
+            throw new JqSchemaException(
+                    "invalid array index '" + token + "' in reference", location);
+        }
+        int index = 0;
+        for (int i = 0; i < token.length(); i++) {
+            char c = token.charAt(i);
+            if (c < '0' || c > '9') {
+                throw new JqSchemaException(
+                        "invalid array index '" + token + "' in reference", location);
+            }
+            index = index * 10 + (c - '0');
+            if (index < 0) {
+                throw new JqSchemaException(
+                        "array index '" + token + "' overflows", location);
+            }
+        }
+        return index;
+    }
+
+    private String percentDecode(String text, String location) {
+        if (text.indexOf('%') < 0) return text;
+        byte[] bytes = new byte[text.length()];
+        int count = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '%') {
+                if (i + 2 >= text.length()) {
+                    throw new JqSchemaException(
+                            "invalid percent-encoding in reference", location);
+                }
+                int hi = Character.digit(text.charAt(i + 1), 16);
+                int lo = Character.digit(text.charAt(i + 2), 16);
+                if (hi < 0 || lo < 0) {
+                    throw new JqSchemaException(
+                            "invalid percent-encoding in reference", location);
+                }
+                bytes[count++] = (byte) ((hi << 4) | lo);
+                i += 2;
+            } else if (c > 127) {
+                throw new JqSchemaException(
+                        "non-ASCII character in reference (percent-encode it)", location);
+            } else {
+                bytes[count++] = (byte) c;
+            }
+        }
+        return new String(bytes, 0, count, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private List<String> parseRequired(JqValue value, String location) {
         if (!(value instanceof JqArray arr)) {
             throw new JqSchemaException("\"required\" must be an array", location);
@@ -311,6 +495,21 @@ final class SchemaCompiler {
         return List.copyOf(names);
     }
 
+    /**
+     * Compile a child schema that applies to a strict sub-instance
+     * (property/pattern/additional values, array elements). The descent
+     * depth lets reference compilation tell legal recursion (which passes
+     * through here) from same-location cycles (which never do).
+     */
+    private SchemaNode compileChild(JqValue schema, String location) {
+        descentDepth++;
+        try {
+            return compileAt(schema, location);
+        } finally {
+            descentDepth--;
+        }
+    }
+
     private ArrayPlan buildArrayPlan(JqValue itemsRaw, JqValue prefixRaw,
             JqValue additionalItemsRaw, boolean hasAdditionalItems,
             JqNumber minItems, JqNumber maxItems,
@@ -321,18 +520,18 @@ final class SchemaCompiler {
         if (draft07) {
             if (itemsRaw instanceof JqArray tuple) {
                 for (int i = 0; i < tuple.size(); i++) {
-                    prefix.add(compileAt(tuple.get(i), location + "/items/" + i));
+                    prefix.add(compileChild(tuple.get(i), location + "/items/" + i));
                 }
                 if (hasAdditionalItems) {
                     if (additionalItemsRaw instanceof JqBoolean b) {
                         tail = b.booleanValue() ? null
                                 : SchemaNode.alwaysFalse(location + "/additionalItems");
                     } else {
-                        tail = compileAt(additionalItemsRaw, location + "/additionalItems");
+                        tail = compileChild(additionalItemsRaw, location + "/additionalItems");
                     }
                 }
             } else if (itemsRaw != null) {
-                tail = compileAt(itemsRaw, location + "/items");
+                tail = compileChild(itemsRaw, location + "/items");
                 // Draft-07 ignores additionalItems alongside single-schema items.
             }
             // Bare additionalItems without tuple items has no meaning; ignored.
@@ -342,14 +541,14 @@ final class SchemaCompiler {
                     throw new JqSchemaException(
                             "array-form \"items\" is draft-07; use \"prefixItems\"", location);
                 }
-                tail = compileAt(itemsRaw, location + "/items");
+                tail = compileChild(itemsRaw, location + "/items");
             }
             if (prefixRaw != null) {
                 if (!(prefixRaw instanceof JqArray tuple)) {
                     throw new JqSchemaException("\"prefixItems\" must be an array", location);
                 }
                 for (int i = 0; i < tuple.size(); i++) {
-                    prefix.add(compileAt(tuple.get(i), location + "/prefixItems/" + i));
+                    prefix.add(compileChild(tuple.get(i), location + "/prefixItems/" + i));
                 }
             }
             if (hasAdditionalItems) {

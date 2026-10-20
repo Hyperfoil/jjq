@@ -34,12 +34,15 @@ final class SchemaNode {
     private final StringPlan stringPlan;
     private final ObjectPlan objectPlan;
     private final ArrayPlan arrayPlan;
+    /** Referenced schema (single-element slot: indirection only for recursion). */
+    private final SchemaNode[] refTarget;
     private final String schemaLocation;
 
     private SchemaNode(boolean alwaysFalse, int typeMask, List<JqValue> enumValues,
             JqValue constValue, boolean hasConst,
             NumberPlan numberPlan, StringPlan stringPlan,
-            ObjectPlan objectPlan, ArrayPlan arrayPlan, String schemaLocation) {
+            ObjectPlan objectPlan, ArrayPlan arrayPlan,
+            SchemaNode[] refTarget, String schemaLocation) {
         this.alwaysFalse = alwaysFalse;
         this.typeMask = typeMask;
         this.enumValues = enumValues;
@@ -49,11 +52,13 @@ final class SchemaNode {
         this.stringPlan = stringPlan;
         this.objectPlan = objectPlan;
         this.arrayPlan = arrayPlan;
+        this.refTarget = refTarget;
         this.schemaLocation = schemaLocation;
     }
 
     static SchemaNode alwaysTrue() {
-        return new SchemaNode(false, TYPE_ALL, null, null, false, null, null, null, null, "");
+        return new SchemaNode(false, TYPE_ALL, null, null, false,
+                null, null, null, null, null, "");
     }
 
     static SchemaNode alwaysFalse() {
@@ -61,16 +66,22 @@ final class SchemaNode {
     }
 
     static SchemaNode alwaysFalse(String schemaLocation) {
-        return new SchemaNode(true, TYPE_ALL, null, null, false, null, null, null, null,
-                schemaLocation);
+        return new SchemaNode(true, TYPE_ALL, null, null, false,
+                null, null, null, null, null, schemaLocation);
     }
 
     static SchemaNode of(int typeMask, List<JqValue> enumValues,
             JqValue constValue, boolean hasConst,
             NumberPlan numberPlan, StringPlan stringPlan,
-            ObjectPlan objectPlan, ArrayPlan arrayPlan, String schemaLocation) {
+            ObjectPlan objectPlan, ArrayPlan arrayPlan,
+            SchemaNode[] refSlot, String schemaLocation) {
         return new SchemaNode(false, typeMask, enumValues, constValue, hasConst,
-                numberPlan, stringPlan, objectPlan, arrayPlan, schemaLocation);
+                numberPlan, stringPlan, objectPlan, arrayPlan, refSlot, schemaLocation);
+    }
+
+    static SchemaNode ref(SchemaNode[] slot, String schemaLocation) {
+        return new SchemaNode(false, TYPE_ALL, null, null, false,
+                null, null, null, null, slot, schemaLocation);
     }
 
     boolean isValid(JqValue instance) {
@@ -90,8 +101,11 @@ final class SchemaNode {
                 && !objectPlan.isValid(object)) {
             return false;
         }
-        return !(instance instanceof JqArray array && arrayPlan != null
-                && !arrayPlan.isValid(array));
+        if (instance instanceof JqArray array && arrayPlan != null
+                && !arrayPlan.isValid(array)) {
+            return false;
+        }
+        return refTarget == null || refTarget[0].isValid(instance);
     }
 
     void validateInto(JqValue instance, String instanceLocation, List<JqValue> errors) {
@@ -125,6 +139,9 @@ final class SchemaNode {
         }
         if (instance instanceof JqArray array && arrayPlan != null) {
             arrayPlan.validateInto(array, instanceLocation, schemaLocation, errors);
+        }
+        if (refTarget != null) {
+            refTarget[0].validateInto(instance, instanceLocation, errors);
         }
     }
 
