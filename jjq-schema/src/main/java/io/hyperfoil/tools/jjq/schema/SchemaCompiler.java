@@ -97,6 +97,13 @@ final class SchemaCompiler {
             JqNumber maxContains = null;
             boolean unique = false;
             SchemaNode[] refSlot = null;
+            List<SchemaNode> allOf = null;
+            List<SchemaNode> anyOf = null;
+            List<SchemaNode> oneOf = null;
+            SchemaNode notNode = null;
+            SchemaNode ifNode = null;
+            JqValue thenRaw = null;
+            JqValue elseRaw = null;
             for (String key : obj.keys()) {
                 switch (key) {
                     case "$schema" -> {}
@@ -223,6 +230,13 @@ final class SchemaCompiler {
                         }
                         unique = b.booleanValue();
                     }
+                    case "allOf" -> allOf = parseBranches(obj.get(key), "allOf", location);
+                    case "anyOf" -> anyOf = parseBranches(obj.get(key), "anyOf", location);
+                    case "oneOf" -> oneOf = parseBranches(obj.get(key), "oneOf", location);
+                    case "not" -> notNode = compileAt(obj.get(key), location + "/not");
+                    case "if" -> ifNode = compileAt(obj.get(key), location + "/if");
+                    case "then" -> thenRaw = obj.get(key);
+                    case "else" -> elseRaw = obj.get(key);
                     case "$ref" -> {
                         // Draft-07 returned early above; here siblings apply too.
                         JqValue ref = obj.get(key);
@@ -253,8 +267,14 @@ final class SchemaCompiler {
             ArrayPlan arrayPlan = buildArrayPlan(itemsRaw, prefixRaw, additionalItemsRaw,
                     hasAdditionalItems, minItems, maxItems,
                     containsNode, minContains, maxContains, unique, location);
+            // then/else without if are entirely ignored (never even compiled).
+            SchemaNode thenNode = ifNode != null && thenRaw != null
+                    ? compileAt(thenRaw, location + "/then") : null;
+            SchemaNode elseNode = ifNode != null && elseRaw != null
+                    ? compileAt(elseRaw, location + "/else") : null;
             return SchemaNode.of(typeMask, enumValues, constValue, hasConst,
-                    numberPlan, stringPlan, objectPlan, arrayPlan, refSlot, location);
+                    numberPlan, stringPlan, objectPlan, arrayPlan, refSlot,
+                    allOf, anyOf, oneOf, notNode, ifNode, thenNode, elseNode, location);
         }
         throw new JqSchemaException(
                 "schema must be an object or boolean, was " + schema.type().jqName(), location);
@@ -478,6 +498,18 @@ final class SchemaCompiler {
             }
         }
         return new String(bytes, 0, count, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private List<SchemaNode> parseBranches(JqValue value, String keyword, String location) {
+        if (!(value instanceof JqArray arr) || arr.size() == 0) {
+            throw new JqSchemaException(
+                    "\"" + keyword + "\" must be a non-empty array", location);
+        }
+        List<SchemaNode> branches = new ArrayList<>(arr.size());
+        for (int i = 0; i < arr.size(); i++) {
+            branches.add(compileAt(arr.get(i), location + "/" + keyword + "/" + i));
+        }
+        return List.copyOf(branches);
     }
 
     private List<String> parseRequired(JqValue value, String location) {

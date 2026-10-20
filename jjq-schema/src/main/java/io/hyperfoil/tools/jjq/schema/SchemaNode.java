@@ -36,13 +36,23 @@ final class SchemaNode {
     private final ArrayPlan arrayPlan;
     /** Referenced schema (single-element slot: indirection only for recursion). */
     private final SchemaNode[] refTarget;
+    private final List<SchemaNode> allOf;
+    private final List<SchemaNode> anyOf;
+    private final List<SchemaNode> oneOf;
+    private final SchemaNode notNode;
+    private final SchemaNode ifNode;
+    private final SchemaNode thenNode;
+    private final SchemaNode elseNode;
     private final String schemaLocation;
 
     private SchemaNode(boolean alwaysFalse, int typeMask, List<JqValue> enumValues,
             JqValue constValue, boolean hasConst,
             NumberPlan numberPlan, StringPlan stringPlan,
             ObjectPlan objectPlan, ArrayPlan arrayPlan,
-            SchemaNode[] refTarget, String schemaLocation) {
+            SchemaNode[] refTarget,
+            List<SchemaNode> allOf, List<SchemaNode> anyOf, List<SchemaNode> oneOf,
+            SchemaNode notNode, SchemaNode ifNode, SchemaNode thenNode, SchemaNode elseNode,
+            String schemaLocation) {
         this.alwaysFalse = alwaysFalse;
         this.typeMask = typeMask;
         this.enumValues = enumValues;
@@ -53,12 +63,19 @@ final class SchemaNode {
         this.objectPlan = objectPlan;
         this.arrayPlan = arrayPlan;
         this.refTarget = refTarget;
+        this.allOf = allOf;
+        this.anyOf = anyOf;
+        this.oneOf = oneOf;
+        this.notNode = notNode;
+        this.ifNode = ifNode;
+        this.thenNode = thenNode;
+        this.elseNode = elseNode;
         this.schemaLocation = schemaLocation;
     }
 
     static SchemaNode alwaysTrue() {
         return new SchemaNode(false, TYPE_ALL, null, null, false,
-                null, null, null, null, null, "");
+                null, null, null, null, null, null, null, null, null, null, null, null, "");
     }
 
     static SchemaNode alwaysFalse() {
@@ -67,21 +84,27 @@ final class SchemaNode {
 
     static SchemaNode alwaysFalse(String schemaLocation) {
         return new SchemaNode(true, TYPE_ALL, null, null, false,
-                null, null, null, null, null, schemaLocation);
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                schemaLocation);
     }
 
     static SchemaNode of(int typeMask, List<JqValue> enumValues,
             JqValue constValue, boolean hasConst,
             NumberPlan numberPlan, StringPlan stringPlan,
             ObjectPlan objectPlan, ArrayPlan arrayPlan,
-            SchemaNode[] refSlot, String schemaLocation) {
+            SchemaNode[] refSlot,
+            List<SchemaNode> allOf, List<SchemaNode> anyOf, List<SchemaNode> oneOf,
+            SchemaNode notNode, SchemaNode ifNode, SchemaNode thenNode, SchemaNode elseNode,
+            String schemaLocation) {
         return new SchemaNode(false, typeMask, enumValues, constValue, hasConst,
-                numberPlan, stringPlan, objectPlan, arrayPlan, refSlot, schemaLocation);
+                numberPlan, stringPlan, objectPlan, arrayPlan, refSlot,
+                allOf, anyOf, oneOf, notNode, ifNode, thenNode, elseNode, schemaLocation);
     }
 
     static SchemaNode ref(SchemaNode[] slot, String schemaLocation) {
         return new SchemaNode(false, TYPE_ALL, null, null, false,
-                null, null, null, null, slot, schemaLocation);
+                null, null, null, null, slot, null, null, null, null, null, null, null,
+                schemaLocation);
     }
 
     boolean isValid(JqValue instance) {
@@ -105,7 +128,35 @@ final class SchemaNode {
                 && !arrayPlan.isValid(array)) {
             return false;
         }
-        return refTarget == null || refTarget[0].isValid(instance);
+        if (refTarget != null && !refTarget[0].isValid(instance)) return false;
+        if (allOf != null) {
+            for (SchemaNode branch : allOf) {
+                if (!branch.isValid(instance)) return false;
+            }
+        }
+        if (anyOf != null) {
+            boolean hit = false;
+            for (SchemaNode branch : anyOf) {
+                if (branch.isValid(instance)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) return false;
+        }
+        if (oneOf != null) {
+            int matches = 0;
+            for (SchemaNode branch : oneOf) {
+                if (branch.isValid(instance) && ++matches > 1) return false;
+            }
+            if (matches == 0) return false;
+        }
+        if (notNode != null && notNode.isValid(instance)) return false;
+        if (ifNode != null) {
+            SchemaNode selected = ifNode.isValid(instance) ? thenNode : elseNode;
+            if (selected != null && !selected.isValid(instance)) return false;
+        }
+        return true;
     }
 
     void validateInto(JqValue instance, String instanceLocation, List<JqValue> errors) {
@@ -142,6 +193,43 @@ final class SchemaNode {
         }
         if (refTarget != null) {
             refTarget[0].validateInto(instance, instanceLocation, errors);
+        }
+        // Failing branches explain themselves; combinators that fail without
+        // failing branches (multi-match oneOf, not) get a summary instead.
+        // Probe (if) errors never leak into either outcome.
+        if (allOf != null) {
+            for (SchemaNode branch : allOf) {
+                branch.validateInto(instance, instanceLocation, errors);
+            }
+        }
+        if (anyOf != null) {
+            for (SchemaNode branch : anyOf) {
+                branch.validateInto(instance, instanceLocation, errors);
+            }
+        }
+        if (oneOf != null) {
+            int matches = 0;
+            for (SchemaNode branch : oneOf) {
+                if (branch.isValid(instance)) matches++;
+            }
+            if (matches == 0) {
+                for (SchemaNode branch : oneOf) {
+                    branch.validateInto(instance, instanceLocation, errors);
+                }
+            } else if (matches > 1) {
+                errors.add(Failures.failure(instanceLocation, schemaLocation, "oneOf",
+                        "instance validates against more than one branch"));
+            }
+        }
+        if (notNode != null && notNode.isValid(instance)) {
+            errors.add(Failures.failure(instanceLocation, schemaLocation, "not",
+                    "instance validates against the excluded schema"));
+        }
+        if (ifNode != null) {
+            SchemaNode selected = ifNode.isValid(instance) ? thenNode : elseNode;
+            if (selected != null) {
+                selected.validateInto(instance, instanceLocation, errors);
+            }
         }
     }
 

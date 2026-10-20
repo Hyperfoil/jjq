@@ -470,6 +470,80 @@ class JqSchemaTest {
                 "{\"properties\":{\"a\":{\"$id\":\"https://example.com/x\",\"type\":\"string\"}}}")));
     }
 
+    // ---- Applicators (issue #167) ----
+
+    @Test
+    void allOfNeedsEveryBranch() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"allOf\":[{\"type\":\"string\"},{\"minLength\":2}]}"));
+        assertTrue(schema.isValid(JqString.of("ab")));
+        assertFalse(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+    }
+
+    @Test
+    void anyOfNeedsOneBranch() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"integer\"}]}"));
+        assertTrue(schema.isValid(JqString.of("a")));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertFalse(schema.isValid(JqBoolean.TRUE));
+    }
+
+    @Test
+    void oneOfNeedsExactlyOne() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"string\",\"minLength\":5}]}"));
+        assertTrue(schema.isValid(JqString.of("abc")));
+        assertFalse(schema.isValid(JqString.of("abcdef")));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+        JqArray errors = schema.validate(JqString.of("abcdef"));
+        assertFalse(errors.size() == 0);
+        assertEquals("oneOf", ((JqObject) errors.get(0)).getField("keyword").stringValue());
+    }
+
+    @Test
+    void notInverts() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"not\":{\"type\":\"string\"}}"));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertFalse(schema.isValid(JqString.of("a")));
+        JqArray errors = schema.validate(JqString.of("a"));
+        assertEquals("not", ((JqObject) errors.get(0)).getField("keyword").stringValue());
+    }
+
+    @Test
+    void ifThenElseSelectsBranch() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"if\":{\"type\":\"string\"},\"then\":{\"minLength\":2},"
+                + "\"else\":{\"type\":\"integer\"}}"));
+        assertTrue(schema.isValid(JqString.of("ab")));
+        assertFalse(schema.isValid(JqString.of("a")));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertFalse(schema.isValid(JqBoolean.TRUE));
+    }
+
+    @Test
+    void thenElseIgnoredWithoutIf() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"then\":{\"type\":\"string\"}}"));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertTrue(JqSchema.compile(schemaOf("{\"then\":42,\"else\":43}}")).isValid(JqNull.NULL));
+    }
+
+    @Test
+    void emptyBranchesRejected() {
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"allOf\":[]}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"anyOf\":[]}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"oneOf\":[]}")));
+    }
+
+    @Test
+    void nonProgressRefThroughApplicatorFailsCompilation() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"allOf\":[{\"$ref\":\"#\"}]}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf(
+                "{\"$defs\":{\"x\":{\"not\":{\"$ref\":\"#/$defs/x\"}}},\"$ref\":\"#/$defs/x\"}")));
+    }
+
     @Test
     void nonSchemaInputFailsCompilation() {        assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNumber.of(1)));
         assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNull.NULL));
