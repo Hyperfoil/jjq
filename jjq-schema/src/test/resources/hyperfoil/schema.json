@@ -1,0 +1,605 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "$id": "http://hyperfoil.io/schema.json",
+  "description": "Hyperfoil benchmark configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [ "name", "http" ],
+  "properties": {
+    "$schema": {
+      "description": "This should point to either http://hyperfoil.io/schema.json or local file",
+      "type": "string"
+    },
+    "name": {
+      "description": "Name of the benchmark.",
+      "type": "string"
+    },
+    "agents": {
+      "description": "Agent nodes that should drive the load.",
+      "oneOf": [
+        {
+          "type": "object",
+          "patternProperties": {
+            ".*" : {
+              "$ref": "#/definitions/agent"
+            }
+          }
+        },
+        {
+          "type": "array",
+          "additionalItems": false,
+          "items": {
+            "type": "object",
+            "minProperties" : 1,
+            "maxProperties" : 1,
+            "patternProperties": {
+              ".*" : {
+                "$ref": "#/definitions/agent"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "threads": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ergonomics": {
+      "$ref": "#/definitions/ergonomics"
+    },
+    "http": {
+      "oneOf": [
+        {
+          "type": "array",
+          "additionalItems": false,
+          "items": {
+            "$ref": "#/definitions/http"
+          }
+        },
+        {
+          "$ref": "#/definitions/http"
+        }
+      ]
+    },
+    "phases": {
+      "description": "Benchmark execution phases.",
+      "type": "array",
+      "additionalItems": false,
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1,
+        "additionalProperties": {
+          "type" : "object",
+          "additionalProperties": false,
+          "properties": {
+            "always": {
+              "description": "Run fixed number of concurrent users.",
+              "allOf": [
+                { "$ref": "#/definitions/phase" },
+                {
+                  "required": [ "users" ],
+                  "properties": {
+                    "users": {
+                      "description": "Number of started users",
+                      "$ref": "#/definitions/incrementableInteger"
+                    }
+                  }
+                }
+              ]
+            },
+            "atOnce": {
+              "description": "Start fixed number of concurrent users.",
+              "allOf": [
+                { "$ref": "#/definitions/phase" },
+                {
+                  "required": [ "users" ],
+                  "properties": {
+                    "users": {
+                      "description": "Number of started users",
+                      "$ref": "#/definitions/incrementableInteger"
+                    }
+                  }
+                }
+              ]
+            },
+            "constantRate": {
+              "description": "Add new users to the system at constant rate.",
+              "allOf": [
+                { "$ref": "#/definitions/phase" },
+                {
+                  "required": [ "usersPerSec" ],
+                  "properties": {
+                    "usersPerSec": {
+                      "description": "Rate for new users",
+                      "$ref": "#/definitions/incrementableNumber"
+                    },
+                    "maxSessions": {
+                      "description": "Maximum number of users (active sessions) executing this phase concurrently.",
+                      "$ref": "#/definitions/positiveInteger"
+                    },
+                    "variance": {
+                      "description": "Add new users randomly following Poisson process (true, default) or evenly (false).",
+                      "type": "boolean"
+                    }
+                  }
+                }
+              ]
+            },
+            "decreasingRate": {
+              "description": "Decreases new users arrival rate over its duration.",
+              "$ref": "#/definitions/rampRatePhase"
+            },
+            "increasingRate": {
+              "description": "Increases new users arrival rate over its duration.",
+              "$ref": "#/definitions/rampRatePhase"
+            },
+            "noop": {
+              "description": "Does not execute anything. Useful for orchestrating phases or adding pauses.",
+              "$ref": "#/definitions/phase"
+            }
+          }
+        }
+      }
+    },
+    "staircase": {
+      "desription": "Shortcut for alternating increasingRate and constantRate phases",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialRampUpDuration": {
+          "description": "Duration of the first ramp-up.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "steadyStateDuration": {
+          "description": "Duration of each steady-state iteration.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "rampUpDuration": {
+          "description": "Duration of each ramp-up iteration between steady-states.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "initialUsersPerSec": {
+          "description": "Number of users per second after initial ramp-up.",
+          "$ref": "#/definitions/positiveNumber"
+        },
+        "incrementUsersPerSec": {
+          "description": "Number of users added in each iteration.",
+          "$ref": "#/definitions/positiveNumber"
+        },
+        "maxIterations": {
+          "description": "Maximum number of steady-state phases.",
+          "$ref": "#/definitions/positiveInteger"
+        },
+        "maxSessions": {
+          "description": "Maximum number of users (active sessions) executing concurrently.",
+          "$ref": "#/definitions/positiveInteger"
+        }
+      }
+    },
+    "usersPerSec": {
+      "description": "Single-phase shortcut: Rate for new users",
+      "$ref": "#/definitions/incrementableNumber"
+    },
+    "maxSessions": {
+      "description": "Single-phase shortcut: Maximum number of users (active sessions) executing this phase concurrently.",
+      "$ref": "#/definitions/positiveInteger"
+    },
+    "duration" : {
+      "description": "Single-phase shortcut: Time relative to phase start for the phase to be finished.",
+      "$ref": "#/definitions/timeMillis"
+    },
+    "maxDuration" : {
+      "description": "Single-phase shortcut: Hard limit, relative to phase start, after which the phase will be terminated.",
+      "$ref": "#/definitions/timeMillis"
+    },
+    "scenario": {
+      "description": "Single-phase shortcut: the scenario",
+      "$ref" : "#/definitions/scenario"
+    }
+  },
+  "definitions": {
+    "agent": {
+      "oneOf": [
+        {
+          "type": [ "string", "number", "boolean" ]
+        },
+        {
+          "type": "object",
+          "patternProperties": {
+            ".*": {
+              "type": [ "string", "number", "boolean" ]
+            }
+          }
+        }
+      ]
+    },
+    "ergonomics": {
+      "description": "Adjust scenario to implement common functionality out-of-the-box.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repeatCookies": {
+          "description": "Store cookies in session and resend them on future requests. Default is true.",
+          "type": "boolean"
+        },
+        "userAgentFromSession": {
+          "description": "Append session ID and client hostname as user agent",
+          "type": "boolean"
+        },
+        "autoRangeCheck": {
+          "description": "Inject status handler that marks the request as invalid on status 4xx or 5xx. Default is true.",
+          "type": "boolean"
+        },
+        "stopOnInvalid": {
+          "description": "Inject completion handler that will stop the session if the request has been marked as invalid. Default is true.",
+          "type": "boolean"
+        },
+        "followRedirect": {
+          "description": "Automatically fire requests when the server responds with redirection. Default is NEVER.",
+          "enum" : [ "NEVER", "LOCATION_ONLY", "HTML_ONLY", "ALWAYS" ]
+        },
+        "compensateInternalLatency": {
+          "description": "Use session's scheduled start time as request start timestamp in open model phases. Default is false.",
+          "type": "boolean"
+        }
+      }
+    },
+    "http": {
+      "description": "HTTP connection pool configuration.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "host" ],
+      "properties": {
+        "protocol": {
+          "enum": [ "http", "https" ]
+        },
+        "host": {
+          "description": "Target hostname. For simplicity this can include scheme and port, too.",
+          "type": "string"
+        },
+        "port": {
+          "description": "Target TCP port",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "addresses": {
+          "description": "List of IP addresses that should be used. The connections will be randomly created to addresses in this list, or using `host` if it's empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "additionalItems": false
+        },
+        "allowHttp1x": {
+          "description": "Allow using HTTP 1.0 and HTTP 1.1 connections. Default is true.",
+          "type": "boolean"
+        },
+        "allowHttp2": {
+          "description": "Allow using HTTP 2.0 connections. Default is true.",
+          "type": "boolean"
+        },
+        "connectionStrategy": {
+          "description": "Connection pooling model. Default is SHARED_POOL.",
+          "enum": [ "SHARED_POOL", "SESSION_POOLS", "OPEN_ON_REQUEST", "ALWAYS_NEW" ]
+        },
+        "directHttp2": {
+          "description": "Start HTTP 2.0 connections without HTTP 1.x -> 2.0 upgrade. Default is false.",
+          "type": "boolean"
+        },
+        "keyManager": {
+          "description": "TLS key manager for setting up client certificates.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "storeType" : { "type": "string" },
+            "storeFile" : { "type" : "string" },
+            "password" : { "type" : "string" },
+            "alias" : { "type" : "string" },
+            "certFile" : { "type" : "string" },
+            "keyFile" : { "type" : "string" }
+          }
+        },
+        "maxHttp2Streams": {
+          "description": "Maximum number of concurrent HTTP 2.0 streams on single TCP connection. Default is 100.",
+          "$ref": "#/definitions/positiveInteger"
+        },
+        "sharedConnections":  {
+          "description": "Maximum number of connections to the server, shared between all phases and sessions. Default is 1.",
+          "oneOf": [
+            { "$ref": "#/definitions/positiveInteger" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [ "core", "max", "buffer" ],
+              "properties": {
+                "core" : { "$ref": "#/definitions/positiveInteger" },
+                "max" : { "$ref": "#/definitions/positiveInteger" },
+                "buffer" : { "$ref": "#/definitions/positiveInteger" },
+                "keepAliveTime" : { "type" : "integer" }
+              }
+            }
+          ]
+        },
+        "pipeliningLimit": {
+          "description": "Maximum number of HTTP 1.1 requests pipelined on a connection. Default is 1.",
+          "$ref": "#/definitions/positiveInteger"
+        },
+        "requestTimeout" : {
+          "description": "Default timeout for all HTTP requests. Default is 30 seconds.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "sslHandshakeTimeout" : {
+          "description": "SSL handshake timeout. Default is 10 seconds.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "rawBytesHandlers": {
+          "description": "Add handlers to support parsing raw HTTP responses. Default is true.",
+          "type": "boolean"
+        },
+        "trustManager": {
+          "description": "TLS trust manager for setting up server certificates.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "storeType" : { "type": "string" },
+            "storeFile" : { "type" : "string" },
+            "password" : { "type" : "string" },
+            "certFile" : { "type" : "string" }
+          }
+        },
+        "useHttpCache": {
+          "description": "Make use of HTTP cache on client-side. If multiple authorities are involved, disable the HTTP cache for all of them to achieve the desired outcomes. The default is true except for wrk/wrk2 wrappers where it is set to false.\n",
+          "type": "boolean"
+        }
+      }
+    },
+    "incrementableInteger": {
+      "oneOf": [
+        { "$ref": "#/definitions/positiveInteger" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [ "base", "increment" ],
+          "properties": {
+            "base" : { "$ref": "#/definitions/positiveInteger" },
+            "increment" : { "type" : "integer" }
+          }
+        }
+      ]
+    },
+    "incrementableNumber": {
+      "oneOf": [
+        { "$ref": "#/definitions/positiveNumber" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [ "base", "increment" ],
+          "properties": {
+            "base" : { "$ref": "#/definitions/positiveNumber" },
+            "increment" : { "type" : "number" }
+          }
+        }
+      ]
+    },
+    "positiveInteger" : {
+      "type" : "integer",
+      "minimum": 1
+    },
+    "positiveNumber" : {
+      "type" : "number",
+      "exclusiveMinimum": 0
+    },
+    "phase": {
+      "type": "object",
+      "oneOf": [
+        { "required": [ "scenario" ] },
+        { "required": [ "forks" ] }
+      ],
+      "properties": {
+        "startTime" : {
+          "description": "Scheduled time (relative to benchmark start) for the phase to start. Default is immediatelly.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "startAfter": {
+          "description": "Phases that must be finished for this phase to start.",
+          "$ref": "#/definitions/phaseReferenceList"
+        },
+        "startAfterStrict": {
+          "description": "Phases that must be terminated for this phase to start.",
+          "$ref": "#/definitions/phaseReferenceList"
+        },
+        "duration" : {
+          "description": "Time relative to phase start for the phase to be finished.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "maxDuration" : {
+          "description": "Hard limit, relative to phase start, after which the phase will be terminated.",
+          "$ref": "#/definitions/timeMillis"
+        },
+        "maxIterations" : {
+          "description": "Maximum number of phase iterations. Default is 1.",
+          "$ref": "#/definitions/positiveInteger"
+        },
+        "scenario": { "$ref" : "#/definitions/scenario" },
+        "forks": {
+          "description": "Concurrent sub-phases sharing the limits and users arrivals.",
+          "oneOf": [
+            {
+              "type" : "array",
+              "minItems": 1,
+              "additionalItems": false,
+              "items": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": {
+                  "$ref": "#/definitions/fork"
+                }
+              }
+            }, {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/fork"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fork": {
+      "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "weight" : { "type": "number" },
+          "scenario" : { "$ref": "#/definitions/scenario" }
+        }
+    },
+    "phaseReferenceList": {
+      "oneOf": [
+        { "$ref": "#/definitions/phaseReference"},
+        {
+          "type": "array",
+          "additionalItems": false,
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/phaseReference"}
+        }
+      ]
+    },
+    "phaseReference" : {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "phase": { "type" : "string" },
+            "iteration" : {
+              "enum": [ "none", "previous", "same" ]
+            },
+            "fork": { "type": "string" }
+          },
+          "required": [ "phase" ]
+        }
+      ]
+    },
+    "rampRatePhase": {
+      "description": "Add new users to the system at varying rate.",
+      "allOf": [
+        { "$ref": "#/definitions/phase" },
+        {
+          "required": [ "initialUsersPerSec", "targetUsersPerSec" ],
+          "properties": {
+            "initialUsersPerSec": {
+              "description": "Rate for new users at the beginning of phase",
+              "$ref": "#/definitions/incrementableNumber"
+            },
+            "targetUsersPerSec": {
+              "description": "Rate for new users at the end of phase",
+              "$ref": "#/definitions/incrementableNumber"
+            },
+            "maxSessions": {
+              "description": "Maximum number of users (active sessions) executing this phase concurrently.",
+              "$ref": "#/definitions/positiveInteger"
+            },
+            "variance": {
+              "description": "Add new users randomly following Poisson process (true, default) or evenly (false).",
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "scenario": {
+      "oneOf": [
+        {
+          "description": "Actions that a single user will execute.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "initialSequences": {
+              "description": "Sequences scheduled for execution with a new session",
+              "type": "array",
+              "additionalItems": false,
+              "minLength": 1,
+              "items": {
+                "$ref": "#/definitions/sequence"
+              }
+            },
+            "sequences": {
+              "description": "Sequences that need to be explicitly triggered.",
+              "type": "array",
+              "additionalItems": false,
+              "minLength": 1,
+              "items": {
+                "$ref": "#/definitions/sequence"
+              }
+            },
+            "orderedSequences": {
+              "description": "Automatically chained sequences.",
+              "type": "array",
+              "additionalItems": false,
+              "minLength": 1,
+              "items": {
+                "$ref": "#/definitions/sequence"
+              }
+            }
+          }
+        }, {
+          "description": "Automatically chained sequences.",
+          "type": "array",
+          "additionalItems": false,
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/sequence"
+          }
+        }
+      ]
+    },
+    "sequence": {
+      "type": "object",
+      "patternProperties": {
+        ".*" : {
+          "type": "array",
+          "additionalItems": false,
+          "minLength": 1,
+          "items": { "$ref" : "#/definitions/step" }
+        }
+      }
+    },
+    "step": {
+      "oneOf": [
+        {
+          "type" : "object",
+          "additionalProperties": false,
+          "$comment": "Steps are inserted here through Generator",
+          "properties": {
+          }
+        },
+        {
+          "enum" : [ "" ]
+        }
+      ]
+    },
+    "timeMillis": {
+      "oneOf": [
+        { "type": "integer" },
+        {
+          "type" : "string",
+          "pattern": "[0-9]* *[smh]?"
+        }
+      ]
+    },
+    "timeNanos": {
+      "type": "string",
+      "pattern": "[0-9.] *(ms|us|ns|s|m|h)?"
+    }
+  }
+}
