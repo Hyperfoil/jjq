@@ -18,6 +18,16 @@ import java.util.List;
  */
 final class SchemaCompiler {
 
+    /**
+     * Recognized assertion keywords outside the subset: rejected rather
+     * than silently dropped. Anything else unknown is an annotation and
+     * ignored per spec (vendor extensions, typos in real schemas).
+     */
+    private static final java.util.Set<String> UNSUPPORTED = java.util.Set.of(
+            "propertyNames", "dependencies", "dependentRequired", "dependentSchemas",
+            "unevaluatedProperties", "unevaluatedItems",
+            "$anchor", "$dynamicRef", "$recursiveRef", "$recursiveAnchor", "$vocabulary");
+
     /** True while compiling a draft-07 document (tuple items, $ref siblings). */
     private boolean draft07;
     /** Document root, for local reference resolution. */
@@ -230,6 +240,9 @@ final class SchemaCompiler {
                         }
                         unique = b.booleanValue();
                     }
+                    case "format", "contentEncoding", "contentMediaType", "contentSchema" -> {
+                        // Annotations only; never assertions in this subset.
+                    }
                     case "allOf" -> allOf = parseBranches(obj.get(key), "allOf", location);
                     case "anyOf" -> anyOf = parseBranches(obj.get(key), "anyOf", location);
                     case "oneOf" -> oneOf = parseBranches(obj.get(key), "oneOf", location);
@@ -245,8 +258,15 @@ final class SchemaCompiler {
                         }
                         refSlot = compileRef(canonicalRef(s.stringValue(), location), location);
                     }
-                    default -> throw new JqSchemaException(
-                            "unsupported keyword '" + key + "'", location);
+                    default -> {
+                        if (UNSUPPORTED.contains(key)) {
+                            throw new JqSchemaException(
+                                    "unsupported keyword '" + key + "'", location);
+                        }
+                        // Unknown keywords are annotations: ignored per spec
+                        // (real schemas carry typos like `desription` and
+                        // vendor extensions; rejecting them breaks acceptance).
+                    }
                 }
             }
             NumberPlan numberPlan = hasLower || hasUpper || multipleOf != null

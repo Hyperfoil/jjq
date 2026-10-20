@@ -544,6 +544,67 @@ class JqSchemaTest {
                 "{\"$defs\":{\"x\":{\"not\":{\"$ref\":\"#/$defs/x\"}}},\"$ref\":\"#/$defs/x\"}")));
     }
 
+    // ---- Real-schema fixtures (issue #167) ----
+
+    private static JqValue fixture(String name) throws Exception {
+        try (var in = JqSchemaTest.class.getClassLoader().getResourceAsStream(name)) {
+            assertNotNull(in, "missing fixture " + name);
+            return JqValues.parse(new String(in.readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void unknownKeywordsAreAnnotations() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"x-foo\":1,\"desription\":\"typo\",\"format\":\"email\",\"type\":\"string\"}"));
+        assertTrue(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+    }
+
+    @Test
+    void recognizedUnsupportedKeywordsRejected() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"propertyNames\":{\"type\":\"string\"}}")));
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"dependentRequired\":{\"a\":[\"b\"]}}")));
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"unevaluatedProperties\":false}")));
+    }
+
+    @Test
+    void hyperfoilSchemasCompile() throws Exception {
+        JqSchema.compile(fixture("hyperfoil/schema.json"));
+        JqSchema.compile(fixture("hyperfoil/run-schema.json"));
+    }
+
+    @Test
+    void hyperfoilRunSchemaValidates() throws Exception {
+        JqSchema schema = JqSchema.compile(fixture("hyperfoil/run-schema.json"));
+        JqValue valid = JqValues.parse("{\"info\":{\"id\":\"ABCD\",\"benchmark\":\"b\","
+                + "\"startTime\":1,\"terminateTime\":2},\"total\":[],\"phase\":{}}");
+        assertTrue(schema.isValid(valid));
+        assertEquals(0, schema.validate(valid).size());
+        assertFalse(schema.isValid(JqValues.parse("{}")));
+        assertFalse(schema.isValid(JqValues.parse(
+                "{\"info\":{\"id\":\"ABCD\",\"benchmark\":\"b\",\"startTime\":1,"
+                + "\"terminateTime\":2},\"total\":[],\"phase\":{},\"zzz\":1}")));
+        assertFalse(schema.isValid(JqValues.parse(
+                "{\"info\":{\"id\":1,\"benchmark\":\"b\",\"startTime\":1,"
+                + "\"terminateTime\":2},\"total\":[],\"phase\":{}}")));
+    }
+
+    @Test
+    void hyperfoilSchemaValidates() throws Exception {
+        JqSchema schema = JqSchema.compile(fixture("hyperfoil/schema.json"));
+        JqValue valid = JqValues.parse("{\"name\":\"bench\",\"http\":[]}");
+        assertTrue(schema.isValid(valid));
+        assertEquals(0, schema.validate(valid).size());
+        assertFalse(schema.isValid(JqValues.parse("{}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"name\":\"b\",\"http\":[],\"zzz\":1}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"name\":1,\"http\":[]}")));
+    }
+
     @Test
     void nonSchemaInputFailsCompilation() {        assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNumber.of(1)));
         assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNull.NULL));
