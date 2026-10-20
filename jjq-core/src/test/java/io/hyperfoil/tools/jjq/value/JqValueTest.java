@@ -1782,8 +1782,46 @@ class JqValueTest {
     }
 
     @Test
-    void strictHugeObjectDuplicatesAcrossResizes() {
-        // 400 distinct keys force several table resizes past promotion;
+    void strictNestedWideObjectsIsolateTables() {
+        // A 40-key inner object nested under a 40-key outer key: the inner
+        // duplicate must report (depth separation — the inner table must
+        // not see outer keys), and KEEP_LAST renders both levels.
+        StringBuilder inner = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) inner.append(',');
+            inner.append("\"n").append(i).append("\":").append(i);
+        }
+        inner.append(",\"n5\":\"dup-inner\"}");
+        StringBuilder doc = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) doc.append(',');
+            doc.append("\"k").append(i).append("\":");
+            doc.append(i == 20 ? inner : String.valueOf(i));
+        }
+        doc.append('}');
+        StringBuilder expectedInner = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) expectedInner.append(',');
+            expectedInner.append("\"n").append(i).append("\":");
+            expectedInner.append(i == 5 ? "\"dup-inner\"" : String.valueOf(i));
+        }
+        expectedInner.append('}');
+        StringBuilder expected = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) expected.append(',');
+            expected.append("\"k").append(i).append("\":");
+            expected.append(i == 20 ? expectedInner : String.valueOf(i));
+        }
+        expected.append('}');
+        assertEquals(expected.toString(),
+                JqValues.parseStrict(doc.toString(), keepLast()).toJsonString());
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(doc.toString()));
+        assertTrue(e.getMessage().contains("\"n5\""), e.getMessage());
+    }
+
+    @Test
+    void strictHugeObjectDuplicatesAcrossResizes() {        // 400 distinct keys force several table resizes past promotion;
         // duplicates (raw, first, escaped) still honor KEEP_LAST order,
         // and REJECT still reports the first duplicate.
         StringBuilder doc = new StringBuilder("{");

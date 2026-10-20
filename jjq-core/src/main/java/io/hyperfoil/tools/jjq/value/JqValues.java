@@ -2057,6 +2057,12 @@ public final class JqValues {
         // retained waste per depth without assuming anything about object sizes.
         private static final int MAX_SCRATCH_SLACK = 1024;
         private Object[][] scratch;
+        // Per-depth duplicate-tracking tables, retained across sequential
+        // objects at the same depth (nested objects use deeper slots, so a
+        // table is never live for two objects at once). Filled on checkout,
+        // so an exception mid-object cannot poison the next user; dropped
+        // when the finished object leaves more slack than MAX_SCRATCH_SLACK.
+        private long[][] dupTables;
 
         JsonByteReader(byte[] data, int offset, int end) {
             this.data = data;
@@ -2120,6 +2126,37 @@ public final class JqValues {
                 table[2 * depth] = null;
                 table[2 * depth + 1] = null;
             }
+        }
+
+        /**
+         * Take the retained duplicate table for this depth, cleared and
+         * ready, or null when none was kept. Single-threaded parsing
+         * reaches one object per depth at a time, so taking it out cannot
+         * alias a live user; filling it here (not on release) keeps
+         * exception paths safe.
+         */
+        long[] checkoutDupTable(int depth) {
+            long[][] tables = dupTables;
+            if (tables == null || depth >= tables.length) return null;
+            long[] table = tables[depth];
+            tables[depth] = null;
+            if (table != null) java.util.Arrays.fill(table, 0);
+            return table;
+        }
+
+        /** Keep a finished table for the next object at this depth. */
+        void retainDupTable(int depth, long[] table, int count) {
+            if (table.length - count > MAX_SCRATCH_SLACK) return;
+            long[][] tables = dupTables;
+            if (tables == null) {
+                tables = new long[32][];
+                dupTables = tables;
+            }
+            if (depth >= tables.length) {
+                tables = java.util.Arrays.copyOf(tables, Math.max(2 * depth + 2, tables.length * 2));
+                dupTables = tables;
+            }
+            tables[depth] = table;
         }
 
         String[] findSharedKeys(String[] keys, int count) {
@@ -2478,16 +2515,18 @@ public final class JqValues {
                         }
                     }
                     if (!dup && count == DUP_LINEAR_MAX) {
-                        // Genuinely growing past the linear range: build the
-                        // flat table once with everything stored so far. A
-                        // dup at exactly MAX leaves count frozen, so count
-                        // can never exceed MAX with dupSlots == null after
-                        // this point.
-                        dupSlots = new long[128];
+                        // Genuinely growing past the linear range: take the
+                        // retained per-depth table when it fits, else a fresh
+                        // one. A dup at exactly MAX leaves count frozen, so
+                        // count can never exceed MAX with dupSlots == null
+                        // after this point.
+                        dupSlots = r.checkoutDupTable(depth);
+                        if (dupSlots == null) dupSlots = new long[128];
+                        int mask = dupSlots.length - 1;
                         for (int i = 0; i <= count; i++) {
                             int hash = JqObject.mix(keys[i].hashCode());
-                            int slot = hash & 127;
-                            while (dupSlots[slot] != 0) slot = (slot + 1) & 127;
+                            int slot = hash & mask;
+                            while (dupSlots[slot] != 0) slot = (slot + 1) & mask;
                             dupSlots[slot] = ((long) hash << 32) | (i + 1);
                         }
                         dupSize = count + 1;
@@ -2533,6 +2572,7 @@ public final class JqValues {
         boolean scratch = grew;
         if (scratch) values = java.util.Arrays.copyOf(values, count);
         if (scratch) r.releaseScratchIfWasteful(depth, keys.length, count);
+        if (dupSlots != null) r.retainDupTable(depth, dupSlots, count);
         // Reference equality is safe because all keys are interned.
         String[] sharedKeys = r.findSharedKeys(keys, count);
         if (sharedKeys != null) {
