@@ -226,6 +226,9 @@ public final class JqPatch {
      * container must exist. Iterative (document depth is unbounded).
      */
     private static Chain resolveChain(JqValue document, String pointer, int index) {
+        if (!pointer.startsWith("/")) {
+            throw new JqPatchException(index, "pointer must start with '/': '" + pointer + "'");
+        }
         List<JqValue> containers = new ArrayList<>();
         List<String> edges = new ArrayList<>();
         containers.add(document);
