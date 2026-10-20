@@ -55,13 +55,21 @@ final class JsonSemantics {
 
     /** Exact numeric equality: long fast path, decimal otherwise. */
     static boolean numbersEqual(JqNumber x, JqNumber y) {
+        return compareNumbers(x, y) == 0;
+    }
+
+    /**
+     * Exact numeric ordering: long fast path, doubles only for
+     * non-finite values, decimal comparison otherwise.
+     */
+    static int compareNumbers(JqNumber x, JqNumber y) {
         if (x.isLongBacked() && y.isLongBacked()) {
-            return x.longValue() == y.longValue();
+            return Long.compare(x.longValue(), y.longValue());
         }
         if (x.isNaN() || x.isInfinite() || y.isNaN() || y.isInfinite()) {
-            return Double.compare(x.doubleValue(), y.doubleValue()) == 0;
+            return Double.compare(x.doubleValue(), y.doubleValue());
         }
-        return x.decimalValue().compareTo(y.decimalValue()) == 0;
+        return x.decimalValue().compareTo(y.decimalValue());
     }
 
     /**

@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.schema;
 
 import io.hyperfoil.tools.jjq.value.JqArray;
 import io.hyperfoil.tools.jjq.value.JqBoolean;
+import io.hyperfoil.tools.jjq.value.JqNumber;
 import io.hyperfoil.tools.jjq.value.JqObject;
 import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
@@ -34,6 +35,17 @@ final class SchemaCompiler {
             List<JqValue> enumValues = null;
             JqValue constValue = null;
             boolean hasConst = false;
+            JqNumber lower = null;
+            boolean lowerExclusive = false;
+            boolean hasLower = false;
+            JqNumber upper = null;
+            boolean upperExclusive = false;
+            boolean hasUpper = false;
+            JqNumber multipleOf = null;
+            JqNumber minLength = null;
+            JqNumber maxLength = null;
+            java.util.regex.Pattern pattern = null;
+            String patternSource = null;
             for (String key : obj.keys()) {
                 switch (key) {
                     case "$schema", "$id" -> {}
@@ -45,11 +57,54 @@ final class SchemaCompiler {
                         constValue = deepCopy(obj.get(key));
                         hasConst = true;
                     }
+                    case "minimum" -> {
+                        lower = requireNumber(obj.get(key), "minimum", location);
+                        lowerExclusive = false;
+                        hasLower = true;
+                    }
+                    case "exclusiveMinimum" -> {
+                        lower = requireNumber(obj.get(key), "exclusiveMinimum", location);
+                        lowerExclusive = true;
+                        hasLower = true;
+                    }
+                    case "maximum" -> {
+                        upper = requireNumber(obj.get(key), "maximum", location);
+                        upperExclusive = false;
+                        hasUpper = true;
+                    }
+                    case "exclusiveMaximum" -> {
+                        upper = requireNumber(obj.get(key), "exclusiveMaximum", location);
+                        upperExclusive = true;
+                        hasUpper = true;
+                    }
+                    case "multipleOf" -> multipleOf = parseMultipleOf(obj.get(key), location);
+                    case "minLength" -> minLength = parseLength(obj.get(key), "minLength", location);
+                    case "maxLength" -> maxLength = parseLength(obj.get(key), "maxLength", location);
+                    case "pattern" -> {
+                        if (!(obj.get(key) instanceof JqString s)) {
+                            throw new JqSchemaException("\"pattern\" must be a string", location);
+                        }
+                        patternSource = s.stringValue();
+                        try {
+                            pattern = java.util.regex.Pattern.compile(patternSource);
+                        } catch (java.util.regex.PatternSyntaxException e) {
+                            throw new JqSchemaException(
+                                    "invalid \"pattern\" regex: " + e.getMessage(), location);
+                        }
+                    }
                     default -> throw new JqSchemaException(
                             "unsupported keyword '" + key + "'", location);
                 }
             }
-            return SchemaNode.of(typeMask, enumValues, constValue, hasConst, location);
+            NumberPlan numberPlan = hasLower || hasUpper || multipleOf != null
+                    ? new NumberPlan(lower, lowerExclusive, hasLower,
+                            upper, upperExclusive, hasUpper, multipleOf)
+                    : null;
+            StringPlan stringPlan = minLength != null || maxLength != null || pattern != null
+                    ? new StringPlan(minLength, maxLength, pattern, patternSource)
+                    : null;
+            return SchemaNode.of(typeMask, enumValues, constValue, hasConst,
+                    numberPlan, stringPlan, location);
         }
         throw new JqSchemaException(
                 "schema must be an object or boolean, was " + schema.type().jqName(), location);
@@ -113,6 +168,31 @@ final class SchemaCompiler {
         List<JqValue> snapshot = new ArrayList<>(arr.size());
         for (int i = 0; i < arr.size(); i++) snapshot.add(deepCopy(arr.get(i)));
         return List.copyOf(snapshot);
+    }
+
+    private JqNumber requireNumber(JqValue value, String keyword, String location) {
+        if (!(value instanceof JqNumber number)) {
+            throw new JqSchemaException("\"" + keyword + "\" must be a number", location);
+        }
+        return number;
+    }
+
+    private JqNumber parseMultipleOf(JqValue value, String location) {
+        JqNumber divisor = requireNumber(value, "multipleOf", location);
+        if (JsonSemantics.compareNumbers(divisor, JqNumber.of(0)) <= 0) {
+            throw new JqSchemaException("\"multipleOf\" must be strictly greater than 0", location);
+        }
+        return divisor;
+    }
+
+    private JqNumber parseLength(JqValue value, String keyword, String location) {
+        JqNumber bound = requireNumber(value, keyword, location);
+        if (!bound.isIntegral()
+                || JsonSemantics.compareNumbers(bound, JqNumber.of(0)) < 0) {
+            throw new JqSchemaException(
+                    "\"" + keyword + "\" must be a non-negative integer", location);
+        }
+        return bound;
     }
 
     static JqValue deepCopy(JqValue value) {

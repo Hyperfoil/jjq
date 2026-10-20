@@ -158,6 +158,80 @@ class JqSchemaTest {
                 JsonSemantics.schemaHash(JqValues.parse("100000000000000000000")));
     }
 
+    // ---- Numbers and strings (issue #167) ----
+
+    @Test
+    void numericBoundsInclusive() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"minimum\":1,\"maximum\":10}"));
+        assertTrue(schema.isValid(JqNumber.of(1)));
+        assertTrue(schema.isValid(JqNumber.of(10)));
+        assertFalse(schema.isValid(JqNumber.of(0)));
+        assertFalse(schema.isValid(JqNumber.of(11)));
+    }
+
+    @Test
+    void numericBoundsExclusive() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"exclusiveMinimum\":1,\"exclusiveMaximum\":10}"));
+        assertFalse(schema.isValid(JqNumber.of(1)));
+        assertFalse(schema.isValid(JqNumber.of(10)));
+        assertTrue(schema.isValid(JqValues.parse("1.5")));
+    }
+
+    @Test
+    void numericBoundsExactBeyondLong() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"minimum\":18446744073709551615}"));
+        assertTrue(schema.isValid(JqValues.parse("18446744073709551615")));
+        assertTrue(schema.isValid(JqValues.parse("18446744073709551616")));
+        assertFalse(schema.isValid(JqValues.parse("18446744073709551614")));
+    }
+
+    @Test
+    void multipleOfExact() {
+        JqSchema intSchema = JqSchema.compile(schemaOf("{\"multipleOf\":3}"));
+        assertTrue(intSchema.isValid(JqNumber.of(9)));
+        assertFalse(intSchema.isValid(JqNumber.of(10)));
+        JqSchema decSchema = JqSchema.compile(schemaOf("{\"multipleOf\":0.5}"));
+        assertTrue(decSchema.isValid(JqNumber.of(2)));
+        assertFalse(decSchema.isValid(JqValues.parse("2.1")));
+    }
+
+    @Test
+    void multipleOfRejectsBadOperands() {
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"multipleOf\":0}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"multipleOf\":-2}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"multipleOf\":\"3\"}")));
+    }
+
+    @Test
+    void stringLengthCountsCodePoints() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"minLength\":2,\"maxLength\":2}"));
+        assertTrue(schema.isValid(JqString.of("ab")));
+        assertTrue(schema.isValid(JqString.of("a\ud83d\ude00")));
+        assertFalse(schema.isValid(JqString.of("a")));
+        assertFalse(schema.isValid(JqString.of("abc")));
+    }
+
+    @Test
+    void patternIsUnanchoredSearch() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"pattern\":\"es\"}"));
+        assertTrue(schema.isValid(JqString.of("expression")));
+        assertFalse(schema.isValid(JqString.of("xyz")));
+    }
+
+    @Test
+    void patternRejectsBadOperands() {
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"pattern\":1}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"pattern\":\"([\"}")));
+    }
+
+    @Test
+    void typedKeywordsIgnoreOtherTypes() {
+        assertTrue(JqSchema.compile(schemaOf("{\"minimum\":5}")).isValid(JqString.of("hi")));
+        assertTrue(JqSchema.compile(schemaOf("{\"minLength\":5}")).isValid(JqNumber.of(42)));
+        assertTrue(JqSchema.compile(schemaOf("{\"multipleOf\":3}")).isValid(JqBoolean.TRUE));
+        assertTrue(JqSchema.compile(schemaOf("{\"pattern\":\"x\"}")).isValid(JqNull.NULL));
+    }
+
     @Test
     void nonSchemaInputFailsCompilation() {        assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNumber.of(1)));
         assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNull.NULL));

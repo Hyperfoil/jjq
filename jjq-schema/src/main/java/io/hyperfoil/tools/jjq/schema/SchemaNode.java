@@ -30,54 +30,76 @@ final class SchemaNode {
     private final List<JqValue> enumValues;
     private final JqValue constValue;
     private final boolean hasConst;
+    private final NumberPlan numberPlan;
+    private final StringPlan stringPlan;
     private final String schemaLocation;
 
     private SchemaNode(boolean alwaysFalse, int typeMask, List<JqValue> enumValues,
-            JqValue constValue, boolean hasConst, String schemaLocation) {
+            JqValue constValue, boolean hasConst,
+            NumberPlan numberPlan, StringPlan stringPlan, String schemaLocation) {
         this.alwaysFalse = alwaysFalse;
         this.typeMask = typeMask;
         this.enumValues = enumValues;
         this.constValue = constValue;
         this.hasConst = hasConst;
+        this.numberPlan = numberPlan;
+        this.stringPlan = stringPlan;
         this.schemaLocation = schemaLocation;
     }
 
     static SchemaNode alwaysTrue() {
-        return new SchemaNode(false, TYPE_ALL, null, null, false, "");
+        return new SchemaNode(false, TYPE_ALL, null, null, false, null, null, "");
     }
 
     static SchemaNode alwaysFalse() {
-        return new SchemaNode(true, TYPE_ALL, null, null, false, "");
+        return new SchemaNode(true, TYPE_ALL, null, null, false, null, null, "");
     }
 
     static SchemaNode of(int typeMask, List<JqValue> enumValues,
-            JqValue constValue, boolean hasConst, String schemaLocation) {
-        return new SchemaNode(false, typeMask, enumValues, constValue, hasConst, schemaLocation);
+            JqValue constValue, boolean hasConst,
+            NumberPlan numberPlan, StringPlan stringPlan, String schemaLocation) {
+        return new SchemaNode(false, typeMask, enumValues, constValue, hasConst,
+                numberPlan, stringPlan, schemaLocation);
     }
 
     boolean isValid(JqValue instance) {
         if (alwaysFalse) return false;
         if (!matchesType(instance)) return false;
         if (enumValues != null && !matchesEnum(instance)) return false;
-        return !hasConst || JsonSemantics.schemaEquals(instance, constValue);
+        if (hasConst && !JsonSemantics.schemaEquals(instance, constValue)) return false;
+        if (instance instanceof JqNumber number && numberPlan != null
+                && !numberPlan.isValid(number)) {
+            return false;
+        }
+        return !(instance instanceof JqString string && stringPlan != null
+                && !stringPlan.isValid(string));
     }
 
     void validateInto(JqValue instance, String instanceLocation, List<JqValue> errors) {
         if (alwaysFalse) {
-            errors.add(failure(instanceLocation, "false", "boolean schema 'false' never validates"));
+            errors.add(Failures.failure(instanceLocation, "", "false",
+                    "boolean schema 'false' never validates"));
             return;
         }
         // Every applicable keyword reports independently (no early return):
         // an instance failing `type` still gets its `enum`/`const` verdicts.
         if (!matchesType(instance)) {
-            errors.add(failure(instanceLocation, "type",
+            errors.add(Failures.failure(instanceLocation, schemaLocation, "type",
                     "expected " + expectedNames() + " but was " + instance.type().jqName()));
         }
         if (enumValues != null && !matchesEnum(instance)) {
-            errors.add(failure(instanceLocation, "enum", "value is not one of the allowed enum values"));
+            errors.add(Failures.failure(instanceLocation, schemaLocation, "enum",
+                    "value is not one of the allowed enum values"));
         }
         if (hasConst && !JsonSemantics.schemaEquals(instance, constValue)) {
-            errors.add(failure(instanceLocation, "const", "value does not equal const"));
+            errors.add(Failures.failure(instanceLocation, schemaLocation, "const",
+                    "value does not equal const"));
+        }
+        if (instance instanceof JqNumber number && numberPlan != null) {
+            numberPlan.validateInto(number, instanceLocation, schemaLocation, errors);
+        }
+        if (instance instanceof JqString string && stringPlan != null) {
+            stringPlan.validateInto(string, instanceLocation, schemaLocation, errors);
         }
     }
 
@@ -118,14 +140,5 @@ final class SchemaNode {
         if ((typeMask & bit) == 0) return;
         if (!names.isEmpty()) names.append(", ");
         names.append(name);
-    }
-
-    private JqValue failure(String instanceLocation, String keyword, String message) {
-        return JqObject.builder(4)
-                .putUnchecked("instanceLocation", JqString.of(instanceLocation))
-                .putUnchecked("keywordLocation", JqString.of(schemaLocation + "/" + keyword))
-                .putUnchecked("keyword", JqString.of(keyword))
-                .putUnchecked("message", JqString.of(message))
-                .build();
     }
 }
