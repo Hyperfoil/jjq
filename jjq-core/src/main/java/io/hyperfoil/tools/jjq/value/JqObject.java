@@ -715,7 +715,7 @@ public final class JqObject implements JqValue {
      * Same function as in {@link JqValues} intern table.
      * @see <a href="https://lemire.me/blog/2015/10/22/faster-hashing-without-effort/">Lemire: Faster hashing without effort</a>
      */
-    private static int mix(int h) {
+    static int mix(int h) {
         h *= 0x9E3779B1;
         return h ^ (h >>> 16);
     }

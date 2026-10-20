@@ -1782,8 +1782,35 @@ class JqValueTest {
     }
 
     @Test
-    void strictDuplicatesPastPromotionStayOrdered() {
-        // 40 distinct keys force HashSet promotion; duplicates past the
+    void strictHugeObjectDuplicatesAcrossResizes() {
+        // 400 distinct keys force several table resizes past promotion;
+        // duplicates (raw, first, escaped) still honor KEEP_LAST order,
+        // and REJECT still reports the first duplicate.
+        StringBuilder doc = new StringBuilder("{");
+        for (int i = 0; i < 400; i++) {
+            if (i > 0) doc.append(',');
+            doc.append("\"k").append(i).append("\":").append(i);
+        }
+        doc.append(",\"k350\":\"dup-late\",\"k0\":\"dup-first\",\"\\u006b399\":\"dup-escaped\"}");
+        StringBuilder expected = new StringBuilder("{");
+        for (int i = 0; i < 400; i++) {
+            if (i > 0) expected.append(',');
+            expected.append("\"k").append(i).append("\":");
+            if (i == 0) expected.append("\"dup-first\"");
+            else if (i == 350) expected.append("\"dup-late\"");
+            else if (i == 399) expected.append("\"dup-escaped\"");
+            else expected.append(i);
+        }
+        expected.append('}');
+        assertEquals(expected.toString(),
+                JqValues.parseStrict(doc.toString(), keepLast()).toJsonString());
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(doc.toString()));
+        assertTrue(e.getMessage().contains("\"k350\""), e.getMessage());
+    }
+
+    @Test
+    void strictDuplicatesPastPromotionStayOrdered() {        // 40 distinct keys force HashSet promotion; duplicates past the
         // promotion point (raw, boundary, and escaped) still honor KEEP_LAST
         // first-seen order, and REJECT still reports the first duplicate.
         StringBuilder doc = new StringBuilder("{");

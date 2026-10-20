@@ -2384,6 +2384,22 @@ public final class JqValues {
     // skip the early doubling resizes.
     private static final int DUP_LINEAR_MAX = 32;
 
+    /**
+     * Double a duplicate-tracking table, rehashing stored key indices.
+     * Only the long array allocates; entries are positions, never nodes.
+     */
+    private static long[] dupGrow(long[] slots, String[] keys, int count) {
+        long[] grown = new long[slots.length * 2];
+        int mask = grown.length - 1;
+        for (int i = 0; i <= count; i++) {
+            int hash = JqObject.mix(keys[i].hashCode());
+            int slot = hash & mask;
+            while (grown[slot] != 0) slot = (slot + 1) & mask;
+            grown[slot] = ((long) hash << 32) | (i + 1);
+        }
+        return grown;
+    }
+
     private static JqObject parseObjectBytes(JsonByteReader r, int depth) {
         if (depth > r.maxDepth) throw new IllegalArgumentException("Exceeds depth limit for parsing");
         r.pos++;
@@ -2400,10 +2416,20 @@ public final class JqValues {
         // wide sibling overwrites.
         boolean grew = false;
         // Strict duplicate tracking: linear scan while the object stays
-        // small (no set, no per-key nodes), promoted to a HashSet once past
-        // DUP_LINEAR_MAX. Lenient parsing skips detection entirely, so it
-        // pays one predictable branch per key and nothing else.
-        java.util.Set<String> seen = null;
+        // small (no set, no per-key nodes), promoted to a flat
+        // open-addressed table once past DUP_LINEAR_MAX. Slots pack the
+        // mixed hash in the high 32 bits and the 1-based key index in
+        // the low 32 (0 = empty), so probes reject on one int compare
+        // and only run equals on hash matches. The mix must avalanche:
+        // sequential keys hash sequentially, and open addressing merges
+        // sequential homes into long runs (HashMap chains tolerate them,
+        // linear probing does not) — hence the shared multiplicative
+        // mixer, not a bare shift-xor. Indices (not references) are
+        // stored, so buffer growth cannot invalidate the table. Lenient
+        // parsing skips detection entirely, so it pays one predictable
+        // branch per key and nothing else.
+        long[] dupSlots = null;
+        int dupSize = 0;
         while (true) {
             r.skipWs();
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') {
@@ -2421,8 +2447,27 @@ public final class JqValues {
             boolean dup = false;
             if (r.strict) {
                 String key = keys[count];
-                if (seen != null) {
-                    dup = !seen.add(key);
+                if (dupSlots != null) {
+                    int hash = JqObject.mix(key.hashCode());
+                    int mask = dupSlots.length - 1;
+                    int slot = hash & mask;
+                    while (true) {
+                        long entry = dupSlots[slot];
+                        if (entry == 0) {
+                            dupSlots[slot] = ((long) hash << 32) | (count + 1);
+                            if (++dupSize * 4 >= dupSlots.length * 3) {
+                                dupSlots = dupGrow(dupSlots, keys, count);
+                            }
+                            break;
+                        }
+                        int idx = (int) entry - 1;
+                        if ((int) (entry >>> 32) == hash
+                                && (keys[idx] == key || keys[idx].equals(key))) {
+                            dup = true;
+                            break;
+                        }
+                        slot = (slot + 1) & mask;
+                    }
                 } else if (count <= DUP_LINEAR_MAX) {
                     // Escaped keys may not be interned, so == needs the
                     // equals fallback (same rule as the KEEP_LAST scan below).
@@ -2434,12 +2479,18 @@ public final class JqValues {
                     }
                     if (!dup && count == DUP_LINEAR_MAX) {
                         // Genuinely growing past the linear range: build the
-                        // set once with everything stored so far, presized to
-                        // skip the early doubling resizes. A dup at exactly
-                        // MAX leaves count frozen, so count can never exceed
-                        // MAX with seen == null after this point.
-                        seen = new java.util.HashSet<>(count * 2 + 1);
-                        for (int i = 0; i <= count; i++) seen.add(keys[i]);
+                        // flat table once with everything stored so far. A
+                        // dup at exactly MAX leaves count frozen, so count
+                        // can never exceed MAX with dupSlots == null after
+                        // this point.
+                        dupSlots = new long[128];
+                        for (int i = 0; i <= count; i++) {
+                            int hash = JqObject.mix(keys[i].hashCode());
+                            int slot = hash & 127;
+                            while (dupSlots[slot] != 0) slot = (slot + 1) & 127;
+                            dupSlots[slot] = ((long) hash << 32) | (i + 1);
+                        }
+                        dupSize = count + 1;
                     }
                 }
             }
