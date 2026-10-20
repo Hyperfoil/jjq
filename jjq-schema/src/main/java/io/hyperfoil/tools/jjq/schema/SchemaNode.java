@@ -32,11 +32,14 @@ final class SchemaNode {
     private final boolean hasConst;
     private final NumberPlan numberPlan;
     private final StringPlan stringPlan;
+    private final ObjectPlan objectPlan;
+    private final ArrayPlan arrayPlan;
     private final String schemaLocation;
 
     private SchemaNode(boolean alwaysFalse, int typeMask, List<JqValue> enumValues,
             JqValue constValue, boolean hasConst,
-            NumberPlan numberPlan, StringPlan stringPlan, String schemaLocation) {
+            NumberPlan numberPlan, StringPlan stringPlan,
+            ObjectPlan objectPlan, ArrayPlan arrayPlan, String schemaLocation) {
         this.alwaysFalse = alwaysFalse;
         this.typeMask = typeMask;
         this.enumValues = enumValues;
@@ -44,22 +47,30 @@ final class SchemaNode {
         this.hasConst = hasConst;
         this.numberPlan = numberPlan;
         this.stringPlan = stringPlan;
+        this.objectPlan = objectPlan;
+        this.arrayPlan = arrayPlan;
         this.schemaLocation = schemaLocation;
     }
 
     static SchemaNode alwaysTrue() {
-        return new SchemaNode(false, TYPE_ALL, null, null, false, null, null, "");
+        return new SchemaNode(false, TYPE_ALL, null, null, false, null, null, null, null, "");
     }
 
     static SchemaNode alwaysFalse() {
-        return new SchemaNode(true, TYPE_ALL, null, null, false, null, null, "");
+        return alwaysFalse("");
+    }
+
+    static SchemaNode alwaysFalse(String schemaLocation) {
+        return new SchemaNode(true, TYPE_ALL, null, null, false, null, null, null, null,
+                schemaLocation);
     }
 
     static SchemaNode of(int typeMask, List<JqValue> enumValues,
             JqValue constValue, boolean hasConst,
-            NumberPlan numberPlan, StringPlan stringPlan, String schemaLocation) {
+            NumberPlan numberPlan, StringPlan stringPlan,
+            ObjectPlan objectPlan, ArrayPlan arrayPlan, String schemaLocation) {
         return new SchemaNode(false, typeMask, enumValues, constValue, hasConst,
-                numberPlan, stringPlan, schemaLocation);
+                numberPlan, stringPlan, objectPlan, arrayPlan, schemaLocation);
     }
 
     boolean isValid(JqValue instance) {
@@ -71,8 +82,16 @@ final class SchemaNode {
                 && !numberPlan.isValid(number)) {
             return false;
         }
-        return !(instance instanceof JqString string && stringPlan != null
-                && !stringPlan.isValid(string));
+        if (instance instanceof JqString string && stringPlan != null
+                && !stringPlan.isValid(string)) {
+            return false;
+        }
+        if (instance instanceof JqObject object && objectPlan != null
+                && !objectPlan.isValid(object)) {
+            return false;
+        }
+        return !(instance instanceof JqArray array && arrayPlan != null
+                && !arrayPlan.isValid(array));
     }
 
     void validateInto(JqValue instance, String instanceLocation, List<JqValue> errors) {
@@ -100,6 +119,12 @@ final class SchemaNode {
         }
         if (instance instanceof JqString string && stringPlan != null) {
             stringPlan.validateInto(string, instanceLocation, schemaLocation, errors);
+        }
+        if (instance instanceof JqObject object && objectPlan != null) {
+            objectPlan.validateInto(object, instanceLocation, schemaLocation, errors);
+        }
+        if (instance instanceof JqArray array && arrayPlan != null) {
+            arrayPlan.validateInto(array, instanceLocation, schemaLocation, errors);
         }
     }
 

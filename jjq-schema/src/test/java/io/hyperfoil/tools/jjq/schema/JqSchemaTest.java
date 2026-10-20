@@ -232,6 +232,156 @@ class JqSchemaTest {
         assertTrue(JqSchema.compile(schemaOf("{\"pattern\":\"x\"}")).isValid(JqNull.NULL));
     }
 
+    // ---- Objects and arrays (issue #167) ----
+
+    @Test
+    void propertiesValidatePresentOnly() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"properties\":{\"a\":{\"type\":\"string\"}}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"a\":\"x\"}")));
+        assertTrue(schema.isValid(JqValues.parse("{}")));
+        assertTrue(schema.isValid(JqValues.parse("{\"b\":1}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"a\":1}")));
+    }
+
+    @Test
+    void requiredNeedsPresenceNotNull() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"required\":[\"a\"]}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"a\":null}")));
+        assertFalse(schema.isValid(JqValues.parse("{}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"b\":1}")));
+        JqArray errors = schema.validate(JqValues.parse("{}"));
+        assertEquals("required", ((JqObject) errors.get(0)).getField("keyword").stringValue());
+    }
+
+    @Test
+    void requiredRejectsBadOperands() {
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"required\":\"a\"}")));
+        assertThrows(JqSchemaException.class, () -> JqSchema.compile(schemaOf("{\"required\":[1]}")));
+    }
+
+    @Test
+    void additionalPropertiesBoolean() {
+        JqSchema schema = JqSchema.compile(
+                schemaOf("{\"properties\":{\"a\":{}},\"additionalProperties\":false}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"a\":1}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"a\":1,\"b\":2}")));
+    }
+
+    @Test
+    void additionalPropertiesSchema() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"properties\":{\"a\":{}},\"additionalProperties\":{\"type\":\"string\"}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"a\":1,\"b\":\"x\"}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"b\":1}")));
+    }
+
+    @Test
+    void patternPropertiesApplyAlongsideNamed() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"properties\":{\"x-a\":{\"type\":\"string\"}},"
+                + "\"patternProperties\":{\"^x-\":{\"minLength\":5}}}"));
+        assertTrue(schema.isValid(JqValues.parse("{\"x-a\":\"abcde\"}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"x-a\":1}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"x-a\":\"ab\"}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"x-b\":\"ab\"}")));
+        assertTrue(schema.isValid(JqValues.parse("{\"x-b\":1}")));
+    }
+
+    @Test
+    void propertyCounts() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"minProperties\":1,\"maxProperties\":2}"));
+        assertFalse(schema.isValid(JqValues.parse("{}")));
+        assertTrue(schema.isValid(JqValues.parse("{\"a\":1}")));
+        assertFalse(schema.isValid(JqValues.parse("{\"a\":1,\"b\":2,\"c\":3}")));
+    }
+
+    @Test
+    void mapBackedInstancesValidate() {
+        java.util.Map<String, JqValue> backing = new java.util.LinkedHashMap<>();
+        backing.put("a", JqString.of("x"));
+        backing.put("b", JqNumber.of(1));
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"properties\":{\"a\":{\"type\":\"string\"}},\"required\":[\"b\"]}"));
+        assertTrue(schema.isValid(JqObject.ofTrusted(backing)));
+        backing.put("a", JqNumber.of(9));
+        assertFalse(schema.isValid(JqObject.ofTrusted(backing)));
+    }
+
+    @Test
+    void itemsAppliesToAllElements() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"items\":{\"type\":\"integer\"}}"));
+        assertTrue(schema.isValid(JqValues.parse("[1,2]")));
+        assertTrue(schema.isValid(JqValues.parse("[]")));
+        assertFalse(schema.isValid(JqValues.parse("[1,\"a\"]")));
+        JqArray errors = schema.validate(JqValues.parse("[1,\"a\"]"));
+        assertEquals("/1", ((JqObject) errors.get(0)).getField("instanceLocation").stringValue());
+    }
+
+    @Test
+    void prefixItemsAllowsTail() {
+        JqSchema schema = JqSchema.compile(
+                schemaOf("{\"prefixItems\":[{\"type\":\"string\"},{\"type\":\"integer\"}]}"));
+        assertTrue(schema.isValid(JqValues.parse("[\"a\",1,\"extra\"]")));
+        assertTrue(schema.isValid(JqValues.parse("[\"a\"]")));
+        assertFalse(schema.isValid(JqValues.parse("[1,\"a\"]")));
+    }
+
+    @Test
+    void draft07TupleWithAdditionalItems() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$schema\":\"http://json-schema.org/draft-07/schema\","
+                + "\"items\":[{\"type\":\"string\"}],\"additionalItems\":false}"));
+        assertTrue(schema.isValid(JqValues.parse("[\"a\"]")));
+        assertFalse(schema.isValid(JqValues.parse("[\"a\",\"b\"]")));
+    }
+
+    @Test
+    void draft07TupleTailSchema() {
+        JqSchema schema = JqSchema.compile(schemaOf(
+                "{\"$schema\":\"http://json-schema.org/draft-07/schema\","
+                + "\"items\":[{\"type\":\"string\"}],\"additionalItems\":{\"type\":\"integer\"}}"));
+        assertTrue(schema.isValid(JqValues.parse("[\"a\",1]")));
+        assertFalse(schema.isValid(JqValues.parse("[\"a\",\"b\"]")));
+    }
+
+    @Test
+    void tupleItemsRejectedIn202012() {
+        assertThrows(JqSchemaException.class,
+                () -> JqSchema.compile(schemaOf("{\"items\":[{\"type\":\"string\"}]}")));
+    }
+
+    @Test
+    void arrayCounts() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"minItems\":1,\"maxItems\":2}"));
+        assertFalse(schema.isValid(JqValues.parse("[]")));
+        assertTrue(schema.isValid(JqValues.parse("[1,2]")));
+        assertFalse(schema.isValid(JqValues.parse("[1,2,3]")));
+    }
+
+    @Test
+    void containsCountsMatches() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"contains\":{\"type\":\"string\"}}"));
+        assertTrue(schema.isValid(JqValues.parse("[1,\"a\"]")));
+        assertFalse(schema.isValid(JqValues.parse("[1,2]")));
+        JqSchema atLeastTwo = JqSchema.compile(
+                schemaOf("{\"contains\":{\"type\":\"string\"},\"minContains\":2}"));
+        assertFalse(atLeastTwo.isValid(JqValues.parse("[1,\"a\"]")));
+        assertTrue(atLeastTwo.isValid(JqValues.parse("[\"a\",\"b\",1]")));
+        JqSchema atMostOne = JqSchema.compile(
+                schemaOf("{\"contains\":{\"type\":\"string\"},\"maxContains\":1}"));
+        assertFalse(atMostOne.isValid(JqValues.parse("[\"a\",\"b\"]")));
+    }
+
+    @Test
+    void uniqueItemsStructural() {
+        JqSchema schema = JqSchema.compile(schemaOf("{\"uniqueItems\":true}"));
+        assertTrue(schema.isValid(JqValues.parse("[1,2]")));
+        assertFalse(schema.isValid(JqValues.parse("[1,1]")));
+        assertFalse(schema.isValid(JqValues.parse("[1,1.0]")));
+        assertFalse(schema.isValid(
+                JqValues.parse("[{\"b\":1,\"a\":2},{\"a\":2,\"b\":1}]")));
+    }
+
     @Test
     void nonSchemaInputFailsCompilation() {        assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNumber.of(1)));
         assertThrows(JqSchemaException.class, () -> JqSchema.compile(JqNull.NULL));

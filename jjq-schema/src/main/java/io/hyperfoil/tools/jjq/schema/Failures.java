@@ -9,6 +9,11 @@ final class Failures {
 
     private Failures() {}
 
+    /** Escape a token for JSON Pointer locations ({@code ~} first, then {@code /}). */
+    static String escapePointer(String token) {
+        return token.replace("~", "~0").replace("/", "~1");
+    }
+
     static JqValue failure(String instanceLocation, String schemaLocation,
             String keyword, String message) {
         return JqObject.builder(4)
