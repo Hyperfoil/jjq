@@ -454,6 +454,97 @@ class JqYamlTest {
         assertEquals("a\tb", reparsed.getField("tab").stringValue());
     }
 
+    // ---- Emitter options (issue #164) ----
+
+    @Test
+    void emitIndentWidthFour() {
+        JqValue v = JqObject.builder(1)
+                .putUnchecked("server", JqObject.builder(2)
+                        .putUnchecked("host", JqString.of("localhost"))
+                        .putUnchecked("ports", JqArray.of(JqNumber.of(8080), JqNumber.of(8081)))
+                        .build())
+                .build();
+        String yaml = JqYaml.toYaml(v, new YamlEmitOptions(4,
+                YamlEmitOptions.Style.BLOCK, YamlEmitOptions.Style.BLOCK));
+        assertEquals("server:\n    host: localhost\n    ports:\n        - 8080\n        - 8081\n", yaml);
+        JqValue back = JqYaml.parse(yaml);
+        assertEquals("localhost", back.getField("server").getField("host").stringValue());
+        assertEquals(8081L, back.getField("server").getField("ports").getElement(1).longValue());
+    }
+
+    @Test
+    void emitOptionsDefaultMatchesNoOptions() {
+        JqValue v = JqObject.builder(2)
+                .putUnchecked("a", JqString.of("x"))
+                .putUnchecked("ports", JqArray.of(JqNumber.of(1), JqNumber.of(2)))
+                .build();
+        assertEquals(JqYaml.toYaml(v), JqYaml.toYaml(v, YamlEmitOptions.DEFAULT));
+    }
+
+    @Test
+    void emitIndentWidthValidated() {
+        assertThrows(IllegalArgumentException.class, () -> new YamlEmitOptions(0,
+                YamlEmitOptions.Style.BLOCK, YamlEmitOptions.Style.BLOCK));
+        assertThrows(IllegalArgumentException.class, () -> new YamlEmitOptions(11,
+                YamlEmitOptions.Style.BLOCK, YamlEmitOptions.Style.BLOCK));
+    }
+
+    @Test
+    void emitFlowSequence() {
+        JqValue v = JqObject.builder(1)
+                .putUnchecked("ports", JqArray.of(JqNumber.of(8080), JqNumber.of(8081)))
+                .build();
+        String yaml = JqYaml.toYaml(v, new YamlEmitOptions(2,
+                YamlEmitOptions.Style.FLOW, YamlEmitOptions.Style.BLOCK));
+        assertEquals("ports: [8080, 8081]\n", yaml);
+        assertEquals("[8080,8081]",
+                JqYaml.parse(yaml).getField("ports").toJsonString());
+    }
+
+    @Test
+    void emitFlowMapping() {
+        JqValue v = JqObject.builder(1)
+                .putUnchecked("server", JqObject.builder(2)
+                        .putUnchecked("host", JqString.of("localhost"))
+                        .putUnchecked("port", JqNumber.of(8080))
+                        .build())
+                .build();
+        String yaml = JqYaml.toYaml(v, new YamlEmitOptions(2,
+                YamlEmitOptions.Style.BLOCK, YamlEmitOptions.Style.FLOW));
+        assertEquals("{server: {host: localhost, port: 8080}}\n", yaml);
+        assertEquals("localhost",
+                JqYaml.parse(yaml).getField("server").getField("host").stringValue());
+    }
+
+    @Test
+    void emitFlowQuotesStructuralScalars() {
+        // Commas, brackets and ': ' end plain scalars in flow context,
+        // so they must be quoted there (block output stays bare).
+        JqValue v = JqArray.of(JqString.of("a,b"), JqString.of("a: b"),
+                JqString.of("[x]"), JqString.of("plain"));
+        String flow = JqYaml.toYaml(v, new YamlEmitOptions(2,
+                YamlEmitOptions.Style.FLOW, YamlEmitOptions.Style.FLOW));
+        assertEquals("[\"a,b\", \"a: b\", \"[x]\", plain]\n", flow);
+        assertEquals(v.toJsonString(), JqYaml.parse(flow).toJsonString());
+        String block = JqYaml.toYaml(v, YamlEmitOptions.DEFAULT);
+        assertTrue(block.contains("- a,b\n"), "block stays bare: " + block);
+    }
+
+    @Test
+    void emitNestedFlowStyles() {
+        // A flow sequence nested in a block mapping, holding mappings
+        // that are forced into flow by the inline context.
+        JqValue v = JqObject.builder(1)
+                .putUnchecked("items", JqArray.of(
+                        JqObject.builder(1).putUnchecked("a", JqNumber.of(1)).build(),
+                        JqObject.builder(1).putUnchecked("b", JqNumber.of(2)).build()))
+                .build();
+        String yaml = JqYaml.toYaml(v, new YamlEmitOptions(2,
+                YamlEmitOptions.Style.FLOW, YamlEmitOptions.Style.BLOCK));
+        assertEquals("items: [{a: 1}, {b: 2}]\n", yaml);
+        assertEquals(v.toJsonString(), JqYaml.parse(yaml).toJsonString());
+    }
+
     @Test
     void toYamlMultilineStringsRoundTrip() {
         JqValue original = JqObject.builder(2)

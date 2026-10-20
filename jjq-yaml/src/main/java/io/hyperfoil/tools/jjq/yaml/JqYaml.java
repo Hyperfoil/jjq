@@ -248,7 +248,19 @@ public final class JqYaml {
      * @return the YAML string
      */
     public static String toYaml(JqValue value) {
-        return YamlEmitter.emit(value);
+        return toYaml(value, YamlEmitOptions.DEFAULT);
+    }
+
+    /**
+     * Serialize a JqValue to a YAML string with explicit emitter options.
+     *
+     * @param value   the JqValue to serialize
+     * @param options indent width and block/flow styles
+     *                  ({@link YamlEmitOptions#DEFAULT} matches {@link #toYaml(JqValue)})
+     * @return the YAML string
+     */
+    public static String toYaml(JqValue value, YamlEmitOptions options) {
+        return YamlEmitter.emit(value, options);
     }
 
     /**
@@ -259,8 +271,21 @@ public final class JqYaml {
      * @throws IOException if writing fails
      */
     public static void toYaml(JqValue value, OutputStream out) throws IOException {
+        toYaml(value, out, YamlEmitOptions.DEFAULT);
+    }
+
+    /**
+     * Serialize a JqValue to YAML with explicit emitter options,
+     * writing to the given OutputStream.
+     *
+     * @param value   the JqValue to serialize
+     * @param out     the OutputStream to write YAML to
+     * @param options indent width and block/flow styles
+     * @throws IOException if writing fails
+     */
+    public static void toYaml(JqValue value, OutputStream out, YamlEmitOptions options) throws IOException {
         OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
-        toYaml(value, writer);
+        toYaml(value, writer, options);
         writer.flush();
     }
 
@@ -271,8 +296,20 @@ public final class JqYaml {
      * @param writer the Writer to write YAML to
      */
     public static void toYaml(JqValue value, Writer writer) {
+        toYaml(value, writer, YamlEmitOptions.DEFAULT);
+    }
+
+    /**
+     * Serialize a JqValue to YAML with explicit emitter options,
+     * writing to the given Writer.
+     *
+     * @param value   the JqValue to serialize
+     * @param writer  the Writer to write YAML to
+     * @param options indent width and block/flow styles
+     */
+    public static void toYaml(JqValue value, Writer writer, YamlEmitOptions options) {
         try {
-            writer.write(YamlEmitter.emit(value));
+            writer.write(YamlEmitter.emit(value, options));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

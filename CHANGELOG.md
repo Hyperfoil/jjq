@@ -2,6 +2,15 @@
 
 ## [Unreleased] - 0.2.4
 
+- YAML emitter options (issue #164): new `YamlEmitOptions` (indent
+  width 1-10, block/flow style per sequences and mappings) with
+  `toYaml` overloads for values, streams, and writers. Defaults
+  reproduce the historical output byte-for-byte; flow scalars quote
+  `,[]{}` and flow-significant colons, and flow collections force
+  flow for everything nested inline with them.
+- YAML emitter quotes scalars holding control characters (#163):
+  C0 (except tab), DEL, and C1 force double-quoted output (`\xXX`,
+  `\uXXXX`) instead of raw bytes that strict parsers reject.
 - Absent/explicit-null collections bind null (issue #155, Jackson/JSON-B
   parity): `List`/`Set`/`Map` fields, absent keys, and top-level generic
   collections bind `null` instead of empty on the reflective and generated

@@ -11,36 +11,55 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Block-style YAML emitter for {@link JqValue} trees (no dependencies).
+ * YAML emitter for {@link JqValue} trees (no dependencies).
  *
  * <p>Scalars that would reparse as another type (or break structure) are
  * double-quoted; everything else emits bare. Multi-line strings use
  * {@code \n} escapes. Round-trip safety is structural: bare scalars are
  * accepted only when the parser itself would read them back as strings
  * ({@link YamlParser#parsesAsPlainString}).</p>
+ *
+ * <p>Output shape follows {@link YamlEmitOptions}: historical output is
+ * {@link YamlEmitOptions#DEFAULT} (2-space indent, block everywhere).
+ * Flow collections force flow for everything nested inline with them;
+ * flow scalars are quoted more aggressively (`,[]{}`, flow-significant
+ * colons) since those end plain scalars in flow context (issue #164).</p>
  */
 final class YamlEmitter {
 
-    private YamlEmitter() {}
+    private final int indentWidth;
+    private final boolean seqFlow;
+    private final boolean mapFlow;
+
+    private YamlEmitter(YamlEmitOptions options) {
+        this.indentWidth = options.indentWidth();
+        this.seqFlow = options.sequenceStyle() == YamlEmitOptions.Style.FLOW;
+        this.mapFlow = options.mappingStyle() == YamlEmitOptions.Style.FLOW;
+    }
 
     static String emit(JqValue value) {
+        return emit(value, YamlEmitOptions.DEFAULT);
+    }
+
+    static String emit(JqValue value, YamlEmitOptions options) {
         StringBuilder sb = new StringBuilder();
-        appendValue(sb, value, 0);
-        if (sb.length() == 0 || sb.charAt(sb.length() - 1) != '\n') {
-            sb.append('\n');
-        }
+        emit(value, sb, options);
         return sb.toString();
     }
 
     static void emit(JqValue value, StringBuilder sb) {
+        emit(value, sb, YamlEmitOptions.DEFAULT);
+    }
+
+    static void emit(JqValue value, StringBuilder sb, YamlEmitOptions options) {
         int start = sb.length();
-        appendValue(sb, value, 0);
+        new YamlEmitter(options).appendValue(sb, value, 0, false);
         if (sb.length() == start || sb.charAt(sb.length() - 1) != '\n') {
             sb.append('\n');
         }
     }
 
-    private static void appendValue(StringBuilder sb, JqValue value, int indent) {
+    private void appendValue(StringBuilder sb, JqValue value, int indent, boolean flow) {
         if (value.isNull()) {
             sb.append("null");
         } else if (value.isBoolean()) {
@@ -48,11 +67,23 @@ final class YamlEmitter {
         } else if (value.isNumber()) {
             appendNumber(sb, (JqNumber) value);
         } else if (value.isString()) {
-            appendScalar(sb, value.stringValue());
+            if (flow) {
+                appendFlowScalar(sb, value.stringValue());
+            } else {
+                appendScalar(sb, value.stringValue());
+            }
         } else if (value.isArray()) {
-            appendSequence(sb, (JqArray) value, indent);
+            if (flow || seqFlow) {
+                appendFlowSequence(sb, (JqArray) value);
+            } else {
+                appendSequence(sb, (JqArray) value, indent);
+            }
         } else if (value.isObject()) {
-            appendMapping(sb, (JqObject) value, indent);
+            if (flow || mapFlow) {
+                appendFlowMapping(sb, (JqObject) value);
+            } else {
+                appendMapping(sb, (JqObject) value, indent);
+            }
         } else {
             sb.append("null");
         }
@@ -71,7 +102,13 @@ final class YamlEmitter {
         }
     }
 
-    private static void appendMapping(StringBuilder sb, JqObject obj, int indent) {
+    /** A collection value on an opened block line: nested block goes deeper. */
+    private boolean isBlockCollection(JqValue value) {
+        return value.isArray() && ((JqArray) value).size() > 0 && !seqFlow
+                || value.isObject() && ((JqObject) value).size() > 0 && !mapFlow;
+    }
+
+    private void appendMapping(StringBuilder sb, JqObject obj, int indent) {
         if (obj.size() == 0) {
             sb.append("{}");
             return;
@@ -84,19 +121,18 @@ final class YamlEmitter {
             appendScalar(sb, key);
             sb.append(':');
             JqValue value = obj.getField(key);
-            if (value.isArray() && ((JqArray) value).size() > 0
-                    || value.isObject() && ((JqObject) value).size() > 0) {
+            if (isBlockCollection(value)) {
                 sb.append('\n');
-                appendValue(sb, value, indent + 2);
+                appendValue(sb, value, indent + indentWidth, false);
             } else {
                 sb.append(' ');
-                appendValue(sb, value, indent + 2);
+                appendValue(sb, value, indent + indentWidth, false);
                 sb.append('\n');
             }
         }
     }
 
-    private static void appendSequence(StringBuilder sb, JqArray arr, int indent) {
+    private void appendSequence(StringBuilder sb, JqArray arr, int indent) {
         if (arr.size() == 0) {
             sb.append("[]");
             return;
@@ -106,40 +142,62 @@ final class YamlEmitter {
             indent(sb, indent);
             sb.append("- ");
             JqValue item = arr.getElement(i);
-            if (item instanceof JqObject obj && obj.size() > 0) {
+            if (item instanceof JqObject obj && obj.size() > 0 && !mapFlow) {
                 // Compact `- key: value` first pair, rest deeper (matches the
                 // inline-mapping shape the parser reads back).
                 var keys = new ArrayList<>(obj.keys());
                 appendScalar(sb, keys.get(0));
                 sb.append(": ");
-                appendInlineOrNested(sb, obj.getField(keys.get(0)), indent + 2);
+                appendInlineOrNested(sb, obj.getField(keys.get(0)), indent + indentWidth);
                 sb.append('\n');
                 for (int k = 1; k < keys.size(); k++) {
-                    indent(sb, indent + 2);
+                    indent(sb, indent + indentWidth);
                     appendScalar(sb, keys.get(k));
                     sb.append(": ");
-                    appendInlineOrNested(sb, obj.getField(keys.get(k)), indent + 2);
+                    appendInlineOrNested(sb, obj.getField(keys.get(k)), indent + indentWidth);
                     sb.append('\n');
                 }
-            } else if (item instanceof JqArray sub && sub.size() > 0) {
+            } else if (isBlockCollection(item)) {
                 sb.append('\n');
-                appendValue(sb, item, indent + 2);
+                appendValue(sb, item, indent + indentWidth, false);
             } else {
-                // Scalars and empty containers stay inline (`- null`, `- {}`).
-                appendValue(sb, item, indent + 2);
+                // Scalars, empty containers and flow collections stay inline
+                // (`- null`, `- {}`, `- [a, b]`).
+                appendValue(sb, item, indent + indentWidth, false);
                 sb.append('\n');
             }
         }
     }
 
-    /** A nested value on an already-opened line: inline when scalar/empty. */
-    private static void appendInlineOrNested(StringBuilder sb, JqValue value, int indent) {
-        if (value.isArray() || value.isObject()) {
+    /** A nested value on an already-opened line: inline when scalar/empty/flow. */
+    private void appendInlineOrNested(StringBuilder sb, JqValue value, int indent) {
+        if (isBlockCollection(value)) {
             sb.append('\n');
-            appendValue(sb, value, indent);
+            appendValue(sb, value, indent, false);
         } else {
-            appendValue(sb, value, indent);
+            appendValue(sb, value, indent, false);
         }
+    }
+
+    private void appendFlowSequence(StringBuilder sb, JqArray arr) {
+        sb.append('[');
+        for (int i = 0; i < arr.size(); i++) {
+            if (i > 0) sb.append(", ");
+            appendValue(sb, arr.getElement(i), 0, true);
+        }
+        sb.append(']');
+    }
+
+    private void appendFlowMapping(StringBuilder sb, JqObject obj) {
+        sb.append('{');
+        List<String> keys = new ArrayList<>(obj.keys());
+        for (int k = 0; k < keys.size(); k++) {
+            if (k > 0) sb.append(", ");
+            appendFlowScalar(sb, keys.get(k));
+            sb.append(": ");
+            appendValue(sb, obj.getField(keys.get(k)), 0, true);
+        }
+        sb.append('}');
     }
 
     private static void indent(StringBuilder sb, int indent) {
@@ -151,6 +209,39 @@ final class YamlEmitter {
             sb.append(s);
             return;
         }
+        appendQuoted(sb, s);
+    }
+
+    /**
+     * Flow-context scalar: bare only when no `,[]{}` and no
+     * flow-significant colon (trailing, or followed by space/tab or a
+     * flow indicator) appear — all of those end a plain scalar in flow
+     * context. Everything else goes through double quotes.
+     */
+    private static void appendFlowScalar(StringBuilder sb, String s) {
+        if (isFlowPlain(s)) {
+            sb.append(s);
+            return;
+        }
+        appendQuoted(sb, s);
+    }
+
+    private static boolean isFlowPlain(String s) {
+        if (!YamlParser.parsesAsPlainString(s)) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') return false;
+            if (c == ':') {
+                if (i + 1 >= s.length()) return false;
+                char n = s.charAt(i + 1);
+                if (n == ' ' || n == '\t' || n == ',' || n == '['
+                        || n == ']' || n == '{' || n == '}') return false;
+            }
+        }
+        return true;
+    }
+
+    private static void appendQuoted(StringBuilder sb, String s) {
         sb.append('"');
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
