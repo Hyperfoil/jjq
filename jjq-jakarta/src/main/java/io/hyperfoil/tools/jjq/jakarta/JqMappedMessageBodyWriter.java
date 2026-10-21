@@ -83,7 +83,7 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
     public boolean isWriteable(Class<?> type, Type genericType,
                                 Annotation[] annotations, MediaType mediaType) {
         return CollectionSupport.isDirectlyMappable(type)
-                || CollectionSupport.bindsThroughMapper(genericType);
+                || CollectionSupport.bindsResponseThroughMapper(genericType);
     }
 
     @Override

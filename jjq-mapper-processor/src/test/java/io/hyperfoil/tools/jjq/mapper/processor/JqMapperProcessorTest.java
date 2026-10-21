@@ -1830,6 +1830,136 @@ class JqMapperProcessorTest {
         assertTrue(mapper.toJson(noLead).contains("\"lead\":null"));
     }
 
+    // ---- Boxed numerics bind explicit null as null (Jackson parity) ----
+
+    private static final String BOXED_POJO = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public class BoxedPojo {
+                private Long id;
+                private Integer level;
+                private Double ratio;
+                private Boolean active;
+                private String name;
+                private int count;
+                private boolean flag;
+                public Long getId() { return id; }
+                public void setId(Long id) { this.id = id; }
+                public Integer getLevel() { return level; }
+                public void setLevel(Integer level) { this.level = level; }
+                public Double getRatio() { return ratio; }
+                public void setRatio(Double ratio) { this.ratio = ratio; }
+                public Boolean getActive() { return active; }
+                public void setActive(Boolean active) { this.active = active; }
+                public String getName() { return name; }
+                public void setName(String name) { this.name = name; }
+                public int getCount() { return count; }
+                public void setCount(int count) { this.count = count; }
+                public boolean isFlag() { return flag; }
+                public void setFlag(boolean flag) { this.flag = flag; }
+            }
+            """;
+
+    private static final String BOXED_RECORD = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public record BoxedRecord(Long id, Integer level, Double ratio,
+                                      Boolean active, String name, int count, boolean flag) {}
+            """;
+
+    private static final String BOXED_PLAIN = """
+            package test;
+
+            public class BoxedPlain {
+                private Long id;
+                private Integer level;
+                private Double ratio;
+                private Boolean active;
+                private String name;
+                private int count;
+                private boolean flag;
+                public Long getId() { return id; }
+                public void setId(Long id) { this.id = id; }
+                public Integer getLevel() { return level; }
+                public void setLevel(Integer level) { this.level = level; }
+                public Double getRatio() { return ratio; }
+                public void setRatio(Double ratio) { this.ratio = ratio; }
+                public Boolean getActive() { return active; }
+                public void setActive(Boolean active) { this.active = active; }
+                public String getName() { return name; }
+                public void setName(String name) { this.name = name; }
+                public int getCount() { return count; }
+                public void setCount(int count) { this.count = count; }
+                public boolean isFlag() { return flag; }
+                public void setFlag(boolean flag) { this.flag = flag; }
+            }
+            """;
+
+    private URLClassLoader compileBoxed() throws Exception {
+        return compileSources(
+                new String[]{"test.BoxedPojo", "test.BoxedRecord", "test.BoxedPlain"},
+                new String[]{BOXED_POJO, BOXED_RECORD, BOXED_PLAIN});
+    }
+
+    @Test
+    void generatedPojo_boxedExplicitNullBindsNull() throws Exception {
+        URLClassLoader loader = compileBoxed();
+        Class<?> pojoClass = Class.forName("test.BoxedPojo", true, loader);
+        Class<?> recordClass = Class.forName("test.BoxedRecord", true, loader);
+        Class<?> plainClass = Class.forName("test.BoxedPlain", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        JqValue nulls = JqValues.parse(
+                "{\"id\":null,\"level\":null,\"ratio\":null,\"active\":null,\"name\":null}");
+        for (Class<?> type : new Class<?>[]{pojoClass, plainClass}) {
+            Object bound = mapper.fromJqValue(nulls, type);
+            assertNull(type.getMethod("getId").invoke(bound), type + " explicit null id");
+            assertNull(type.getMethod("getLevel").invoke(bound), type + " explicit null level");
+            assertNull(type.getMethod("getRatio").invoke(bound), type + " explicit null ratio");
+            assertNull(type.getMethod("getActive").invoke(bound), type + " explicit null active");
+            assertNull(type.getMethod("getName").invoke(bound), type + " explicit null name");
+        }
+        Object recordBound = mapper.fromJqValue(nulls, recordClass);
+        assertNull(recordClass.getMethod("id").invoke(recordBound), "record explicit null id");
+        assertNull(recordClass.getMethod("level").invoke(recordBound), "record explicit null level");
+        assertNull(recordClass.getMethod("ratio").invoke(recordBound), "record explicit null ratio");
+        assertNull(recordClass.getMethod("active").invoke(recordBound), "record explicit null active");
+        assertNull(recordClass.getMethod("name").invoke(recordBound), "record explicit null name");
+
+        // Absent boxed keys bind null on every path as well
+        JqValue empty = JqValues.parse("{}");
+        for (Class<?> type : new Class<?>[]{pojoClass, plainClass}) {
+            Object bound = mapper.fromJqValue(empty, type);
+            assertNull(type.getMethod("getId").invoke(bound), type + " absent id");
+            assertNull(type.getMethod("getLevel").invoke(bound), type + " absent level");
+        }
+        Object recordEmpty = mapper.fromJqValue(empty, recordClass);
+        assertNull(recordClass.getMethod("id").invoke(recordEmpty), "record absent id");
+        assertNull(recordClass.getMethod("level").invoke(recordEmpty), "record absent level");
+
+        // Primitives keep zero-defaults; real values still convert
+        Object pojo = mapper.fromJqValue(JqValues.parse(
+                "{\"id\":7,\"level\":3,\"ratio\":1.5,\"active\":true,\"name\":\"x\","
+                        + "\"count\":9,\"flag\":true}"), pojoClass);
+        assertEquals(7L, pojoClass.getMethod("getId").invoke(pojo));
+        assertEquals(3, pojoClass.getMethod("getLevel").invoke(pojo));
+        assertEquals(1.5, pojoClass.getMethod("getRatio").invoke(pojo));
+        assertEquals(Boolean.TRUE, pojoClass.getMethod("getActive").invoke(pojo));
+        assertEquals(9, pojoClass.getMethod("getCount").invoke(pojo));
+        assertEquals(true, pojoClass.getMethod("isFlag").invoke(pojo));
+
+        Object zeroed = mapper.fromJqValue(
+                JqValues.parse("{\"count\":null,\"flag\":null}"), pojoClass);
+        assertEquals(0, pojoClass.getMethod("getCount").invoke(zeroed));
+        assertEquals(false, pojoClass.getMethod("isFlag").invoke(zeroed));
+    }
+
     static volatile long serBlackhole;
 
     @Test

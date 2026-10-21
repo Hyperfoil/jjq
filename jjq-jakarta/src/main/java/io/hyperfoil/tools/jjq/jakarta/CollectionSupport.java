@@ -58,6 +58,45 @@ final class CollectionSupport {
         return false;
     }
 
+    /**
+     * Writer-side variant of {@link #bindsThroughMapper}: RESTEasy passes the
+     * DECLARED endpoint return type, so a reactive wrapper around a mappable
+     * collection ({@code Uni<List<Hero>>}) must unwrap to the bound
+     * collection before matching. Only single-value async shapes qualify:
+     * Mutiny {@code Uni} by name (no Mutiny dependency here) and
+     * {@code CompletionStage} (covers {@code CompletableFuture}); streaming
+     * shapes and {@code Response}-wrapped values keep declining exactly as
+     * before. The framework always resolves the wrapper before writing, so
+     * per-element dispatch is unchanged. The reader keeps the strict
+     * variant: request entities are never async-typed, and claiming one
+     * would bind the wrong Java type downstream.
+     *
+     * @param genericType the declared generic type (may be null)
+     * @return true when the writer should bind through the mapper
+     */
+    static boolean bindsResponseThroughMapper(Type genericType) {
+        Type current = genericType;
+        while (current instanceof ParameterizedType parameterized
+                && isAsyncWrapper(rawClassOf(parameterized))) {
+            Type[] args = parameterized.getActualTypeArguments();
+            if (args.length != 1) return false;
+            current = args[0];
+        }
+        return bindsThroughMapper(current);
+    }
+
+    /** Raw class of a parameterized type, or null for exotic raw types. */
+    private static Class<?> rawClassOf(ParameterizedType parameterized) {
+        return parameterized.getRawType() instanceof Class<?> raw ? raw : null;
+    }
+
+    /** Single-value async wrappers the framework resolves before writing. */
+    private static boolean isAsyncWrapper(Class<?> raw) {
+        if (raw == null) return false;
+        if (java.util.concurrent.CompletionStage.class.isAssignableFrom(raw)) return true;
+        return raw.getName().equals("io.smallrye.mutiny.Uni");
+    }
+
     /** An element type the mapper binds: annotated, or a {@code JqValue} passthrough. */
     private static boolean isMappableElement(Type type) {
         Class<?> element = upperBound(type);

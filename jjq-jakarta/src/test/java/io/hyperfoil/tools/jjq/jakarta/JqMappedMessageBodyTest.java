@@ -293,6 +293,19 @@ class JqMappedMessageBodyTest {
         assertFalse(writer.isWriteable(java.util.List.class, java.util.List.class, null, null));
     }
 
+    private static java.lang.reflect.Type futureOfUsers() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<
+                java.util.concurrent.CompletableFuture<java.util.List<SimpleUser>>>() {}.getType();
+    }
+
+    @Test
+    void isWriteable_asyncWrapperOfMappedCollection() {
+        // RESTEasy passes the declared Uni<...>/CompletionStage<...> return
+        // type; the framework resolves the wrapper before writing, so the
+        // writer must match the bound collection or a toString fallback wins.
+        assertTrue(writer.isWriteable(java.util.List.class, futureOfUsers(), null, null));
+    }
+
     @Test
     void readFrom_listRoundTrips() throws IOException {
         Object result = readGeneric(

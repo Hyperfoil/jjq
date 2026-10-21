@@ -1343,11 +1343,21 @@ final class MappingCodeGenerator {
      * @param kind      the {@code TypeConverter.Kind} name (e.g. {@code "LONG"})
      */
     private static void appendBoxedScalar(StringBuilder sb, String apply, String boxedName, String kind) {
-        sb.append("(java.lang.").append(boxedName).append(") ")
-          .append("io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(").append(apply)
-          .append(", io.hyperfoil.tools.jjq.mapper.TypeConverter.Kind.").append(kind)
-          .append(", java.lang.").append(boxedName).append(".class")
-          .append(", java.lang.").append(boxedName).append(".class, mapper)");
+        sb.append(boxedScalarExpr(apply, boxedName, kind));
+    }
+
+    /**
+     * Null-preserving extraction for a boxed scalar: absent and explicit-null
+     * keys bind null (Jackson parity, same {@code convert} path the
+     * reflection binding uses), non-null inputs convert exactly like the
+     * primitive helpers. Callers must have {@code mapper} in scope.
+     */
+    private static String boxedScalarExpr(String apply, String boxedName, String kind) {
+        return "(java.lang." + boxedName + ") "
+          + "io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(" + apply
+          + ", io.hyperfoil.tools.jjq.mapper.TypeConverter.Kind." + kind
+          + ", java.lang." + boxedName + ".class"
+          + ", java.lang." + boxedName + ".class, mapper)";
     }
 
     /** {@code new TypeToken<T>(){}.getType()} for a parameterized type string. */
@@ -2148,15 +2158,23 @@ final class MappingCodeGenerator {
         String typeName = prop.typeName();
         return switch (typeName) {
             case "java.lang.String" -> "asStringChecked(" + apply + ")";
-            case "int", "java.lang.Integer" -> "asIntChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\"))";
-            case "long", "java.lang.Long" -> "asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"long\"))";
-            case "double", "java.lang.Double" -> "asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"double\"))";
-            case "float", "java.lang.Float" -> "(float) asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"float\"))";
-            case "boolean", "java.lang.Boolean" -> "asBooleanChecked(requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\"))";
-            case "short", "java.lang.Short" -> "asShortChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\"))";
-            case "byte", "java.lang.Byte" -> "asByteChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\"))";
-            case "char", "java.lang.Character" ->
+            case "int" -> "asIntChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\"))";
+            case "java.lang.Integer" -> boxedScalarExpr(apply, "Integer", "INT");
+            case "long" -> "asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"long\"))";
+            case "java.lang.Long" -> boxedScalarExpr(apply, "Long", "LONG");
+            case "double" -> "asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"double\"))";
+            case "java.lang.Double" -> boxedScalarExpr(apply, "Double", "DOUBLE");
+            case "float" -> "(float) asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"float\"))";
+            case "java.lang.Float" -> boxedScalarExpr(apply, "Float", "FLOAT");
+            case "boolean" -> "asBooleanChecked(requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\"))";
+            case "java.lang.Boolean" -> boxedScalarExpr(apply, "Boolean", "BOOLEAN");
+            case "short" -> "asShortChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\"))";
+            case "java.lang.Short" -> boxedScalarExpr(apply, "Short", "SHORT");
+            case "byte" -> "asByteChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\"))";
+            case "java.lang.Byte" -> boxedScalarExpr(apply, "Byte", "BYTE");
+            case "char" ->
                 "asCharChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"char\"))";
+            case "java.lang.Character" -> boxedScalarExpr(apply, "Character", "CHAR");
             case "java.math.BigDecimal" -> "asBigDecimalChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigDecimal\"))";
             case "java.math.BigInteger" -> "asBigIntegerChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigInteger\"))";
             case "java.util.UUID" -> "asUuidChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"UUID\"))";
