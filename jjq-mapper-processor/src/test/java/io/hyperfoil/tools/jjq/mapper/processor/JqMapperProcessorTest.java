@@ -2024,6 +2024,75 @@ class JqMapperProcessorTest {
         assertEquals(mapper.toJqValue(plain).toJsonString(), mapper.toJson(pojo));
     }
 
+    // ---- Precomputed key constants + exotic wire names ----
+
+    @Test
+    void generatedMapping_emitsStaticKeyConstants() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+                @JqMapped
+                public record Keyed(String firstName, int age) {}
+                """;
+        Class<?> recordClass = compileAndLoad("test.Keyed", source);
+        byte[] mappingBytes;
+        try (var in = recordClass.getClassLoader()
+                .getResourceAsStream("test/Keyed_JqMapping.class")) {
+            assertNotNull(in, "generated mapping should be emitted");
+            mappingBytes = in.readAllBytes();
+        }
+        String javap = javapOf(mappingBytes);
+        assertTrue(javap.contains("static final java.lang.String KEY_"),
+                "quoted key String constants should be emitted:\n" + javap);
+        assertTrue(javap.contains("static final byte[] KEYB_"),
+                "quoted key byte constants should be emitted:\n" + javap);
+    }
+
+    private static String javapOf(byte[] classBytes) throws Exception {
+        Path tmp = Files.createTempFile("jjq-mapping", ".class");
+        try {
+            Files.write(tmp, classBytes);
+            String javap = Path.of(System.getProperty("java.home"), "bin", "javap").toString();
+            Process proc = new ProcessBuilder(javap, "-p", tmp.toString())
+                    .redirectErrorStream(true).start();
+            String out = new String(proc.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(0, proc.waitFor(), "javap failed: " + out);
+            return out;
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    @Test
+    void generatedMapping_exoticWireNameSerializesCorrectly() throws Exception {
+        String source = """
+                package test;
+
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqName;
+
+                @JqMapped
+                public record Weird(@JqName("a\\"b\\\\c") String v) {}
+                """;
+        Class<?> recordClass = compileAndLoad("test.Weird", source);
+        JqMapper mapper = JqMapper.create();
+        Object instance = recordClass.getDeclaredConstructor(String.class).newInstance("x");
+
+        // Both output paths must agree on the correctly escaped form
+        String viaString = mapper.toJson(instance);
+        byte[] viaBytes = mapper.toJsonBytes(instance);
+        assertEquals(viaString,
+                new String(viaBytes, java.nio.charset.StandardCharsets.UTF_8));
+        // ... and the output must actually parse back to the same value
+        JqValue tree = JqValues.parse(viaBytes);
+        assertEquals("x", tree.getField("a\"b\\c").stringValue());
+        Object back = mapper.fromJqValue(tree, recordClass);
+        assertEquals(instance, back);
+    }
+
     static volatile long serBlackhole;
 
     @Test

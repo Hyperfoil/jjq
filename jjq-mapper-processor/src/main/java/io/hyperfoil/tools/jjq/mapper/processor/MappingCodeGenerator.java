@@ -132,6 +132,7 @@ final class MappingCodeGenerator {
                   .append(" = new ").append(comp.converterClass()).append("();\n");
             }
         }
+        emitRecordKeyConstants(sb, components);
         sb.append("\n");
 
         // Known-field set for unknown-key forwarding (issue #87)
@@ -705,7 +706,7 @@ final class MappingCodeGenerator {
             sb.append("        return JqObject.builder(").append(activeCount).append(")\n");
             for (var comp : components) {
                 if (comp.ignored() || comp.skipSerialize()) continue;
-                sb.append("            .putUnchecked(\"").append(comp.jsonName()).append("\", ");
+                sb.append("            .putUnchecked(\"").append(escapeJava(comp.jsonName())).append("\", ");
                 generateSerializationValue(sb, comp, "instance." + comp.name() + "()");
                 sb.append(")\n");
             }
@@ -715,7 +716,7 @@ final class MappingCodeGenerator {
             sb.append("        var _b = JqObject.builder(").append(activeCount).append(")\n");
             for (var comp : components) {
                 if (comp.ignored() || comp.skipSerialize()) continue;
-                sb.append("            .putUnchecked(\"").append(comp.jsonName()).append("\", ");
+                sb.append("            .putUnchecked(\"").append(escapeJava(comp.jsonName())).append("\", ");
                 generateSerializationValue(sb, comp, "instance." + comp.name() + "()");
                 sb.append(")\n");
             }
@@ -729,7 +730,7 @@ final class MappingCodeGenerator {
                 if (comp.ignored() || comp.skipSerialize()) continue;
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
-                    sb.append("        _b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
+                    sb.append("        _b.putUnchecked(\"").append(escapeJava(comp.jsonName())).append("\", ");
                     generateSerializationValue(sb, comp, "instance." + comp.name() + "()");
                     sb.append(");\n");
                 } else {
@@ -751,7 +752,7 @@ final class MappingCodeGenerator {
         sb.append("        var ").append(local).append(" = ").append(accessor).append(";\n");
         String condition = inclusionCondition(comp.inclusion(), local, comp.typeName());
         if (!"true".equals(condition)) sb.append("        if (").append(condition).append(") ");
-        sb.append("_b.putUnchecked(\"").append(comp.jsonName()).append("\", ");
+        sb.append("_b.putUnchecked(\"").append(escapeJava(comp.jsonName())).append("\", ");
         generateSerializationValue(sb, comp, local);
         sb.append(");\n");
     }
@@ -848,6 +849,38 @@ final class MappingCodeGenerator {
      * Generate the appendJson method — direct field-to-JSON serialization
      * that bypasses intermediate JqValue tree construction.
      */
+    /**
+     * Precomputed quoted key constants for serialized record components:
+     * serializers write them verbatim instead of re-encoding the key per
+     * call. Same escaping as the tree path (exotic wire names included).
+     */
+    private static void emitRecordKeyConstants(StringBuilder sb,
+            java.util.List<JqMapperProcessor.ComponentInfo> components) {
+        sb.append("    // Precomputed quoted keys (see GeneratedMapping#jsonKey)\n");
+        for (var comp : components) {
+            if (comp.ignored() || comp.skipSerialize()) continue;
+            sb.append("    private static final String KEY_").append(comp.name().toUpperCase())
+              .append(" = jsonKey(\"").append(escapeJava(comp.jsonName())).append("\");\n");
+            sb.append("    private static final byte[] KEYB_").append(comp.name().toUpperCase())
+              .append(" = jsonKeyBytes(\"").append(escapeJava(comp.jsonName())).append("\");\n");
+        }
+    }
+
+    /**
+     * Precomputed quoted key constants for serialized POJO properties.
+     */
+    private static void emitPojoKeyConstants(StringBuilder sb,
+            java.util.List<JqMapperProcessor.PropertyInfo> properties) {
+        sb.append("    // Precomputed quoted keys (see GeneratedMapping#jsonKey)\n");
+        for (var prop : properties) {
+            if (prop.ignored() || prop.skipSerialize()) continue;
+            sb.append("    private static final String KEY_").append(prop.name().toUpperCase())
+              .append(" = jsonKey(\"").append(escapeJava(prop.jsonName())).append("\");\n");
+            sb.append("    private static final byte[] KEYB_").append(prop.name().toUpperCase())
+              .append(" = jsonKeyBytes(\"").append(escapeJava(prop.jsonName())).append("\");\n");
+        }
+    }
+
     private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
                                              List<JqMapperProcessor.ComponentInfo> components,
                                              JqMapperProcessor.AnyInfo anyInfo) {
@@ -898,7 +931,7 @@ final class MappingCodeGenerator {
     private static void appendJsonField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
         String accessor = "instance." + comp.name() + "()";
         // Key — pre-escaped literal since JSON keys from Java identifiers never need escaping
-        sb.append("        _sb.append(\"\\\"").append(escapeJava(comp.jsonName())).append("\\\":\");\n");
+        sb.append("        _sb.append(KEY_").append(comp.name().toUpperCase()).append(");\n");
         // Value
         appendJsonValue(sb, comp, accessor);
     }
@@ -911,13 +944,13 @@ final class MappingCodeGenerator {
         String condition = inclusionCondition(comp.inclusion(), local, comp.typeName());
         if ("true".equals(condition)) {
             sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
-            sb.append("        _sb.append(\"\\\"").append(escapeJava(comp.jsonName())).append("\\\":\");\n");
+            sb.append("        _sb.append(KEY_").append(comp.name().toUpperCase()).append(");\n");
             appendJsonValue(sb, comp, local);
             return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
-        sb.append("            _sb.append(\"\\\"").append(escapeJava(comp.jsonName())).append("\\\":\");\n");
+        sb.append("            _sb.append(KEY_").append(comp.name().toUpperCase()).append(");\n");
         sb.append("    ");
         appendJsonValue(sb, comp, local);
         sb.append("        }\n");
@@ -1053,8 +1086,7 @@ final class MappingCodeGenerator {
     /** Append a single field as JSON key:value bytes. */
     private static void appendJsonBytesField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
         String accessor = "instance." + comp.name() + "()";
-        sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(comp.jsonName())).append("\");\n");
-        sb.append("        _out.writeByte(':');\n");
+        sb.append("        _out.writeBytes(KEYB_").append(comp.name().toUpperCase()).append(");\n");
         appendJsonBytesValue(sb, comp, accessor);
     }
 
@@ -1066,15 +1098,13 @@ final class MappingCodeGenerator {
         String condition = inclusionCondition(comp.inclusion(), local, comp.typeName());
         if ("true".equals(condition)) {
             sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
-            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(comp.jsonName())).append("\");\n");
-            sb.append("        _out.writeByte(':');\n");
+            sb.append("        _out.writeBytes(KEYB_").append(comp.name().toUpperCase()).append(");\n");
             appendJsonBytesValue(sb, comp, local);
             return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
-        sb.append("            io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(comp.jsonName())).append("\");\n");
-        sb.append("            _out.writeByte(':');\n");
+        sb.append("            _out.writeBytes(KEYB_").append(comp.name().toUpperCase()).append(");\n");
         sb.append("    ");
         appendJsonBytesValue(sb, comp, local);
         sb.append("        }\n");
@@ -1557,6 +1587,7 @@ final class MappingCodeGenerator {
                 }
             }
         }
+        emitPojoKeyConstants(sb, properties);
         // Static formatters for @JqFormat properties (shared by deser and ser)
         for (var prop : properties) {
             if (!prop.ignored() && prop.format() != null) {
@@ -1779,7 +1810,7 @@ final class MappingCodeGenerator {
                 if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
-                sb.append("            .putUnchecked(\"").append(prop.jsonName()).append("\", ");
+                sb.append("            .putUnchecked(\"").append(escapeJava(prop.jsonName())).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(")\n");
             }
@@ -1791,7 +1822,7 @@ final class MappingCodeGenerator {
                 if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
-                sb.append("            .putUnchecked(\"").append(prop.jsonName()).append("\", ");
+                sb.append("            .putUnchecked(\"").append(escapeJava(prop.jsonName())).append("\", ");
                 generateSerializationValueForPojo(sb, prop, readExpr);
                 sb.append(")\n");
             }
@@ -1806,7 +1837,7 @@ final class MappingCodeGenerator {
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {
-                    sb.append("        _b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
+                    sb.append("        _b.putUnchecked(\"").append(escapeJava(prop.jsonName())).append("\", ");
                     generateSerializationValueForPojo(sb, prop, readExpr);
                     sb.append(");\n");
                 } else {
@@ -1865,7 +1896,7 @@ final class MappingCodeGenerator {
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if (!first) sb.append("        _sb.append(',');\n");
-                sb.append("        _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+                sb.append("        _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
                 appendJsonValueForPojo(sb, prop, readExpr);
                 first = false;
             }
@@ -1877,7 +1908,7 @@ final class MappingCodeGenerator {
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {
                     sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
-                    sb.append("        _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+                    sb.append("        _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
                     appendJsonValueForPojo(sb, prop, readExpr);
                 } else {
                     appendJsonFieldWithInclusionForPojo(sb, prop, readExpr);
@@ -1917,8 +1948,7 @@ final class MappingCodeGenerator {
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
                 if (!first) sb.append("        _out.writeByte(',');\n");
-                sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
-                sb.append("        _out.writeByte(':');\n");
+                sb.append("        _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
                 appendJsonBytesValueForPojo(sb, prop, readExpr);
                 first = false;
             }
@@ -1930,8 +1960,7 @@ final class MappingCodeGenerator {
                 if (readExpr == null) continue;
                 if ("ALWAYS".equals(prop.inclusion())) {
                     sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
-                    sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
-                    sb.append("        _out.writeByte(':');\n");
+                    sb.append("        _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
                     appendJsonBytesValueForPojo(sb, prop, readExpr);
                 } else {
                     appendJsonBytesFieldWithInclusionForPojo(sb, prop, readExpr);
@@ -2027,15 +2056,13 @@ final class MappingCodeGenerator {
         String condition = inclusionCondition(prop.inclusion(), local, prop.typeName());
         if ("true".equals(condition)) {
             sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
-            sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
-            sb.append("        _out.writeByte(':');\n");
+            sb.append("        _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
             appendJsonBytesValueForPojo(sb, prop, local);
             return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
-        sb.append("            io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, \"").append(escapeJava(prop.jsonName())).append("\");\n");
-        sb.append("            _out.writeByte(':');\n");
+        sb.append("            _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
         sb.append("    ");
         appendJsonBytesValueForPojo(sb, prop, local);
         sb.append("        }\n");
@@ -2125,13 +2152,13 @@ final class MappingCodeGenerator {
         String condition = inclusionCondition(prop.inclusion(), local, prop.typeName());
         if ("true".equals(condition)) {
         sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
-        sb.append("        _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+        sb.append("        _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
         appendJsonValueForPojo(sb, prop, local);
         return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
-        sb.append("            _sb.append(\"\\\"").append(escapeJava(prop.jsonName())).append("\\\":\");\n");
+        sb.append("            _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
         sb.append("    ");
         appendJsonValueForPojo(sb, prop, local);
         sb.append("        }\n");
@@ -2362,7 +2389,7 @@ final class MappingCodeGenerator {
         sb.append("        var ").append(local).append(" = ").append(readExpr).append(";\n");
         String condition = inclusionCondition(prop.inclusion(), local, prop.typeName());
         if (!"true".equals(condition)) sb.append("        if (").append(condition).append(") ");
-        sb.append("_b.putUnchecked(\"").append(prop.jsonName()).append("\", ");
+        sb.append("_b.putUnchecked(\"").append(escapeJava(prop.jsonName())).append("\", ");
         generateSerializationValueForPojo(sb, prop, local);
         sb.append(");\n");
     }

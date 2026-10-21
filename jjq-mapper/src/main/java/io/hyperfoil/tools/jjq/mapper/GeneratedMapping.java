@@ -83,6 +83,36 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Precomputed quoted JSON key as a string ({@code "name":}), for generated
+     * serializers. Computed once at class-init with the same escaping as the
+     * tree path, so exotic wire names serialize identically on every path.
+     *
+     * @param key the raw wire name
+     * @return the quoted key with trailing colon
+     */
+    protected static String jsonKey(String key) {
+        StringBuilder sb = new StringBuilder(key.length() + 3);
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(sb, key);
+        sb.append(':');
+        return sb.toString();
+    }
+
+    /**
+     * Precomputed quoted JSON key as UTF-8 bytes ({@code "name":}), for
+     * generated serializers. Same escaping as {@link #jsonKey(String)}.
+     *
+     * @param key the raw wire name
+     * @return a freshly allocated quoted key with trailing colon
+     */
+    protected static byte[] jsonKeyBytes(String key) {
+        io.hyperfoil.tools.jjq.value.BytOutput out =
+                new io.hyperfoil.tools.jjq.value.BytOutput(key.length() * 3 + 3);
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(out, key);
+        out.writeByte(':');
+        return out.toByteArray();
+    }
+
+    /**
      * Emit any-getter extras into a builder after mapped fields (generated-code
      * counterpart of the reflection path). {@code JqObject} entries are used
      * directly; {@code Map} values are converted ({@code null} becomes JSON
