@@ -105,6 +105,20 @@ public class JjqProcessor {
 
     private static final String JSON = "application/json";
 
+    /** Wire type for RFC 9457 problem details (no JAX-RS constant exists). */
+    private static final String PROBLEM_JSON = "application/problem+json";
+
+    /**
+     * Never loaded as a class (the application may not have http-problem):
+     * registration below passes this name as a string only.
+     */
+    private static final String HTTP_PROBLEM_CLASS = "io.quarkiverse.httpproblem.HttpProblem";
+
+    /** REST JSON engines whose presence keeps HttpProblem on the engine path. */
+    private static final java.util.Set<String> JSON_ENGINE_ARTIFACTS = java.util.Set.of(
+            "quarkus-rest-jackson", "quarkus-resteasy-jackson",
+            "quarkus-rest-jsonb", "quarkus-resteasy-jsonb");
+
     private static final String[] BODY_PROVIDER_CLASSES = {
             JqMappedMessageBodyReader.class.getName(),
             JqMappedMessageBodyWriter.class.getName(),
@@ -145,6 +159,26 @@ public class JjqProcessor {
     static boolean httpProblemPresent(Collection<ResolvedDependency> dependencies) {
         return dependencies.stream().anyMatch(d -> d.getGroupId().equals("io.quarkiverse.httpproblem")
                 && d.getArtifactId().equals("quarkus-http-problem"));
+    }
+
+    /**
+     * Whether a JSON engine that renders {@code HttpProblem} is present.
+     * Jackson variants cannot reach here (rejected above), so in practice
+     * this is the JSON-B REST extensions; all four are listed so the gate
+     * stays correct if the rejection ever narrows. Pure presence check on
+     * the application model, without loading engine classes.
+     */
+    static boolean jsonEnginePresent(Collection<ResolvedDependency> dependencies) {
+        return dependencies.stream().anyMatch(d -> d.getGroupId().equals("io.quarkus")
+                && JSON_ENGINE_ARTIFACTS.contains(d.getArtifactId()));
+    }
+
+    /**
+     * Whether the engine-free problem writer applies: http-problem present
+     * and no JSON engine able to serve it instead (issue #176).
+     */
+    static boolean problemWriterWanted(Collection<ResolvedDependency> dependencies) {
+        return httpProblemPresent(dependencies) && !jsonEnginePresent(dependencies);
     }
 
     /**
@@ -1074,6 +1108,7 @@ public class JjqProcessor {
 
     @BuildStep
     void registerRestProviders(Capabilities capabilities,
+            CurateOutcomeBuildItem curateOutcome,
             BuildProducer<AdditionalBeanBuildItem> additionalBeans,
             BuildProducer<MessageBodyReaderBuildItem> additionalReaders,
             BuildProducer<MessageBodyWriterBuildItem> additionalWriters,
@@ -1122,10 +1157,29 @@ public class JjqProcessor {
         exceptionMappers.produce(new ExceptionMapperBuildItem(
                 JqBadRequestExceptionMapper.class.getName(),
                 JqBadRequestException.class.getName(), Priorities.USER, true));
+        // Engine-free problem rendering (issue #176): only when http-problem
+        // is present and no JSON engine can serve it instead. The writer
+        // class is named, never loaded, so engine-backed applications are
+        // untouched.
+        if (problemWriterWanted(curateOutcome.getApplicationModel().getDependencies())) {
+            additionalBeans.produce(AdditionalBeanBuildItem.builder()
+                    .addBeanClasses(List.of(
+                            io.hyperfoil.tools.jjq.jakarta.JqProblemWriter.class.getName()))
+                    .setDefaultScope(SINGLETON)
+                    .setUnremovable()
+                    .build());
+            additionalWriters.produce(new MessageBodyWriterBuildItem.Builder(
+                    io.hyperfoil.tools.jjq.jakarta.JqProblemWriter.class.getName(), HTTP_PROBLEM_CLASS)
+                    .setMediaTypeStrings(List.of(PROBLEM_JSON))
+                    .setBuiltin(true)
+                    .setRuntimeType(RuntimeType.SERVER)
+                    .build());
+        }
     }
 
     @BuildStep
     void registerClassicProviders(Capabilities capabilities,
+            CurateOutcomeBuildItem curateOutcome,
             BuildProducer<AdditionalBeanBuildItem> additionalBeans,
             BuildProducer<ResteasyJaxrsProviderBuildItem> providers) {
         if (capabilities.isMissing(Capability.RESTEASY)) {
@@ -1138,6 +1192,16 @@ public class JjqProcessor {
                 .build());
         for (String provider : PROVIDER_CLASSES) {
             providers.produce(new ResteasyJaxrsProviderBuildItem(provider));
+        }
+        if (problemWriterWanted(curateOutcome.getApplicationModel().getDependencies())) {
+            additionalBeans.produce(AdditionalBeanBuildItem.builder()
+                    .addBeanClasses(List.of(
+                            io.hyperfoil.tools.jjq.jakarta.JqProblemWriter.class.getName()))
+                    .setDefaultScope(SINGLETON)
+                    .setUnremovable()
+                    .build());
+            providers.produce(new ResteasyJaxrsProviderBuildItem(
+                    io.hyperfoil.tools.jjq.jakarta.JqProblemWriter.class.getName()));
         }
     }
 

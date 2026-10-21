@@ -91,6 +91,18 @@ class JjqProducerGenerationTest {
         assertFalse(JjqProcessor.httpProblemPresent(List.of()));
     }
 
+    @Test
+    void problemWriterWantedNeedsProblemWithoutEngine() {
+        var problem = dependency("io.quarkiverse.httpproblem", "quarkus-http-problem");
+        var jsonb = dependency("io.quarkus", "quarkus-rest-jsonb");
+        var jackson = dependency("io.quarkus", "quarkus-rest-jackson");
+        assertTrue(JjqProcessor.problemWriterWanted(List.of(problem)));
+        assertFalse(JjqProcessor.problemWriterWanted(List.of(problem, jsonb)));
+        assertFalse(JjqProcessor.problemWriterWanted(List.of(problem, jackson)));
+        assertFalse(JjqProcessor.problemWriterWanted(List.of(jsonb)));
+        assertFalse(JjqProcessor.problemWriterWanted(List.of()));
+    }
+
     private static ResolvedDependency dependency(String group, String artifact) {
         return ResolvedDependencyBuilder.newInstance()
                 .setGroupId(group).setArtifactId(artifact).setVersion("3.38.2").build();

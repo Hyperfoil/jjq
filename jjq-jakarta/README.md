@@ -159,6 +159,19 @@ implementations that handle `JqValue` serialization for REST endpoints.
 These are auto-discovered by JAX-RS implementations (Quarkus RESTEasy, Jersey, etc.)
 via the `@Provider` annotation. No additional configuration is needed.
 
+### Problem details without a JSON engine
+
+`JqProblemWriter` renders `HttpProblem` entities (quarkiverse http-problem)
+as `application/problem+json` with no JSON engine involved: field order,
+null-skipping, and URI forms match the engine's `JsonbProblemSerializer`
+byte for byte. The `jjq-quarkus` extension registers it only when
+`quarkus-http-problem` is present and no JSON engine is on the classpath;
+with an engine present, behavior stays exactly as today. Note:
+`quarkus-http-problem` itself currently fails the build without a JSON
+provider extension, so in Quarkus the engine stays required for now;
+the writer serves engine-less runtimes through `@Provider` scanning and
+activates automatically if that requirement ever relaxes.
+
 ### REST endpoint example
 
 ```java
