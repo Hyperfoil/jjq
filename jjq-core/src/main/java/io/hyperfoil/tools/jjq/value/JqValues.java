@@ -2020,6 +2020,437 @@ public final class JqValues {
     // ========================================================================
 
     /** Mutable parser state for byte[]-based parsing. */
+    /**
+     * Open a strict token cursor over an already-buffered UTF-8 document.
+     *
+     * @param bytes the JSON document (buffered by the caller; not retained)
+     * @return a cursor positioned before the document
+     * @throws IllegalArgumentException with line/column position on malformed
+     *         UTF-8 or NUL/BOM policy violation, exactly as
+     *         {@link #parseStrict(byte[])} reports them
+     */
+    public static JqCursor strictCursor(byte[] bytes) {
+        return new JqCursor(bytes, ParseOptions.defaults());
+    }
+
+    /**
+     * Open a strict token cursor with explicit strict-parse options.
+     *
+     * @param bytes   the JSON document (buffered by the caller; not retained)
+     * @param options the strict-parse options (non-null)
+     * @return a cursor positioned before the document
+     */
+    public static JqCursor strictCursor(byte[] bytes, ParseOptions options) {
+        return new JqCursor(bytes, options);
+    }
+
+    /**
+     * Strict single-object token cursor for generated typed readers
+     * (issue #172).
+     *
+     * <p>Shares the strict grammar with {@link #parseStrict(byte[])} — the
+     * same UTF-8 validation, escape/surrogate checks, canonical number
+     * rules and trailing-content rejection — but decodes a flat object into
+     * plain JDK values without building a {@code JqValue} tree. String
+     * decoding reuses {@link #parseStringRawBytes} directly, so escaped
+     * values decode identically by shared-site construction.</p>
+     *
+     * <p>Fallback philosophy: any deviation from the canonical happy path
+     * (unknown or escaped field names, nested values, coercible-but-naked
+     * forms like strings-for-numbers, overflows, duplicates, malformed
+     * separators, trailing content) reports an explicit fallback outcome,
+     * and the caller re-runs the existing path over the complete original
+     * input. The fallback then reproduces today's exact behavior — accepted
+     * coercions, binding errors and syntax errors alike — so fallback is
+     * always a legal outcome. Only a fully validated document completes.</p>
+     *
+     * <p>Protocol (mirrors the {@code parseStrict} object loop):</p>
+     * <pre>{@code
+     * if (!cursor.beginDocument()) return fallback; // empty input
+     * if (!cursor.beginObject()) return fallback;   // non-object top level
+     * while (cursor.nextField()) {
+     *     int idx = cursor.fieldIndex(knownNames);
+     *     if (idx < 0) return fallback;
+     *     if (!cursor.expectColon()) return fallback;
+     *     ... peekValue + typed read, mismatch means fallback ...
+     * }
+     * if (!cursor.endInput()) return fallback;
+     * }</pre>
+     *
+     * <p>Duplicate detection stays with the caller (presence bits over the
+     * schema's field indexes): a repeated field must fall back, letting the
+     * existing path apply the configured duplicate policy. Depth limits need
+     * no check here — the top-level object sits at depth 1 (always within
+     * the minimum limit of 1) and nested values fall back unconsumed.</p>
+     *
+     * <p>Single-use and not thread-safe: one cursor decodes one document.</p>
+     */
+    public static final class JqCursor {
+
+        /** Value shape at the cursor, without consuming input. */
+        public enum ValueKind {
+            /** {@code "..."} string. */
+            STRING,
+            /** {@code -}?digits (canonical or not — readers decide). */
+            NUMBER,
+            /** {@code true} (or a truncated lookalike). */
+            TRUE,
+            /** {@code false} (or a truncated lookalike). */
+            FALSE,
+            /** {@code null} (or a truncated lookalike). */
+            NULL,
+            /** Anything else, including end of input. */
+            OTHER
+        }
+
+        private final JsonByteReader r;
+        private final ParseOptions options;
+        /** True once a value was read and the next field needs a comma. */
+        private boolean commaRequired;
+        private long longHolder;
+        private int intHolder;
+        private boolean boolHolder;
+        /** Scan state shared by the integer readers (magnitude limit varies). */
+        private boolean negated;
+        private long negatedAcc;
+
+        private JqCursor(byte[] bytes, ParseOptions options) {
+            int bad = Utf8.validate(bytes, 0, bytes.length);
+            if (bad >= 0) throw utf8Error(bytes, 0, bad);
+            if (options.nulPolicy() == ParseOptions.NulPolicy.REJECT) {
+                for (int i = 0; i < bytes.length; i++) {
+                    if (bytes[i] == 0) {
+                        StringBuilder sb = new StringBuilder("NUL byte rejected");
+                        appendPosition(sb, bytes, 0, i);
+                        throw new IllegalArgumentException(sb.toString());
+                    }
+                }
+            }
+            this.options = options;
+            JsonByteReader reader = new JsonByteReader(bytes, 0, bytes.length);
+            reader.strict = true;
+            reader.maxDepth = options.maxDepth();
+            reader.duplicatePolicy = options.duplicatePolicy();
+            this.r = reader;
+        }
+
+        /**
+         * Skip leading whitespace and a byte-order mark.
+         *
+         * @return false for empty input (caller falls back and binds exactly
+         *         as {@code parseStrict} yields {@code JqNull} there)
+         */
+        public boolean beginDocument() {
+            JsonByteReader r = this.r;
+            byte[] d = r.data;
+            int e = r.end;
+            int p = 0;
+            while (p < e && isWsByte(d[p])) p++;
+            if (p >= e) return false;
+            if (e - p >= 3 && (d[p] & 0xFF) == 0xEF
+                    && (d[p + 1] & 0xFF) == 0xBB && (d[p + 2] & 0xFF) == 0xBF) {
+                if (options.bomPolicy() == ParseOptions.BomPolicy.REJECT) {
+                    StringBuilder sb = new StringBuilder("Byte-order mark (BOM) rejected");
+                    appendPosition(sb, d, 0, p);
+                    throw new IllegalArgumentException(sb.toString());
+                }
+                p += 3;
+                while (p < e && isWsByte(d[p])) p++;
+                if (p >= e) return false;
+            }
+            r.pos = p;
+            r.base = p;
+            return true;
+        }
+
+        /**
+         * Consume the opening brace of the top-level object.
+         *
+         * @return false for any non-object top level (caller falls back,
+         *         preserving today's shape-mismatch and scalar handling)
+         */
+        public boolean beginObject() {
+            JsonByteReader r = this.r;
+            r.skipWs();
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '{') return false;
+            r.pos++;
+            commaRequired = false;
+            return true;
+        }
+
+        /**
+         * Advance to the next field: consumes separators and the closing
+         * brace. A missing comma reports the end so {@link #endInput} falls
+         * back (the existing path then reports the separator error — the
+         * position is on the quote, never at EOF, so a real end is
+         * unmistakable); anything else reports a field so
+         * {@link #fieldIndex} confirms or falls back.
+         *
+         * @return false when the closing brace was consumed, true when a key
+         *         may follow (call {@link #fieldIndex} to confirm)
+         */
+        public boolean nextField() {
+            JsonByteReader r = this.r;
+            r.skipWs();
+            if (r.pos < r.end && (r.data[r.pos] & 0xFF) == '}') {
+                r.pos++;
+                return false;
+            }
+            if (commaRequired) {
+                if (r.pos < r.end && (r.data[r.pos] & 0xFF) == ',') {
+                    r.pos++;
+                    r.skipWs();
+                    return true;
+                }
+                // A quote here is a missing comma (never a real end: the
+                // brace above would have matched). Anything else — EOF,
+                // garbage, brackets — goes to fieldIndex for fallback.
+                return r.pos < r.end && (r.data[r.pos] & 0xFF) == '"'
+                        ? false : true;
+            }
+            return true;
+        }
+
+        /**
+         * Match the field name at the cursor against known UTF-8 wire names
+         * by exact byte equality (hash matches alone are never proof).
+         * Names containing escapes report fallback — the existing path
+         * decodes and matches them.
+         *
+         * @param known candidate wire names as UTF-8 bytes, in field order
+         * @return the matched index, or -1 to fall back (unknown, escaped or
+         *         absent key); positions are untouched on -1
+         */
+        public int fieldIndex(byte[][] known) {
+            commaRequired = true;
+            JsonByteReader r = this.r;
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') return -1;
+            byte[] d = r.data;
+            int e = r.end;
+            int start = r.pos + 1;
+            int p = start;
+            while (p < e) {
+                int b = d[p] & 0xFF;
+                if (b == '"') break;
+                if (b == '\\') return -1;
+                p++;
+            }
+            if (p >= e) return -1;
+            int len = p - start;
+            for (int i = 0; i < known.length; i++) {
+                byte[] k = known[i];
+                if (k.length != len) continue;
+                boolean eq = true;
+                for (int j = 0; j < len; j++) {
+                    if (k[j] != d[start + j]) { eq = false; break; }
+                }
+                if (eq) {
+                    r.pos = p + 1;
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        /**
+         * Consume the colon between a matched key and its value.
+         *
+         * @return false to fall back (the existing path reports the key
+         *         separator error)
+         */
+        public boolean expectColon() {
+            JsonByteReader r = this.r;
+            r.skipWs();
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != ':') return false;
+            r.pos++;
+            return true;
+        }
+
+        /** Classify the value without consuming input. */
+        public ValueKind peekValue() {
+            JsonByteReader r = this.r;
+            r.skipWs();
+            if (r.pos >= r.end) return ValueKind.OTHER;
+            int b = r.data[r.pos] & 0xFF;
+            if (b == '"') return ValueKind.STRING;
+            if (b == 't') return ValueKind.TRUE;
+            if (b == 'f') return ValueKind.FALSE;
+            if (b == 'n') return ValueKind.NULL;
+            if (b == '-' || (b >= '0' && b <= '9')) return ValueKind.NUMBER;
+            return ValueKind.OTHER;
+        }
+
+        /**
+         * Decode a string value, sharing the strict string path (escapes and
+         * surrogate rules identical by construction).
+         *
+         * @return the decoded string, or null to fall back
+         */
+        public String readString() {
+            JsonByteReader r = this.r;
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') return null;
+            String s = parseStringRawBytes(r);
+            // The shared slow path assumes a closing quote ahead (its
+            // object-loop callers always have one, or fail the ':' check
+            // next): on truncated input it overruns past the end instead of
+            // throwing. Detect the overrun here and fall back — the existing
+            // path then throws the shared "Unterminated string".
+            if (r.pos > r.end) return null;
+            return s;
+        }
+
+        /**
+         * Decode a canonical integer ({@code -?(0|[1-9][0-9]*)}) in long
+         * range. Fractions, exponents, leading zeros and overflows report
+         * fallback — the existing path coerces or rejects them exactly as
+         * today.
+         *
+         * @return true with {@link #longValue} set, false to fall back
+         */
+        public boolean readLong() {
+            if (!scanInteger(922337203685477580L)) return false;
+            longHolder = negatedAcc;
+            return true;
+        }
+
+        /** Decoded value of the last successful {@link #readLong}. */
+        public long longValue() { return longHolder; }
+
+        /**
+         * Decode a canonical integer in int range (same fallback contract as
+         * {@link #readLong}).
+         *
+         * @return true with {@link #intValue} set, false to fall back
+         */
+        public boolean readInt() {
+            if (!scanInteger(214748364L)) return false;
+            longHolder = negatedAcc;
+            intHolder = (int) negatedAcc;
+            return true;
+        }
+
+        /** Decoded value of the last successful {@link #readInt}. */
+        public int intValue() { return intHolder; }
+
+        /**
+         * Scan a canonical integer capped at {@code cap * 10 + 7/8}: the
+         * quotient cap keeps the accumulator in range while the final digit
+         * limit admits one extra unit for negative targets (so Long.MIN and
+         * Integer.MIN still decode instead of falling back).
+         */
+        private boolean scanInteger(long cap) {
+            JsonByteReader r = this.r;
+            byte[] d = r.data;
+            int p = r.pos;
+            int e = r.end;
+            if (p >= e) return false;
+            negated = false;
+            if ((d[p] & 0xFF) == '-') {
+                negated = true;
+                if (++p >= e) return false;
+            }
+            int b = d[p] & 0xFF;
+            long acc;
+            if (b == '0') {
+                acc = 0;
+                p++;
+                // A digit after a leading zero is not canonical strict
+                // input; the fallback path reports "Invalid number".
+                if (p < e && isDigitByte(d[p])) return false;
+            } else if (b >= '0' && b <= '9') {
+                acc = 0;
+                while (p < e) {
+                    int c = d[p] & 0xFF;
+                    if (c < '0' || c > '9') break;
+                    int digit = c - '0';
+                    // Overflow is not exceptional input: magnitudes past the
+                    // cap (plus one unit for negative targets, so Long.MIN
+                    // and Integer.MIN still decode) fall back to the tree
+                    // path, which reports the range mismatch.
+                    int lastLimit = negated ? 8 : 7;
+                    if (acc > cap || (acc == cap && digit > lastLimit)) return false;
+                    acc = acc * 10 + digit;
+                    p++;
+                }
+            } else {
+                return false;
+            }
+            r.pos = p;
+            negatedAcc = negated ? -acc : acc;
+            return true;
+        }
+
+        private static boolean isDigitByte(byte b) {
+            int u = b & 0xFF;
+            return u >= '0' && u <= '9';
+        }
+
+        /**
+         * Decode a {@code true}/{@code false} literal.
+         *
+         * @return true with {@link #booleanValue} set, false to fall back
+         *         (today's lenient boolean coercions live on the fallback path)
+         */
+        public boolean readBoolean() {
+            JsonByteReader r = this.r;
+            byte[] d = r.data;
+            int p = r.pos;
+            int e = r.end;
+            if (p < e && (d[p] & 0xFF) == 't') {
+                if (p + 4 <= e && d[p + 1] == 'r' && d[p + 2] == 'u' && d[p + 3] == 'e') {
+                    r.pos = p + 4;
+                    boolHolder = true;
+                    return true;
+                }
+                return false;
+            }
+            if (p < e && (d[p] & 0xFF) == 'f') {
+                if (p + 5 <= e && d[p + 1] == 'a' && d[p + 2] == 'l'
+                        && d[p + 3] == 's' && d[p + 4] == 'e') {
+                    r.pos = p + 5;
+                    boolHolder = false;
+                    return true;
+                }
+                return false;
+            }
+            return false;
+        }
+
+        /** Decoded value of the last successful {@link #readBoolean}. */
+        public boolean booleanValue() { return boolHolder; }
+
+        /**
+         * Consume a {@code null} literal (presence counts; the field keeps
+         * its mapping default).
+         *
+         * @return true when {@code null} was consumed, false to fall back
+         */
+        public boolean readNull() {
+            JsonByteReader r = this.r;
+            byte[] d = r.data;
+            int p = r.pos;
+            int e = r.end;
+            if (p + 4 <= e && (d[p] & 0xFF) == 'n' && d[p + 1] == 'u'
+                    && d[p + 2] == 'l' && d[p + 3] == 'l') {
+                r.pos = p + 4;
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Validate the end of input after the closing brace.
+         *
+         * @return true when only whitespace follows, false to fall back (the
+         *         existing path then reports the trailing-content error)
+         */
+        public boolean endInput() {
+            JsonByteReader r = this.r;
+            r.skipWs();
+            return r.pos >= r.end;
+        }
+    }
+
     private static final class JsonByteReader {
         final byte[] data;
         final int end;
