@@ -6,6 +6,7 @@ import io.hyperfoil.tools.jjq.mapper.JqType;
 import io.hyperfoil.tools.jjq.mapper.JqKeys;
 import io.hyperfoil.tools.jjq.mapper.TypeConverter;
 import io.hyperfoil.tools.jjq.value.BytOutput;
+import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.WebApplicationException;
@@ -96,13 +97,80 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
         BytOutput out = JqValues.acquireByteBuffer();
         if (CollectionSupport.isDirectlyMappable(type)) {
             mapper.appendJsonBytes(value, out);
+        } else if (value instanceof java.util.Collection<?> collection) {
+            writeCollection(collection, out);
+        } else if (value instanceof java.util.Map<?, ?> map) {
+            writeMap(map, out);
+        } else if (value instanceof Object[] array) {
+            writeArray(array, out);
         } else {
-            // Collections serialize element-wise through the tree: per-element
-            // mappings (including polymorphic injection) resolve on the
-            // runtime type. The direct-to-bytes fast path stays reserved for
-            // directly mapped types until measured otherwise.
+            // Anything else (primitive arrays and containers the mapper
+            // declines) serializes through the tree exactly as before.
             TypeConverter.toJqValue(value, mapper).appendToBytes(out);
         }
         JqValues.writeByteBuffer(out, entityStream);
+    }
+
+    /**
+     * Write collection elements one by one, dispatching each on its runtime
+     * type without building the intermediate element tree — the same
+     * per-element behavior as the tree path (which converts each element
+     * through its own binding), minus the {@code JqArray}/{@code JqObject}
+     * allocation. Empty collections render {@code []}.
+     */
+    private void writeCollection(java.util.Collection<?> collection, BytOutput out) {
+        out.writeByte('[');
+        boolean first = true;
+        for (Object element : collection) {
+            if (!first) out.writeByte(',');
+            first = false;
+            writeElement(element, out);
+        }
+        out.writeByte(']');
+    }
+
+    /** Write array elements exactly like collection elements. */
+    private void writeArray(Object[] array, BytOutput out) {
+        out.writeByte('[');
+        for (int i = 0; i < array.length; i++) {
+            if (i > 0) out.writeByte(',');
+            writeElement(array[i], out);
+        }
+        out.writeByte(']');
+    }
+
+    /**
+     * Write map entries with stringified keys in iteration order, matching
+     * the tree path's {@code String.valueOf} keys.
+     */
+    private void writeMap(java.util.Map<?, ?> map, BytOutput out) {
+        out.writeByte('{');
+        boolean first = true;
+        for (var entry : map.entrySet()) {
+            if (!first) out.writeByte(',');
+            first = false;
+            JqValues.appendJsonString(out, String.valueOf(entry.getKey()));
+            out.writeByte(':');
+            writeElement(entry.getValue(), out);
+        }
+        out.writeByte('}');
+    }
+
+    /**
+     * Dispatch one collection element or map value on its runtime type,
+     * mirroring {@code TypeConverter.toJqValue} endpoint by endpoint:
+     * {@code JqValue} passes through, enums render by wire name through the
+     * tree, everything else binds through the mapper (null-safe, generated
+     * mappings write directly, reflection falls back to the tree with
+     * identical output).
+     */
+    private void writeElement(Object element, BytOutput out) {
+        if (element instanceof JqValue jv) {
+            JqValues.appendJqValue(out, jv);
+        } else if (element != null && element.getClass().isEnum()) {
+            TypeConverter.toJqValue(element, mapper).appendToBytes(out);
+        } else {
+            mapper.appendJsonBytes(element, out);
+        }
     }
 }

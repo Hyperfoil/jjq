@@ -286,7 +286,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                 if (compFormat == null && hasPatternMarker(rc)
                         && !isNumberTypeName(typeName) && !isBooleanTypeName(typeName)) return null;
                 components.add(new ComponentInfo(name, serName, typeName, jqExpr, ignored, jqField != null, inclusion, converterClass,
-                        isRecordType(rc.asType()),
+                        isRecordType(rc.asType()), isMappedNestedType(rc.asType()),
                         "WRITE_ONLY".equals(rcAccess), "READ_ONLY".equals(rcAccess), adapter, converterField,
                         compAliases, compFormat, compStringShape));
             }
@@ -510,7 +510,7 @@ public class JqMapperProcessor extends AbstractProcessor {
                     && !isNumberTypeName(typeName) && !isBooleanTypeName(typeName)) return null;
             properties.add(new PropertyInfo(name, serName, typeName, jqExpr, ignored, jqField != null,
                     getterName, setterName, isPublic, inclusion, converterClass,
-                    isRecordType(field.asType()),
+                    isRecordType(field.asType()), isMappedNestedType(field.asType()),
                     skipSer, skipDeser, isPrivate, isFinal, adapter, converterField, propAliases,
                     propFormat, propStringShape));
         }
@@ -1915,7 +1915,7 @@ public class JqMapperProcessor extends AbstractProcessor {
     }
 
     record ComponentInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
-                         String inclusion, String converterClass, boolean nestedRecord,
+                         String inclusion, String converterClass, boolean nestedRecord, boolean nestedMapped,
                          boolean skipSerialize, boolean skipDeserialize, AdapterInfo adapter,
                          String converterField, java.util.List<String> aliases,
                          io.hyperfoil.tools.jjq.mapper.JqFormat.Spec format, boolean stringShape) {}
@@ -1923,7 +1923,7 @@ public class JqMapperProcessor extends AbstractProcessor {
     /** Metadata for a single POJO field. */
     record PropertyInfo(String name, String jsonName, String typeName, String jqExpr, boolean ignored, boolean hasJqField,
                         String getterName, String setterName, boolean isPublicField, String inclusion,
-                        String converterClass, boolean nestedRecord,
+                        String converterClass, boolean nestedRecord, boolean nestedMapped,
                         boolean skipSerialize, boolean skipDeserialize,
                         boolean privateField, boolean finalField, AdapterInfo adapter,
                         String converterField, java.util.List<String> aliases,
@@ -2103,17 +2103,35 @@ public class JqMapperProcessor extends AbstractProcessor {
     }
 
     /**
-     * True if the type is a record. Only records recurse into
+     * True if the type is a record. Records recurse into
      * {@code mapper.appendJson} in generated serializers: the canonical
      * constructor is guaranteed by the language and records are final,
-     * so the runtime value is always mappable. Every other shape
-     * (POJO, enum, container, scalar) keeps the TypeConverter fallback,
-     * which alone handles unmappable classes via fromJavaObject.
+     * so the runtime value is always mappable.
      */
     private boolean isRecordType(javax.lang.model.type.TypeMirror type) {
         javax.lang.model.element.Element element =
                 processingEnv.getTypeUtils().asElement(type);
         return element != null
                 && element.getKind() == javax.lang.model.element.ElementKind.RECORD;
+    }
+
+    /**
+     * True if the type is a class or record carrying {@code @JqMapped}.
+     * Such nested values recurse into {@code mapper.appendJson(Bytes)} in
+     * generated serializers, which dispatches on the runtime class: a
+     * generated mapping writes directly, anything else falls back to the
+     * reflection path's tree with identical output. Enums, interfaces,
+     * containers and scalars are excluded — they keep their dedicated
+     * branches (an annotated enum still serializes by wire name).
+     */
+    private boolean isMappedNestedType(javax.lang.model.type.TypeMirror type) {
+        if (type.getKind() != javax.lang.model.type.TypeKind.DECLARED) return false;
+        javax.lang.model.element.Element element =
+                processingEnv.getTypeUtils().asElement(type);
+        if (element == null) return false;
+        javax.lang.model.element.ElementKind kind = element.getKind();
+        if (kind != javax.lang.model.element.ElementKind.CLASS
+                && kind != javax.lang.model.element.ElementKind.RECORD) return false;
+        return element.getAnnotation(JqMapped.class) != null;
     }
 }

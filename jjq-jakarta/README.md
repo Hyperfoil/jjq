@@ -253,7 +253,8 @@ Use these records directly as REST parameters and return types:
 ```java
 @POST
 public Response createUser(CreateUserRequest request) {
-    // JSON bytes → JqValue → record via JqMapper (not Jackson)
+    // JSON bytes → record via JqMapper (not Jackson): a registered direct
+    // reader decodes without a JqValue tree, otherwise strict parse-plus-map
     service.create(request.name(), request.age(), request.email());
     return Response.ok().build();
 }
@@ -261,7 +262,7 @@ public Response createUser(CreateUserRequest request) {
 @GET
 @Path("/{id}")
 public CreateUserRequest getUser(@PathParam("id") long id) {
-    // Record → JqValue → JSON bytes via JqMapper (not Jackson)
+    // Record → JSON bytes via JqMapper (not Jackson)
     return new CreateUserRequest("Alice", 30, "alice@example.com");
 }
 ```
@@ -273,6 +274,15 @@ other types fall through to Jackson or other registered providers.
 With the `jjq-mapper-processor` annotation processor on the classpath, mapping
 executes in ~20 ns per 5-field record (~11x faster than Jackson 3). Without the
 processor, reflection-based mapping is used (~39 ns, ~6x faster than Jackson 3).
+
+Request bodies bound through `JqMapper.fromJsonStrict` (the path the reader
+above takes for directly mappable types) additionally consult registered
+direct readers before parsing: with a reader, canonical requests skip the
+`JqValue` tree; anything else — unknown or escaped names, nested values,
+accepted coercions, duplicates — falls back to the same strict path with
+identical outcomes. Collection and map endpoints with directly-mappable
+elements serialize element-wise without building a tree; arrays,
+polymorphic families, and unmapped shapes keep the tree path.
 
 ### OpenAPI limitation (SmallRye)
 

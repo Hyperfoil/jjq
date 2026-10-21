@@ -2,6 +2,30 @@
 
 ## [Unreleased] - 0.2.4
 
+- Opt-in direct byte-to-record readers for REST requests (issues
+  #170-#175): Quarkus augmentation compiles one reusable reader per
+  eligible flat `@JqMapped` request record (`String`/`int`/`long`/
+  `boolean` plus boxed, basic wire naming and required presence) from
+  its immutable binding schema, and `JqMapper.fromJsonStrict` consults
+  it before the tree path. Anything outside the canonical fast path —
+  unknown or escaped names, nested values, accepted coercions,
+  duplicates, malformed input — falls back to the identical strict
+  parse-plus-map path, so behavior never changes; user constructors run
+  only after full validation. Disabled by default
+  (`quarkus.jjq.direct-readers`, zero footprint change when off).
+  Measured on Temurin (bytes-to-DTO at matched strictness, 3 forks,
+  `-prof gc`): RESULTS-TBD.
+- Tree-free response serialization for mapped types (issue #175):
+  generated mappings write nested `@JqMapped` records and POJOs
+  straight to bytes via the mapper instead of per-field `JqValue`
+  trees, and the Jakarta writer emits collections and maps of
+  mapped elements entry by entry. Output bytes are unchanged;
+  arrays, polymorphic families, and unmapped shapes keep the tree
+  path. Measured on Temurin (DTO-to-bytes at matched output, 3
+  forks, `-prof gc`, non-overlapping 99.9% CIs): nested-POJO
+  record -35% latency / -63% allocation (String) and -22% / -68%
+  (bytes); nested-record control unchanged; the demo nested-GET
+  deficit vs Jackson (-6%, two rounds) closes to parity.
 - Structural JSON diff in `jjq-core` (issue #168): strict RFC 6902
   `diff`/`apply` over `JqValue` (apply round-trips every diff;
   upstream json-patch-tests green) plus lenient comparison reports

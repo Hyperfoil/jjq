@@ -390,6 +390,108 @@ class JqMappedMessageBodyTest {
         assertEquals("[{\"a\":1}]", values);
     }
 
+    // ---- Collections serialize element-wise without a tree ----
+
+    /** Hand-written generated mapping: records invocations of the direct path. */
+    static final class SpyUserMapping extends io.hyperfoil.tools.jjq.mapper.GeneratedMapping<SimpleUser> {
+        int appendCalls;
+
+        @Override
+        public Class<SimpleUser> type() {
+            return SimpleUser.class;
+        }
+
+        @Override
+        public SimpleUser fromJqValue(JqValue value, JqMapper mapper) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public JqValue toJqValue(SimpleUser user, JqMapper mapper) {
+            var builder = io.hyperfoil.tools.jjq.value.JqObject.builder(3);
+            builder.put("name", io.hyperfoil.tools.jjq.value.JqString.of(user.name()));
+            builder.put("age", io.hyperfoil.tools.jjq.value.JqNumber.of(user.age()));
+            builder.put("active", io.hyperfoil.tools.jjq.value.JqBoolean.of(user.active()));
+            return builder.build();
+        }
+
+        @Override
+        public void appendJsonBytes(SimpleUser user,
+                                    io.hyperfoil.tools.jjq.value.BytOutput out,
+                                    JqMapper mapper) {
+            appendCalls++;
+            out.writeByte('{');
+            JqValues.appendJsonString(out, "name");
+            out.writeByte(':');
+            JqValues.appendJsonString(out, user.name());
+            out.writeByte(',');
+            JqValues.appendJsonString(out, "age");
+            out.writeByte(':');
+            out.writeLong(user.age());
+            out.writeByte(',');
+            JqValues.appendJsonString(out, "active");
+            out.writeByte(':');
+            if (user.active()) out.writeTrue(); else out.writeFalse();
+            out.writeByte('}');
+        }
+    }
+
+    private static JqMappedMessageBodyWriter writerWith(SpyUserMapping spy) {
+        return new JqMappedMessageBodyWriter(JqMapper.builder().register(spy).build());
+    }
+
+    private String writeGeneric(JqMappedMessageBodyWriter writer, Object value,
+                                Class<?> type, java.lang.reflect.Type genericType)
+            throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writer.writeTo(value, type, genericType, null, null, null, out);
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void writeTo_listDispatchesPerElement() throws IOException {
+        SpyUserMapping spy = new SpyUserMapping();
+        var users = java.util.List.of(
+                new SimpleUser("Alice", 30, true),
+                new SimpleUser("Bob", 25, false));
+        String json = writeGeneric(writerWith(spy), users, java.util.List.class, listOfUsers());
+        assertEquals(2, spy.appendCalls);
+        assertEquals("[{\"name\":\"Alice\",\"age\":30,\"active\":true},"
+                + "{\"name\":\"Bob\",\"age\":25,\"active\":false}]", json);
+    }
+
+    @Test
+    void writeTo_collectionMatchesTreeExactly() throws IOException {
+        var users = java.util.List.of(
+                new SimpleUser("Alice", 30, true),
+                new SimpleUser("Bob", 25, false));
+        assertEquals(treeBytes(users), writeGeneric(users, java.util.List.class, listOfUsers()));
+        assertEquals("[]", writeGeneric(java.util.List.of(), java.util.List.class, listOfUsers()));
+        assertEquals(treeBytes(java.util.Map.of("lead", new SimpleUser("Alice", 30, true))),
+                writeGeneric(java.util.Map.of("lead", new SimpleUser("Alice", 30, true)),
+                        java.util.Map.class, mapOfUsers()));
+        assertEquals(treeBytes(new SimpleUser[]{new SimpleUser("Alice", 30, true)}),
+                writeGeneric(new SimpleUser[]{new SimpleUser("Alice", 30, true)},
+                        SimpleUser[].class, SimpleUser[].class));
+    }
+
+    @Test
+    void writeTo_collectionNullsMatchTreeExactly() throws IOException {
+        var withNull = java.util.Arrays.asList(new SimpleUser("Alice", 30, true), null);
+        assertEquals(treeBytes(withNull),
+                writeGeneric(withNull, java.util.List.class, listOfUsers()));
+        var nullValue = new java.util.LinkedHashMap<String, SimpleUser>();
+        nullValue.put("lead", null);
+        assertEquals(treeBytes(nullValue),
+                writeGeneric(nullValue, java.util.Map.class, mapOfUsers()));
+    }
+
+    private String treeBytes(Object value) {
+        return new String(io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(
+                io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(value, JqMapper.create())),
+                StandardCharsets.UTF_8);
+    }
+
     // ---- Helpers ----
 
     private Object readJson(String json, Class<?> type) throws IOException {

@@ -48,4 +48,38 @@ public final class BenchmarkRecords {
 
     @JqMapped
     public record OrderRecord(String id, String customer, List<Item> items) {}
+
+    /** Nested POJO fixture: nested values previously serialized via the tree. */
+    @JqMapped
+    public static class PojoAddress {
+        private String city;
+        private String zip;
+        private String country;
+
+        public PojoAddress() {}
+
+        public String getCity() { return city; }
+        public void setCity(String city) { this.city = city; }
+        public String getZip() { return zip; }
+        public void setZip(String zip) { this.zip = zip; }
+        public String getCountry() { return country; }
+        public void setCountry(String country) { this.country = country; }
+    }
+
+    /** POJO with a nested @JqMapped POJO field. */
+    @JqMapped
+    public static class PojoPerson {
+        private String name;
+        private int age;
+        private PojoAddress address;
+
+        public PojoPerson() {}
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public int getAge() { return age; }
+        public void setAge(int age) { this.age = age; }
+        public PojoAddress getAddress() { return address; }
+        public void setAddress(PojoAddress address) { this.address = address; }
+    }
 }

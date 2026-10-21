@@ -239,7 +239,7 @@ final class MappingCodeGenerator {
             list.add(new JqMapperProcessor.ComponentInfo(
                     p.name(), p.jsonName(), p.typeName(),
                     JqMapperProcessor.fieldProgram(p.jsonName()),
-                    false, false, "ALWAYS", p.converterClass(), false,
+                    false, false, "ALWAYS", p.converterClass(), false, false,
                     false, false, null, p.converterField(), java.util.List.of(), null, false));
         }
         return list;
@@ -988,14 +988,12 @@ final class MappingCodeGenerator {
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     // JqValue — null-safe via appendJqValue
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ").append(accessor).append(");\n");
-                } else if (comp.nestedRecord()) {
-                    // Nested record — recurse into its generated emitter via the
+                } else if (comp.nestedRecord() || comp.nestedMapped()) {
+                    // Nested @JqMapped type — recurse into its generated emitter via the
                     // mapper (cache hit, no tree). Null-safe: renders JSON null.
-                    // Records are final with a guaranteed canonical constructor,
-                    // so the runtime value is always mappable.
                     sb.append("        mapper.appendJson(").append(accessor).append(", _sb);\n");
                 } else {
-                    // Enums, lists, maps, optionals, POJOs —
+                    // Enums, lists, maps, optionals, unmapped POJOs —
                     // fall back to TypeConverter for now
                     sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                       .append(accessor).append(", mapper).appendTo(_sb);\n");
@@ -1146,12 +1144,12 @@ final class MappingCodeGenerator {
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ").append(accessor).append(");\n");
-                } else if (comp.nestedRecord()) {
-                    // Nested record — recurse into its generated emitter via the
+                } else if (comp.nestedRecord() || comp.nestedMapped()) {
+                    // Nested @JqMapped type — recurse into its generated emitter via the
                     // mapper (cache hit, no tree). Null-safe: renders JSON null.
                     sb.append("        mapper.appendJsonBytes(").append(accessor).append(", _out);\n");
                 } else {
-                    // Enums, lists, maps, optionals, POJOs —
+                    // Enums, lists, maps, optionals, unmapped POJOs —
                     // fall back to TypeConverter for now
                     sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                       .append(accessor).append(", mapper).appendToBytes(_out);\n");
@@ -1997,12 +1995,12 @@ final class MappingCodeGenerator {
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ").append(readExpr).append(");\n");
-                } else if (prop.nestedRecord()) {
-                    // Nested record — recurse into its generated emitter via the
+                } else if (prop.nestedRecord() || prop.nestedMapped()) {
+                    // Nested @JqMapped type — recurse into its generated emitter via the
                     // mapper (cache hit, no tree). Null-safe: renders JSON null.
                     sb.append("        mapper.appendJsonBytes(").append(readExpr).append(", _out);\n");
                 } else {
-                    // Enums, lists, maps, optionals, POJOs —
+                    // Enums, lists, maps, optionals, unmapped POJOs —
                     // fall back to TypeConverter for now
                     sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                       .append(readExpr).append(", mapper).appendToBytes(_out);\n");
@@ -2095,12 +2093,12 @@ final class MappingCodeGenerator {
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ").append(readExpr).append(");\n");
-                } else if (prop.nestedRecord()) {
-                    // Nested record — recurse into its generated emitter via the
+                } else if (prop.nestedRecord() || prop.nestedMapped()) {
+                    // Nested @JqMapped type — recurse into its generated emitter via the
                     // mapper (cache hit, no tree). Null-safe: renders JSON null.
                     sb.append("        mapper.appendJson(").append(readExpr).append(", _sb);\n");
                 } else {
-                    // Enums, lists, maps, optionals, POJOs —
+                    // Enums, lists, maps, optionals, unmapped POJOs —
                     // fall back to TypeConverter for now
                     sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                       .append(readExpr).append(", mapper).appendTo(_sb);\n");
@@ -2208,7 +2206,7 @@ final class MappingCodeGenerator {
             JqMapperProcessor.CreatorParamInfo p) {
         return new JqMapperProcessor.PropertyInfo(
                 p.name(), p.jsonName(), p.typeName(), null, false, false,
-                null, null, false, "ALWAYS", p.converterClass(), false,
+                null, null, false, "ALWAYS", p.converterClass(), false, false,
                 false, false, false, false, null, p.converterField(), java.util.List.of(), null, false);
     }
 

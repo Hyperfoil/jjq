@@ -1674,6 +1674,205 @@ class JqMapperProcessorTest {
         assertTrue(mapper.toJson(noAddress).contains("\"address\":null"));
     }
 
+    // ---- Nested @JqMapped POJO fields bypass the tree (bytes path) ----
+
+    private static final String NEST_POJO_ADDRESS = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public class NestAddress {
+                private String city;
+                private String zip;
+                public String getCity() { return city; }
+                public void setCity(String city) { this.city = city; }
+                public String getZip() { return zip; }
+                public void setZip(String zip) { this.zip = zip; }
+            }
+            """;
+
+    private static final String NEST_POJO_EMPLOYEE = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public class NestEmployee {
+                private String name;
+                private NestAddress address;
+                public String getName() { return name; }
+                public void setName(String name) { this.name = name; }
+                public NestAddress getAddress() { return address; }
+                public void setAddress(NestAddress address) { this.address = address; }
+            }
+            """;
+
+    private static final String NEST_POJO_TEAM = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public record NestTeam(String name, NestAddress lead) {}
+            """;
+
+    private URLClassLoader compileNestPojo() throws Exception {
+        return compileSources(
+                new String[]{"test.NestAddress", "test.NestEmployee", "test.NestTeam"},
+                new String[]{NEST_POJO_ADDRESS, NEST_POJO_EMPLOYEE, NEST_POJO_TEAM});
+    }
+
+    private static Object newNestAddress(ClassLoader loader, String city, String zip) throws Exception {
+        Class<?> addressClass = Class.forName("test.NestAddress", true, loader);
+        Object address = addressClass.getDeclaredConstructor().newInstance();
+        addressClass.getMethod("setCity", String.class).invoke(address, city);
+        addressClass.getMethod("setZip", String.class).invoke(address, zip);
+        return address;
+    }
+
+    /** Bytecode of one generated method, via javap, for structural assertions. */
+    private static String generatedMethod(byte[] mappingBytes, String method) throws Exception {
+        Path tmp = Files.createTempFile("jjq-mapping", ".class");
+        try {
+            Files.write(tmp, mappingBytes);
+            String javap = Path.of(System.getProperty("java.home"), "bin", "javap").toString();
+            Process proc = new ProcessBuilder(javap, "-c", "-p", tmp.toString())
+                    .redirectErrorStream(true).start();
+            String out = new String(proc.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(0, proc.waitFor(), "javap failed: " + out);
+            int start = out.indexOf(" " + method + "(");
+            assertTrue(start >= 0, method + " should be emitted:\n" + out);
+            int end = out.indexOf("\n  public ", start + 1);
+            if (end < 0) end = out.indexOf("\n  protected ", start + 1);
+            if (end < 0) end = out.indexOf("\n  private ", start + 1);
+            return end < 0 ? out.substring(start) : out.substring(start, end);
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    private static byte[] mappingBytes(ClassLoader loader, String mapping) throws Exception {
+        String resource = "test/" + mapping + "_JqMapping.class";
+        try (var in = loader.getResourceAsStream(resource)) {
+            assertNotNull(in, "generated mapping should be emitted: " + resource);
+            return in.readAllBytes();
+        }
+    }
+
+    @Test
+    void generatedPojo_nestedMappedPojoAvoidsTree() throws Exception {
+        URLClassLoader loader = compileNestPojo();
+        String code = generatedMethod(mappingBytes(loader, "NestEmployee"), "appendJsonBytes");
+        assertTrue(code.contains("JqMapper.appendJsonBytes"),
+                "nested @JqMapped POJO should serialize via mapper.appendJsonBytes:\n" + code);
+        assertFalse(code.contains("TypeConverter.toJqValue"),
+                "nested @JqMapped POJO must not route through the JqValue tree:\n" + code);
+    }
+
+    @Test
+    void generatedRecord_nestedMappedPojoAvoidsTree() throws Exception {
+        URLClassLoader loader = compileNestPojo();
+        String code = generatedMethod(mappingBytes(loader, "NestTeam"), "appendJsonBytes");
+        assertTrue(code.contains("JqMapper.appendJsonBytes"),
+                "nested @JqMapped POJO should serialize via mapper.appendJsonBytes:\n" + code);
+        assertFalse(code.contains("TypeConverter.toJqValue"),
+                "nested @JqMapped POJO must not route through the JqValue tree:\n" + code);
+    }
+
+    @Test
+    void generatedPojo_nestedMappedPojoMatchesTree() throws Exception {
+        URLClassLoader loader = compileNestPojo();
+        Class<?> employeeClass = Class.forName("test.NestEmployee", true, loader);
+        Class<?> addressClass = Class.forName("test.NestAddress", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        Object employee = employeeClass.getDeclaredConstructor().newInstance();
+        employeeClass.getMethod("setName", String.class).invoke(employee, "Alice");
+        employeeClass.getMethod("setAddress", addressClass)
+                .invoke(employee, newNestAddress(loader, "NYC", "10001"));
+
+        assertEquals(mapper.toJqValue(employee).toJsonString(), mapper.toJson(employee));
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(employee)),
+                mapper.toJsonBytes(employee));
+
+        // Null nested POJO renders JSON null on every path
+        Object noAddress = employeeClass.getDeclaredConstructor().newInstance();
+        employeeClass.getMethod("setName", String.class).invoke(noAddress, "Bob");
+        assertEquals(mapper.toJqValue(noAddress).toJsonString(), mapper.toJson(noAddress));
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(noAddress)),
+                mapper.toJsonBytes(noAddress));
+        assertTrue(mapper.toJson(noAddress).contains("\"address\":null"));
+    }
+
+    @Test
+    void generatedRecord_nestedMappedPojoMatchesTree() throws Exception {
+        URLClassLoader loader = compileNestPojo();
+        Class<?> teamClass = Class.forName("test.NestTeam", true, loader);
+        Class<?> addressClass = Class.forName("test.NestAddress", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        Object team = teamClass.getDeclaredConstructor(String.class, addressClass)
+                .newInstance("A", newNestAddress(loader, "NYC", "10001"));
+        assertEquals(mapper.toJqValue(team).toJsonString(), mapper.toJson(team));
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(team)),
+                mapper.toJsonBytes(team));
+
+        Object noLead = teamClass.getDeclaredConstructor(String.class, addressClass)
+                .newInstance("B", null);
+        assertArrayEquals(
+                io.hyperfoil.tools.jjq.value.JqValues.serializeToBytes(mapper.toJqValue(noLead)),
+                mapper.toJsonBytes(noLead));
+        assertTrue(mapper.toJson(noLead).contains("\"lead\":null"));
+    }
+
+    static volatile long serBlackhole;
+
+    @Test
+    void generatedPojo_directBytesAllocateLessThanTree() throws Exception {
+        var mx = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory
+                .getThreadMXBean();
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                mx.isThreadAllocatedMemorySupported() && mx.isThreadAllocatedMemoryEnabled());
+        URLClassLoader loader = compileNestPojo();
+        Class<?> employeeClass = Class.forName("test.NestEmployee", true, loader);
+        Class<?> addressClass = Class.forName("test.NestAddress", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        Object employee = employeeClass.getDeclaredConstructor().newInstance();
+        employeeClass.getMethod("setName", String.class).invoke(employee, "Alice");
+        employeeClass.getMethod("setAddress", addressClass)
+                .invoke(employee, newNestAddress(loader, "NYC", "10001"));
+
+        for (int i = 0; i < 5_000; i++) {
+            byte[] b = mapper.toJsonBytes(employee);
+            serBlackhole += b.length + b[0];
+            serBlackhole += io.hyperfoil.tools.jjq.value.JqValues
+                    .serializeToBytes(mapper.toJqValue(employee)).length;
+        }
+        long id = Thread.currentThread().getId();
+        long directStart = mx.getThreadAllocatedBytes(id);
+        for (int i = 0; i < 20_000; i++) {
+            byte[] b = mapper.toJsonBytes(employee);
+            serBlackhole += b.length + b[0];
+        }
+        long directBytes = mx.getThreadAllocatedBytes(id) - directStart;
+        long treeStart = mx.getThreadAllocatedBytes(id);
+        for (int i = 0; i < 20_000; i++) {
+            byte[] b = io.hyperfoil.tools.jjq.value.JqValues
+                    .serializeToBytes(mapper.toJqValue(employee));
+            serBlackhole += b.length + b[0];
+        }
+        long treeBytes = mx.getThreadAllocatedBytes(id) - treeStart;
+        assertTrue(directBytes * 2 < treeBytes,
+                "direct " + directBytes / 20_000 + " B/op vs tree "
+                        + treeBytes / 20_000 + " B/op");
+    }
+
     @Test
     void generatedMapping_threeLevelNesting() throws Exception {
         String l3Source = """

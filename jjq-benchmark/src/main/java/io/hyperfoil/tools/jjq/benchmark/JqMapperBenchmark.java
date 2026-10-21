@@ -153,6 +153,19 @@ public class JqMapperBenchmark {
 
         // Warmup POJO mapping cache
         jqMapper.fromJqValue(simpleJqValue, BenchmarkRecords.SimplePojo.class);
+
+        // Nested POJO instances (nested values previously took the tree path)
+        pojoPerson = new BenchmarkRecords.PojoPerson();
+        pojoPerson.setName("Alice");
+        pojoPerson.setAge(30);
+        BenchmarkRecords.PojoAddress pojoAddress = new BenchmarkRecords.PojoAddress();
+        pojoAddress.setCity("New York");
+        pojoAddress.setZip("10001");
+        pojoAddress.setCountry("US");
+        pojoPerson.setAddress(pojoAddress);
+
+        // Warmup nested POJO mapping cache
+        jqMapper.toJsonBytes(pojoPerson);
     }
 
     // ========================================================================
@@ -368,6 +381,29 @@ public class JqMapperBenchmark {
     // ========================================================================
 
     private BenchmarkRecords.SimplePojo simplePojo;
+
+    // Nested POJO state (nested @JqMapped POJO values serialize tree-free)
+    private BenchmarkRecords.PojoPerson pojoPerson;
+
+    @Benchmark
+    public byte[] ser_nestedPojo_jjq_generated_bytes() {
+        return jqMapper.toJsonBytes(pojoPerson);
+    }
+
+    @Benchmark
+    public byte[] ser_nestedPojo_jackson_bytes() throws JacksonException {
+        return jacksonMapper.writeValueAsBytes(pojoPerson);
+    }
+
+    @Benchmark
+    public String ser_nestedPojo_jjq_generated() {
+        return jqMapper.toJson(pojoPerson);
+    }
+
+    @Benchmark
+    public String ser_nestedPojo_jackson() throws JacksonException {
+        return jacksonMapper.writeValueAsString(pojoPerson);
+    }
 
     @Benchmark
     public BenchmarkRecords.SimplePojo deser_simple_pojo_generated_preParsed() {
