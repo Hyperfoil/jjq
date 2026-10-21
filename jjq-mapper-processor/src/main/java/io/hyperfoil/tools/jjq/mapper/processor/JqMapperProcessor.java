@@ -458,13 +458,19 @@ public class JqMapperProcessor extends AbstractProcessor {
             }
 
             // Resolve field-level @JqInclude (overrides class-level), else the
-            // bridged @JsonInclude default (mirrors the reflection path)
+            // bridged @JsonInclude default (mirrors the reflection path).
+            // The bridge checks the field first, then the getter — generated
+            // models (openapi-generator style) carry @JsonInclude on getters.
             JqInclude fieldInclude = field.getAnnotation(JqInclude.class);
             String inclusion;
             if (fieldInclude != null) {
                 inclusion = fieldInclude.value().name();
             } else {
                 String bridged = bridgeInclusion(field);
+                if (bridged == null && getterName != null) {
+                    Element getter = methodElements.get(getterName);
+                    if (getter != null) bridged = bridgeInclusion(getter);
+                }
                 inclusion = bridged != null ? bridged : classInclusion;
             }
 
@@ -620,11 +626,18 @@ public class JqMapperProcessor extends AbstractProcessor {
     /**
      * Bridged inclusion for a record component. {@code @JsonInclude} targets
      * fields (not components), so fall back to the same-named field's mirrors
-     * (same fallback as the other Jackson mirrors).
+     * (same fallback as the other Jackson mirrors), then the accessor —
+     * generated models may carry it on getters only.
      */
     private static String bridgeInclusionForRecord(RecordComponentElement rc, TypeElement enclosing) {
         for (Element e : enclosing.getEnclosedElements()) {
             if (e.getKind() == ElementKind.FIELD && e.getSimpleName().contentEquals(rc.getSimpleName())) {
+                String inclusion = bridgeInclusion(e);
+                if (inclusion != null) return inclusion;
+            }
+        }
+        for (Element e : enclosing.getEnclosedElements()) {
+            if (e.getKind() == ElementKind.METHOD && e.getSimpleName().contentEquals(rc.getSimpleName())) {
                 String inclusion = bridgeInclusion(e);
                 if (inclusion != null) return inclusion;
             }

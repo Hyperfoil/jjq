@@ -1960,6 +1960,70 @@ class JqMapperProcessorTest {
         assertEquals(false, pojoClass.getMethod("isFlag").invoke(zeroed));
     }
 
+    // ---- Getter-placed @JsonInclude (openapi-generator style) ----
+
+    private static final String INCL_POJO = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public class InclPojo {
+                private String name;
+                private String otherName;
+                public String getName() { return name; }
+                public void setName(String name) { this.name = name; }
+                @com.fasterxml.jackson.annotation.JsonInclude(
+                    com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                public String getOtherName() { return otherName; }
+                public void setOtherName(String otherName) { this.otherName = otherName; }
+            }
+            """;
+
+    private static final String INCL_RECORD = """
+            package test;
+
+            import io.hyperfoil.tools.jjq.mapper.JqMapped;
+
+            @JqMapped
+            public record InclRecord(String name, String otherName) {
+                @com.fasterxml.jackson.annotation.JsonInclude(
+                    com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                @Override
+                public String otherName() { return otherName; }
+            }
+            """;
+
+    @Test
+    void generatedPojo_getterJsonIncludeOmitsNulls() throws Exception {
+        URLClassLoader loader = compileSources(
+                new String[]{"test.InclPojo", "test.InclRecord"},
+                new String[]{INCL_POJO, INCL_RECORD});
+        Class<?> pojoClass = Class.forName("test.InclPojo", true, loader);
+        Class<?> recordClass = Class.forName("test.InclRecord", true, loader);
+        JqMapper mapper = JqMapper.create();
+
+        Object pojo = pojoClass.getDeclaredConstructor().newInstance();
+        pojoClass.getMethod("setName", String.class).invoke(pojo, "x");
+        String pojoJson = mapper.toJson(pojo);
+        assertTrue(pojoJson.contains("\"name\":\"x\""), pojoJson);
+        assertFalse(pojoJson.contains("otherName"), pojoJson);
+
+        Object record = recordClass.getDeclaredConstructor(String.class, String.class)
+                .newInstance("x", null);
+        String recordJson = mapper.toJson(record);
+        assertTrue(recordJson.contains("\"name\":\"x\""), recordJson);
+        assertFalse(recordJson.contains("otherName"), recordJson);
+
+        // Reflective path agrees (bridge honors accessors at runtime)
+        Class<?> plainPojo = compileAndLoad("test.PlainInclPojo",
+                INCL_POJO.replace("class InclPojo", "class PlainInclPojo")
+                        .replace("@JqMapped\n            public class", "public class"));
+        Object plain = plainPojo.getDeclaredConstructor().newInstance();
+        plainPojo.getMethod("setName", String.class).invoke(plain, "x");
+        assertEquals(mapper.toJqValue(plain).toJsonString(), mapper.toJson(pojo));
+    }
+
     static volatile long serBlackhole;
 
     @Test
