@@ -137,7 +137,9 @@ public final class BindingSchema {
         this.genericType = genericType;
         this.bridgeClassNames = List.copyOf(bridgeClassNames);
         this.fields = List.copyOf(fields);
-        this.required = Set.copyOf(required);
+        // Declaration order is load-bearing: the generated reader reports
+        // the first missing required field, exactly like checkRequired.
+        this.required = java.util.Collections.unmodifiableSet(new LinkedHashSet<>(required));
         this.knownKeys = Set.copyOf(knownKeys);
         this.construction = construction;
         this.unknownPolicy = unknownPolicy;

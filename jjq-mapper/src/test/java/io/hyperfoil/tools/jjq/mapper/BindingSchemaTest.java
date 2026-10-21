@@ -257,9 +257,20 @@ class BindingSchemaTest {
         assertThrows(JqMapperException.class, () -> mapper.bindingSchemaFor(Conflict.class));
     }
 
+    record TwoRequired(@JqRequired String first, int middle, @JqRequired long last) {}
+
     @Test
-    void schemaIsImmutableAndReusable() {
-        BindingSchema schema = mapper.bindingSchemaFor(Flat.class);
+    void requiredKeepsDeclarationOrder() {
+        BindingSchema schema = mapper.bindingSchemaFor(TwoRequired.class);
+        assertEquals(List.of("first", "last"), List.copyOf(schema.required()));
+        // First-missing-in-declaration-order matches checkRequired exactly.
+        JqMapperException e = assertThrows(JqMapperException.class, () -> mapper.fromJqValue(
+                JqValues.parse("{\"middle\":1}"), TwoRequired.class));
+        assertTrue(e.getMessage().contains("\"first\""), e.getMessage());
+    }
+
+    @Test
+    void schemaIsImmutableAndReusable() {        BindingSchema schema = mapper.bindingSchemaFor(Flat.class);
         assertThrows(UnsupportedOperationException.class, () -> schema.fields().add(null));
         assertThrows(UnsupportedOperationException.class, () -> schema.required().add("x"));
         assertThrows(UnsupportedOperationException.class, () -> schema.knownKeys().add("x"));

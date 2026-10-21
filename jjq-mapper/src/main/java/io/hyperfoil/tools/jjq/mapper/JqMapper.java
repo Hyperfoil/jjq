@@ -89,6 +89,11 @@ public final class JqMapper {
             new ConcurrentHashMap<>();
     // Compiled enum bindings per enum class (empty = reflective resolution).
     private final ConcurrentHashMap<Class<?>, EnumBinding<?>> compiledEnums = new ConcurrentHashMap<>();
+    // Direct byte-to-record readers per bound type, registered at build time
+    // (absent = existing strict parse-plus-map path). Populated once by the
+    // builder; read-only afterwards.
+    private final ConcurrentHashMap<Class<?>, DirectReader<?>> directReaders =
+            new ConcurrentHashMap<>();
 
     private JqMapper(List<AnnotationBridge> bridges) {
         this(bridges, false);
@@ -202,6 +207,7 @@ public final class JqMapper {
         private final java.util.List<GeneratedMapping<?>> mappings = new java.util.ArrayList<>();
         private final java.util.List<AnnotationBridge> bridges = new java.util.ArrayList<>();
         private final java.util.List<EnumBinding<?>> enumBindings = new java.util.ArrayList<>();
+        private final java.util.List<DirectReader<?>> directReaders = new java.util.ArrayList<>();
         private final java.util.Map<Class<?>, PolyConfig> polyFamilies = new java.util.LinkedHashMap<>();
         private final java.util.Map<Class<?>, KeyPolyConfig> keyFamilies = new java.util.LinkedHashMap<>();
         private boolean failOnUnknownProperties;
@@ -231,6 +237,21 @@ public final class JqMapper {
          */
         public Builder registerEnum(EnumBinding<?> binding) {
             enumBindings.add(java.util.Objects.requireNonNull(binding, "binding"));
+            return this;
+        }
+
+        /**
+         * Register a build-time generated direct reader. A registered reader
+         * is consulted by strict bytes-to-target entry points before the
+         * tree-based path; unregistered types keep the existing behavior.
+         * Registration never changes what the mapper accepts: readers fall
+         * back to the generic path outside their canonical fast path.
+         *
+         * @param reader the generated reader to register
+         * @return this builder for chaining
+         */
+        public Builder registerDirectReader(DirectReader<?> reader) {
+            directReaders.add(java.util.Objects.requireNonNull(reader, "reader"));
             return this;
         }
 
@@ -309,6 +330,12 @@ public final class JqMapper {
             }
             for (var b : enumBindings) {
                 mapper.compiledEnums.put(b.type(), b);
+            }
+            for (var r : directReaders) {
+                if (mapper.directReaders.putIfAbsent(r.type(), r) != null) {
+                    throw new JqMapperException(
+                            "Duplicate direct reader for " + r.type().getName());
+                }
             }
             for (var family : polyFamilies.entrySet()) {
                 mapper.cache.put(family.getKey(),
@@ -395,6 +422,19 @@ public final class JqMapper {
      */
     public BindingSchema bindingSchemaFor(Type type) {
         return BindingSchema.forType(type, this);
+    }
+
+    /**
+     * Look up the build-time generated direct reader for a type.
+     *
+     * @param type the bound type
+     * @param <T>  the target type
+     * @return the registered reader, or null when the type keeps the
+     *         existing strict parse-plus-map path
+     */
+    @SuppressWarnings("unchecked")
+    public <T> DirectReader<T> directReaderFor(Class<T> type) {
+        return (DirectReader<T>) directReaders.get(type);
     }
 
     @SuppressWarnings("unchecked")

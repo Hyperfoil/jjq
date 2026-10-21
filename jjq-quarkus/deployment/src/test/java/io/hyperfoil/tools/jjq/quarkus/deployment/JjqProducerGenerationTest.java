@@ -29,6 +29,7 @@ class JjqProducerGenerationTest {
         JjqProcessor.generateMapperProducer((name, data) -> classes.put(name, data),
                 List.of("com.example.Foo_JqMapping"), true,
                 List.of("com.example.TestBridge"), List.of("com.example.Foo_EnumBinding"),
+                List.of("com.example.Foo_DirectReader"),
                 Map.of(ShapeBase.class, new io.hyperfoil.tools.jjq.mapper.PolyConfig("method",
                         Map.of("A", ShapeA.class, "B", ShapeB.class), true)),
                 Map.of(NodeBase.class, new io.hyperfoil.tools.jjq.mapper.KeyPolyConfig(
@@ -44,6 +45,8 @@ class JjqProducerGenerationTest {
                 "com/example/Foo_JqMapping",
                 "com/example/TestBridge",
                 "com/example/Foo_EnumBinding",
+                "com/example/Foo_DirectReader",
+                "registerDirectReader",
                 "failOnUnknownProperties",
                 "registerEnum",
                 "registerPoly",
@@ -69,7 +72,7 @@ class JjqProducerGenerationTest {
     void generatedProducerHandlesEmptyModel() {
         Map<String, byte[]> classes = new LinkedHashMap<>();
         JjqProcessor.generateMapperProducer((name, data) -> classes.put(name, data),
-                List.of(), false, List.of(), List.of(), Map.of(), Map.of(), false);
+                List.of(), false, List.of(), List.of(), List.of(), Map.of(), Map.of(), false);
 
         assertEquals(1, classes.size());
         String pool = new String(classes.values().iterator().next(), StandardCharsets.ISO_8859_1);

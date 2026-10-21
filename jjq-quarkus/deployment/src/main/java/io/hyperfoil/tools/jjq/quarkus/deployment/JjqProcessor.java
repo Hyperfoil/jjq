@@ -1,9 +1,16 @@
 package io.hyperfoil.tools.jjq.quarkus.deployment;
 
+import java.lang.Enum.EnumDesc;
 import java.lang.constant.ClassDesc;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.AnnotationTarget;
@@ -18,6 +25,9 @@ import io.hyperfoil.tools.jjq.jakarta.JqMappedMessageBodyWriter;
 import io.hyperfoil.tools.jjq.jakarta.JqValueMessageBodyReader;
 import io.hyperfoil.tools.jjq.jakarta.JqValueMessageBodyWriter;
 import io.hyperfoil.tools.jjq.jakarta.JqValueParamConverterProvider;
+import io.hyperfoil.tools.jjq.mapper.BindingSchema;
+import io.hyperfoil.tools.jjq.mapper.DirectReadFallbackException;
+import io.hyperfoil.tools.jjq.mapper.DirectReader;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.EnumBinding;
@@ -34,6 +44,7 @@ import io.hyperfoil.tools.jjq.quarkus.runtime.JjqFormatMapper;
 import io.hyperfoil.tools.jjq.quarkus.runtime.JjqBuildTimeConfig;
 import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
+import io.hyperfoil.tools.jjq.value.JqValues;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.GeneratedBeanBuildItem;
 import io.quarkus.arc.deployment.GeneratedBeanGizmo2Adaptor;
@@ -53,6 +64,8 @@ import io.quarkus.gizmo2.Expr;
 import io.quarkus.gizmo2.Gizmo;
 import io.quarkus.gizmo2.LocalVar;
 import io.quarkus.gizmo2.creator.BlockCreator;
+import io.quarkus.gizmo2.desc.ConstructorDesc;
+import io.quarkus.gizmo2.desc.FieldDesc;
 import io.quarkus.gizmo2.desc.MethodDesc;
 import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyReaderBuildItem;
@@ -414,6 +427,336 @@ public class JjqProcessor {
     }
 
     /**
+     * Reader class name for a bound type, colocated in the type's package
+     * like {@code _JqMapping} classes (same package keeps the canonical
+     * constructor accessible; nested {@code $} becomes {@code _}).
+     *
+     * @param className the Jandex dotted class name (nested classes use {@code $})
+     * @return the generated reader class name
+     */
+    static String directReaderClassNameFor(String className) {
+        int dot = className.lastIndexOf('.');
+        String pkg = dot < 0 ? "" : className.substring(0, dot + 1);
+        String binary = dot < 0 ? className : className.substring(dot + 1);
+        return pkg + binary.replace('$', '_') + "_DirectReader";
+    }
+
+    /** Reader generation caps at 64 fields: method bytecode grows linearly
+     * per field, and this keeps the hottest method an order of magnitude
+     * under the 64KB method limit. Wider records keep the existing path. */
+    static final int DIRECT_READER_MAX_FIELDS = 64;
+
+    private static final DotName JAX_POST = DotName.createSimple("jakarta.ws.rs.POST");
+    private static final DotName JAX_PUT = DotName.createSimple("jakarta.ws.rs.PUT");
+    private static final DotName JAX_PATCH = DotName.createSimple("jakarta.ws.rs.PATCH");
+
+    /**
+     * Request body types for direct-reader generation: {@code @JqMapped}
+     * types taken directly as parameters of {@code @POST}/{@code @PUT}/
+     * {@code @PATCH} resource methods. One reader is generated per type no
+     * matter how many endpoints share it; serialization-only models get
+     * none. Generic wrappers (lists, maps) stay on the existing path.
+     *
+     * @param index  the application Jandex index
+     * @param mapped discovered {@code @JqMapped} class names (Jandex dotted form)
+     * @return request body class names, in discovery order
+     */
+    static Set<String> requestBodyClassNames(IndexView index, Set<String> mapped) {
+        Set<String> found = new LinkedHashSet<>();
+        for (DotName method : List.of(JAX_POST, JAX_PUT, JAX_PATCH)) {
+            for (AnnotationInstance ann : index.getAnnotations(method)) {
+                if (ann.target().kind() != AnnotationTarget.Kind.METHOD) continue;
+                for (org.jboss.jandex.MethodParameterInfo param : ann.target().asMethod().parameters()) {
+                    if (param.type().kind() != org.jboss.jandex.Type.Kind.CLASS) continue;
+                    String name = param.type().asClassType().name().toString();
+                    if (mapped.contains(name)) found.add(name);
+                }
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Emit a direct byte-to-record reader for one eligible flat record.
+     * Anything this method cannot express throws, and the caller keeps the
+     * existing strict parse-plus-map path — never silently partial.
+     *
+     * <p>Eligibility beyond the schema (which already pins binding rules):
+     * the record and its canonical constructor must be invocable from the
+     * colocated reader (public or package-visible, never private), the
+     * field count must fit the method-size budget, and no field may carry
+     * aliases (one wire name per field keeps dispatch a single scan).</p>
+     *
+     * @param output where the generated class bytes go
+     * @param type   the bound record class (already loaded)
+     * @param schema the compiled binding schema (must be eligible)
+     */
+    static void generateDirectReader(ClassOutput output, Class<?> type, BindingSchema schema) {
+        String name = type.getName();
+        if (!type.isRecord()) {
+            throw new IllegalArgumentException(
+                    "jjq: direct readers serve records: " + name);
+        }
+        if (!schema.eligibleForDirectReader()) {
+            throw new IllegalArgumentException("jjq: " + name + " is not direct-reader eligible: "
+                    + String.join("; ", schema.ineligibilityReasons()));
+        }
+        if (Modifier.isPrivate(type.getModifiers())) {
+            throw new IllegalArgumentException(
+                    "jjq: private records use the reflective path: " + name);
+        }
+        List<BindingSchema.Field> fields = schema.fields();
+        if (fields.size() > DIRECT_READER_MAX_FIELDS) {
+            throw new IllegalArgumentException("jjq: " + name + " has " + fields.size()
+                    + " fields, readers support up to " + DIRECT_READER_MAX_FIELDS);
+        }
+        for (BindingSchema.Field field : fields) {
+            if (!field.aliases().isEmpty()) {
+                throw new IllegalArgumentException("jjq: aliased field '" + field.wireName()
+                        + "' of " + name + " uses the reflective path");
+            }
+            switch (field.kind()) {
+                case STRING, INT, LONG, BOOLEAN -> { }
+                default -> throw new IllegalArgumentException("jjq: field '" + field.wireName()
+                        + "' of " + name + " has kind " + field.kind());
+            }
+        }
+        Class<?>[] ctorTypes = new Class<?>[fields.size()];
+        for (BindingSchema.Field field : fields) {
+            ctorTypes[field.constructorIndex()] = field.javaType();
+        }
+        Constructor<?> ctor;
+        try {
+            ctor = type.getDeclaredConstructor(ctorTypes);
+        } catch (NoSuchMethodException e) {
+            throw new IllegalArgumentException(
+                    "jjq: no canonical constructor for " + name, e);
+        }
+        if (Modifier.isPrivate(ctor.getModifiers())) {
+            throw new IllegalArgumentException(
+                    "jjq: private canonical constructor uses the reflective path: " + name);
+        }
+
+        ClassDesc recordDesc = ClassDesc.of(name);
+        ClassDesc kindDesc = ClassDesc.of(JqValues.JqCursor.ValueKind.class.getName());
+        MethodDesc mStrict = MethodDesc.of(JqValues.class, "strictCursor",
+                JqValues.JqCursor.class, byte[].class);
+        MethodDesc mBeginDoc = MethodDesc.of(JqValues.JqCursor.class, "beginDocument", boolean.class);
+        MethodDesc mBeginObj = MethodDesc.of(JqValues.JqCursor.class, "beginObject", boolean.class);
+        MethodDesc mNext = MethodDesc.of(JqValues.JqCursor.class, "nextField", boolean.class);
+        MethodDesc mIndex = MethodDesc.of(JqValues.JqCursor.class, "fieldIndex", int.class, byte[][].class);
+        MethodDesc mColon = MethodDesc.of(JqValues.JqCursor.class, "expectColon", boolean.class);
+        MethodDesc mPeek = MethodDesc.of(JqValues.JqCursor.class, "peekValue",
+                JqValues.JqCursor.ValueKind.class);
+        MethodDesc mReadString = MethodDesc.of(JqValues.JqCursor.class, "readString", String.class);
+        MethodDesc mReadLong = MethodDesc.of(JqValues.JqCursor.class, "readLong", boolean.class);
+        MethodDesc mLongValue = MethodDesc.of(JqValues.JqCursor.class, "longValue", long.class);
+        MethodDesc mReadInt = MethodDesc.of(JqValues.JqCursor.class, "readInt", boolean.class);
+        MethodDesc mIntValue = MethodDesc.of(JqValues.JqCursor.class, "intValue", int.class);
+        MethodDesc mReadBool = MethodDesc.of(JqValues.JqCursor.class, "readBoolean", boolean.class);
+        MethodDesc mBoolValue = MethodDesc.of(JqValues.JqCursor.class, "booleanValue", boolean.class);
+        MethodDesc mReadNull = MethodDesc.of(JqValues.JqCursor.class, "readNull", boolean.class);
+        MethodDesc mEnd = MethodDesc.of(JqValues.JqCursor.class, "endInput", boolean.class);
+        Const cString = Const.of(EnumDesc.of(kindDesc, "STRING"));
+        Const cNumber = Const.of(EnumDesc.of(kindDesc, "NUMBER"));
+        Const cTrue = Const.of(EnumDesc.of(kindDesc, "TRUE"));
+        Const cFalse = Const.of(EnumDesc.of(kindDesc, "FALSE"));
+        Const cNull = Const.of(EnumDesc.of(kindDesc, "NULL"));
+
+        Gizmo gizmo = Gizmo.create(output).withDebugInfo(false).withParameters(false);
+        gizmo.class_(directReaderClassNameFor(name), cc -> {
+            cc.implements_(DirectReader.class);
+            // Dispatch table, built once per reader in the constructor:
+            // readers are singletons, so per-request matching allocates
+            // nothing beyond the decoded values themselves.
+            FieldDesc keysDesc = cc.field("keys", fc -> fc.setType(byte[][].class));
+            cc.constructor(mc -> mc.body(bc -> {
+                bc.invokeSpecial(ConstructorDesc.of(Object.class), mc.this_());
+                List<Expr> keyExprs = new ArrayList<>(fields.size());
+                for (BindingSchema.Field field : fields) {
+                    keyExprs.add(bc.invokeVirtual(
+                            MethodDesc.of(String.class, "getBytes", byte[].class, Charset.class),
+                            Const.of(field.wireName()),
+                            bc.getStaticField(FieldDesc.of(StandardCharsets.class, "UTF_8"))));
+                }
+                bc.set(mc.this_().field(keysDesc),
+                        bc.newArray(ClassDesc.ofDescriptor("[B"), keyExprs));
+                bc.return_();
+            }));
+            cc.method("type", mc -> {
+                mc.returning(Class.class);
+                mc.body(bc -> bc.return_(Const.of(type)));
+            });
+            cc.method("read", mc -> {
+                // Erased signature (Object, not T): the JVM resolves
+                // interface dispatch by exact descriptor, so a covariant
+                // return here would need a synthetic bridge method (same
+                // rule as the generated enum bindings).
+                mc.returning(Object.class);
+                var json = mc.parameter("json", byte[].class);
+                // Reserved for nested delegation (future backends consult the
+                // mapper); the MVP flat backend bakes everything at build time.
+                mc.parameter("mapper", JqMapper.class);
+                mc.body(bc -> {
+                    LocalVar cursor = bc.localVar("cursor",
+                            bc.invokeStatic(mStrict, List.of(json)));
+                    ifNotFallback(bc, bc.invokeVirtual(mBeginDoc, cursor));
+                    ifNotFallback(bc, bc.invokeVirtual(mBeginObj, cursor));
+                    // Typed locals start at their mapping defaults (JVM
+                    // defaults): absent fields and explicit nulls both bind
+                    // these, exactly like the tree-based mapping.
+                    List<LocalVar> values = new ArrayList<>(fields.size());
+                    List<LocalVar> seen = new ArrayList<>(fields.size());
+                    for (BindingSchema.Field field : fields) {
+                        values.add(newValueLocal(bc, field));
+                        seen.add(bc.localVar("s_" + field.javaName(), false));
+                    }
+                    bc.while_(cond -> cond.yield(cond.invokeVirtual(mNext, cursor)), body -> {
+                        LocalVar key = body.localVar("k", body.invokeVirtual(mIndex, cursor,
+                                body.get(mc.this_().field(keysDesc))));
+                        body.if_(body.lt(key, 0), t -> t.throw_(DirectReadFallbackException.class));
+                        body.switch_(key, sc -> {
+                            for (int i = 0; i < fields.size(); i++) {
+                                emitFieldCase(sc, i, fields.get(i), cursor, values.get(i),
+                                        seen.get(i), cNull,
+                                        mColon, mPeek, cString, cNumber, cTrue, cFalse,
+                                        mReadString, mReadLong, mLongValue, mReadInt,
+                                        mIntValue, mReadBool, mBoolValue, mReadNull);
+                            }
+                            sc.default_(b -> b.throw_(DirectReadFallbackException.class));
+                        });
+                    });
+                    ifNotFallback(bc, bc.invokeVirtual(mEnd, cursor));
+                    // Required check runs only after the whole input passed
+                    // strict validation, preserving syntax-before-binding
+                    // failure precedence; declaration order matches
+                    // TypeConverter.checkRequired exactly.
+                    for (String wire : schema.required()) {
+                        LocalVar flag = seen.get(indexOfWire(fields, wire));
+                        bc.ifNot(flag, b -> b.throw_(b.invokeVirtual(
+                                MethodDesc.of(JqMapperException.class, "prependPath",
+                                        JqMapperException.class, String.class),
+                                b.new_(JqMapperException.class, List.of(Const.of(
+                                        "Missing required field \"" + wire + "\" for "
+                                                + type.getSimpleName()))),
+                                Const.of(wire))));
+                    }
+                    // The user constructor runs last: never before complete
+                    // validation, never retried on fallback.
+                    List<Expr> args = new ArrayList<>(fields.size());
+                    List<BindingSchema.Field> byCtor = new ArrayList<>(fields);
+                    byCtor.sort(java.util.Comparator.comparingInt(BindingSchema.Field::constructorIndex));
+                    for (BindingSchema.Field field : byCtor) {
+                        args.add(values.get(fields.indexOf(field)));
+                    }
+                    bc.return_(bc.new_(
+                            ConstructorDesc.of(recordDesc, ctorTypes), args));
+                });
+            });
+        });
+    }
+
+    /** Index of a wire name in schema order (required names always resolve). */
+    private static int indexOfWire(List<BindingSchema.Field> fields, String wire) {
+        for (int i = 0; i < fields.size(); i++) {
+            if (fields.get(i).wireName().equals(wire)) return i;
+        }
+        throw new IllegalStateException("jjq: required wire '" + wire + "' is not a field");
+    }
+
+    /** Value local for one field, initialized to its mapping default. */
+    private static LocalVar newValueLocal(BlockCreator bc, BindingSchema.Field field) {
+        String name = "f_" + field.javaName();
+        Class<?> javaType = field.javaType();
+        if (javaType == String.class) {
+            return bc.localVar(name, String.class, Const.ofNull(String.class));
+        }
+        if (javaType == int.class) return bc.localVar(name, 0);
+        if (javaType == long.class) return bc.localVar(name, 0L);
+        if (javaType == boolean.class) return bc.localVar(name, false);
+        if (javaType == Integer.class || javaType == Long.class || javaType == Boolean.class) {
+            return bc.localVar(name, javaType, Const.ofNull(javaType));
+        }
+        throw new IllegalArgumentException(
+                "jjq: field '" + field.wireName() + "' has unsupported type " + javaType.getName());
+    }
+
+    /** Emit one field case: duplicate check, presence, colon, peek, null-or-typed read. */
+    private static void emitFieldCase(io.quarkus.gizmo2.creator.SwitchCreator sc, int index,
+            BindingSchema.Field field, LocalVar cursor, LocalVar value, LocalVar seen,
+            Const cNull, MethodDesc mColon, MethodDesc mPeek,
+            Const cString, Const cNumber, Const cTrue, Const cFalse,
+            MethodDesc mReadString, MethodDesc mReadLong, MethodDesc mLongValue,
+            MethodDesc mReadInt, MethodDesc mIntValue, MethodDesc mReadBool, MethodDesc mBoolValue,
+            MethodDesc mReadNull) {
+        sc.caseOf(index, b -> {
+            b.if_(seen, t -> t.throw_(DirectReadFallbackException.class));
+            b.set(seen, Const.of(true));
+            ifNotFallback(b, b.invokeVirtual(mColon, cursor));
+            // The shape is classified after the colon, when the cursor is on
+            // the value (a peek at the colon would always read OTHER).
+            LocalVar peek = b.localVar("pk_" + field.javaName(), b.invokeVirtual(mPeek, cursor));
+            // Explicit null counts as present and keeps the mapping default.
+            b.ifElse(b.eq(peek, cNull),
+                    t -> ifNotFallback(t, t.invokeVirtual(mReadNull, cursor)),
+                    e -> emitTypedRead(e, field, cursor, value, peek,
+                            cString, cNumber, cTrue, cFalse,
+                            mReadString, mReadLong, mLongValue, mReadInt, mIntValue,
+                            mReadBool, mBoolValue));
+        });
+    }
+
+    /** Emit the canonical typed read for one field (mismatch means fallback). */
+    private static void emitTypedRead(BlockCreator e, BindingSchema.Field field,
+            LocalVar cursor, LocalVar value, LocalVar peek,
+            Const cString, Const cNumber, Const cTrue, Const cFalse,
+            MethodDesc mReadString, MethodDesc mReadLong, MethodDesc mLongValue,
+            MethodDesc mReadInt, MethodDesc mIntValue, MethodDesc mReadBool, MethodDesc mBoolValue) {
+        Class<?> javaType = field.javaType();
+        switch (field.kind()) {
+            case STRING -> {
+                ifNotFallback(e, e.eq(peek, cString));
+                LocalVar v = e.localVar("v_" + field.javaName(),
+                        e.invokeVirtual(mReadString, cursor));
+                e.ifNull(v, t -> t.throw_(DirectReadFallbackException.class));
+                e.set(value, v);
+            }
+            case INT -> {
+                ifNotFallback(e, e.eq(peek, cNumber));
+                ifNotFallback(e, e.invokeVirtual(mReadInt, cursor));
+                LocalVar holder = e.localVar("h_" + field.javaName(),
+                        e.invokeVirtual(mIntValue, cursor));
+                e.set(value, javaType.isPrimitive() ? holder : e.box(holder));
+            }
+            case LONG -> {
+                ifNotFallback(e, e.eq(peek, cNumber));
+                ifNotFallback(e, e.invokeVirtual(mReadLong, cursor));
+                LocalVar holder = e.localVar("h_" + field.javaName(),
+                        e.invokeVirtual(mLongValue, cursor));
+                e.set(value, javaType.isPrimitive() ? holder : e.box(holder));
+            }
+            case BOOLEAN -> {
+                e.ifElse(e.eq(peek, cTrue),
+                        t -> ifNotFallback(t, t.invokeVirtual(mReadBool, cursor)),
+                        u -> {
+                            ifNotFallback(u, u.eq(peek, cFalse));
+                            ifNotFallback(u, u.invokeVirtual(mReadBool, cursor));
+                        });
+                LocalVar holder = e.localVar("h_" + field.javaName(),
+                        e.invokeVirtual(mBoolValue, cursor));
+                e.set(value, javaType.isPrimitive() ? holder : e.box(holder));
+            }
+            default -> throw new IllegalArgumentException(
+                    "jjq: field '" + field.wireName() + "' has kind " + field.kind());
+        }
+    }
+
+    /** Throw the fallback signal unless the condition holds. */
+    private static void ifNotFallback(BlockCreator bc, Expr condition) {
+        bc.ifNot(condition, b -> b.throw_(DirectReadFallbackException.class));
+    }
+
+    /**
      * Emit the serialization fallback both paths share: per-constant wire
      * names first (baked if-chain, no map allocation), else {@code name()}.
      * The caller must invoke this in tail position: every path returns.
@@ -465,10 +808,12 @@ public class JjqProcessor {
     @BuildStep
     void createMapperBean(JjqBuildTimeConfig config,
             CurateOutcomeBuildItem curateOutcome,
+            CombinedIndexBuildItem combinedIndex,
             List<JjqMappedTypeBuildItem> mappedTypes,
             List<JjqEnumBindingBuildItem> enumBindings,
             List<JjqPolyFamilyBuildItem> polyFamilyItems,
-            BuildProducer<GeneratedBeanBuildItem> generatedBeans) {
+            BuildProducer<GeneratedBeanBuildItem> generatedBeans,
+            BuildProducer<JjqDirectReaderBuildItem> directReaders) {
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
         List<String> mappingClassNames = new ArrayList<>();
         for (JjqMappedTypeBuildItem type : mappedTypes) {
@@ -524,10 +869,71 @@ public class JjqProcessor {
         List<String> enumBindingClassNames = enumBindings.stream()
                 .map(JjqEnumBindingBuildItem::getBindingClassName)
                 .toList();
+        List<String> directReaderClassNames = generateDirectReaders(config, combinedIndex.getIndex(),
+                mappedTypes, bridges, config.failOnUnknownProperties(),
+                new GeneratedBeanGizmo2Adaptor(generatedBeans), directReaders);
         generateMapperProducer(new GeneratedBeanGizmo2Adaptor(generatedBeans),
                 mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames, enumBindingClassNames,
+                directReaderClassNames,
                 polyFamilies, keyFamilies,
                 httpProblemPresent(curateOutcome.getApplicationModel().getDependencies()));
+    }
+
+    /**
+     * Generate one direct reader per eligible request body type (issue #173).
+     * Schemas compile against a probe mapper with the application's bridges
+     * and strictness, so generation sees exactly the runtime binding rules.
+     * Ineligible types and generation guardrails skip with a warning and
+     * keep the existing path; invalid mapping configuration also skips here
+     * and keeps its established first-use failure instead of failing the
+     * build for an endpoint that may never be called.
+     *
+     * @return generated reader class names, in discovery order
+     */
+    static List<String> generateDirectReaders(JjqBuildTimeConfig config, IndexView index,
+            List<JjqMappedTypeBuildItem> mappedTypes, List<AnnotationBridge> bridges,
+            boolean failOnUnknown, ClassOutput output,
+            BuildProducer<JjqDirectReaderBuildItem> produced) {
+        List<String> readers = new ArrayList<>();
+        if (!config.directReaders()) return readers;
+        Set<String> mapped = new LinkedHashSet<>();
+        for (JjqMappedTypeBuildItem type : mappedTypes) mapped.add(type.getClassName());
+        Set<String> requests = requestBodyClassNames(index, mapped);
+        if (requests.isEmpty()) return readers;
+        JqMapper.Builder probe = JqMapper.builder().failOnUnknownProperties(failOnUnknown);
+        for (AnnotationBridge bridge : bridges) probe.bridge(bridge);
+        JqMapper probeMapper = probe.build();
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        for (String className : requests) {
+            Class<?> type;
+            try {
+                type = Class.forName(className, false, cl);
+            } catch (ClassNotFoundException | LinkageError e) {
+                LOG.warnf("jjq: request type %s not found, keeping the existing path", className);
+                continue;
+            }
+            BindingSchema schema;
+            try {
+                schema = probeMapper.bindingSchemaFor(type);
+            } catch (JqMapperException e) {
+                // Invalid mapping configuration: keep the established
+                // first-use failure instead of failing the build here.
+                LOG.warnf("jjq: no direct reader for %s (%s), keeping the existing path",
+                        className, e.getMessage());
+                continue;
+            }
+            if (!schema.eligibleForDirectReader()) continue;
+            try {
+                generateDirectReader(output, type, schema);
+            } catch (IllegalArgumentException e) {
+                LOG.warnf("jjq: %s, type will use the existing path", e.getMessage());
+                continue;
+            }
+            String reader = directReaderClassNameFor(className);
+            readers.add(reader);
+            produced.produce(new JjqDirectReaderBuildItem(className, reader));
+        }
+        return readers;
     }
 
     /**
@@ -542,12 +948,14 @@ public class JjqProcessor {
      * @param failOnUnknownProperties mapper strictness flag, baked in as a constant
      * @param bridgeClassNames        {@code AnnotationBridge} implementations to construct directly
      * @param enumBindingClassNames   generated {@code _EnumBinding} classes to register directly
+     * @param directReaderClassNames  generated {@code _DirectReader} classes to register directly
      * @param polyFamilies            discriminator family bases to dispatch tables (discovery order)
      * @param keyFamilies             key-presence family bases to dispatch tables (discovery order)
      * @param alwaysProblemDetails    whether the http-problem extension owns error rendering
      */
     static void generateMapperProducer(ClassOutput output, List<String> mappingClassNames,
             boolean failOnUnknownProperties, List<String> bridgeClassNames, List<String> enumBindingClassNames,
+            List<String> directReaderClassNames,
             java.util.Map<Class<?>, PolyConfig> polyFamilies, java.util.Map<Class<?>, KeyPolyConfig> keyFamilies,
             boolean alwaysProblemDetails) {
         Gizmo gizmo = Gizmo.create(output).withDebugInfo(false).withParameters(false);
@@ -583,6 +991,12 @@ public class JjqProcessor {
                                 MethodDesc.of(JqMapper.Builder.class, "registerEnum",
                                         JqMapper.Builder.class, EnumBinding.class),
                                 builder, bc.new_(java.lang.constant.ClassDesc.of(binding))));
+                    }
+                    for (String reader : directReaderClassNames) {
+                        bc.set(builder, bc.invokeVirtual(
+                                MethodDesc.of(JqMapper.Builder.class, "registerDirectReader",
+                                        JqMapper.Builder.class, DirectReader.class),
+                                builder, bc.new_(java.lang.constant.ClassDesc.of(reader))));
                     }
                     for (var poly : polyFamilies.entrySet()) {
                         bc.set(builder, bc.invokeVirtual(

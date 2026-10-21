@@ -26,4 +26,16 @@ public interface JjqBuildTimeConfig {
      */
     @WithDefault("false")
     boolean failOnUnknownProperties();
+
+    /**
+     * Generate direct byte-to-record readers for eligible flat
+     * {@code @JqMapped} request records (issue #170). Disabled by default:
+     * when off, no reader classes are generated and request handling is
+     * exactly today's strict parse-plus-map path. When on, readers are
+     * generated and registered on the CDI mapper; inputs outside their
+     * canonical fast path fall back to the same path, so enabling the flag
+     * never changes accepted inputs or error behavior.
+     */
+    @WithDefault("false")
+    boolean directReaders();
 }
