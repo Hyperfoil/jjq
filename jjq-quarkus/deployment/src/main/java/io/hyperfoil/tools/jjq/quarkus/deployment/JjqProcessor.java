@@ -578,7 +578,8 @@ public class JjqProcessor {
         MethodDesc mBeginDoc = MethodDesc.of(JqValues.JqCursor.class, "beginDocument", boolean.class);
         MethodDesc mBeginObj = MethodDesc.of(JqValues.JqCursor.class, "beginObject", boolean.class);
         MethodDesc mNext = MethodDesc.of(JqValues.JqCursor.class, "nextField", boolean.class);
-        MethodDesc mIndex = MethodDesc.of(JqValues.JqCursor.class, "fieldIndex", int.class, byte[][].class);
+        MethodDesc mIndex = MethodDesc.of(JqValues.JqCursor.class, "fieldIndexHashed", int.class,
+                byte[][].class, int[].class);
         MethodDesc mColon = MethodDesc.of(JqValues.JqCursor.class, "expectColon", boolean.class);
         MethodDesc mPeek = MethodDesc.of(JqValues.JqCursor.class, "peekValue",
                 JqValues.JqCursor.ValueKind.class);
@@ -604,17 +605,25 @@ public class JjqProcessor {
             // readers are singletons, so per-request matching allocates
             // nothing beyond the decoded values themselves.
             FieldDesc keysDesc = cc.field("keys", fc -> fc.setType(byte[][].class));
+            // Prefilter hashes, computed at build time with the same
+            // function the cursor inlines while scanning (pinned by test).
+            FieldDesc hashesDesc = cc.field("keyHashes", fc -> fc.setType(int[].class));
             cc.constructor(mc -> mc.body(bc -> {
                 bc.invokeSpecial(ConstructorDesc.of(Object.class), mc.this_());
                 List<Expr> keyExprs = new ArrayList<>(fields.size());
+                List<Expr> hashExprs = new ArrayList<>(fields.size());
                 for (BindingSchema.Field field : fields) {
+                    byte[] wire = field.wireName().getBytes(StandardCharsets.UTF_8);
                     keyExprs.add(bc.invokeVirtual(
                             MethodDesc.of(String.class, "getBytes", byte[].class, Charset.class),
                             Const.of(field.wireName()),
                             bc.getStaticField(FieldDesc.of(StandardCharsets.class, "UTF_8"))));
+                    hashExprs.add(Const.of(JqValues.hashFieldName(wire, 0, wire.length)));
                 }
                 bc.set(mc.this_().field(keysDesc),
                         bc.newArray(ClassDesc.ofDescriptor("[B"), keyExprs));
+                bc.set(mc.this_().field(hashesDesc),
+                        bc.newArray(ClassDesc.ofDescriptor("I"), hashExprs));
                 bc.return_();
             }));
             cc.method("type", mc -> {
@@ -647,7 +656,8 @@ public class JjqProcessor {
                     }
                     bc.while_(cond -> cond.yield(cond.invokeVirtual(mNext, cursor)), body -> {
                         LocalVar key = body.localVar("k", body.invokeVirtual(mIndex, cursor,
-                                body.get(mc.this_().field(keysDesc))));
+                                body.get(mc.this_().field(keysDesc)),
+                                body.get(mc.this_().field(hashesDesc))));
                         body.if_(body.lt(key, 0), t -> t.throw_(DirectReadFallbackException.class));
                         body.switch_(key, sc -> {
                             for (int i = 0; i < fields.size(); i++) {

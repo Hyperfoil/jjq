@@ -100,6 +100,92 @@ class JqCursorTest {
         return new DecodeResult(true, out);
     }
 
+    /** Same driver through the hashed dispatch: outcomes must match exactly. */
+    static DecodeResult decodeHashed(byte[] doc, String[] names, Kind[] kinds) {
+        return decodeHashed(doc, names, kinds, ParseOptions.defaults());
+    }
+
+    static DecodeResult decodeHashed(byte[] doc, String[] names, Kind[] kinds, ParseOptions options) {
+        JqValues.JqCursor cursor = JqValues.strictCursor(doc, options);
+        if (!cursor.beginDocument()) return DecodeResult.fallback();
+        if (!cursor.beginObject()) return DecodeResult.fallback();
+        byte[][] known = wires(names);
+        int[] hashes = new int[names.length];
+        for (int i = 0; i < names.length; i++) {
+            hashes[i] = JqValues.hashFieldName(known[i], 0, known[i].length);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        long present = 0;
+        while (cursor.nextField()) {
+            int idx = cursor.fieldIndexHashed(known, hashes);
+            if (idx < 0) return DecodeResult.fallback();
+            if ((present & (1L << idx)) != 0) return DecodeResult.fallback();
+            present |= 1L << idx;
+            if (!cursor.expectColon()) return DecodeResult.fallback();
+            var peek = cursor.peekValue();
+            if (peek == JqValues.JqCursor.ValueKind.NULL) {
+                if (!cursor.readNull()) return DecodeResult.fallback();
+                continue;
+            }
+            switch (kinds[idx]) {
+                case STRING -> {
+                    if (peek != JqValues.JqCursor.ValueKind.STRING) return DecodeResult.fallback();
+                    String s = cursor.readString();
+                    if (s == null) return DecodeResult.fallback();
+                    out.put(names[idx], s);
+                }
+                case LONG -> {
+                    if (peek != JqValues.JqCursor.ValueKind.NUMBER) return DecodeResult.fallback();
+                    if (!cursor.readLong()) return DecodeResult.fallback();
+                    out.put(names[idx], cursor.longValue());
+                }
+                case INT -> {
+                    if (peek != JqValues.JqCursor.ValueKind.NUMBER) return DecodeResult.fallback();
+                    if (!cursor.readInt()) return DecodeResult.fallback();
+                    out.put(names[idx], cursor.intValue());
+                }
+                case BOOLEAN -> {
+                    if (peek != JqValues.JqCursor.ValueKind.TRUE
+                            && peek != JqValues.JqCursor.ValueKind.FALSE) {
+                        return DecodeResult.fallback();
+                    }
+                    if (!cursor.readBoolean()) return DecodeResult.fallback();
+                    out.put(names[idx], cursor.booleanValue());
+                }
+            }
+        }
+        if (!cursor.endInput()) return DecodeResult.fallback();
+        return new DecodeResult(true, out);
+    }
+
+    @Test
+    void hashedDispatchMatchesLinearDispatch() {
+        String[] names = {"name", "age", "score", "active", "a\"b", "caf\u00e9", "",
+                "averyveryverylongfieldname0123456789abcdef"};
+        Kind[] kinds = {Kind.STRING, Kind.INT, Kind.LONG, Kind.BOOLEAN,
+                Kind.STRING, Kind.STRING, Kind.STRING, Kind.STRING};
+        String[] docs = {
+            "{\"name\":\"Ann\",\"age\":30,\"score\":100,\"active\":true}",
+            "{\"active\":false,\"score\":1,\"age\":2,\"name\":\"x\"}",
+            "{\"name\":null,\"age\":null,\"score\":null,\"active\":null}",
+            "{\"zzz\":1}",
+            "{\"name\":\"a\\\"b\"}",
+            "{\"a\\\"b\":\"v\"}",
+            "{\"caf\u00e9\":\"v\"}",
+            "{\"caf\u00e9\":\"\\u00e9\"}",
+            "{\"\":1,\"name\":\"x\"}",
+            "{\"averyveryverylongfieldname0123456789abcdef\":\"v\"}",
+            "{\"name\":\"a\",\"name\":\"b\"}",
+            "{\"name\":\"x\",\"age\":1} trailing",
+            "{\"name\":",
+            "{}",
+        };
+        for (String doc : docs) {
+            byte[] bytes = doc.getBytes(StandardCharsets.UTF_8);
+            assertEquals(decode(bytes, names, kinds), decodeHashed(bytes, names, kinds), doc);
+        }
+    }
+
     /** Oracle outcome of the canonical path. */
     record Oracle(boolean ok, JqValue value, String error) {}
 

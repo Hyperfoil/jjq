@@ -404,8 +404,8 @@ class DirectReaderGenerationTest {
                     type, schema);
             String pool = new String(classes.values().iterator().next(), StandardCharsets.ISO_8859_1);
             for (String expected : List.of(
-                    "DirectReader", "JqCursor", "strictCursor", "fieldIndex",
-                    "DirectReadFallbackException", "readString", "readInt")) {
+                    "DirectReader", "JqCursor", "strictCursor", "fieldIndexHashed",
+                    "keyHashes", "DirectReadFallbackException", "readString", "readInt")) {
                 assertTrue(pool.contains(expected),
                         type.getSimpleName() + ": emitted class should reference " + expected);
             }

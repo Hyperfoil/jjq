@@ -2021,6 +2021,27 @@ public final class JqValues {
 
     /** Mutable parser state for byte[]-based parsing. */
     /**
+     * FNV-1a hash over a byte range: the single-pass name hash shared by
+     * {@link JqCursor#fieldIndexHashed}. Pure function of the bytes, so
+     * build time (reader constructors) and request time (cursor scan,
+     * which inlines the same arithmetic) agree by construction — pinned
+     * by the cursor differential test.
+     *
+     * @param d     source bytes
+     * @param start inclusive start
+     * @param end   exclusive end
+     * @return the 32-bit hash
+     */
+    public static int hashFieldName(byte[] d, int start, int end) {
+        int h = 0x811c9dc5;
+        for (int p = start; p < end; p++) {
+            h ^= d[p] & 0xFF;
+            h *= 0x01000193;
+        }
+        return h;
+    }
+
+    /**
      * Open a strict token cursor over an already-buffered UTF-8 document.
      *
      * @param bytes the JSON document (buffered by the caller; not retained)
@@ -2209,6 +2230,56 @@ public final class JqValues {
                         ? false : true;
             }
             return true;
+        }
+
+        /**
+         * Match the field name at the cursor like {@link #fieldIndex}, but
+         * prefiltered by a caller-supplied hash per candidate: one scan
+         * hashes the input while finding the closing quote, then at most
+         * the hash-colliding candidates pay a byte compare. Same contract
+         * (first-in-order match, escapes and unknowns fall back, positions
+         * untouched on -1) at O(length + matches) instead of O(fields
+         * times length).
+         *
+         * @param known  candidate wire names as UTF-8 bytes, in field order
+         * @param hashes {@link #hashFieldName} of each candidate, same order;
+         *               typically a build-time constant per reader
+         * @return the matched index, or -1 to fall back
+         */
+        public int fieldIndexHashed(byte[][] known, int[] hashes) {
+            commaRequired = true;
+            JsonByteReader r = this.r;
+            if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') return -1;
+            byte[] d = r.data;
+            int e = r.end;
+            int start = r.pos + 1;
+            int h = 0x811c9dc5;
+            int p = start;
+            while (p < e) {
+                int b = d[p] & 0xFF;
+                if (b == '"') break;
+                if (b == '\\') return -1;
+                h ^= b;
+                h *= 0x01000193;
+                p++;
+            }
+            if (p >= e) return -1;
+            int len = p - start;
+            int n = Math.min(known.length, hashes.length);
+            for (int i = 0; i < n; i++) {
+                if (hashes[i] != h) continue;
+                byte[] k = known[i];
+                if (k.length != len) continue;
+                boolean eq = true;
+                for (int j = 0; j < len; j++) {
+                    if (k[j] != d[start + j]) { eq = false; break; }
+                }
+                if (eq) {
+                    r.pos = p + 1;
+                    return i;
+                }
+            }
+            return -1;
         }
 
         /**
