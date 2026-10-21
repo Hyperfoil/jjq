@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.mapper;
 
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.value.BytOutput;
+import io.hyperfoil.tools.jjq.value.JqNull;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 
@@ -435,6 +436,49 @@ public final class JqMapper {
     @SuppressWarnings("unchecked")
     public <T> DirectReader<T> directReaderFor(Class<T> type) {
         return (DirectReader<T>) directReaders.get(type);
+    }
+
+    /**
+     * Deserialize already-buffered JSON bytes strictly to a Java type,
+     * consulting the registered {@link DirectReader} first (issue #174).
+     *
+     * <p>When a direct reader is registered for the type it decodes the
+     * document without building a {@code JqValue} tree; anything outside
+     * its canonical fast path falls back to the generic route below, so
+     * accepted inputs and error behavior are identical with or without a
+     * reader. Types without a reader — collections, maps, arrays,
+     * polymorphic families and unaccelerated records — always take the
+     * generic route: strict parse of the whole document, then bind.</p>
+     *
+     * <p>Strictness matches the REST contract and differs from the lenient
+     * {@link #fromJson} overloads on purpose: trailing content, malformed
+     * JSON, duplicate keys and binding failures all throw instead of
+     * tolerating. Empty input and JSON null bind a {@code null} reference,
+     * mirroring Jackson.</p>
+     *
+     * @param json the JSON bytes to parse and deserialize (may be empty)
+     * @param type the target type
+     * @param <T>  the target type
+     * @return the bound value, or null for empty or JSON-null input
+     * @throws IllegalArgumentException on malformed input (positions included)
+     * @throws JqMapperException on binding failures (paths included)
+     */
+    public <T> T fromJsonStrict(byte[] json, Class<T> type) {
+        if (json.length == 0) return null;
+        DirectReader<T> reader = directReaderFor(type);
+        if (reader != null) {
+            try {
+                return reader.read(json, this);
+            } catch (DirectReadFallbackException e) {
+                // Fall through to the generic route: it reproduces today's
+                // exact behavior for coercions, binding errors and syntax
+                // errors alike (syntax first, since binding runs on a fully
+                // parsed document there).
+            }
+        }
+        JqValue value = JqValues.parseStrict(json);
+        if (value instanceof JqNull) return null;
+        return fromJqValue(value, type);
     }
 
     @SuppressWarnings("unchecked")

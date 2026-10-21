@@ -93,6 +93,13 @@ public class JjqResource {
     }
 
     @GET
+    @Path("/mapper/direct")
+    @Produces(MediaType.TEXT_PLAIN)
+    public String direct() {
+        return Boolean.toString(mapper.directReaderFor(Greeting.class) != null);
+    }
+
+    @GET
     @Path("/failure")
     @Produces(MediaType.TEXT_PLAIN)
     public String failure() {

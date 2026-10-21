@@ -83,6 +83,17 @@ public class JjqResourceTest {
     }
 
     @Test
+    public void directReaderIsRegisteredForEligibleRequests() {
+        // Guards against silent no-ops: the suite below must exercise the
+        // specialized route, not just agree with it through fallback.
+        given()
+                .when().get("/jjq/mapper/direct")
+                .then()
+                .statusCode(200)
+                .body(equalTo("true"));
+    }
+
+    @Test
     public void invalidCreatorInputIsBadRequest() {
         given()
                 .contentType("application/json")

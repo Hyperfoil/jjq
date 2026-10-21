@@ -39,7 +39,11 @@ import jakarta.inject.Inject;
  * binds to a {@code null} reference, mirroring Jackson. If a generated
  * {@code _JqMapping} class exists (from {@code jjq-mapper-processor}),
  * the mapping executes in ~20 ns per 5-field record. Otherwise, the
- * reflection-based mapper is used (~37 ns).</p>
+ * reflection-based mapper is used (~37 ns). When a build-time generated
+ * direct reader is registered for the target type (issue #170), the body
+ * decodes straight from bytes without a {@code JqValue} tree; anything
+ * outside its canonical fast path falls back to the same strict
+ * parse-plus-map path, so behavior is identical either way.</p>
  *
  * <p>Usage — just annotate your record and use it as a REST parameter:</p>
  * <pre>{@code
@@ -96,25 +100,35 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
                             MultivaluedMap<String, String> httpHeaders,
                             InputStream entityStream) throws IOException, WebApplicationException {
         byte[] bytes = entityStream.readAllBytes();
-        if (bytes.length == 0) {
-            return null;
-        }
-        final JqValue value;
-        try {
-            value = JqValues.parseStrict(bytes);
-        } catch (IllegalArgumentException e) {
-            throw JqBadRequestException.of("Invalid JSON request body", e);
-        }
-        if (value instanceof JqNull) {
-            return null;
-        }
         try {
             if (CollectionSupport.isDirectlyMappable(type)) {
-                return mapper.fromJqValue(value, type);
+                // Strict bytes-to-target dispatch: a registered direct
+                // reader decodes without a tree parse, otherwise this is
+                // exactly the strict parse-plus-map path below (empty and
+                // JSON-null bodies bind null, mirroring Jackson).
+                return mapper.fromJsonStrict(bytes, type);
             }
-            // Homogeneous collections and maps (accepted above) bind through
-            // the generic overload: per-element conversion with indexed paths.
-            return mapper.fromJqValue(value, genericType);
+            if (bytes.length == 0) {
+                return null;
+            }
+            final JqValue value;
+            try {
+                value = JqValues.parseStrict(bytes);
+            } catch (IllegalArgumentException e) {
+                throw JqBadRequestException.of("Invalid JSON request body", e);
+            }
+            if (value instanceof JqNull) {
+                return null;
+            }
+            try {
+                // Homogeneous collections and maps (accepted above) bind through
+                // the generic overload: per-element conversion with indexed paths.
+                return mapper.fromJqValue(value, genericType);
+            } catch (JqMapperException e) {
+                throw JqBadRequestException.of("Cannot bind JSON request body", e);
+            }
+        } catch (IllegalArgumentException e) {
+            throw JqBadRequestException.of("Invalid JSON request body", e);
         } catch (JqMapperException e) {
             throw JqBadRequestException.of("Cannot bind JSON request body", e);
         }

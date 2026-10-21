@@ -97,4 +97,44 @@ class DirectReaderEnabledBeanTest {
                 .statusCode(200)
                 .body("note", equalTo("hi"));
     }
+
+    @Test
+    void restErrorsMatchTheExistingPath() {
+        // Malformed JSON stays a parse error.
+        given()
+                .contentType("application/json")
+                .body("{\"name\":")
+                .when().post("/direct/eligible")
+                .then()
+                .statusCode(400);
+        // Trailing content stays a parse error.
+        given()
+                .contentType("application/json")
+                .body("{\"name\":\"ann\",\"age\":3} trailing")
+                .when().post("/direct/eligible")
+                .then()
+                .statusCode(400);
+        // Duplicate keys stay a parse error.
+        given()
+                .contentType("application/json")
+                .body("{\"name\":\"a\",\"name\":\"b\",\"age\":3}")
+                .when().post("/direct/eligible")
+                .then()
+                .statusCode(400);
+        // Coercion failures fall back and stay binding errors.
+        given()
+                .contentType("application/json")
+                .body("{\"name\":\"ann\",\"age\":{}}")
+                .when().post("/direct/eligible")
+                .then()
+                .statusCode(400);
+        // Unknown properties stay ignored by default.
+        given()
+                .contentType("application/json")
+                .body("{\"name\":\"ann\",\"age\":3,\"bogus\":1}")
+                .when().post("/direct/eligible")
+                .then()
+                .statusCode(200)
+                .body("name", equalTo("ann"));
+    }
 }

@@ -869,8 +869,8 @@ public class JjqProcessor {
         List<String> enumBindingClassNames = enumBindings.stream()
                 .map(JjqEnumBindingBuildItem::getBindingClassName)
                 .toList();
-        List<String> directReaderClassNames = generateDirectReaders(config, combinedIndex.getIndex(),
-                mappedTypes, bridges, config.failOnUnknownProperties(),
+        List<String> directReaderClassNames = generateDirectReaders(config.directReaders(),
+                combinedIndex.getIndex(), mappedTypes, bridges, config.failOnUnknownProperties(),
                 new GeneratedBeanGizmo2Adaptor(generatedBeans), directReaders);
         generateMapperProducer(new GeneratedBeanGizmo2Adaptor(generatedBeans),
                 mappingClassNames, config.failOnUnknownProperties(), bridgeClassNames, enumBindingClassNames,
@@ -890,12 +890,12 @@ public class JjqProcessor {
      *
      * @return generated reader class names, in discovery order
      */
-    static List<String> generateDirectReaders(JjqBuildTimeConfig config, IndexView index,
+    static List<String> generateDirectReaders(boolean directReadersEnabled, IndexView index,
             List<JjqMappedTypeBuildItem> mappedTypes, List<AnnotationBridge> bridges,
             boolean failOnUnknown, ClassOutput output,
             BuildProducer<JjqDirectReaderBuildItem> produced) {
         List<String> readers = new ArrayList<>();
-        if (!config.directReaders()) return readers;
+        if (!directReadersEnabled) return readers;
         Set<String> mapped = new LinkedHashSet<>();
         for (JjqMappedTypeBuildItem type : mappedTypes) mapped.add(type.getClassName());
         Set<String> requests = requestBodyClassNames(index, mapped);

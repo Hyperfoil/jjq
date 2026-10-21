@@ -429,4 +429,81 @@ class JqMappedMessageBodyTest {
         writer.writeTo(value, type, genericType, null, null, null, out);
         return out.toString(StandardCharsets.UTF_8);
     }
+
+    // ---- Strict dispatch through registered readers (issue #174) ----
+
+    /** Stub reader with scripted outcomes and invocation tracking. */
+    static final class StubReader implements io.hyperfoil.tools.jjq.mapper.DirectReader<SimpleUser> {
+        int invocations;
+        boolean fallBack;
+
+        @Override
+        public Class<SimpleUser> type() {
+            return SimpleUser.class;
+        }
+
+        @Override
+        public SimpleUser read(byte[] json, JqMapper mapper) {
+            invocations++;
+            if (fallBack) throw new io.hyperfoil.tools.jjq.mapper.DirectReadFallbackException();
+            return new SimpleUser("direct", 1, true);
+        }
+    }
+
+    private static JqMappedMessageBodyReader readerWith(StubReader stub) {
+        return new JqMappedMessageBodyReader(
+                JqMapper.builder().registerDirectReader(stub).build());
+    }
+
+    @Test
+    void readFrom_registeredReaderServesCanonicalInput() throws IOException {
+        StubReader stub = new StubReader();
+        Object result = readJson(readerWith(stub),
+                "{\"name\":\"Alice\",\"age\":30,\"active\":true}", SimpleUser.class);
+        assertEquals(new SimpleUser("direct", 1, true), result);
+        assertEquals(1, stub.invocations);
+    }
+
+    @Test
+    void readFrom_readerFallbackBindsExactly() throws IOException {
+        StubReader stub = new StubReader();
+        stub.fallBack = true;
+        // Coercion binds through the fallback exactly as without a reader.
+        Object result = readJson(readerWith(stub),
+                "{\"name\":42,\"age\":30,\"active\":true}", SimpleUser.class);
+        assertEquals(new SimpleUser("42", 30, true), result);
+        assertEquals(1, stub.invocations);
+    }
+
+    @Test
+    void readFrom_readerFallbackKeepsErrorClassification() throws IOException {
+        StubReader stub = new StubReader();
+        stub.fallBack = true;
+        JqMappedMessageBodyReader withReader = readerWith(stub);
+        // Parse errors stay parse errors (400 "Invalid JSON").
+        JqBadRequestException parse = assertThrows(JqBadRequestException.class,
+                () -> readJson(withReader, "{bad", SimpleUser.class));
+        assertEquals(400, parse.status());
+        // Binding errors stay binding errors.
+        assertThrows(JqBadRequestException.class,
+                () -> readJson(withReader, "{\"name\":{},\"age\":30,\"active\":true}", SimpleUser.class));
+        // Empty and null bodies still bind null without consulting the reader
+        // for empty input; JSON null consults it first, then binds null.
+        assertNull(readJson(withReader, "", SimpleUser.class));
+        assertNull(readJson(withReader, "null", SimpleUser.class));
+        assertEquals(3, stub.invocations);
+    }
+
+    @Test
+    void readFrom_collectionPathIgnoresElementReaders() throws IOException {
+        // Element readers never serve the generic collection path (issue
+        // #174 MVP): lists bind element-wise through the tree exactly as
+        // without a reader.
+        StubReader stub = new StubReader();
+        Object result = readGeneric(readerWith(stub),
+                "[{\"name\":\"Alice\",\"age\":30,\"active\":true}]",
+                java.util.List.class, listOfUsers());
+        assertEquals(java.util.List.of(new SimpleUser("Alice", 30, true)), result);
+        assertEquals(0, stub.invocations);
+    }
 }
