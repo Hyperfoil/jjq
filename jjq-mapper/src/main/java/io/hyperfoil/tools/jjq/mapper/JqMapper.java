@@ -369,6 +369,34 @@ public final class JqMapper {
         }
     }
 
+    /**
+     * Compile the immutable binding schema for a concrete type.
+     *
+     * <p>The schema describes wire names, required presence, conversions and
+     * construction for the type under this mapper's bridge configuration. It
+     * feeds build-time generation of direct byte-to-record readers (issue
+     * #170); it never changes what the mapper accepts.</p>
+     *
+     * @param type the bound type
+     * @param <T>  the target type
+     * @return the immutable schema
+     * @throws JqMapperException for invalid mapping configuration
+     */
+    public <T> BindingSchema bindingSchemaFor(Class<T> type) {
+        return BindingSchema.forType(type, this);
+    }
+
+    /**
+     * Compile the immutable binding schema for a possibly generic type.
+     *
+     * @param type the bound type (a {@code Class} or parameterized type)
+     * @return the immutable schema
+     * @throws JqMapperException for invalid mapping configuration
+     */
+    public BindingSchema bindingSchemaFor(Type type) {
+        return BindingSchema.forType(type, this);
+    }
+
     @SuppressWarnings("unchecked")
     private <T> T fromJqValueInner(JqValue value, Class<T> type) {
         if (type.isEnum()) {

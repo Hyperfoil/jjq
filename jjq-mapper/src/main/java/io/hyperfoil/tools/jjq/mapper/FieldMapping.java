@@ -216,4 +216,10 @@ final class FieldMapping {
     boolean isIgnored() { return ignored; }
     /** True if this field uses a JqProgram (from @JqField), false if direct field name. */
     boolean usesProgram() { return program != null; }
+    /** Pre-resolved conversion strategy for this field's target type. */
+    TypeConverter.Kind conversionKind() { return conversionKind; }
+    /** True when a {@code @JqFormat} formatter handles this field. */
+    boolean hasFormatter() { return formatter != null; }
+    /** True when numbers/booleans serialize quoted (from {@code @JqFormat} shape). */
+    boolean isStringShaped() { return stringShaped; }
 }

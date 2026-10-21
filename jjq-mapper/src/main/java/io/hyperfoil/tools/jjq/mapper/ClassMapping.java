@@ -117,14 +117,28 @@ final class ClassMapping<T> implements Mapping<T> {
         this.knownKeys = known;
     }
 
+    /** Fields bound on deserialization, in binding order. */
+    FieldMapping[] deserFields() { return deserFields.clone(); }
+    /** Required wire names in declaration order (absent keys fail binding). */
+    Set<String> required() { return required; }
+    /** Every non-program lookup key (primary names plus aliases). */
+    Set<String> knownKeys() { return knownKeys; }
+    /** Deserialization creator (null for canonical construction). */
+    CreatorSpec creator() { return creator; }
+    /** Builder binding (null unless configured). */
+    BuilderSpec builder() { return builder; }
+    /** Polymorphic family membership for serialization (null for standalone types). */
+    PolySerInfo polySer() { return polySer; }
+    /** True when unknown keys are forwarded to an any-setter instead of failing. */
+    boolean hasAnySetter() { return anyHandlers != null && anyHandlers.setter() != null; }
+
     /**
      * Create a ClassMapping by introspecting a record class.
      *
      * @throws JqMapperException if the class is not a record or introspection fails
      */
     @SuppressWarnings("unchecked")
-    static <T> ClassMapping<T> forRecord(Class<T> type, List<AnnotationBridge> bridges, PolySerInfo polySer) {
-        if (!type.isRecord()) {
+    static <T> ClassMapping<T> forRecord(Class<T> type, List<AnnotationBridge> bridges, PolySerInfo polySer) {        if (!type.isRecord()) {
             throw new JqMapperException("Only record types are supported: " + type.getName());
         }
 
