@@ -14,7 +14,19 @@
   only after full validation. Disabled by default
   (`quarkus.jjq.direct-readers`, zero footprint change when off).
   Measured on Temurin (bytes-to-DTO at matched strictness, 3 forks,
-  `-prof gc`): RESULTS-TBD.
+  `-prof gc`, non-overlapping 99.9% CIs): flat5 ordered 141ns to
+  95ns (-33%) at 424B to 152B (-64%); flat20 ordered 790ns to
+  681ns (-14%) at 1384B to 480B (-65%), order-insensitive while
+  the baseline pays a reorder tax (1154ns). Dispatch overhead is
+  ~3ns. Fallback shapes (unknown keys, coercions) cost more than
+  the baseline path and are reported separately, never as
+  representative traffic. Gates: full reactor green; packaged-JVM
+  and native-image integration suites 42/42 on REST and Classic
+  stacks (native images 53/55MB, 15ms startup); JVM startup
+  unchanged (0.43s with or without readers); async-profiler shows
+  the reader at 0.3% CPU and 0.5% allocation at 43k rps with
+  request-body buffering dominating instead; generated readers
+  stay under 6KB (flat) and 16KB (20 fields).
 - Tree-free response serialization for mapped types (issue #175):
   generated mappings write nested `@JqMapped` records and POJOs
   straight to bytes via the mapper instead of per-field `JqValue`

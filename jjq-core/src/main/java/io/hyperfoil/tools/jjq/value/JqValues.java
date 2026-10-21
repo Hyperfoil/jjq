@@ -2376,6 +2376,9 @@ public final class JqValues {
                 return false;
             }
             r.pos = p;
+            // Long.MIN accumulates to 9223372036854775808, which wraps to
+            // Long.MIN on store; negating wraps back to Long.MIN — the exact
+            // right answer by double-wrap (JLS modular arithmetic, no UB).
             negatedAcc = negated ? -acc : acc;
             return true;
         }

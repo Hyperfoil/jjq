@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.invoke.MethodHandles;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -450,5 +451,185 @@ class DirectReaderGenerationTest {
         JjqProcessor.generateDirectReader((name, data) -> classes.put(name, data), type, schema);
         int size = classes.values().iterator().next().length;
         assertTrue(size < max, type.getSimpleName() + " reader is " + size + " bytes (limit " + max + ")");
+    }
+
+    /** Inert domain annotation: binding must never interpret or enforce it. */
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target({java.lang.annotation.ElementType.RECORD_COMPONENT,
+            java.lang.annotation.ElementType.FIELD})
+    @interface WireNote {
+        String value();
+    }
+
+    @JqMapped
+    record Annotated(@WireNote("n") String name, @WireNote("a") int age) {}
+
+    @Test
+    void unknownAnnotationsStayInvisible() throws Throwable {
+        DirectReader<?> reader = loadReader(Annotated.class);
+        assertEquals(new Annotated("a", 1), readDirect(reader, "{\"name\":\"a\",\"age\":1}"));
+        Outcome fallback = assertFallback(reader, "{\"name\":42,\"age\":1}");
+        assertEquals(new Annotated("42", 1), fallback.value());
+    }
+
+    /** Uniform error rendering for outcome comparison. */
+    static String formatError(RuntimeException e) {
+        return e.getClass().getName() + ": " + e.getMessage();
+    }
+
+    /** Oracle outcome captured single-threaded for the concurrency corpus. */
+    record Pinned(boolean completed, Object value, String thrown) {}
+
+    /**
+     * Raw reader outcome with uniformly formatted errors (no assertions):
+     * completion carries the value, fallback replays the oracle outcome,
+     * and only {@code IllegalArgumentException} may escape the reader
+     * itself (its shared strict sites). Fully deterministic per document.
+     */
+    Pinned capture(DirectReader<?> reader, byte[] doc) {
+        try {
+            @SuppressWarnings("unchecked")
+            Object result = ((DirectReader<Object>) reader).read(doc, oracle);
+            return new Pinned(true, result, null);
+        } catch (DirectReadFallbackException e) {
+            try {
+                Object result = oracle.fromJqValue(JqValues.parseStrict(doc), reader.type());
+                return new Pinned(false, result, null);
+            } catch (RuntimeException ex) {
+                return new Pinned(false, null, formatError(ex));
+            }
+        } catch (IllegalArgumentException e) {
+            return new Pinned(false, null, formatError(e));
+        } catch (RuntimeException e) {
+            throw new AssertionError("reader escaped the error contract", e);
+        }
+    }
+
+    @Test
+    void sharedReaderSurvivesConcurrentRequests() throws Throwable {
+        DirectReader<?> reader = loadReader(FlatOrder.class);
+        String[] corpus = {
+            "{\"name\":\"ann\",\"age\":30,\"score\":100,\"active\":true,\"optAge\":7}",
+            "{\"optAge\":7,\"active\":true,\"score\":100,\"age\":30,\"name\":\"ann\"}",
+            "{\"name\":\"a\"}",
+            "{}",
+            "{\"name\":null,\"age\":5,\"score\":null,\"active\":null}",
+            "{\"name\":42,\"age\":1,\"score\":2,\"active\":false}",
+            "{\"name\":\"a\",\"age\":1,\"score\":2,\"active\":false,\"extra\":1}",
+            "{\"name\":\"a\",\"age\":1,\"score\":2,\"active\":false,\"age\":3}",
+            "{\"name\":\"a\",\"age\":1,\"score\":2,\"active\":tru}",
+            "{\"name\":\"a\"} trailing",
+            "{\"n\\u0061me\":\"a\"}",
+        };
+        List<Pinned> expected = new ArrayList<>();
+        for (String doc : corpus) {
+            expected.add(capture(reader, doc.getBytes(StandardCharsets.UTF_8)));
+        }
+        int threads = 8;
+        int rounds = 400;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+            for (int t = 0; t < threads; t++) {
+                futures.add(pool.submit(() -> {
+                    for (int r = 0; r < rounds; r++) {
+                        for (int i = 0; i < corpus.length; i++) {
+                            Pinned want = expected.get(i);
+                            Pinned got = capture(reader, corpus[i].getBytes(StandardCharsets.UTF_8));
+                            assertEquals(want, got, "divergence for " + corpus[i]);
+                        }
+                    }
+                    return null;
+                }));
+            }
+            for (var future : futures) future.get(120, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    static byte[] mutate(byte[] base, byte[] alphabet, java.util.Random rng) {
+        int op = rng.nextInt(5);
+        return switch (op) {
+            case 0 -> {
+                if (base.length == 0) yield base;
+                byte[] doc = base.clone();
+                doc[rng.nextInt(doc.length)] = (byte) rng.nextInt(256);
+                yield doc;
+            }
+            case 1 -> {
+                int cut = rng.nextInt(base.length + 1);
+                byte[] doc = new byte[cut];
+                System.arraycopy(base, 0, doc, 0, cut);
+                yield doc;
+            }
+            case 2 -> {
+                if (base.length == 0) yield base;
+                int at = rng.nextInt(base.length);
+                int len = Math.min(rng.nextInt(4), base.length - at);
+                byte[] doc = new byte[base.length - len];
+                System.arraycopy(base, 0, doc, 0, at);
+                System.arraycopy(base, at + len, doc, at, base.length - at - len);
+                yield doc;
+            }
+            case 3 -> {
+                int at = rng.nextInt(base.length + 1);
+                int len = 1 + rng.nextInt(3);
+                byte[] doc = new byte[base.length + len];
+                System.arraycopy(base, 0, doc, 0, at);
+                for (int j = 0; j < len; j++) doc[at + j] = alphabet[rng.nextInt(alphabet.length)];
+                System.arraycopy(base, at, doc, at + len, base.length - at);
+                yield doc;
+            }
+            default -> {
+                if (base.length == 0) yield base;
+                int at = rng.nextInt(base.length);
+                int len = Math.min(1 + rng.nextInt(4), base.length - at);
+                byte[] doc = new byte[base.length + len];
+                System.arraycopy(base, 0, doc, 0, at + len);
+                System.arraycopy(base, at, doc, at, len);
+                System.arraycopy(base, at + len, doc, at + len, base.length - at - len);
+                yield doc;
+            }
+        };
+    }
+
+    @Test
+    void fuzzKeepsReaderOracleAgreement() throws Throwable {
+        DirectReader<?> reader = loadReader(FlatOrder.class);
+        String[] seeds = {
+            "{\"name\":\"ann\",\"age\":30,\"score\":-100,\"active\":true,\"optAge\":null}",
+            "{\"name\":\"\\u00e9\\ud83d\\ude00\",\"optAge\":7}",
+        };
+        byte[] alphabet = "{}[]\",: \t\n0123456789.eE+-truefalsn\"\\u".getBytes(StandardCharsets.US_ASCII);
+        java.util.Random rng = new java.util.Random(0x175);
+        for (String seed : seeds) {
+            byte[] base = seed.getBytes(StandardCharsets.UTF_8);
+            for (int i = 0; i < 1500; i++) {
+                byte[] doc = mutate(base, alphabet, rng);
+                // Independent oracle outcome through the canonical path.
+                boolean oracleOk = true;
+                Object oracleValue = null;
+                String oracleError = null;
+                try {
+                    oracleValue = oracle.fromJqValue(JqValues.parseStrict(doc), FlatOrder.class);
+                } catch (RuntimeException e) {
+                    oracleOk = false;
+                    oracleError = formatError(e);
+                }
+                Pinned got = capture(reader, doc);
+                if (got.completed()) {
+                    assertTrue(oracleOk, "completed but oracle threw <" + oracleError + ">");
+                    assertEquals(oracleValue, got.value());
+                } else if (got.thrown() != null) {
+                    assertFalse(oracleOk, "threw but oracle succeeded");
+                    assertEquals(oracleError, got.thrown());
+                } else {
+                    // Fallback replays the oracle outcome by construction.
+                    assertTrue(oracleOk, "fallback value without oracle success");
+                    assertEquals(oracleValue, got.value());
+                }
+            }
+        }
     }
 }

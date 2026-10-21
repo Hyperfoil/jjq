@@ -778,6 +778,7 @@ but the tree holds real non-finites — check with a `double` binding or
 - [jjq-jakarta README](jjq-jakarta/README.md) — Hibernate, JPA, JAX-RS, and JSON-B integration
 - [jjq-mapper README](jjq-mapper/README.md) — Record data binding, @JqField, type support
 - [jjq-mapper-processor README](jjq-mapper-processor/README.md) — Compile-time code generation, setup, benchmarks
+- [jjq-quarkus README](jjq-quarkus/README.md) — Quarkus extension, CDI mapper, direct request readers
 
 ## License
 

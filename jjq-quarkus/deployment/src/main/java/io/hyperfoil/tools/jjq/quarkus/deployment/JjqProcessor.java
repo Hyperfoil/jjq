@@ -434,7 +434,7 @@ public class JjqProcessor {
      * @param className the Jandex dotted class name (nested classes use {@code $})
      * @return the generated reader class name
      */
-    static String directReaderClassNameFor(String className) {
+    public static String directReaderClassNameFor(String className) {
         int dot = className.lastIndexOf('.');
         String pkg = dot < 0 ? "" : className.substring(0, dot + 1);
         String binary = dot < 0 ? className : className.substring(dot + 1);
@@ -491,7 +491,7 @@ public class JjqProcessor {
      * @param type   the bound record class (already loaded)
      * @param schema the compiled binding schema (must be eligible)
      */
-    static void generateDirectReader(ClassOutput output, Class<?> type, BindingSchema schema) {
+    public static void generateDirectReader(ClassOutput output, Class<?> type, BindingSchema schema) {
         String name = type.getName();
         if (!type.isRecord()) {
             throw new IllegalArgumentException(

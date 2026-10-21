@@ -61,6 +61,12 @@
         </dependency>
 
         <dependency>
+            <groupId>io.hyperfoil.tools</groupId>
+            <artifactId>jjq-quarkus-deployment</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.openjdk.jol</groupId>
             <artifactId>jol-core</artifactId>
             <version>0.18-SNAPSHOT</version>

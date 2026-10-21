@@ -70,6 +70,56 @@ byte[] jsonBytes2 = ...;
 List<Item> items3 = mapper.fromJson(jsonBytes2, listType);
 ```
 
+### Strict request parsing
+
+`fromJson` above is lenient (it tolerates trailing content, like most
+JSON libraries). For request bodies, use the strict entry point, which
+rejects trailing content, malformed JSON, duplicate keys, and binding
+failures instead of tolerating them:
+
+```java
+// Strict bytes-to-target: empty and JSON-null bodies bind null
+User user = mapper.fromJsonStrict(jsonBytes, User.class);
+```
+
+When a build-time generated direct reader is registered for the target
+type (see below), `fromJsonStrict` decodes straight from bytes without
+building a `JqValue` tree; anything outside the reader's canonical fast
+path falls back to the identical strict parse-plus-map path, so accepted
+inputs and error behavior are the same either way. Types without a
+reader — collections, maps, arrays, polymorphic families, unaccelerated
+records — always take the generic path.
+
+### Direct readers and binding schemas
+
+A *binding schema* (`BindingSchema`) is the immutable build-time
+description of how one Java type binds JSON: wire names, aliases,
+required presence, conversion kinds, primitive/boxed missing behavior,
+unknown-key policy, and construction strategy. It reuses the semantics
+already resolved by the mapper — it introduces no new binding rules, and
+it is not a JSON Schema document (see `jjq-schema` for those).
+
+A *direct reader* (`DirectReader`) is generated per eligible type from
+its binding schema — currently by the `jjq-quarkus` augmentation step —
+and registered on the mapper:
+
+```java
+JqMapper mapper = JqMapper.builder()
+    .registerDirectReader(new CreateUserRequest_DirectReader())
+    .build();
+```
+
+Eligible types are flat `@JqMapped` records over `String`, `int`,
+`long`, `boolean` and their nullable boxed equivalents, with basic wire
+naming (`@JqName`, `@JqNaming`) and required presence (`@JqRequired`).
+Nested records and collections, aliases, `@JqField` programs, custom
+converters and formats, creators, builders, polymorphic families,
+identity bindings, any-setters, and POJO setters all keep the existing
+path; readers wider than 64 fields are not generated. Readers are
+stateless and shared across threads; user constructors run only after
+the whole input has passed strict validation, and never retry on
+fallback.
+
 ### Serialization
 
 ```java
