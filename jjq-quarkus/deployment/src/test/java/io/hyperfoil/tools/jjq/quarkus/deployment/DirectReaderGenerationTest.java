@@ -92,6 +92,17 @@ class DirectReaderGenerationTest {
             String s10, int i11, long l12, boolean b13, Boolean s14,
             String s15, int i16, long l17, boolean b18, String s19) {}
 
+    /** Eligible wide fixture exercising the grouped reader shape (>32 fields). */
+    @JqMapped
+    record Wide40(String f00, int f01, long f02, boolean f03, Integer f04,
+            String f05, int f06, long f07, boolean f08, Integer f09,
+            String f10, int f11, long f12, boolean f13, Integer f14,
+            String f15, int f16, long f17, boolean f18, Integer f19,
+            String f20, int f21, long f22, boolean f23, Integer f24,
+            String f25, int f26, long f27, boolean f28, Integer f29,
+            String f30, int f31, long f32, boolean f33, Integer f34,
+            String f35, int f36, long f37, boolean f38, Integer f39) {}
+
     @JqMapped
     record Wide65(int f00, int f01, int f02, int f03, int f04, int f05, int f06, int f07,
             int f08, int f09, int f10, int f11, int f12, int f13, int f14, int f15,
@@ -230,6 +241,62 @@ class DirectReaderGenerationTest {
         DirectReader<?> reader = loadReader(FlatOrder.class);
         assertEquals(new FlatOrder(null, 5, 0L, false, null),
                 readDirect(reader, "{\"name\":null,\"age\":5,\"score\":null,\"active\":null}"));
+    }
+
+    /** Wide eligible fixture takes the grouped shape and matches the oracle. */
+    static String wide40Doc(boolean reversed, boolean partial) {
+        StringBuilder sb = new StringBuilder("{");
+        java.util.List<Integer> order = new java.util.ArrayList<>();
+        for (int i = 0; i < 40; i++) order.add(i);
+        if (reversed) java.util.Collections.reverse(order);
+        if (partial) order.subList(3, order.size()).clear();
+        boolean first = true;
+        for (int i : order) {
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"f").append(String.format("%02d", i)).append("\":");
+            sb.append(switch (i % 5) {
+                case 0 -> "\"v" + i + "\"";
+                case 1 -> Integer.toString(i);
+                case 2 -> Long.toString(i * 1000L);
+                case 3 -> (i % 2 == 0) ? "true" : "false";
+                default -> Integer.toString(i);
+            });
+        }
+        return sb.append("}").toString();
+    }
+
+    @Test
+    void wideReaderSplitsIntoHelpers() throws Throwable {
+        BindingSchema schema = JqMapper.create().bindingSchemaFor(Wide40.class);
+        assertTrue(schema.eligibleForDirectReader(), schema.ineligibilityReasons().toString());
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        JjqProcessor.generateDirectReader((name, data) -> classes.put(name, data),
+                Wide40.class, schema);
+        String pool = new String(classes.values().iterator().next(), StandardCharsets.ISO_8859_1);
+        assertTrue(pool.contains("readF0"), "wide reader should split field helpers");
+        assertTrue(pool.contains("readF39"), "wide reader should split field helpers");
+        // Small readers keep the single-method shape.
+        BindingSchema small = JqMapper.create().bindingSchemaFor(FlatOrder.class);
+        Map<String, byte[]> smallClasses = new LinkedHashMap<>();
+        JjqProcessor.generateDirectReader((name, data) -> smallClasses.put(name, data),
+                FlatOrder.class, small);
+        String smallPool = new String(smallClasses.values().iterator().next(),
+                StandardCharsets.ISO_8859_1);
+        assertFalse(smallPool.contains("readF0"), "small readers must stay single-method");
+    }
+
+    @Test
+    void wideReaderCompletesLikeOracle() throws Throwable {
+        DirectReader<?> reader = loadReader(Wide40.class);
+        for (String doc : List.of(wide40Doc(false, false), wide40Doc(true, false),
+                wide40Doc(false, true))) {
+            Object expected = oracle.fromJqValue(
+                    JqValues.parseStrict(doc.getBytes(StandardCharsets.UTF_8)), Wide40.class);
+            assertEquals(expected, readDirect(reader, doc));
+        }
+        assertFallback(reader, wide40Doc(false, false).replace("}", ",\"zz\":1}"));
+        assertFallback(reader, "{\"f00\":\"a\",\"f00\":\"b\"}");
     }
 
     @Test

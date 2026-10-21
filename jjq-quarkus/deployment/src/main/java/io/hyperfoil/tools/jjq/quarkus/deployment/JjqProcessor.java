@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.quarkus.deployment;
 
 import java.lang.Enum.EnumDesc;
 import java.lang.constant.ClassDesc;
+import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.nio.charset.Charset;
@@ -480,6 +481,14 @@ public class JjqProcessor {
      * under the 64KB method limit. Wider records keep the existing path. */
     static final int DIRECT_READER_MAX_FIELDS = 64;
 
+    /**
+     * Readers at or below this width keep the single-method shape
+     * byte-identical; wider readers split field decoding into per-field
+     * helpers so every method stays far below the JIT's huge-method
+     * budget (a 64-field single body exceeds it and never compiles).
+     */
+    static final int GROUPED_ABOVE_FIELDS = 32;
+
     private static final DotName JAX_POST = DotName.createSimple("jakarta.ws.rs.POST");
     private static final DotName JAX_PUT = DotName.createSimple("jakarta.ws.rs.PUT");
     private static final DotName JAX_PATCH = DotName.createSimple("jakarta.ws.rs.PATCH");
@@ -630,6 +639,33 @@ public class JjqProcessor {
                 mc.returning(Class.class);
                 mc.body(bc -> bc.return_(Const.of(type)));
             });
+            boolean grouped = fields.size() > GROUPED_ABOVE_FIELDS;
+            List<MethodDesc> fieldReaders = new ArrayList<>(fields.size());
+            if (grouped) {
+                for (int i = 0; i < fields.size(); i++) {
+                    BindingSchema.Field field = fields.get(i);
+                    MethodDesc md = cc.method("readF" + i,
+                            MethodTypeDesc.of(returnDescOf(field.javaType()),
+                                    ClassDesc.of(JqValues.JqCursor.class.getName())),
+                            mc -> {
+                                var cur = mc.parameter("cursor", JqValues.JqCursor.class);
+                                mc.body(bc -> {
+                                    LocalVar cursor = bc.localVar("cursor", cur);
+                                    ifNotFallback(bc, bc.invokeVirtual(mColon, cur));
+                                    LocalVar peek = bc.localVar("pk", bc.invokeVirtual(mPeek, cur));
+                                    LocalVar value = newValueLocal(bc, field);
+                                    bc.ifElse(bc.eq(peek, cNull),
+                                            t -> ifNotFallback(t, t.invokeVirtual(mReadNull, cur)),
+                                            e -> emitTypedRead(e, field, cur, value, peek,
+                                                    cString, cNumber, cTrue, cFalse,
+                                                    mReadString, mReadLong, mLongValue, mReadInt,
+                                                    mIntValue, mReadBool, mBoolValue));
+                                    bc.return_(value);
+                                });
+                            });
+                    fieldReaders.add(md);
+                }
+            }
             cc.method("read", mc -> {
                 // Erased signature (Object, not T): the JVM resolves
                 // interface dispatch by exact descriptor, so a covariant
@@ -649,23 +685,40 @@ public class JjqProcessor {
                     // defaults): absent fields and explicit nulls both bind
                     // these, exactly like the tree-based mapping.
                     List<LocalVar> values = new ArrayList<>(fields.size());
-                    List<LocalVar> seen = new ArrayList<>(fields.size());
+                    List<LocalVar> seen = grouped ? List.of() : new ArrayList<>(fields.size());
                     for (BindingSchema.Field field : fields) {
                         values.add(newValueLocal(bc, field));
-                        seen.add(bc.localVar("s_" + field.javaName(), false));
+                        if (!grouped) {
+                            seen.add(bc.localVar("s_" + field.javaName(), false));
+                        }
                     }
+                    LocalVar seenBits = grouped ? bc.localVar("seenBits", 0L) : null;
                     bc.while_(cond -> cond.yield(cond.invokeVirtual(mNext, cursor)), body -> {
                         LocalVar key = body.localVar("k", body.invokeVirtual(mIndex, cursor,
                                 body.get(mc.this_().field(keysDesc)),
                                 body.get(mc.this_().field(hashesDesc))));
                         body.if_(body.lt(key, 0), t -> t.throw_(DirectReadFallbackException.class));
+                        if (grouped) {
+                            LocalVar bit = body.localVar("bit", body.shl(Const.of(1L), key));
+                            body.if_(body.ne(body.and(seenBits, bit), Const.of(0L)),
+                                    t -> t.throw_(DirectReadFallbackException.class));
+                            body.set(seenBits, body.or(seenBits, bit));
+                        }
                         body.switch_(key, sc -> {
                             for (int i = 0; i < fields.size(); i++) {
-                                emitFieldCase(sc, i, fields.get(i), cursor, values.get(i),
-                                        seen.get(i), cNull,
-                                        mColon, mPeek, cString, cNumber, cTrue, cFalse,
-                                        mReadString, mReadLong, mLongValue, mReadInt,
-                                        mIntValue, mReadBool, mBoolValue, mReadNull);
+                                if (grouped) {
+                                    int fi = i;
+                                    sc.caseOf(i, b -> {
+                                        b.set(values.get(fi), b.invokeVirtual(
+                                                fieldReaders.get(fi), mc.this_(), cursor));
+                                    });
+                                } else {
+                                    emitFieldCase(sc, i, fields.get(i), cursor, values.get(i),
+                                            seen.get(i), cNull,
+                                            mColon, mPeek, cString, cNumber, cTrue, cFalse,
+                                            mReadString, mReadLong, mLongValue, mReadInt,
+                                            mIntValue, mReadBool, mBoolValue, mReadNull);
+                                }
                             }
                             sc.default_(b -> b.throw_(DirectReadFallbackException.class));
                         });
@@ -676,14 +729,14 @@ public class JjqProcessor {
                     // failure precedence; declaration order matches
                     // TypeConverter.checkRequired exactly.
                     for (String wire : schema.required()) {
-                        LocalVar flag = seen.get(indexOfWire(fields, wire));
-                        bc.ifNot(flag, b -> b.throw_(b.invokeVirtual(
-                                MethodDesc.of(JqMapperException.class, "prependPath",
-                                        JqMapperException.class, String.class),
-                                b.new_(JqMapperException.class, List.of(Const.of(
-                                        "Missing required field \"" + wire + "\" for "
-                                                + type.getSimpleName()))),
-                                Const.of(wire))));
+                        if (grouped) {
+                            long mask = 1L << indexOfWire(fields, wire);
+                            bc.if_(bc.eq(bc.and(seenBits, Const.of(mask)), Const.of(0L)),
+                                    b -> emitMissingRequired(b, wire, type.getSimpleName()));
+                        } else {
+                            LocalVar flag = seen.get(indexOfWire(fields, wire));
+                            bc.ifNot(flag, b -> emitMissingRequired(b, wire, type.getSimpleName()));
+                        }
                     }
                     // The user constructor runs last: never before complete
                     // validation, never retried on fallback.
@@ -706,6 +759,25 @@ public class JjqProcessor {
             if (fields.get(i).wireName().equals(wire)) return i;
         }
         throw new IllegalStateException("jjq: required wire '" + wire + "' is not a field");
+    }
+
+    /** ClassDesc for a field type, primitives included (helper return types). */
+    private static ClassDesc returnDescOf(Class<?> type) {
+        if (type == int.class) return ClassDesc.ofDescriptor("I");
+        if (type == long.class) return ClassDesc.ofDescriptor("J");
+        if (type == boolean.class) return ClassDesc.ofDescriptor("Z");
+        return ClassDesc.of(type.getName());
+    }
+
+    /** Required-field failure, identical for both reader shapes. */
+    private static void emitMissingRequired(io.quarkus.gizmo2.creator.BlockCreator b,
+            String wire, String simpleName) {
+        b.throw_(b.invokeVirtual(
+                MethodDesc.of(JqMapperException.class, "prependPath",
+                        JqMapperException.class, String.class),
+                b.new_(JqMapperException.class, List.of(Const.of(
+                        "Missing required field \"" + wire + "\" for " + simpleName))),
+                Const.of(wire)));
     }
 
     /** Value local for one field, initialized to its mapping default. */
@@ -752,7 +824,7 @@ public class JjqProcessor {
 
     /** Emit the canonical typed read for one field (mismatch means fallback). */
     private static void emitTypedRead(BlockCreator e, BindingSchema.Field field,
-            LocalVar cursor, LocalVar value, LocalVar peek,
+            Expr cursor, LocalVar value, LocalVar peek,
             Const cString, Const cNumber, Const cTrue, Const cFalse,
             MethodDesc mReadString, MethodDesc mReadLong, MethodDesc mLongValue,
             MethodDesc mReadInt, MethodDesc mIntValue, MethodDesc mReadBool, MethodDesc mBoolValue) {
