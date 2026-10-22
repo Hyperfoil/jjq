@@ -255,6 +255,15 @@ public class JqEscapeBenchmark {
         return JqValues.serializeToBytes(input);
     }
 
+    /** jjq byte-based: raw String through escapeJsonToBytes (generated-code path). */
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @Benchmark
+    public byte[] ser_jjq_escapeJsonToBytes_firstUse() {
+        var out = JqValues.acquireByteBuffer();
+        out.writeJsonString(nextString());
+        return JqValues.releaseByteBuffer(out);
+    }
+
     /** jjq scan-only: needsEscaping (no output, just detection) */
     @CompilerControl(CompilerControl.Mode.DONT_INLINE)
     @Benchmark
