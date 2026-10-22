@@ -35,6 +35,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-mapper-jackson` | Bridges Jackson 2 annotations (`@JsonProperty`, `@JsonIgnore`, `@JsonInclude`) into jjq-mapper |
 | `jjq-mapper-jsonb` | Bridges JSON-B annotations (`@JsonbProperty`, `@JsonbTransient`, `@JsonbNillable`) into jjq-mapper |
 | `jjq-yaml` | Dependency-free native YAML parsing into `JqValue` trees plus block-style emission — enables jq queries over YAML documents |
+| `jjq-xml` | Dependency-free JDK-StAX XML parsing into `JqValue` trees plus emission — enables jq queries over XML documents |
 | `jjq-schema` | Zero-dependency JSON Schema validation (2020-12 subset, draft-07 compatible) — compile once, validate across documents and threads |
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 127/558 conformance |
