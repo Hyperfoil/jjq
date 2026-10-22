@@ -3337,9 +3337,35 @@ final class YamlParser {
      */
     private static JqValue withSourceText(JqValue resolved, String source) {
         if (!(resolved instanceof JqNumber) && !(resolved instanceof JqBoolean)) return resolved;
+        // Canonical decimal ints render identically, so there is nothing
+        // to attach (issue #129): skip the render-compare. The screen
+        // admits only `0` and `-?[1-9][0-9]{0,18}` — every convertInteger
+        // outcome for these renders the same digits (long directly, or
+        // BigDecimal on overflow, which is exact for <=19 digits).
+        // `-0` (a double), `+`, leading zeros, underscores, base prefixes
+        // and sexagesimal all fail the screen and keep the full check.
+        if (isCanonicalInt(source)) return resolved;
         if (resolved.toJsonString().equals(source)) return resolved;
         if (resolved instanceof JqNumber n) return n.withSourceText(source);
         return ((JqBoolean) resolved).withSourceText(source);
+    }
+
+    /** Canonical long renderings: `0`, or an optional `-` plus 1-19 digits without a leading zero. */
+    private static boolean isCanonicalInt(String source) {
+        int n = source.length();
+        int i = n > 0 && source.charAt(0) == '-' ? 1 : 0;
+        int digits = n - i;
+        if (digits < 1 || digits > 19) return false;
+        char first = source.charAt(i);
+        if (first < '1' || first > '9') {
+            // Only bare `0` (no sign: `-0` resolves to a double).
+            return digits == 1 && first == '0' && i == 0;
+        }
+        for (int j = i + 1; j < n; j++) {
+            char c = source.charAt(j);
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
     }
 
     private static boolean isSpecialFloat(String value) {

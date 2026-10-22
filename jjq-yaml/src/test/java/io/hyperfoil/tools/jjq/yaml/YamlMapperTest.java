@@ -72,6 +72,13 @@ class YamlMapperTest {
         var cases = new String[][]{
                 {"0022", "0022"}, {"3.10", "3.10"}, {"yes", "yes"},
                 {"0x1F", "0x1F"}, {"1_000", "1_000"}, {"190:20:30", "190:20:30"},
+                // Screen-edge spellings for the #129 canonical-int
+                // precheck: divergent ones must keep attaching source text
+                {"+22", "+22"}, {"007", "007"}, {"00", "00"}, {"1e3", "1e3"},
+                // 19-digit overflow passes the screen but renders the same
+                // digits through the BigDecimal fallback: binds identically
+                {"9999999999999999999", "9999999999999999999"},
+                {"30", "30"}, {"-5", "-5"}, {"0", "0"},
         };
         for (var c : cases) {
             Env env = mapper.readValue("name: X\nvalue: " + c[0] + "\n", Env.class);
