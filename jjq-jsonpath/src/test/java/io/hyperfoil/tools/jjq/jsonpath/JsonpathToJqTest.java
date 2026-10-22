@@ -1,6 +1,8 @@
 package io.hyperfoil.tools.jjq.jsonpath;
 
 import io.hyperfoil.tools.jjq.JqProgram;
+import io.hyperfoil.tools.jjq.evaluator.Environment;
+import io.hyperfoil.tools.jjq.value.JqNumber;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.junit.jupiter.api.Assumptions;
@@ -9,6 +11,8 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -210,10 +214,12 @@ class JsonpathToJqTest {
             assertTrue(result.contains("test(\"^test$\")"), "Should convert like_regex without flags: " + result);
         }
 
-        @Test void filterAddsIterator() {
-            // Filter on non-array path adds []? in LAX mode (auto-wrap semantics)
+        @Test void filterTestsValueItself() {
+            // A filter over a non-iteration path tests the value itself,
+            // iterating only actual arrays — in both modes. Unconditional []?
+            // wrongly emptied scalars and decomposed objects.
             String result = JsonpathToJq.convert("$.data ?(@.active == true)", JsonpathToJq.Mode.LAX);
-            assertTrue(result.contains("[]?"), "Should add []? before select in lax: " + result);
+            assertTrue(result.contains("if type == \"array\""), "type-directed: " + result);
             assertTrue(result.contains("select("), result);
         }
 
@@ -1144,5 +1150,31 @@ class JsonpathToJqTest {
         // Well below the cap and the compiler's stack budget.
         String jq = JsonpathToJq.convert("$" + ".a".repeat(100), JsonpathToJq.Mode.LAX);
         assertNotNull(jq);
+    }
+
+    // ========================================================================
+    //  Variables: names plus caller-side binding (issue #73 follow-up)
+    // ========================================================================
+
+    @Test
+    void variablesUsedFindsNames() {
+        assertEquals(Set.of("min", "max"),
+                JsonpathToJq.variablesUsed("$[*].a ? (@ > $min && @ < $max)"));
+        assertEquals(Set.of(), JsonpathToJq.variablesUsed("$.a.b"));
+        assertEquals(Set.of(), JsonpathToJq.variablesUsed("$"));
+        assertEquals(Set.of(), JsonpathToJq.variablesUsed("$.a ? (@.b == \"$x\")"));
+        assertEquals(Set.of("s"), JsonpathToJq.variablesUsed("strict $.s < $s"));
+    }
+
+    @Test
+    void boundVariablesEvaluate() {
+        var vars = Map.of("min", JqNumber.of(1), "max", JqNumber.of(4));
+        JqProgram program = JsonpathToJq.compile("$[*].a ? (@ > $min && @ < $max)",
+                JsonpathToJq.Mode.LAX);
+        var env = new Environment();
+        vars.forEach(env::setVariable);
+        JqValue input = JqValues.parse("[{\"a\": 1}, {\"a\": 2}, {\"a\": 3}, {\"a\": 5}]");
+        assertEquals(List.of("2", "3"), program.applyAll(input, env).stream()
+                .map(v -> v.toJsonString()).toList());
     }
 }

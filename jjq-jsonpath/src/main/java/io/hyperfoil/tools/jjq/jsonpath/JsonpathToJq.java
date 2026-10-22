@@ -140,6 +140,30 @@ public final class JsonpathToJq {
     }
 
     /**
+     * Names of {@code $variables} referenced by a path expression, in first-use
+     * order. The jq translation carries the same names, so callers bind them
+     * through {@code Environment#setVariable} before applying the program.
+     * Quoted literals never contribute names (the lexer does not emit
+     * variables inside strings); a bare {@code $} root is not a variable.
+     *
+     * @param jsonpath the SQL/JSON path expression
+     * @return referenced variable names, possibly empty
+     * @throws IllegalArgumentException on pathological nesting or invalid input
+     */
+    public static java.util.Set<String> variablesUsed(String jsonpath) {
+        String trimmed = jsonpath == null ? "" : jsonpath.trim();
+        // Same mode-prefix strip as convertTokenized: a leading keyword is
+        // not part of the path.
+        if (trimmed.startsWith("strict ")) trimmed = trimmed.substring(7).trim();
+        else if (trimmed.startsWith("lax ")) trimmed = trimmed.substring(4).trim();
+        var names = new java.util.LinkedHashSet<String>();
+        for (var token : new JsonpathLexer(trimmed).tokenize()) {
+            if (token.is(JsonpathTokenType.NAMED_VARIABLE)) names.add(token.value());
+        }
+        return java.util.Set.copyOf(names);
+    }
+
+    /**
      * Convert a SQL/JSON path to jq and wrap in {@code [...]} to collect all
      * matches into an array — equivalent to PostgreSQL's {@code jsonb_path_query_array()}.
      * Uses lax mode (PostgreSQL default).

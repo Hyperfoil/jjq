@@ -813,19 +813,14 @@ public final class JsonpathTranslator {
         advance(); // consume LPAREN
 
         // If the path before the filter doesn't end with []? (array iteration),
-        // decide how the filter input reaches select().
-        // Lax mode auto-wraps: iterate unconditionally (proven behavior).
-        // Strict mode is type-directed: iterate actual arrays, test anything
-        // else directly. Unconditional []? iterates object values in strict
-        // mode (testing e.g. `true` instead of `{"active":true}`); no marker
-        // tests the value itself.
+        // test the value itself, iterating only actual arrays. Appending []?
+        // unconditionally iterates scalars to empty and object values instead
+        // of the object (e.g. scalar `.a` filtered to nothing, `{b:2}` tested
+        // as `2`); the conditional matches PostgreSQL in both modes, with lax
+        // tolerance coming from the ? suppression the error pass adds.
         String currentJq = jq.toString();
         if (!currentJq.endsWith("[]?") && !currentJq.endsWith("[]")) {
-            if (mode == JsonpathToJq.Mode.LAX) {
-                jq.append("[]?");
-            } else {
-                jq.append(" | (if type == \"array\" then .[] else . end)");
-            }
+            jq.append(" | (if type == \"array\" then .[] else . end)");
         }
 
         jq.append(" | select(");
