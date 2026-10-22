@@ -5,6 +5,7 @@ import io.hyperfoil.tools.jjq.mapper.JqIgnore;
 import io.hyperfoil.tools.jjq.mapper.JqMapped;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.JqType;
+import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import org.junit.jupiter.api.Test;
@@ -381,6 +382,50 @@ class JqMappedMessageBodyTest {
                 new SimpleUser("Alice", 30, true),
                 new SimpleUser("Bob", 25, false)),
                 readGeneric(json, java.util.List.class, listOfUsers()));
+    }
+
+    // ---- Collection shapes (issue #184 characterization) ----
+
+    @Test
+    void writeTo_homogeneousListExact() throws IOException {
+        String json = writeGeneric(
+                java.util.List.of(new SimpleUser("Alice", 30, true), new SimpleUser("Bob", 25, false)),
+                java.util.List.class, listOfUsers());
+        assertEquals("[{\"name\":\"Alice\",\"age\":30,\"active\":true},"
+                + "{\"name\":\"Bob\",\"age\":25,\"active\":false}]", json);
+    }
+
+    @Test
+    void writeTo_heterogeneousListExact() throws IOException {
+        var mixed = new java.util.ArrayList<>();
+        mixed.add(new SimpleUser("Alice", 30, true));
+        mixed.add(null);
+        mixed.add(new WithIgnored("Bob", "secret"));
+        mixed.add(JqString.of("tail"));
+        String json = writeGeneric(mixed, java.util.List.class, listOfUsers());
+        assertEquals("[{\"name\":\"Alice\",\"age\":30,\"active\":true},null,"
+                + "{\"name\":\"Bob\"},\"tail\"]", json);
+    }
+
+    @Test
+    void writeTo_emptyList() throws IOException {
+        assertEquals("[]", writeGeneric(java.util.List.of(),
+                java.util.List.class, listOfUsers()));
+    }
+
+    @Test
+    void writeTo_allNullList() throws IOException {
+        assertEquals("[null,null]", writeGeneric(
+                java.util.Arrays.asList(null, null),
+                java.util.List.class, listOfUsers()));
+    }
+
+    @Test
+    void writeTo_objectArrayExact() throws IOException {
+        String json = writeGeneric(
+                new SimpleUser[]{new SimpleUser("Alice", 30, true)},
+                SimpleUser[].class, SimpleUser[].class);
+        assertEquals("[{\"name\":\"Alice\",\"age\":30,\"active\":true}]", json);
     }
 
     @Test
