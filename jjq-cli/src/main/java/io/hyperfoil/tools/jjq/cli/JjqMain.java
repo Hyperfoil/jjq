@@ -132,10 +132,13 @@ public final class JjqMain {
     }
 
     private boolean useColor() {
-        if (colorOutput) return true;
+        // Colors are opt-in only (-C). System.console() cannot tell a pipe
+        // from a terminal on all supported JDKs (it reports non-null with
+        // fully redirected IO on <=24, fixed only in 25), so auto-detecting
+        // would inject escapes into pipes and files. Never color unless
+        // asked: script output stays clean everywhere.
         if (monochromeOutput) return false;
-        // Default: color if stdout is a terminal (not redirected)
-        return System.console() != null;
+        return colorOutput;
     }
 
     private int run() {
@@ -338,7 +341,7 @@ public final class JjqMain {
         System.out.println("  -S, --sort-keys         Sort object keys");
         System.out.println("  -j, --join-output       Don't print newlines between outputs");
         System.out.println("  -f, --from-file FILE    Read filter from file");
-        System.out.println("  -C, --color-output      Force colored output");
+        System.out.println("  -C, --color-output      Force colored output (never automatic)");
         System.out.println("  -M, --monochrome-output Disable colored output");
         System.out.println("  --arg NAME VALUE        Set $NAME to VALUE (string)");
         System.out.println("  --argjson NAME JSON     Set $NAME to parsed JSON value");

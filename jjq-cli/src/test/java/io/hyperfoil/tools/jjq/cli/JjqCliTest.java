@@ -134,4 +134,17 @@ class JjqCliTest {
         assertEquals(2, r.exit());
         assertTrue(r.stderr().contains("--input-format"));
     }
+
+    @Test
+    void colorsOptInOnly() throws Exception {
+        // Piped output must never carry escapes, whatever the runtime
+        // reports for System.console() (non-null with redirected IO on
+        // JDK <=24). Only -C enables color.
+        Result plain = runStdin("{\"a\":1}\n", ".a");
+        assertFalse(plain.stdout().contains("\u001B"), "escapes leaked: " + plain.stdout());
+        Result forced = runStdin("{\"a\":1}\n", "-C", ".a");
+        assertTrue(forced.stdout().contains("\u001B["), "no escapes: " + forced.stdout());
+        Result off = runStdin("{\"a\":1}\n", "-M", ".a");
+        assertEquals("1\n", off.stdout());
+    }
 }
