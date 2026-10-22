@@ -77,9 +77,13 @@ try (var out = Files.newOutputStream(path)) {
 JqYaml.toYaml(config, writer);
 ```
 
-Emission writes block-style YAML with the dependency-free emitter (no flow
-collections except empty `{}`/`[]`; scalars that would reparse as another type
-are double-quoted automatically).
+Emission writes block-style YAML by default with the dependency-free emitter
+(scalars that would reparse as another type are double-quoted automatically).
+`YamlEmitOptions` selects the indent width (1-10) and block/flow rendering per
+collection kind; the default (`2`, block everywhere) reproduces the historical
+output exactly. The tree carries no comments, styles, tags, or anchor names,
+so those do not survive emission; aliases are resolved and `<<` merges are
+flattened at parse time.
 
 ## YAML → Java Object Mapping
 

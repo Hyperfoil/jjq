@@ -2763,6 +2763,16 @@ class JqValueTest {
         }
     }
 
+    @Test
+    void testParseAllRejectsNonConsumingInput() {
+        // Issue #182: a value dispatch that consumes nothing (":" yields 0
+        // with no advance) looped forever appending junk until the heap was
+        // exhausted. Both loops must reject instead of hanging.
+        assertThrows(IllegalArgumentException.class, () -> JqValues.parseAll(":"));
+        assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseAll(":".getBytes(StandardCharsets.UTF_8)));
+    }
+
     // ========================================================================
     //  SWAR string scanning edge cases
     //  Tests boundary conditions around the 8-byte SWAR scanning window

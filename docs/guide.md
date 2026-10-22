@@ -105,6 +105,35 @@ echo '1 2 3' | jjq '. * 10'
 # 30
 ```
 
+### YAML Input and Output
+
+The same filters run over YAML documents. YAML input parses every
+`---`-separated document and feeds each through the filter independently;
+YAML output writes block-style YAML with `---` between results.
+
+```bash
+# Query YAML, print JSON (useful for piping into JSON tools)
+jjq --input-format yaml '.metadata.name' deployment.yaml
+
+# Update a value and write YAML back
+jjq --input-format yaml --output-format yaml '.spec.replicas = 3' deployment.yaml
+
+# Convert JSON to YAML
+echo '{"spec":{"replicas":2}}' | jjq --output-format yaml '.'
+# spec:
+#   replicas: 2
+
+# Every document goes through the filter; -s collects them into one array
+jjq --input-format yaml -s '[.[].kind]' manifests.yaml
+```
+
+`--indent N` sets the YAML indent width (1-10, default 2, always spaces).
+`-c`, `--tab`, `-j` and `-S` apply to JSON output only. `-r` still unwraps
+strings. Scalar resolution follows the YAML 1.1-style table in the
+`jjq-yaml` README (`yes`/`no`/`on`/`off` are booleans, `077` is octal):
+queries see typed values, and the tree keeps no comments, styles, tags, or
+anchor names. Malformed input fails with an error, never a hang.
+
 ### Options Reference
 
 | Option | Description |
@@ -124,6 +153,8 @@ echo '1 2 3' | jjq '. * 10'
 | `--argjson NAME JSON` | Set `$NAME` to a parsed JSON value |
 | `--tab` | Use tab characters for indentation |
 | `--indent N` | Use N spaces for indentation (default: 2) |
+| `--input-format FMT` | Input format: `json` or `yaml` (default: `json`) |
+| `--output-format FMT` | Output format: `json` or `yaml` (default: `json`) |
 
 ### CLI Examples
 

@@ -1422,6 +1422,18 @@ public final class JqValues {
                 "Single-quoted strings are not valid JSON; use double quotes");
     }
 
+    /**
+     * Cold constructor for the no-progress rejection (issue #182): a value
+     * dispatch that consumes no input would loop forever appending junk
+     * values until the heap is exhausted (e.g. {@code :}). Kept out of
+     * line like {@link #singleQuoteError} so the dispatch loops pay only
+     * a compare-sized guard on the hot path.
+     */
+    private static IllegalArgumentException noProgressError(int offset) {
+        return new IllegalArgumentException(
+                "Invalid JSON value at offset " + offset);
+    }
+
     /** Index of the first non-whitespace char (cold paths only). */
     private static int firstNonWs(String text) {
         int i = 0;
@@ -1542,6 +1554,7 @@ public final class JqValues {
             if (reader.pos >= reader.len) break;
             int startPos = reader.pos;
             JqValue value = parseValue(reader, 0);
+            if (reader.pos == startPos) throw noProgressError(startPos);
             setSourceLength(value, reader.pos - startPos);
             results.add(value);
         }
@@ -2766,6 +2779,7 @@ public final class JqValues {
             if (reader.pos >= reader.end) break;
             int startPos = reader.pos;
             JqValue value = parseValueBytes(reader, 0);
+            if (reader.pos == startPos) throw noProgressError(startPos);
             setSourceLength(value, reader.pos - startPos);
             results.add(value);
         }

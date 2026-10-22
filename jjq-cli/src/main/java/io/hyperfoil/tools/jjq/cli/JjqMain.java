@@ -3,6 +3,8 @@ package io.hyperfoil.tools.jjq.cli;
 import io.hyperfoil.tools.jjq.JqProgram;
 import io.hyperfoil.tools.jjq.evaluator.Environment;
 import io.hyperfoil.tools.jjq.value.*;
+import io.hyperfoil.tools.jjq.yaml.JqYaml;
+import io.hyperfoil.tools.jjq.yaml.YamlEmitOptions;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +31,8 @@ public final class JjqMain {
     private int indent = 2;
     private String filter = null;
     private String fromFile = null;
+    private String inputFormat = "json";
+    private String outputFormat = "json";
     private final List<String> files = new ArrayList<>();
     private final Map<String, String> argVars = new LinkedHashMap<>();
     private final Map<String, String> argJsonVars = new LinkedHashMap<>();
@@ -54,6 +58,8 @@ public final class JjqMain {
                 case "-S", "--sort-keys" -> sortKeys = true;
                 case "--tab" -> { tab = true; indent = 1; }
                 case "--indent" -> { i++; indent = Integer.parseInt(args[i]); }
+                case "--input-format" -> { i++; inputFormat = parseFormat(args[i], "--input-format"); }
+                case "--output-format" -> { i++; outputFormat = parseFormat(args[i], "--output-format"); }
                 case "-j", "--join-output" -> joinOutput = true;
                 case "-C", "--color-output" -> { colorOutput = true; monochromeOutput = false; }
                 case "-M", "--monochrome-output" -> { monochromeOutput = true; colorOutput = false; }
@@ -100,6 +106,29 @@ public final class JjqMain {
             System.err.println("Usage: jjq [OPTIONS] FILTER [FILE...]");
             System.exit(2);
         }
+    }
+
+    private static String parseFormat(String value, String flag) {
+        if (value.equals("json") || value.equals("yaml")) return value;
+        System.err.println("jjq: " + flag + " must be json or yaml, was: " + value);
+        System.exit(2);
+        throw new AssertionError("unreachable");
+    }
+
+    private boolean yamlInput() { return inputFormat.equals("yaml"); }
+
+    private boolean yamlOutput() { return outputFormat.equals("yaml"); }
+
+    /**
+     * Emitter options for YAML output (issue #182): the CLI default indent
+     * of 2 matches {@link YamlEmitOptions#DEFAULT}; {@code --indent N}
+     * widens it. Tabs are not valid YAML indentation, so YAML output
+     * always uses spaces.
+     */
+    private YamlEmitOptions yamlOptions() {
+        if (indent == 2) return YamlEmitOptions.DEFAULT;
+        return new YamlEmitOptions(Math.min(10, Math.max(1, indent)),
+                YamlEmitOptions.Style.BLOCK, YamlEmitOptions.Style.BLOCK);
     }
 
     private boolean useColor() {
@@ -160,6 +189,8 @@ public final class JjqMain {
                         for (String line : content.split("\n", -1)) {
                             inputs.add(JqString.of(line));
                         }
+                    } else if (yamlInput()) {
+                        inputs.addAll(JqYaml.parseAll(content));
                     } else {
                         inputs.addAll(JqValues.parseAll(content));
                     }
@@ -183,10 +214,23 @@ public final class JjqMain {
             }
             return result;
         }
+        if (yamlInput()) {
+            return JqYaml.parseAll(content);
+        }
         return JqValues.parseAll(content);
     }
 
     private void printValue(JqValue value, boolean firstOutput) {
+        // YAML output is always block-style, newline-terminated, with
+        // `---` between documents. Raw strings still print unwrapped;
+        // JSON-only modes (compact, tab, join, sort, color) do not apply.
+        if (yamlOutput() && !(rawOutput && value instanceof JqString)) {
+            if (!firstOutput) {
+                System.out.println("---");
+            }
+            System.out.print(JqYaml.toYaml(value, yamlOptions()));
+            return;
+        }
         String text;
         if (rawOutput && value instanceof JqString s) {
             text = s.stringValue();
@@ -300,6 +344,10 @@ public final class JjqMain {
         System.out.println("  --argjson NAME JSON     Set $NAME to parsed JSON value");
         System.out.println("  --tab                   Use tab for indentation");
         System.out.println("  --indent N              Use N spaces for indentation");
+        System.out.println("  --input-format FMT    Input format: json or yaml (default: json)");
+        System.out.println("  --output-format FMT   Output format: json or yaml (default: json)");
+        System.out.println("                        YAML output is block-style with --- separators;");
+        System.out.println("                        -c/--tab/-j/-S have no effect on YAML output");
         System.out.println("  -h, --help              Show this help");
         System.out.println("  --version               Show version");
     }

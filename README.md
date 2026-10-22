@@ -517,6 +517,11 @@ jjq [OPTIONS] FILTER [FILE...]
 | `--argjson NAME JSON` | Set `$NAME` to parsed JSON value |
 | `--tab` | Use tab for indentation |
 | `--indent N` | Use N spaces for indentation (default: 2) |
+| `--input-format FMT` | Input format: `json` or `yaml` (default: `json`) |
+| `--output-format FMT` | Output format: `json` or `yaml` (default: `json`) |
+
+YAML output is block-style with `---` between documents. `-c`/`--tab`/`-j`/`-S`
+apply to JSON output only; `--indent N` sets the YAML indent width (1-10).
 
 ### Examples
 
@@ -541,6 +546,20 @@ echo '[1,2,3,4,5]' | jjq 'reduce .[] as $x (0; . + $x)'
 printf '{"name":"Alice"}\n{"name":"Bob"}\n' | jjq '.name'
 # "Alice"
 # "Bob"
+
+# Query YAML with the same filters (jq queries over YAML, not yq-compatible flags)
+printf 'spec:\n  replicas: 2\n' | jjq --input-format yaml '.spec.replicas'
+# 2
+
+# Update YAML and write it back (--output-format yaml separates documents with ---)
+printf 'spec:\n  replicas: 2\n' | jjq --input-format yaml --output-format yaml '.spec.replicas = 3'
+# spec:
+#   replicas: 3
+
+# Convert JSON to YAML
+echo '{"spec":{"replicas":2}}' | jjq --output-format yaml '.'
+# spec:
+#   replicas: 2
 ```
 
 ## Performance

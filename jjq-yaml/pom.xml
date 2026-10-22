@@ -10,7 +10,7 @@
 
     <artifactId>jjq-yaml</artifactId>
     <name>jjq :: YAML</name>
-    <description>YAML parsing into jjq JqValue trees via SnakeYAML</description>
+    <description>YAML parsing into jjq JqValue trees with a dependency-free native parser</description>
 
     <dependencies>
         <dependency>
