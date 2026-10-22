@@ -384,6 +384,29 @@ class JqYamlTest {
     }
 
     @Test
+    void toYamlSeqItemNestedMapSitsDeeper() {
+        // Issue #181: a mapping nested under a sequence-item key must be
+        // one level deeper than the key, or reparse promotes its entries
+        // to siblings and nulls the key. Sequences keep the compact
+        // same-indent form (valid, reparses fine).
+        JqValue value = JqValues.parse(
+                "{\"items\":[{\"name\":\"a\",\"labels\":{\"app\":\"demo\"},\"ports\":[8080]}]}");
+        String yaml = JqYaml.toYaml(value);
+        assertEquals("""
+                items:
+                  - name: a
+                    labels:\s
+                      app: demo
+                    ports:\s
+                    - 8080
+                """, yaml.lines()
+                        .filter(l -> !l.isBlank())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n");
+        JqValue reparsed = JqYaml.parse(yaml);
+        assertEquals(reparsed.toJsonString(), value.toJsonString());
+    }
+
+    @Test
     void toYamlSpecialValues() {
         JqValue value = JqValues.parse("{\"a\":null,\"b\":true,\"c\":1.5,\"d\":\"hello\"}");
         String yaml = JqYaml.toYaml(value);
@@ -644,8 +667,7 @@ class JqYamlTest {
     }
 
     @Test
-    void toYamlEmptyContainersRoundTrip() {
-        JqValue original = JqObject.builder(2)
+    void toYamlEmptyContainersRoundTrip() {        JqValue original = JqObject.builder(2)
                 .putUnchecked("map", JqObject.builder(0).build())
                 .putUnchecked("seq", JqArray.of())
                 .build();
@@ -841,7 +863,12 @@ class JqYamlTest {
             "{\"a\":{}}", "{\"a\":[]}", "{\"a\":{\"b\":{}}}", "{\"a\":[[]]}",
             "{\"a\":null}", "[null]", "{\"a\":[null]}", "{}",
             "{\"deep\":{\"a\":{\"b\":{\"c\":{\"d\":1}}}}}",
-            "{\"list\":[[1],[2]]}", "{\"m\":[{\"a\":1},{\"b\":2}]}", "\"just a scalar\"", "\"\"", "42", "true", "null"
+            "{\"list\":[[1],[2]]}", "{\"m\":[{\"a\":1},{\"b\":2}]}", "\"just a scalar\"", "\"\"", "42", "true", "null",
+            // seq-item maps with nested collection values (issue #181)
+            "{\"items\":[{\"name\":\"a\",\"labels\":{\"app\":\"demo\",\"tier\":\"backend\"}}]}",
+            "{\"items\":[{\"labels\":{\"app\":\"demo\"},\"name\":\"a\"}]}",
+            "{\"s\":[{\"l\":[{\"a\":1}]}]}",
+            "{\"m\":[{\"a\":[1,2]}]}"
         );
         for (String doc : docs) {
             JqValue original = JqValues.parse(doc);

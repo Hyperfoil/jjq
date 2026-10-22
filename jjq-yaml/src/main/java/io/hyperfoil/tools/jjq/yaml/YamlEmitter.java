@@ -148,13 +148,15 @@ final class YamlEmitter {
                 var keys = new ArrayList<>(obj.keys());
                 appendScalar(sb, keys.get(0));
                 sb.append(": ");
-                appendInlineOrNested(sb, obj.getField(keys.get(0)), indent + indentWidth);
+                JqValue first = obj.getField(keys.get(0));
+                appendInlineOrNested(sb, first, seqMapValueIndent(first, indent));
                 sb.append('\n');
                 for (int k = 1; k < keys.size(); k++) {
                     indent(sb, indent + indentWidth);
                     appendScalar(sb, keys.get(k));
                     sb.append(": ");
-                    appendInlineOrNested(sb, obj.getField(keys.get(k)), indent + indentWidth);
+                    JqValue value = obj.getField(keys.get(k));
+                    appendInlineOrNested(sb, value, seqMapValueIndent(value, indent));
                     sb.append('\n');
                 }
             } else if (isBlockCollection(item)) {
@@ -167,6 +169,21 @@ final class YamlEmitter {
                 sb.append('\n');
             }
         }
+    }
+
+    /**
+     * Indent for a value nested under a sequence-item mapping key (issue
+     * #181): a nested block mapping must sit one level deeper than its
+     * key — same-indent mappings are siblings by the block rules and
+     * reparse promoted with a nulled key. Block sequences stay at the
+     * key level (valid compact notation, reparses fine), as do
+     * scalars, empties and flow values.
+     */
+    private int seqMapValueIndent(JqValue value, int seqIndent) {
+        if (value.isObject() && isBlockCollection(value)) {
+            return seqIndent + 2 * indentWidth;
+        }
+        return seqIndent + indentWidth;
     }
 
     /** A nested value on an already-opened line: inline when scalar/empty/flow. */
