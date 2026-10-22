@@ -136,7 +136,12 @@ class YamlDifferentialTest {
                 // Trailing commas are legal (suite 5KJE/UDR7)
                 "a: [one, two, ]\n",
                 "sequence: [ one, two, ]\nmapping: { sky: blue, sea: green }\n",
-                "a: {x: 1, }\n"
+                "a: {x: 1, }\n",
+                // Flow quoted escapes decode exactly once (issue #183)
+                "k: [\"a\\\\\", \"b\"]\n",
+                "k: [\"a\\\\nb\", \"x\\ty\"]\n",
+                "k: [\"say \\\"hi\\\"\", 'it''s']\n",
+                "k: {\"a\\\\\": 1}\n"
         );
     }
 

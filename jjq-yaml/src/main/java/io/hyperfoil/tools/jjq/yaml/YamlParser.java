@@ -3009,7 +3009,10 @@ final class YamlParser {
             } else if (c == '\'' || c == '"') {
                 char q = c;
                 i++;
-                value = applyConstructor(tag, JqString.of(unquoteScalar(quoted(q), q)));
+                // quoted() already decodes escapes inline; decoding again
+                // would corrupt (issue #183: trailing "\\" threw, "\\n"
+                // became a newline).
+                value = applyConstructor(tag, JqString.of(quoted(q)));
             } else {
                 String plainText = plain();
                 // A bare `-` is not a value in flow (suite G5U8/YJV2 parity;
