@@ -42,6 +42,45 @@ public final class JsonpathToJq {
     private JsonpathToJq() {}
 
     /**
+     * Reject absurdly nested paths before translation: each dot or bracket
+     * level becomes jq nesting that the compiler walks recursively. Counts
+     * dots outside brackets/quotes plus maximum bracket depth; anything at
+     * or past the cap fails clean instead of overflowing the stack.
+     */
+    private static void rejectDeepPaths(String trimmed) {
+        int dots = 0;
+        int depth = 0;
+        int maxDepth = 0;
+        boolean inSingle = false;
+        boolean inDouble = false;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (inSingle) {
+                if (c == '\'') inSingle = false;
+            } else if (inDouble) {
+                if (c == '"') inDouble = false;
+            } else if (c == '\'') {
+                inSingle = true;
+            } else if (c == '"') {
+                inDouble = true;
+            } else if (c == '[' || c == '(') {
+                depth++;
+                if (depth > maxDepth) maxDepth = depth;
+            } else if (c == ']' || c == ')') {
+                if (depth > 0) depth--;
+            } else if (c == '.') {
+                // Counted at any bracket depth: dots inside filters and
+                // arguments nest the generated expression just the same.
+                dots++;
+            }
+        }
+        if (dots + maxDepth >= MAX_PATH_DEPTH) {
+            throw new IllegalArgumentException(
+                    "JSON path nesting past " + MAX_PATH_DEPTH + " is not supported");
+        }
+    }
+
+    /**
      * Convert a SQL/JSON path expression to jq using lax mode (PostgreSQL default).
      *
      * @param jsonpath the SQL/JSON path expression (e.g., {@code $.a.b.c})
@@ -52,17 +91,27 @@ public final class JsonpathToJq {
     }
 
     /**
+     * Maximum path nesting accepted for conversion. Deeper paths would
+     * generate jq nesting that overflows the compiler's stack
+     * (StackOverflowError, unrecoverable); 250 is 50x past the deepest
+     * path in the PostgreSQL regression corpus.
+     */
+    private static final int MAX_PATH_DEPTH = 250;
+
+    /**
      * Convert a SQL/JSON path expression to jq using the tokenizing parser.
      * This is the new implementation that replaces the string-replacement approach.
      *
      * @param jsonpath the SQL/JSON path expression
      * @param mode strict or lax evaluation mode
      * @return the equivalent jq expression
+     * @throws IllegalArgumentException on pathological nesting or invalid input
      */
     public static String convertTokenized(String jsonpath, Mode mode) {
         if (jsonpath == null || jsonpath.isEmpty()) return ".";
         String trimmed = jsonpath.trim();
         if (trimmed.isEmpty()) return ".";
+        rejectDeepPaths(trimmed);
 
         // Detect mode from expression prefix
         if (trimmed.startsWith("strict ")) {

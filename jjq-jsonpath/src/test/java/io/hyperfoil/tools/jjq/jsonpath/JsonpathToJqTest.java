@@ -1127,4 +1127,22 @@ class JsonpathToJqTest {
         assertEquals(expectedOutput, result.toJsonString(),
                 "jsonpath: " + jsonpath + " (mode: " + mode + "), jq: " + JsonpathToJq.convert(jsonpath, mode));
     }
+
+    // ========================================================================
+    //  Depth cap: pathological nesting fails clean, never StackOverflowError
+    // ========================================================================
+
+    @Test
+    void deepPathsFailClean() {
+        // 1000-deep paths overflowed the jq compiler's stack before the cap.
+        assertThrows(IllegalArgumentException.class,
+                () -> JsonpathToJq.convert("$" + ".a".repeat(1000), JsonpathToJq.Mode.LAX));
+    }
+
+    @Test
+    void moderatePathsStillConvert() {
+        // Well below the cap and the compiler's stack budget.
+        String jq = JsonpathToJq.convert("$" + ".a".repeat(100), JsonpathToJq.Mode.LAX);
+        assertNotNull(jq);
+    }
 }

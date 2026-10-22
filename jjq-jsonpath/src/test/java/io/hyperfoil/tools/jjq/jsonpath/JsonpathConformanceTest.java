@@ -69,10 +69,36 @@ class JsonpathConformanceTest {
             assumeTrue(false, "Unsupported: silent mode");
         }
         if (tc.expectsError) {
-            // We can test that conversion+compilation doesn't crash, but we can't replicate
-            // PostgreSQL's exact error semantics. Skip for now.
+            // Policy (release housekeeping): PostgreSQL errors must also
+            // fail here — messages intentionally differ, only the failure
+            // itself is asserted. Cases jjq accepts are documented
+            // divergences (usually lax-mode tolerance) and stay skipped.
+            // Input parsing is kept out of the agreement: a rejected input
+            // needs triage, not a pass.
+            JqValue input;
+            try {
+                input = JqValues.parse(tc.inputJson);
+            } catch (Exception e) {
+                skipped++;
+                assumeTrue(false, "Input rejected by jjq parser (needs triage): "
+                        + e.getMessage());
+                return;
+            }
+            try {
+                String jq = JsonpathToJq.convert(tc.jsonpath, JsonpathToJq.Mode.LAX);
+                JqProgram program = JqProgram.compile(jq);
+                if (tc.queryFirst) {
+                    program.apply(input);
+                } else {
+                    program.applyAll(input);
+                }
+            } catch (Exception e) {
+                passed++;
+                return;
+            }
             skipped++;
-            assumeTrue(false, "Skipping: expects PostgreSQL error");
+            assumeTrue(false, "Divergence: PostgreSQL errors but jjq accepts: " + tc.jsonpath);
+            return;
         }
 
         String jsonpath = tc.jsonpath;
