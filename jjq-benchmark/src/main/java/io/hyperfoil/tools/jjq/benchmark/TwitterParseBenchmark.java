@@ -34,6 +34,7 @@ public class TwitterParseBenchmark {
 
     private String twitterJson;
     private byte[] twitterJsonBytes;
+    private int[] indexBuf;
     private JqProgram countQuery;
 
     @Setup(Level.Trial)
@@ -44,6 +45,7 @@ public class TwitterParseBenchmark {
             twitterJsonBytes = in.readAllBytes();
         }
         twitterJson = new String(twitterJsonBytes, StandardCharsets.UTF_8);
+        indexBuf = new int[twitterJsonBytes.length];
         countQuery = JqProgram.compile(".search_metadata.count");
         JqValue count = countQuery.apply(JqValues.parseStrict(twitterJsonBytes));
         if (!"100".equals(count.toJsonString())) {
@@ -69,5 +71,11 @@ public class TwitterParseBenchmark {
     @Benchmark
     public JqValue query_count() {
         return countQuery.apply(JqValues.parseStrict(twitterJsonBytes));
+    }
+
+    @Benchmark
+    public int index_structurals() {
+        return io.hyperfoil.tools.jjq.value.StructuralIndexer.indexInto(
+                twitterJsonBytes, 0, twitterJsonBytes.length, indexBuf);
     }
 }
