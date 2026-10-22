@@ -156,7 +156,8 @@ public final class BytOutput {
                 } else if (c < 0x800) {
                     dst[p++] = (byte) (0xC0 | (c >> 6));
                     dst[p++] = (byte) (0x80 | (c & 0x3F));
-                } else if (Character.isHighSurrogate(c) && i + 1 < wEnd - off) {
+                } else if (Character.isHighSurrogate(c) && i + 1 < wEnd - off
+                        && Character.isLowSurrogate(scratch[i + 1])) {
                     char low = scratch[++i];
                     int cp = Character.toCodePoint(c, low);
                     dst[p++] = (byte) (0xF0 | (cp >> 18));
@@ -285,7 +286,8 @@ public final class BytOutput {
             } else if (c < 0x800) {
                 dst[p++] = (byte) (0xC0 | (c >> 6));
                 dst[p++] = (byte) (0x80 | (c & 0x3F));
-            } else if (Character.isHighSurrogate(c) && i + 1 < end) {
+            } else if (Character.isHighSurrogate(c) && i + 1 < end
+                    && Character.isLowSurrogate(a[i + 1])) {
                 char low = a[++i];
                 int cp = Character.toCodePoint(c, low);
                 dst[p++] = (byte) (0xF0 | (cp >> 18));
