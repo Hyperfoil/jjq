@@ -740,6 +740,42 @@ class JqYamlTest {
         assertEquals("a", config.host());
     }
 
+    @Test
+    void strictMergeCollisionExplicitWins() {
+        // Explicit keys override merged keys (not duplicates): no throw,
+        // explicit value wins (issue #143: merge-guard characterization).
+        JqValue result = JqYaml.parse(
+                "base: &b\n  x: 1\n  y: 9\nderived:\n  <<: *b\n  x: 2\n",
+                YamlOptions.STRICT);
+        assertEquals(2L, result.getField("derived").getField("x").longValue());
+        assertEquals(9L, result.getField("derived").getField("y").longValue());
+    }
+
+    @Test
+    void strictMergeAfterExplicitKeepsMergeValue() {
+        // Merge entries replace through put semantics even in strict mode:
+        // no throw, merge value wins (existing behavior, pinned).
+        JqValue result = JqYaml.parse(
+                "base: &b\n  x: 1\nderived:\n  x: 5\n  <<: *b\n",
+                YamlOptions.STRICT);
+        assertEquals(1L, result.getField("derived").getField("x").longValue());
+    }
+
+    @Test
+    void strictGiantMapMatchesLenient() {
+        // 50K unique keys: strict and lenient must agree exactly
+        // (issue #143: guards the unchecked strict path at scale).
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 50_000; i++) {
+            sb.append("key-").append(i).append(": ").append(i % 3 == 0 ? "\"v\"" : i).append('\n');
+        }
+        String doc = sb.toString();
+        JqValue strict = JqYaml.parse(doc, YamlOptions.STRICT);
+        JqValue lenient = JqYaml.parse(doc, YamlOptions.LENIENT);
+        assertEquals(50_000, strict.size());
+        assertEquals(lenient.toJsonString(), strict.toJsonString());
+    }
+
     // ---- Malformed UTF-8 handling (issue #131) ----
 
     private static byte[] latin1(String s) {

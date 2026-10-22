@@ -1140,6 +1140,11 @@ final class YamlParser {
     private JqObject parseBlockMap(int indent) {
         var builder = JqObject.builder(8);
         Set<String> seen = options.allowDuplicateKeys() ? null : new HashSet<>();
+        // Strict duplicate tracking lives in `seen`; while no merge has
+        // populated this scope, explicit keys are known-absent and skip
+        // the builder's own duplicate scan (issue #143). Null when
+        // lenient (checked put keeps last-wins replace there).
+        boolean[] merged = seen != null ? new boolean[1] : null;
         for (;;) {
             if (!skipBlankAndComments()) break;
             int ind = peekIndent();
@@ -1166,14 +1171,14 @@ final class YamlParser {
             byte c0 = d[cs2];
             if (c0 != '?' && c0 != '!' && c0 != '&' && c0 != '*' && c0 != '\''
                     && c0 != '"' && c0 != '{' && c0 != '[' && c0 != ':'
-                    && parseBlockMapEntryFast(builder, seen, cs2, mle, indent)) {
+                    && parseBlockMapEntryFast(builder, seen, merged, cs2, mle, indent)) {
                 continue;
             }
             String rawRest = readLine();
             String rawLine = stripLine(rawRest);
             if (rawLine.isEmpty()) continue;
             if (rawLine.equals("?") || rawLine.startsWith("? ") || rawLine.startsWith("?\t")) {
-                parseExplicitEntry(builder, seen, rawLine, rawRest, indent);
+                parseExplicitEntry(builder, seen, merged, rawLine, rawRest, indent);
                 continue;
             }
             if (rawLine.equals(":") || rawLine.startsWith(": ")) {
@@ -1182,13 +1187,14 @@ final class YamlParser {
             MapEntry entry = splitKeyValue(rawLine);
             String key = unquoteKey(entry.key());
             if ("<<".equals(key)) {
-                applyMerge(builder, entry.value(), indent);
+                applyMerge(builder, merged, entry.value(), indent);
                 continue;
             }
             if (seen != null && !seen.add(key)) {
                 throw new JqYamlException(key, line - 1);
             }
-            builder.put(key, parseMapValue(entry.value(), indent, hasTrailingComment(rawRest)));
+            putMapEntry(builder, merged, key,
+                    parseMapValue(entry.value(), indent, hasTrailingComment(rawRest)));
         }
         return shareKeys((JqObject) builder.build());
     }
@@ -1219,13 +1225,15 @@ final class YamlParser {
     private JqValue parseInlineMap(String firstLine, int keyCol, int parentIndent, boolean firstCommented) {
         var builder = JqObject.builder(4);
         Set<String> seen = options.allowDuplicateKeys() ? null : new HashSet<>();
+        boolean[] merged = seen != null ? new boolean[1] : null;
         MapEntry first = splitKeyValue(firstLine);
         String key = unquoteKey(first.key());
         if ("<<".equals(key)) {
-            applyMerge(builder, first.value(), parentIndent);
+            applyMerge(builder, merged, first.value(), parentIndent);
         } else {
             if (seen != null) seen.add(key);
-            builder.put(key, parseInlineMapValue(first.value(), keyCol, parentIndent, firstCommented));
+            putMapEntry(builder, merged, key,
+                    parseInlineMapValue(first.value(), keyCol, parentIndent, firstCommented));
         }
         for (;;) {
             int saved = pos;
@@ -1253,13 +1261,13 @@ final class YamlParser {
             MapEntry entry = splitKeyValue(rawLine);
             String k = unquoteKey(entry.key());
             if ("<<".equals(k)) {
-                applyMerge(builder, entry.value(), parentIndent);
+                applyMerge(builder, merged, entry.value(), parentIndent);
                 continue;
             }
             if (seen != null && !seen.add(k)) {
                 throw new JqYamlException(k, line - 1);
             }
-            builder.put(k, parseInlineMapValue(entry.value(), keyCol, parentIndent,
+            putMapEntry(builder, merged, k, parseInlineMapValue(entry.value(), keyCol, parentIndent,
                     hasTrailingComment(rawRest2)));
         }
         return shareKeys((JqObject) builder.build());
@@ -1290,7 +1298,7 @@ final class YamlParser {
      * comment lines skipped) supplies the value, else null.
      */
     private void parseExplicitEntry(JqObject.Builder builder,
-            Set<String> seen, String rawLine, String rawRest, int indent) {
+            Set<String> seen, boolean[] merged, String rawLine, String rawRest, int indent) {
         String keyFirst = rawLine.length() == 1 ? "" : rawLine.substring(1).strip();
         // A `- ` entry cannot be an explicit key (suite Y79Y/007).
         if (keyFirst.equals("-") || keyFirst.startsWith("- ") || keyFirst.startsWith("-\t")) {
@@ -1340,7 +1348,7 @@ final class YamlParser {
         }
         if ("<<".equals(key)) {
             if (hasValue) {
-                applyMerge(builder, vtext, indent);
+                applyMerge(builder, merged, vtext, indent);
             }
             return;
         }
@@ -1355,7 +1363,7 @@ final class YamlParser {
         } else {
             value = parseMapValue(vtext, indent, commentedValue);
         }
-        builder.put(key, value);
+        putMapEntry(builder, merged, key, value);
     }
 
     /**
@@ -1419,7 +1427,7 @@ final class YamlParser {
      * errors. Fully consumes the line on success.
      */
     private boolean parseBlockMapEntryFast(JqObject.Builder builder,
-            Set<String> seen, int cs, int le, int indent) {
+            Set<String> seen, boolean[] merged, int cs, int le, int indent) {
         int ce = commentStart(d, cs, le);
         int i = findMappingColon(cs, ce);
         if (i < 0) {
@@ -1452,14 +1460,14 @@ final class YamlParser {
             line++;
         }
         if ("<<".equals(key)) {
-            applyMerge(builder,
+            applyMerge(builder, merged,
                     new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8), indent);
         } else {
             if (seen != null && !seen.add(key)) {
                 throw new JqYamlException(key, line - 1);
             }
             JqValue deferred = tryDeferPlainString(vs, ve, indent, Integer.MAX_VALUE, true);
-            builder.put(key, deferred != null ? deferred
+            putMapEntry(builder, merged, key, deferred != null ? deferred
                     : parseMapValue(new String(d, vs, ve - vs, java.nio.charset.StandardCharsets.UTF_8),
                             indent, commented));
         }
@@ -1864,8 +1872,23 @@ final class YamlParser {
         }
     }
 
+    /**
+     * Strict explicit-key insert (issue #143): while no merge has populated
+     * this scope, the key is known-absent — the strict seen-check above
+     * threw on any explicit duplicate — so the builder's own duplicate
+     * scan is skipped. Any merge in scope (or lenient mode, {@code merged}
+     * null) falls back to checked put, preserving explicit-over-merged
+     * and merge-over-explicit replace behavior exactly.
+     */
+    private static void putMapEntry(JqObject.Builder builder, boolean[] merged,
+            String key, JqValue value) {
+        if (merged != null && !merged[0]) builder.putUnchecked(key, value);
+        else builder.put(key, value);
+    }
+
     /** Apply a `<<` merge value (alias or sequence of aliases to mappings). */
-    private void applyMerge(JqObject.Builder builder, String inline, int indent) {
+    private void applyMerge(JqObject.Builder builder, boolean[] merged, String inline, int indent) {
+        if (merged != null) merged[0] = true;
         applyMerge(builder::put, inline, indent);
     }
 
@@ -2640,6 +2663,7 @@ final class YamlParser {
         FlowCursor c = new FlowCursor(text, 1);
         var builder = JqObject.builder(4);
         Set<String> seen = options.allowDuplicateKeys() ? null : new HashSet<>();
+        boolean[] merged = seen != null ? new boolean[1] : null;
         c.skipWs();
         if (c.peek() == '}') return builder.build();
         for (;;) {
@@ -2658,12 +2682,12 @@ final class YamlParser {
                 value = c.flowValue();
             }
             if ("<<".equals(key)) {
-                mergeFlowValue(builder, value);
+                mergeFlowValue(builder, merged, value);
             } else {
                 if (seen != null && !seen.add(key)) {
                     throw new JqYamlException(key, line);
                 }
-                builder.put(key, value);
+                putMapEntry(builder, merged, key, value);
             }
             c.skipWs();
             char ch = c.next();
@@ -2681,7 +2705,8 @@ final class YamlParser {
         return builder.build();
     }
 
-    private void mergeFlowValue(JqObject.Builder builder, JqValue value) {
+    private void mergeFlowValue(JqObject.Builder builder, boolean[] merged, JqValue value) {
+        if (merged != null) merged[0] = true;
         if (value instanceof JqObject obj) {
             obj.forEach(builder::put);
         } else if (value instanceof JqArray arr) {
@@ -3001,6 +3026,7 @@ final class YamlParser {
         JqValue parseFlowMapRest() {
             var builder = JqObject.builder(4);
             Set<String> seen = options.allowDuplicateKeys() ? null : new HashSet<>();
+            boolean[] merged = seen != null ? new boolean[1] : null;
             skipWs();
             if (peek() == '}') {
                 i++;
@@ -3022,12 +3048,12 @@ final class YamlParser {
                     value = flowValue();
                 }
                 if ("<<".equals(key)) {
-                    mergeFlowValue(builder, value);
+                    mergeFlowValue(builder, merged, value);
                 } else {
                     if (seen != null && !seen.add(key)) {
                         throw new JqYamlException(key, line);
                     }
-                    builder.put(key, value);
+                    putMapEntry(builder, merged, key, value);
                 }
                 skipWs();
                 char ch = next();

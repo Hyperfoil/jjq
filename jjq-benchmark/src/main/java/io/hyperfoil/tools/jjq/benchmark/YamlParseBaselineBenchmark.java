@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.benchmark;
 
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.yaml.JqYaml;
+import io.hyperfoil.tools.jjq.yaml.YamlOptions;
 import org.openjdk.jmh.annotations.*;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.JsonNode;
@@ -82,6 +83,12 @@ public class YamlParseBaselineBenchmark {
     @Benchmark
     public JqValue parse_jqyaml_stream() {
         return JqYaml.parse(new ByteArrayInputStream(paramYamlBytes));
+    }
+
+    @Benchmark
+    public JqValue parse_jqyaml_strict() {
+        // Strict duplicate-rejecting path (issue #143 gate: dup machinery).
+        return JqYaml.parse(paramYaml, YamlOptions.STRICT);
     }
 
     @Benchmark
