@@ -40,6 +40,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 300/558 conformance (error agreement included) |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
+| `jjq-vector` | Experimental explicit-Vector-API kernels — JDK 27+, strictly opt-in, scalar fallback always present |
 | `jjq-test-suite` | 466 conformance tests + 525 upstream jq tests (96.0% passing) |
 | `jjq-benchmark` | JMH benchmarks vs Jackson 3.2.3: parsing, serialization, mapper, allocation profiling |
 

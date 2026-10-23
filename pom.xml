@@ -241,6 +241,19 @@
         </profile>
 
         <profile>
+            <id>jjq-vector-jdk27</id>
+            <!-- Experimental Vector API module: needs release 27 plus the
+                 incubator module, so it joins the reactor on JDK 27+ only.
+                 Older JDKs never see it (zero footprint by default). -->
+            <activation>
+                <jdk>[27,)</jdk>
+            </activation>
+            <modules>
+                <module>jjq-vector</module>
+            </modules>
+        </profile>
+
+        <profile>
             <id>release</id>
             <activation>
                 <property>
