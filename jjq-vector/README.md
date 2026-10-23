@@ -3,7 +3,15 @@
 Experimental explicit-vector kernels ([issue #187](https://github.com/Hyperfoil/jjq/issues/187)).
 Strictly opt-in: nothing references this module from any default path.
 
-## Status: stage 0 (plumbing only)
+## Status: stage 1 (escape-scan kernel)
+
+- `VectorKernels.scanVector` is an explicit Vector API kernel
+  (compare/mask/early-exit, scalar tail); scalar arm stays as fallback
+  and differential oracle. Both arms pinned to identical output
+  (corpus, block-boundary, 500 randomized differentials).
+- `VectorScanBenchmark` (provided-scope JMH, run on demand) gates it:
+  13.3x scalar on 4KB-clean, 5.8x on 512-clean, ties on dense,
+  zero allocation delta (Temurin 27).
 
 - Module joins the reactor on **JDK 27+ only** (profile-gated);
   older JDKs never see it.

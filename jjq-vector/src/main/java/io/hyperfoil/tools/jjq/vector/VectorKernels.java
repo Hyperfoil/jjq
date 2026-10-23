@@ -2,6 +2,11 @@ package io.hyperfoil.tools.jjq.vector;
 
 import java.util.Objects;
 
+import jdk.incubator.vector.ByteVector;
+import jdk.incubator.vector.VectorMask;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
+
 /**
  * Optional explicit-vector kernels over raw bytes.
  *
@@ -10,11 +15,9 @@ import java.util.Objects;
  * choice. Class file version requires JDK 27+; do not load on older
  * runtimes (the module is absent from those builds by construction).
  *
- * <p>Stage 0: the dispatch shape only. {@link #scanFirstEscape} selects
- * a vector arm when {@link #isSupported()} and the scalar arm otherwise;
- * both arms currently share one scalar loop, so output is identical by
- * construction and the tests pin the dispatch, not speed. Stage 1
- * replaces {@code scanVector} with an explicit Vector API kernel.
+ * <p>Stage 1: {@code scanVector} is an explicit Vector API kernel
+ * (compare/mask/early-exit); the scalar arm stays as fallback and
+ * differential oracle. Tests pin both arms to identical output.
  */
 public final class VectorKernels {
 
@@ -22,6 +25,10 @@ public final class VectorKernels {
 
     /** System property forcing the scalar fallback ({@code -Djjq.vector.enabled=false}). */
     public static final String ENABLE_PROPERTY = "jjq.vector.enabled";
+
+    /** Preferred species, looked up once (stage-1 note: re-query if
+     * kernels ever need to adapt to migration across ISAs at runtime). */
+    private static final VectorSpecies<Byte> SPECIES = VectorSupport.preferredSpecies();
 
     /** False only when explicitly disabled; read dynamically so tests can toggle per case. */
     public static boolean isEnabled() {
@@ -47,11 +54,25 @@ public final class VectorKernels {
         return scanScalar(v, off, len);
     }
 
-    // Stage 1 replaces this body with the explicit Vector API kernel
-    // (compare/mask/store/early-exit); kept separate so the dispatch
-    // shape is already in place and tested.
+    // Stage 1: explicit Vector API kernel (compare/mask/early-exit over
+    // caller-provided arrays — no private String access, no --add-opens).
+    // Operates on signed bytes so one LT catches controls and >= 0x80,
+    // exactly like the scalar arm.
     static int scanVector(byte[] v, int off, int len) {
-        return scanScalar(v, off, len);
+        final int step = SPECIES.length();
+        int i = 0;
+        for (; i + step <= len; i += step) {
+            ByteVector x = ByteVector.fromArray(SPECIES, v, off + i);
+            VectorMask<Byte> m = x.compare(VectorOperators.LT, (byte) 0x20)
+                    .or(x.compare(VectorOperators.EQ, (byte) '"'))
+                    .or(x.compare(VectorOperators.EQ, (byte) '\\'));
+            if (m.anyTrue()) return i + m.firstTrue();
+        }
+        for (; i < len; i++) {
+            byte b = v[off + i];
+            if (b < 0x20 || b == '"' || b == '\\') return i;
+        }
+        return len;
     }
 
     static int scanScalar(byte[] v, int off, int len) {

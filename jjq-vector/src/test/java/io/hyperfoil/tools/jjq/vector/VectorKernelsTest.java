@@ -117,4 +117,38 @@ class VectorKernelsTest {
         assertThrows(IndexOutOfBoundsException.class,
                 () -> VectorKernels.scanFirstEscape(v, -1, 1));
     }
+
+    @Test
+    void blockBoundaries() {
+        // Escapes around every plausible block edge (64/128/256-bit
+        // species all divide these): the vector arm must agree with the
+        // oracle exactly at block transitions and inside tails.
+        int[] edges = {0, 1, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512};
+        for (int edge : edges) {
+            byte[] clean = new byte[600];
+            java.util.Arrays.fill(clean, (byte) 'a');
+            // Escape exactly at the edge.
+            byte[] at = clean.clone();
+            at[edge] = '"';
+            // Escape just before the edge (previous block's tail).
+            byte[] before = clean.clone();
+            if (edge > 0) before[edge - 1] = '\\';
+            else before[0] = '\\';
+            // High byte at the edge (signed-negative flag).
+            byte[] high = clean.clone();
+            high[edge] = (byte) 0x80;
+            for (byte[] c : new byte[][]{clean, at, before, high}) {
+                assertEquals(oracle(c, 0, c.length), VectorKernels.scanVector(c, 0, c.length),
+                        () -> "vector arm at edge " + edge);
+                assertEquals(oracle(c, 0, c.length),
+                        VectorKernels.scanFirstEscape(c, 0, c.length));
+            }
+        }
+        // Lengths below, at, and above one 64-byte block.
+        for (int len : new int[]{1, 63, 64, 65, 127}) {
+            byte[] c = new byte[len];
+            java.util.Arrays.fill(c, (byte) 'b');
+            assertEquals(len, VectorKernels.scanVector(c, 0, len));
+        }
+    }
 }
