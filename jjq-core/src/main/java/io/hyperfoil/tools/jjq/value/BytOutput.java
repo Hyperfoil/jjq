@@ -26,6 +26,13 @@ public final class BytOutput {
      */
     private static final int CHAR_SCRATCH_SIZE = 8192;
 
+    /**
+     * Length at or below which ASCII writes use a plain charAt loop:
+     * pollution damage on a short copy is bounded below the getChars
+     * fixed cost (same crossover argument as JqString.SHORT_SCAN_MAX).
+     */
+    private static final int SHORT_WRITE_MAX = 64;
+
     byte[] buf;
     int pos;
     private char[] charScratch;
@@ -69,9 +76,29 @@ public final class BytOutput {
     public void writeAsciiString(String s) {
         int len = s.length();
         ensureCapacity(len);
-        for (int i = 0; i < len; i++) {
-            buf[pos++] = (byte) s.charAt(i);
+        if (len <= SHORT_WRITE_MAX) {
+            for (int i = 0; i < len; i++) {
+                buf[pos++] = (byte) s.charAt(i);
+            }
+            return;
         }
+        // getChars copy instead of a charAt loop: charAt carries a
+        // coder-profile branch that any UTF-16 charAt in the process
+        // poisons for every call site (paper "Escaping JSON one lane at
+        // a time", profile pollution). Callers pass ASCII-only content.
+        char[] scratch = charScratch();
+        byte[] dst = buf;
+        int p = pos;
+        int off = 0;
+        while (off < len) {
+            int wEnd = Math.min(off + CHAR_SCRATCH_SIZE, len);
+            s.getChars(off, wEnd, scratch, 0);
+            for (int i = 0; i < wEnd - off; i++) {
+                dst[p++] = (byte) scratch[i];
+            }
+            off = wEnd;
+        }
+        pos = p;
     }
 
     /**
@@ -192,15 +219,19 @@ public final class BytOutput {
      * runs the segment scan/encode over the array (issue #157 experiment).
      * Semantics match the previous charAt loop exactly, including lone
      * surrogates (3-byte form) and window-boundary behavior.
+     *
+     * @return true when any escape sequence was emitted (lets callers fuse
+     *         the cleanliness memo into the escape run instead of
+     *         pre-scanning with a pollution-exposed charAt loop)
      */
-    public void escapeJsonToBytes(String s) {
+    public boolean escapeJsonToBytes(String s) {
         final int len = s.length();
         ensureCapacity(len * 3 + 12); // worst case: all escaped + UTF-8 expansion
+        boolean escaped = false;
         if (len <= CHAR_SCRATCH_SIZE) {
             char[] scratch = charScratch();
             s.getChars(0, len, scratch, 0);
-            escapeWindow(scratch, 0, len);
-            return;
+            return escapeWindow(scratch, 0, len);
         }
         char[] scratch = charScratch();
         int off = 0;
@@ -210,9 +241,10 @@ public final class BytOutput {
                 wEnd--; // never split a surrogate pair across windows
             }
             s.getChars(off, wEnd, scratch, 0);
-            escapeWindow(scratch, 0, wEnd - off);
+            escaped |= escapeWindow(scratch, 0, wEnd - off);
             off = wEnd;
         }
+        return escaped;
     }
 
     /** Lazily-created bounded scratch (retained with the buffer). */
@@ -227,14 +259,18 @@ public final class BytOutput {
     /**
      * Segment-based escape scan over a scratch window: scans for the next
      * escape character without writing, then bulk-flushes the clean segment.
+     *
+     * @return true when any escape sequence was emitted in this window
      */
-    private void escapeWindow(char[] a, int start, int end) {
+    private boolean escapeWindow(char[] a, int start, int end) {
         int segStart = start;
+        boolean escaped = false;
 
         for (int i = start; i < end; i++) {
             char c = a[i];
             if (c >= 0x20 && c != '"' && c != '\\') continue; // scan — no writes
 
+            escaped = true;
             // Found escape character — flush clean segment before it
             if (i > segStart) {
                 writeSegmentChars(a, segStart, i);
@@ -265,6 +301,7 @@ public final class BytOutput {
         if (segStart < end) {
             writeSegmentChars(a, segStart, end);
         }
+        return escaped;
     }
 
     /**

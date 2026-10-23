@@ -98,9 +98,9 @@ public final class JqString implements JqValue {
         throw new IllegalStateException("Deferred JqString with no source");
     }
 
-    /** Check output-cleanliness once and remember the verdict (cold path). */
-    private byte checkAndMemoClean(String v) {
-        byte m = needsEscaping(v) ? (byte) 2 : (byte) 1;
+    /** Record a cleanliness verdict from an escape run (cold path). */
+    private byte memoClean(boolean escaped) {
+        byte m = escaped ? (byte) 2 : (byte) 1;
         cleanMemo = m;
         return m;
     }
@@ -146,17 +146,23 @@ public final class JqString implements JqValue {
      * Uses a fast path: scans for characters that need escaping and appends
      * clean segments in bulk via {@code sb.append(s, start, end)}, only
      * falling back to per-character handling at escape points.
+     *
+     * @return true when any escape sequence was emitted (lets callers fuse
+     *         the cleanliness memo into the escape run instead of
+     *         pre-scanning with a pollution-exposed charAt loop)
      */
     /**
      * Escape a string for JSON output, appending the result to the StringBuilder.
      * Characters below 0x20, {@code "}, and {@code \} are escaped.
      */
-    public static void escapeJson(String s, StringBuilder sb) {
+    public static boolean escapeJson(String s, StringBuilder sb) {
         final int len = s.length();
         int start = 0; // start of current clean segment
+        boolean escaped = false;
         for (int i = 0; i < len; i++) {
             char c = s.charAt(i);
             if (c >= 0x20 && c != '"' && c != '\\') continue; // common case: no escaping needed
+            escaped = true;
             // Flush the clean segment before this character
             if (i > start) sb.append(s, start, i);
             switch (c) {
@@ -178,6 +184,7 @@ public final class JqString implements JqValue {
         }
         // Flush remaining clean segment
         if (start < len) sb.append(s, start, len);
+        return escaped;
     }
 
     /** Uppercase hex digits for {@code \\uXXXX} escapes. */
@@ -279,11 +286,50 @@ public final class JqString implements JqValue {
         return JqValues.serialize(this);
     }
 
-    /** Check if a string contains any characters that require JSON escaping. */
+    /**
+     * Length at or below which scans use a plain charAt loop: pollution
+     * damage on a short scan is bounded to a few ns, below any copy-first
+     * fixed cost (ThreadLocal lookup plus getChars call). Measured
+     * crossover on Temurin (JqEscapeBenchmark clean/primed A/B).
+     */
+    private static final int SHORT_SCAN_MAX = 64;
+
+    /** Chunk size for the immune scan tier: bounds wasted copy on early exit. */
+    private static final int SCAN_CHUNK = 256;
+
+    /**
+     * Retained scan scratch for {@link #needsEscaping}: one 8K-char window
+     * (16 KB) per thread, so retention stays bounded no matter how large
+     * any single string is.
+     */
+    private static final ThreadLocal<char[]> SCAN_SCRATCH =
+            ThreadLocal.withInitial(() -> new char[8192]);
+
+    /**
+     * Check if a string contains any characters that require JSON escaping.
+     * Short strings scan inline; longer ones scan windowed {@code getChars}
+     * chunks, immune to process-wide charAt profile pollution (paper
+     * "Escaping JSON one lane at a time").
+     */
     public static boolean needsEscaping(String s) {
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c < 0x20 || c == '"' || c == '\\') return true;
+        final int len = s.length();
+        if (len <= SHORT_SCAN_MAX) {
+            for (int i = 0; i < len; i++) {
+                char c = s.charAt(i);
+                if (c < 0x20 || c == '"' || c == '\\') return true;
+            }
+            return false;
+        }
+        char[] scratch = SCAN_SCRATCH.get();
+        int off = 0;
+        while (off < len) {
+            int wEnd = Math.min(off + SCAN_CHUNK, len);
+            s.getChars(off, wEnd, scratch, 0);
+            for (int i = 0; i < wEnd - off; i++) {
+                char c = scratch[i];
+                if (c < 0x20 || c == '"' || c == '\\') return true;
+            }
+            off = wEnd;
         }
         return false;
     }
@@ -307,10 +353,12 @@ public final class JqString implements JqValue {
         if (v != null) {
             // Materialized (eager or already accessed deferred): skip the
             // rescan when a previous output proved the value clean.
+            // Otherwise the escape run below reports the verdict and fuses
+            // it into the memo — no separate pre-scan.
             byte m = cleanMemo;
-            if (m == 0) m = checkAndMemoClean(v);
             if (m == 1) sb.append(v);
-            else escapeJson(v, sb);
+            else if (m == 2) escapeJson(v, sb);
+            else memoClean(escapeJson(v, sb));
         } else if (source instanceof String s && !hasEscapes) {
             // Deferred from String, no escapes -- ZERO-COPY: write source directly
             // Source content between quotes is already valid JSON (no escape sequences)
@@ -337,10 +385,12 @@ public final class JqString implements JqValue {
         if (v != null) {
             // Materialized — encode directly when a previous output proved
             // the value clean, else escape (same memo as appendTo).
+            // Otherwise the escape run below reports the verdict and fuses
+            // it into the memo — no separate pre-scan.
             byte m = cleanMemo;
-            if (m == 0) m = checkAndMemoClean(v);
             if (m == 1) out.writeUTF8(v);
-            else out.escapeJsonToBytes(v);
+            else if (m == 2) out.escapeJsonToBytes(v);
+            else memoClean(out.escapeJsonToBytes(v));
         } else if (source instanceof byte[] bytes && !hasEscapes) {
             // Deferred from bytes, no escapes — ZERO-COPY: raw byte copy
             // Source bytes are already valid UTF-8 JSON content (no escape sequences).

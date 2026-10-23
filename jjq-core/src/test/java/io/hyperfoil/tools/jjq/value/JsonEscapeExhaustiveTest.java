@@ -84,6 +84,27 @@ class JsonEscapeExhaustiveTest {
     }
 
     @Test
+    void needsEscapingAgreesWithOracle() {
+        for (int cp = 0; cp <= 0xFFFF; cp++) {
+            final int code = cp;
+            char c = (char) code;
+            boolean expected = c < 0x20 || c == '"' || c == '\\';
+            assertEquals(expected, JqString.needsEscaping(String.valueOf(c)),
+                    () -> "needsEscaping wrong at U+" + Integer.toHexString(code));
+        }
+        // Multi-window strings: escape past the 8K scratch edge.
+        String pad = "a".repeat(SCRATCH);
+        assertTrue(JqString.needsEscaping(pad + "\""));
+        assertTrue(JqString.needsEscaping(pad + "\u0000" + pad));
+        assertFalse(JqString.needsEscaping(pad + pad));
+        // Mid-range: just over the short tier, across chunk edges.
+        assertFalse(JqString.needsEscaping("x".repeat(100)));
+        assertTrue(JqString.needsEscaping("y".repeat(99) + "\""));
+        assertTrue(JqString.needsEscaping("y".repeat(255) + "\u0001" + "z".repeat(300)));
+        assertFalse(JqString.needsEscaping("z".repeat(300)));
+    }
+
+    @Test
     void windowBoundaries() {
         String pad = "a".repeat(SCRATCH);
         String[] cases = {
@@ -100,6 +121,11 @@ class JsonEscapeExhaustiveTest {
                 // Long clean and escape-dense strings over several windows.
                 "b".repeat(3 * SCRATCH + 17),
                 ("\"\\\n\t" + "é\u20ACTrue").repeat(2000),
+                // Mid-range tier/chunk coverage: escapes around 64 and 256.
+                "q".repeat(63) + "\"" + "q".repeat(10),
+                "q".repeat(64) + "\"" + "q".repeat(10),
+                "q".repeat(255) + "\\" + "q".repeat(300),
+                "q".repeat(512),
         };
         for (String s : cases) {
             assertArrayEquals(oracle(s), escapeBytes(s),
