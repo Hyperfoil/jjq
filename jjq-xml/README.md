@@ -6,7 +6,7 @@ XML parsing, querying, and emission via jjq's [JqValue](../jjq-core) tree: jq pr
 <dependency>
     <groupId>io.hyperfoil.tools</groupId>
     <artifactId>jjq-xml</artifactId>
-    <version>0.2.4-SNAPSHOT</version>
+    <version>0.2.4</version>
 </dependency>
 ```
 

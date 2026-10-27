@@ -365,9 +365,6 @@
   only column-0 markers terminate the scalar (YAML 1.2 §9.1.2/§8.1.1),
   matching SnakeYAML byte-for-byte; real column-0 markers still end
   the scalar and start a new document
-
-## [0.2.3] - 2026-10-11
-
 - Non-finite coherence (follow-up to the incus-spawn report): `abs`
   and `divide` route through exact double arithmetic, Jackson/fastjson2
   conversions preserve via `Double`, and `decimalValue()` throws instead
@@ -376,6 +373,80 @@
 - Non-finite numbers mismatch for integral and decimal targets instead
   of silently binding 0 (jq never holds such values); doubles pass
   through exact, `null` serialization unchanged
+- New `jjq-xml` module: jq over XML via JDK StAX straight into
+  `JqValue` (no DOM tree), with xq-compatible mapping (`@attr`
+  attributes, `#text` text, repeated siblings collapse to arrays,
+  strings by default with opt-in JSON-number coercion that still
+  keeps `001` a string). DOCTYPE and entity references are rejected,
+  depth is capped; emission round-trips the common subset. Zero new
+  dependencies; 27 tests pin mapping, hardening, and `JqProgram`
+  interop (issue #169)
+- CLI YAML input/output (issue #182): `--input-format`/`--output-format`
+  `json|yaml` (defaults `json`, byte-identical when absent) over the
+  existing engine — YAML input feeds every document through the filter
+  per file and stream, `-s` collects documents, YAML output writes
+  block style with `---` separators. `-r` still unwraps strings,
+  `--indent N` sets the YAML width (1-10, spaces), `-c`/`--tab`/`-j`/`-S`
+  stay JSON-output concerns. Malformed input fails cleanly with a
+  non-zero exit instead of hanging (parse loops reject non-consuming
+  input). Colors are opt-in only (`-C`, never automatic). End-to-end
+  child-JVM tests with hang timeouts
+- SQL/JSON path conformance (issue #73): PostgreSQL-error cases pass
+  when jjq also fails (divergences stay skipped, never counted),
+  absurdly nested paths fail clean instead of overflowing, and
+  `$variables` bind through `variablesUsed` plus the jq environment
+  (the old `'{"` substring flag skipped 70 object-input lines spuriously;
+  `jsonb_path_query_array` covered too). Corpus 558 to 585 cases,
+  skips 257 to 217, zero same-case masking
+- Engine-free HTTP problem rendering (issue #176): `JqProblemWriter`
+  renders byte-identically to the JSON-B serializer across 403/400/500
+  with conditional registration, so engine-less runtimes keep working
+- Async collection responses and boxed nulls (issue #178): the writer
+  claims `Uni<List<…>>` (async unwrap; strict matching stays on the
+  reader) and generated POJO mappings route boxed scalars through the
+  null-preserving converter (explicit-null `Long`/`Integer` no longer
+  bind 0)
+- Getter-placed `@JsonInclude` honored in codegen (issue #179):
+  field-then-getter lookup mirrors the runtime bridge
+- Reader dispatch and width (issue #180): FNV-1a hashed field dispatch
+  (−10 to −38% on dispatch cells, baseline cells unmoved) with
+  build-time per-reader hashes; readers above 32 fields decode through
+  small per-field helpers (a 64-field reader exceeded HotSpot's 8KB
+  JIT compile limit and never compiled; smaller readers byte-identical);
+  precomputed quoted key constants (−44% on the JMH bytes path,
+  String path flat, plus an exotic wire-name escaping fix)
+- Canonical-int fast path for render-compare (issue #129): admits only
+  `0` and `-?[1-9][0-9]{0,18}` (time-neutral everywhere, allocation
+  −4 to −6% across lenient/stream/strict)
+- Strict-map duplicate fast path (issue #143): unchecked `put` once the
+  scope seen-set admits the key, with merge-collision fallback preserving
+  merge precedence exactly (strict maps-1mb +21.8%/−19.7% allocation to
+  lenient parity)
+- Sequence-item nested maps emit one level deeper (issue #181);
+  the mixed fixture round-trips again
+- Flow quoted escapes decode once, not twice (issue #183)
+- Collection response shapes pinned in writer tests (issue #184)
+- Lone-high-surrogate mis-pairing fixed in byte serialization
+  (issue #185): a trailing high surrogate followed by any char paired
+  with garbage instead of the documented 3-byte form; pinned by an
+  exhaustive 65,536-char oracle test plus window-boundary strings
+- Serialization scans immune to `charAt` profile pollution
+  (issue #186): `getChars` scans, cleanliness memo fused into the
+  escape run (one scan eliminated), length-tiered at 64 chars
+  (bounded exposure below, immune chunks above). Primed full scans
+  −12 to −57%, ASCII end-to-end ties or wins, allocations identical
+- Experimental `jjq-vector` module, JDK-27-gated and strictly opt-in
+  (issue #187): scalar fallback always present; escape-scan kernel at
+  13.3x scalar on long-clean input with ties on dense and zero
+  allocation delta. A staged structural-indexer follow-up was stopped
+  on evidence (multibyte validation floor). Absent from JDKs below 27
+  and from releases built on them
+- Experimental scalar structural indexer groundwork in core: retained
+  `int[]` plus count contract mirroring the native split, with
+  differential tests and twitter.json comparison rows
+
+## [0.2.3] - 2026-10-11
+
 - YAML float fidelity (#138-#140, from the emitter round-trip audit):
   exact decimals via BigDecimal (22-digit precision survives, dotless
   exponents stay float, trailing forms stable), lone surrogates escape
