@@ -1598,7 +1598,7 @@ public final class TypeConverter {
      * absent — strict behavior). The normalized map goes from normalized wire
      * name to constant name, built once at handler resolution.
      *
-     * <p>Public alongside {@link #EnumHandlers} for build-time resolution.</p>
+     * <p>Public alongside {@link TypeConverter.EnumHandlers} for build-time resolution.</p>
      */
     public record EnumLeniency(java.util.Set<JqEnum.Normalize> normalizations,
                         JqEnum.OnUnknown onUnknown,

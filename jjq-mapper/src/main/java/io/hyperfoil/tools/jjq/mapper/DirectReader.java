@@ -43,8 +43,7 @@ public interface DirectReader<T> {
      * @throws DirectReadFallbackException to run the existing path instead;
      *         user constructors, creators, converters and setters never run
      *         before this is thrown or a value is returned
-     * @throws io.hyperfoil.tools.jjq.value.JqValues strict errors
-     *         ({@code IllegalArgumentException}) on malformed input that the
+     * @throws IllegalArgumentException on malformed input that the
      *         cursor detects itself, identical to the existing path
      */
     T read(byte[] json, JqMapper mapper);
