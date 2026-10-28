@@ -126,6 +126,35 @@ class Utf8Test {
         assertEquals(bad.length - 1, Utf8.validate(bad, 0, bad.length));
     }
 
+    @Test
+    void sharedSequenceHelperContract() {
+        // Issue #190: the package-private sequence helper shared by Utf8
+        // and StructuralIndexer returns the offset just past a valid
+        // sequence, or -1 when malformed. Both callers translate -1 into
+        // their own error form (lead offset vs exception) without
+        // re-encoding the rules.
+        byte[] two = {(byte) 0xC3, (byte) 0xA9};
+        assertEquals(2, Utf8.sequenceEnd(two, 0, 2));
+        byte[] three = {(byte) 0xE2, (byte) 0x82, (byte) 0xAC};
+        assertEquals(3, Utf8.sequenceEnd(three, 0, 3));
+        byte[] four = {(byte) 0xF0, (byte) 0x9F, (byte) 0x98, (byte) 0x80};
+        assertEquals(4, Utf8.sequenceEnd(four, 0, 4));
+        // Malformed of every class reports -1; the caller owns the offset.
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0x80}, 0, 1));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xC0, (byte) 0xAF}, 0, 2));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xC3, (byte) 0x28}, 0, 2));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xE0, (byte) 0x80, (byte) 0xAF}, 0, 3));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xED, (byte) 0xA0, (byte) 0x80}, 0, 3));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xF4, (byte) 0x90, (byte) 0x80, (byte) 0x80}, 0, 4));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xF5}, 0, 1));
+        // Truncated sequences report -1 regardless of how many bytes remain.
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xE2, (byte) 0x82}, 0, 2));
+        assertEquals(-1, Utf8.sequenceEnd(new byte[]{(byte) 0xF0, (byte) 0x9F, (byte) 0x98}, 0, 3));
+        // Mid-buffer starts work: end offsets are absolute.
+        byte[] buf = {'a', (byte) 0xE2, (byte) 0x82, (byte) 0xAC, 'b'};
+        assertEquals(4, Utf8.sequenceEnd(buf, 1, 5));
+    }
+
     private static void assertValid(String s) {
         byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
         assertEquals(-1, Utf8.validate(bytes, 0, bytes.length), s);

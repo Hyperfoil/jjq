@@ -111,39 +111,10 @@ public final class StructuralIndexer {
         throw new IllegalArgumentException("Unclosed string in document");
     }
 
-    /** Validate one UTF-8 sequence at {@code i}; return the next offset. Rules mirror Utf8. */
+    /** Validate one UTF-8 sequence at {@code i}; return the next offset. Rules live in Utf8. */
     private static int utf8Step(byte[] buf, int i, int end) {
-        int b = buf[i] & 0xFF;
-        if (b < 0xC2) throw new IllegalArgumentException("Invalid UTF-8 at offset " + i);
-        if (b < 0xE0) {
-            if (i + 1 >= end || !isContinuation(buf[i + 1])) {
-                throw new IllegalArgumentException("Invalid UTF-8 at offset " + i);
-            }
-            return i + 2;
-        }
-        if (b < 0xF0) {
-            if (i + 2 >= end
-                    || !isContinuation(buf[i + 1]) || !isContinuation(buf[i + 2])
-                    || (b == 0xE0 && (buf[i + 1] & 0xFF) < 0xA0)
-                    || (b == 0xED && (buf[i + 1] & 0xFF) > 0x9F)) {
-                throw new IllegalArgumentException("Invalid UTF-8 at offset " + i);
-            }
-            return i + 3;
-        }
-        if (b <= 0xF4) {
-            if (i + 3 >= end
-                    || !isContinuation(buf[i + 1]) || !isContinuation(buf[i + 2])
-                    || !isContinuation(buf[i + 3])
-                    || (b == 0xF0 && (buf[i + 1] & 0xFF) < 0x90)
-                    || (b == 0xF4 && (buf[i + 1] & 0xFF) > 0x8F)) {
-                throw new IllegalArgumentException("Invalid UTF-8 at offset " + i);
-            }
-            return i + 4;
-        }
-        throw new IllegalArgumentException("Invalid UTF-8 at offset " + i);
-    }
-
-    private static boolean isContinuation(byte b) {
-        return (b & 0xC0) == 0x80;
+        int next = Utf8.sequenceEnd(buf, i, end);
+        if (next < 0) throw new IllegalArgumentException("Invalid UTF-8 at offset " + i);
+        return next;
     }
 }
