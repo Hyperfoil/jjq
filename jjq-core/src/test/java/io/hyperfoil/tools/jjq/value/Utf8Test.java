@@ -130,4 +130,85 @@ class Utf8Test {
         byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
         assertEquals(-1, Utf8.validate(bytes, 0, bytes.length), s);
     }
+
+    @Test
+    void everyLeadByteAtEveryMod16Offset() {
+        // Issue #193: lead classification must not depend on word alignment.
+        // Every possible first byte, placed at every offset modulo 16 in an
+        // otherwise-ASCII buffer. ASCII bytes are valid; anything else alone
+        // is malformed at exactly its own offset.
+        for (int value = 0; value < 256; value++) {
+            for (int at = 0; at < 16; at++) {
+                // 80 bytes so the 8-byte word skip engages; the probe sits
+                // at every lane offset modulo 16.
+                byte[] bytes = new byte[80];
+                java.util.Arrays.fill(bytes, (byte) 'a');
+                bytes[at] = (byte) value;
+                int expected = value < 0x80 ? -1 : at;
+                assertEquals(expected, Utf8.validate(bytes, 0, bytes.length),
+                        String.format("byte 0x%02X at %d", value, at));
+            }
+        }
+    }
+
+    @Test
+    void sequencesCrossingSixteenByteBoundaries() {
+        // Valid 2/3/4-byte sequences starting at every offset across 8- and
+        // 16-byte boundaries, plus truncated variants reporting the lead.
+        String[] chars = {"\u00e9", "\u20ac", "\uD83D\uDE00"};
+        for (String ch : chars) {
+            byte[] enc = ch.getBytes(StandardCharsets.UTF_8);
+            for (int at = 0; at < 24; at++) {
+                // 96 bytes so the word skip engages and the sequence crosses
+                // 8- and 16-byte boundaries at every residue.
+                byte[] bytes = new byte[96];
+                java.util.Arrays.fill(bytes, (byte) 'q');
+                System.arraycopy(enc, 0, bytes, at, enc.length);
+                assertEquals(-1, Utf8.validate(bytes, 0, bytes.length),
+                        ch + " at " + at);
+                // Truncate the sequence by one byte: the lead offset reports.
+                byte[] cut = java.util.Arrays.copyOf(bytes, at + enc.length - 1);
+                assertEquals(at, Utf8.validate(cut, 0, cut.length),
+                        "truncated " + ch + " at " + at);
+            }
+        }
+    }
+
+    @Test
+    void nonzeroOffsetRanges() {
+        // Ranges starting mid-buffer: a complete sequence at a nonzero
+        // offset validates; a range starting on a continuation byte of an
+        // otherwise-valid sequence reports that byte.
+        byte[] bytes = ("ab\u00e9cd\u20acef").getBytes(StandardCharsets.UTF_8);
+        assertEquals(-1, Utf8.validate(bytes, 2, bytes.length - 2));
+        assertEquals(-1, Utf8.validate(bytes, 0, bytes.length));
+        // bytes[3] is the A9 continuation of C3 A9 ("\u00e9" starts at 2).
+        assertEquals(3, Utf8.validate(bytes, 3, bytes.length - 3));
+        // Single-byte range on a lead reports truncation at the lead.
+        assertEquals(2, Utf8.validate(bytes, 2, 1));
+        // Range ending exactly at a sequence end is valid.
+        assertEquals(-1, Utf8.validate(bytes, 0, 4));
+    }
+
+    @Test
+    void secondByteBoundaryValues() {
+        // Each special second-byte rule pinned on both sides of its edge.
+        // E0: second byte must be >= A0 (else overlong).
+        assertEquals(0, Utf8.validate(new byte[]{(byte) 0xE0, (byte) 0x9F, (byte) 0xBF}, 0, 3));
+        assertEquals(-1, Utf8.validate(new byte[]{(byte) 0xE0, (byte) 0xA0, (byte) 0x80}, 0, 3));
+        // ED: second byte must be <= 9F (else surrogate).
+        assertEquals(-1, Utf8.validate(new byte[]{(byte) 0xED, (byte) 0x9F, (byte) 0xBF}, 0, 3)); // D7FF
+        assertEquals(0, Utf8.validate(new byte[]{(byte) 0xED, (byte) 0xA0, (byte) 0x80}, 0, 3)); // D800
+        assertEquals(0, Utf8.validate(new byte[]{(byte) 0xED, (byte) 0xBF, (byte) 0xBF}, 0, 3)); // DFFF
+        // F0: second byte must be >= 90 (else overlong).
+        assertEquals(0, Utf8.validate(new byte[]{(byte) 0xF0, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF}, 0, 4));
+        assertEquals(-1, Utf8.validate(new byte[]{(byte) 0xF0, (byte) 0x90, (byte) 0x80, (byte) 0x80}, 0, 4));
+        // F4: second byte must be <= 8F (else above U+10FFFF).
+        assertEquals(-1, Utf8.validate(new byte[]{(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF}, 0, 4));
+        assertEquals(0, Utf8.validate(new byte[]{(byte) 0xF4, (byte) 0x90, (byte) 0x80, (byte) 0x80}, 0, 4));
+        // C2..DF always need exactly one continuation.
+        assertEquals(-1, Utf8.validate(new byte[]{(byte) 0xC2, (byte) 0x80}, 0, 2));
+        assertEquals(-1, Utf8.validate(new byte[]{(byte) 0xDF, (byte) 0xBF}, 0, 2));
+        assertEquals(0, Utf8.validate(new byte[]{(byte) 0xDF, (byte) 0xC0}, 0, 2));
+    }
 }
