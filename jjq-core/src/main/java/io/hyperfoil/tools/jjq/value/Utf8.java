@@ -28,9 +28,16 @@ public final class Utf8 {
         int end = offset + length;
         // Tiny inputs stay on the original scalar path verbatim so its
         // compiled shape (and inline budget) does not change; larger inputs
-        // skip 8 ASCII bytes per iteration in a separate helper.
+        // skip 16 ASCII bytes per iteration in a separate helper.
         if (length < 64) return validateScalar(bytes, offset, end);
         int i = offset;
+        while (i + 32 <= end) {
+            if (!SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i))
+                    || !SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i + 8))
+                    || !SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i + 16))
+                    || !SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i + 24))) break;
+            i += 32;
+        }
         while (i + 8 <= end) {
             if (!SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i))) break;
             i += 8;
