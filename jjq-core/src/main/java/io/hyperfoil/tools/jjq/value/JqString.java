@@ -23,7 +23,7 @@ public final class JqString implements JqValue {
     private final Object source;      // String or byte[] or null
     private final int start;          // content start offset (after opening ")
     private final int end;            // content end offset (before closing ")
-    private final boolean hasEscapes; // whether source range contains backslash escapes
+    private final byte hasEscapes; // bit flags: FLAG_HAS_ESCAPES | FLAG_LONE_REPLACE
     // Memoized output-cleanliness: 0 = unknown, 1 = needs no JSON escaping,
     // 2 = needs escaping. Computed once via needsEscaping on first output of
     // a materialized value, then skips the rescan on every later serialize.
@@ -31,12 +31,25 @@ public final class JqString implements JqValue {
     // idempotent verdicts, worst case a repeated scan.
     private byte cleanMemo;
 
+    /** {@code hasEscapes} bit meaning a backslash escape is present. */
+    private static final byte FLAG_HAS_ESCAPES = 1;
+    /** {@code hasEscapes} bit: lone surrogate escapes decode as U+FFFD. */
+    private static final byte FLAG_LONE_REPLACE = 2;
+
     private JqString(String value, Object source, int start, int end, boolean hasEscapes) {
         this.value = value;
         this.source = source;
         this.start = start;
         this.end = end;
-        this.hasEscapes = hasEscapes;
+        this.hasEscapes = (byte) (hasEscapes ? FLAG_HAS_ESCAPES : 0);
+    }
+
+    private JqString(String value, Object source, int start, int end, byte flags) {
+        this.value = value;
+        this.source = source;
+        this.start = start;
+        this.end = end;
+        this.hasEscapes = flags;
     }
 
     /** Create an eager JqString with the value already materialized. */
@@ -51,6 +64,13 @@ public final class JqString implements JqValue {
      */
     static JqString deferred(String source, int start, int end, boolean hasEscapes) {
         return new JqString(null, source, start, end, hasEscapes);
+    }
+
+    /** Char-path variant of {@link #deferredBytes(byte[], int, int, boolean, boolean)}. */
+    static JqString deferred(String source, int start, int end, boolean hasEscapes,
+                             boolean loneReplace) {
+        return new JqString(null, source, start, end,
+                (byte) ((hasEscapes ? FLAG_HAS_ESCAPES : 0) | (loneReplace ? FLAG_LONE_REPLACE : 0)));
     }
 
     /**
@@ -75,6 +95,19 @@ public final class JqString implements JqValue {
         return new JqString(null, source, start, end, hasEscapes);
     }
 
+    /**
+     * Same as {@link #deferredBytes(byte[], int, int, boolean)} but with an
+     * explicit lone-surrogate policy: when {@code loneReplace} is set,
+     * materialization decodes unpaired surrogate escapes as U+FFFD
+     * (ParseOptions.LoneSurrogatePolicy.REPLACE). Stored in a second
+     * {@code hasEscapes} bit, so object size is unchanged.
+     */
+    public static JqString deferredBytes(byte[] source, int start, int end, boolean hasEscapes,
+                                         boolean loneReplace) {
+        return new JqString(null, source, start, end,
+                (byte) ((hasEscapes ? FLAG_HAS_ESCAPES : 0) | (loneReplace ? FLAG_LONE_REPLACE : 0)));
+    }
+
     @Override
     public Type type() { return Type.STRING; }
 
@@ -90,10 +123,14 @@ public final class JqString implements JqValue {
 
     private String materialize() {
         if (source instanceof String s) {
-            return hasEscapes ? unescapeJson(s, start, end) : s.substring(start, end);
+            return (hasEscapes & FLAG_HAS_ESCAPES) != 0
+                    ? unescapeJson(s, start, end, (hasEscapes & FLAG_LONE_REPLACE) != 0)
+                    : s.substring(start, end);
         } else if (source instanceof byte[] bytes) {
             String raw = new String(bytes, start, end - start, StandardCharsets.UTF_8);
-            return hasEscapes ? unescapeJson(raw, 0, raw.length()) : raw;
+            return (hasEscapes & FLAG_HAS_ESCAPES) != 0
+                    ? unescapeJson(raw, 0, raw.length(), (hasEscapes & FLAG_LONE_REPLACE) != 0)
+                    : raw;
         }
         throw new IllegalStateException("Deferred JqString with no source");
     }
@@ -110,6 +147,11 @@ public final class JqString implements JqValue {
      * Handles standard JSON escape sequences including unicode escapes.
      */
     static String unescapeJson(String source, int start, int end) {
+        return unescapeJson(source, start, end, false);
+    }
+
+    /** Policy-aware variant: unpaired surrogate escapes decode as U+FFFD when {@code loneReplace}. */
+    static String unescapeJson(String source, int start, int end, boolean loneReplace) {
         var sb = new StringBuilder(end - start);
         int pos = start;
         while (pos < end) {
@@ -126,8 +168,23 @@ public final class JqString implements JqValue {
                     case 't' -> sb.append('\t');
                     case 'u' -> {
                         int cp = Integer.parseInt(source, pos + 1, pos + 5, 16);
-                        sb.append((char) cp);
-                        pos += 4;
+                        boolean paired = false;
+                        if (cp >= 0xD800 && cp <= 0xDBFF && pos + 7 < end
+                                && source.charAt(pos + 5) == '\\'
+                                && source.charAt(pos + 6) == 'u') {
+                            int low = Integer.parseInt(source, pos + 7, pos + 11, 16);
+                            paired = low >= 0xDC00 && low <= 0xDFFF;
+                            if (paired) {
+                                sb.append((char) cp);
+                                sb.append((char) low);
+                                pos += 10; // consume both escapes
+                            }
+                        }
+                        if (!paired) {
+                            if (cp >= 0xD800 && cp <= 0xDFFF && loneReplace) cp = 0xFFFD;
+                            sb.append((char) cp);
+                            pos += 4;
+                        }
                     }
                     default -> sb.append(esc);
                 }
@@ -359,11 +416,11 @@ public final class JqString implements JqValue {
             if (m == 1) sb.append(v);
             else if (m == 2) escapeJson(v, sb);
             else memoClean(escapeJson(v, sb));
-        } else if (source instanceof String s && !hasEscapes) {
+        } else if (source instanceof String s && (hasEscapes & FLAG_HAS_ESCAPES) == 0) {
             // Deferred from String, no escapes -- ZERO-COPY: write source directly
             // Source content between quotes is already valid JSON (no escape sequences)
             sb.append(s, start, end);
-        } else if (source instanceof byte[] bytes && !hasEscapes) {
+        } else if (source instanceof byte[] bytes && (hasEscapes & FLAG_HAS_ESCAPES) == 0) {
             // Deferred from bytes, no escapes -- materialize once, then append
             // (For ASCII byte ranges this constructs the String; future SWAR
             // optimization could append bytes directly for pure-ASCII content)
@@ -391,14 +448,14 @@ public final class JqString implements JqValue {
             if (m == 1) out.writeUTF8(v);
             else if (m == 2) out.escapeJsonToBytes(v);
             else memoClean(out.escapeJsonToBytes(v));
-        } else if (source instanceof byte[] bytes && !hasEscapes) {
+        } else if (source instanceof byte[] bytes && (hasEscapes & FLAG_HAS_ESCAPES) == 0) {
             // Deferred from bytes, no escapes — ZERO-COPY: raw byte copy
             // Source bytes are already valid UTF-8 JSON content (no escape sequences).
             // This is the key optimization: for the parse→query→serialize round-trip,
             // most strings are never touched by jq filters, so their original bytes
             // can be copied directly to the output without ever constructing a Java String.
             out.writeBytes(bytes, start, end - start);
-        } else if (source instanceof String s && !hasEscapes) {
+        } else if (source instanceof String s && (hasEscapes & FLAG_HAS_ESCAPES) == 0) {
             // Deferred from String, no escapes — encode source region as UTF-8
             out.escapeJsonToBytes(s.substring(start, end));
         } else if (source != null) {

@@ -105,6 +105,40 @@ class JsonEscapeExhaustiveTest {
     }
 
     @Test
+    void loneSurrogatePolicy() {
+        // Default (REJECT) unchanged everywhere.
+        for (String doc : new String[]{
+                "{\"a\":\"\\uD83D\"}",
+                "{\"a\":\"\\uDC00\"}",
+                "{\"a\":\"\\uD83D\\u0041\"}"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> JqValues.parseStrict(doc));
+        }
+        // REPLACE decodes as U+FFFD, preserving everything else.
+        var opts = ParseOptions.defaults()
+                .withLoneSurrogatePolicy(ParseOptions.LoneSurrogatePolicy.REPLACE);
+        // High surrogate alone.
+        assertEquals("�", ((io.hyperfoil.tools.jjq.value.JqObject)
+                JqValues.parseStrict("{\"a\":\"\\uD83D\"}", opts)).get("a").stringValue());
+        // Low surrogate alone.
+        assertEquals("�", ((io.hyperfoil.tools.jjq.value.JqObject)
+                JqValues.parseStrict("{\"a\":\"\\uDC00\"}", opts)).get("a").stringValue());
+        // High + non-low: replace the high, keep the follower.
+        assertEquals("�A", ((io.hyperfoil.tools.jjq.value.JqObject)
+                JqValues.parseStrict("{\"a\":\"\\uD83D\\u0041\"}", opts)).get("a").stringValue());
+        // Paired escape is NOT replaced.
+        assertEquals("😀", ((io.hyperfoil.tools.jjq.value.JqObject)
+                JqValues.parseStrict("{\"a\":\"\\uD83D\\uDE00\"}", opts)).get("a").stringValue());
+        // Bytes path (large input exercises the byte parser).
+        String big = "{\"a\":\"" + "x".repeat(10000) + "\\uD83D\"}";
+        assertEquals("x".repeat(10000) + "�",
+                ((io.hyperfoil.tools.jjq.value.JqObject) JqValues.parseStrict(big, opts)).get("a").stringValue());
+        // Keys stay strict — a lone surrogate in a key is still an error.
+        assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"\\uD83D\":1}", opts));
+    }
+
+    @Test
     void windowBoundaries() {
         String pad = "a".repeat(SCRATCH);
         String[] cases = {

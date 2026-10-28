@@ -915,6 +915,8 @@ public final class JqValues {
         // Maximum tolerated nesting depth (configurable strict option;
         // defaults to MAX_PARSE_DEPTH so lenient parsing is unchanged).
         int maxDepth = MAX_PARSE_DEPTH;
+        // Lone-surrogate policy for strict strings (REPLACE opt-in).
+        boolean loneReplace;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -1284,6 +1286,7 @@ public final class JqValues {
         }
         var reader = new JsonReader(trimmed);
         reader.maxDepth = options.maxDepth();
+        reader.loneReplace = options.loneSurrogatePolicy() == ParseOptions.LoneSurrogatePolicy.REPLACE;
         JqValue result = parseValue(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.len) {
@@ -1385,6 +1388,7 @@ public final class JqValues {
         reader.base = offset;
         reader.maxDepth = options.maxDepth();
         reader.duplicatePolicy = options.duplicatePolicy();
+        reader.loneReplace = options.loneSurrogatePolicy() == ParseOptions.LoneSurrogatePolicy.REPLACE;
         JqValue result = parseValueBytes(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.end) {
@@ -1492,6 +1496,11 @@ public final class JqValues {
      * mirroring the lenient path's landing positions on valid input.
      */
     private static void validateEscapeBytes(JsonByteReader r) {
+        validateEscapeBytes(r, false);
+    }
+
+    /** Strict validation; keys always reject lone surrogates regardless of policy. */
+    private static void validateEscapeBytes(JsonByteReader r, boolean forKey) {
         if (r.pos >= r.end) throw strictError(r, "Unterminated escape sequence");
         int e = r.data[r.pos] & 0xFF;
         // Simple escapes: validate only. The caller advances past the escape
@@ -1518,6 +1527,7 @@ public final class JqValues {
                     if (r.pos + 2 >= r.end
                             || (r.data[r.pos + 1] & 0xFF) != '\\'
                             || (r.data[r.pos + 2] & 0xFF) != 'u') {
+                        if (r.loneReplace && !forKey) break; // decode as U+FFFD later
                         throw strictError(r, "Unpaired surrogate escape");
                     }
                     boolean pair = r.pos + 6 < r.end;
@@ -1528,10 +1538,13 @@ public final class JqValues {
                         else low = (low << 4) | hexVal(h);
                     }
                     if (!pair) throw strictError(r, "Invalid \\u escape sequence");
-                    if (low < 0xDC00 || low > 0xDFFF) throw strictError(r, "Unpaired surrogate escape");
+                    if (low < 0xDC00 || low > 0xDFFF) {
+                        if (r.loneReplace) break; // not a pair; decode as U+FFFD later
+                        throw strictError(r, "Unpaired surrogate escape");
+                    }
                     r.pos += 6;
                 } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
-                    throw strictError(r, "Unpaired surrogate escape");
+                    if (!r.loneReplace || forKey) throw strictError(r, "Unpaired surrogate escape");
                 }
             }
             default -> throw strictError(r, "Invalid escape '\\" + (char) e + "'");
@@ -1771,7 +1784,7 @@ public final class JqValues {
             if (c == '"') {
                 int contentEnd = r.pos;
                 r.pos++; // skip closing "
-                return JqString.deferred(s, contentStart, contentEnd, true);
+                return JqString.deferred(s, contentStart, contentEnd, true, r.loneReplace);
             }
             if (c == '\\') {
                 r.pos++; // skip backslash
@@ -2165,6 +2178,7 @@ public final class JqValues {
             reader.strict = true;
             reader.maxDepth = options.maxDepth();
             reader.duplicatePolicy = options.duplicatePolicy();
+        reader.loneReplace = options.loneSurrogatePolicy() == ParseOptions.LoneSurrogatePolicy.REPLACE;
             this.r = reader;
         }
 
@@ -2556,6 +2570,9 @@ public final class JqValues {
         // option; defaults to REJECT so lenient parsing is unchanged).
         // Only consulted when a repeated key is actually found.
         ParseOptions.DuplicatePolicy duplicatePolicy = ParseOptions.DuplicatePolicy.REJECT;
+        // Lone-surrogate policy for strict strings (REPLACE opt-in):
+        // materialization decodes unpaired escapes as U+FFFD.
+        boolean loneReplace;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -3180,7 +3197,7 @@ public final class JqValues {
             if (b == '"') {
                 int contentEnd = r.pos;
                 r.pos++;
-                return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, true, r.loneReplace);
             }
             // Must be backslash: same handling as the scalar tail below.
             r.pos++; // skip backslash
@@ -3194,7 +3211,7 @@ public final class JqValues {
             if (b == '"') {
                 int contentEnd = r.pos;
                 r.pos++;
-                return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, true, r.loneReplace);
             }
             if (b == '\\') {
                 r.pos++; // skip backslash
@@ -3219,7 +3236,7 @@ public final class JqValues {
             if (b == '"') {
                 int contentEnd = r.pos;
                 r.pos++;
-                return JqString.deferredBytes(r.data, contentStart, contentEnd, true);
+                return JqString.deferredBytes(r.data, contentStart, contentEnd, true, r.loneReplace);
             }
             if (b == '\\') {
                 r.pos++; // skip backslash
@@ -3433,7 +3450,7 @@ public final class JqValues {
             if (b == '"') break;
             if (b == '\\') {
                 r.pos++;
-                if (r.strict) validateEscapeBytes(r);
+                if (r.strict) validateEscapeBytes(r, true); // keys always strict
                 else if (r.pos < r.end && (r.data[r.pos] & 0xFF) == 'u') r.pos += 4;
             }
             r.pos++;

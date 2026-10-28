@@ -48,17 +48,35 @@ public final class ParseOptions {
         KEEP_LAST
     }
 
+    /**
+     * What to do with a lone surrogate escape (an unpaired
+     * {@code \uD800}-{@code \uDFFF} escape). JSON's grammar allows it
+     * (RFC 8259 §7/§8.2 warn only about interoperability), so consumers
+     * reading files they cannot fix (e.g. Node's {@code JSON.stringify}
+     * output) need an opt-out that rejects nothing spec-legal.
+     */
+    public enum LoneSurrogatePolicy {
+        /** Fail with a positioned error (current behavior). */
+        REJECT,
+        /** Decode each lone surrogate escape as U+FFFD (WHATWG/Unicode
+         *  recommendation; the character was unrecoverable anyway). */
+        REPLACE
+    }
+
     private final int maxDepth;
     private final BomPolicy bomPolicy;
     private final NulPolicy nulPolicy;
     private final DuplicatePolicy duplicatePolicy;
+    private final LoneSurrogatePolicy loneSurrogatePolicy;
 
     private ParseOptions(int maxDepth, BomPolicy bomPolicy, NulPolicy nulPolicy,
-                         DuplicatePolicy duplicatePolicy) {
+                         DuplicatePolicy duplicatePolicy,
+                         LoneSurrogatePolicy loneSurrogatePolicy) {
         this.maxDepth = maxDepth;
         this.bomPolicy = bomPolicy;
         this.nulPolicy = nulPolicy;
         this.duplicatePolicy = duplicatePolicy;
+        this.loneSurrogatePolicy = loneSurrogatePolicy;
     }
 
     /**
@@ -68,7 +86,7 @@ public final class ParseOptions {
      */
     public static ParseOptions defaults() {
         return new ParseOptions(JqValues.MAX_PARSE_DEPTH, BomPolicy.STRIP, NulPolicy.ALLOW,
-                DuplicatePolicy.REJECT);
+                DuplicatePolicy.REJECT, LoneSurrogatePolicy.REJECT);
     }
 
     /**
@@ -83,7 +101,7 @@ public final class ParseOptions {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
         }
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy, loneSurrogatePolicy);
     }
 
     /**
@@ -95,7 +113,7 @@ public final class ParseOptions {
      */
     public ParseOptions withBomPolicy(BomPolicy bomPolicy) {
         Objects.requireNonNull(bomPolicy, "bomPolicy");
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy, loneSurrogatePolicy);
     }
 
     /**
@@ -108,7 +126,7 @@ public final class ParseOptions {
      */
     public ParseOptions withNulPolicy(NulPolicy nulPolicy) {
         Objects.requireNonNull(nulPolicy, "nulPolicy");
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy, loneSurrogatePolicy);
     }
 
     /**
@@ -121,7 +139,7 @@ public final class ParseOptions {
      */
     public ParseOptions withDuplicatePolicy(DuplicatePolicy duplicatePolicy) {
         Objects.requireNonNull(duplicatePolicy, "duplicatePolicy");
-        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy);
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy, loneSurrogatePolicy);
     }
 
     /**
@@ -146,9 +164,31 @@ public final class ParseOptions {
     }
 
     /**
+     * Lone-surrogate-escape handling (opt-in; default stays rejecting).
+     * Applies to every strict entry point (text and bytes), with
+     * {@link #REPLACE} decoding each unpaired escape as U+FFFD.
+     *
+     * @param loneSurrogatePolicy the policy (non-null)
+     * @return new options with this policy
+     * @throws NullPointerException if {@code loneSurrogatePolicy} is null
+     */
+    public ParseOptions withLoneSurrogatePolicy(LoneSurrogatePolicy loneSurrogatePolicy) {
+        Objects.requireNonNull(loneSurrogatePolicy, "loneSurrogatePolicy");
+        return new ParseOptions(maxDepth, bomPolicy, nulPolicy, duplicatePolicy,
+                loneSurrogatePolicy);
+    }
+
+    /**
      * @return the duplicate-key policy
      */
     public DuplicatePolicy duplicatePolicy() {
         return duplicatePolicy;
+    }
+
+    /**
+     * @return the lone-surrogate-escape policy
+     */
+    public LoneSurrogatePolicy loneSurrogatePolicy() {
+        return loneSurrogatePolicy;
     }
 }
