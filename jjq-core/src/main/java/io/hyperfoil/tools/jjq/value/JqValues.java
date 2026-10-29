@@ -2598,6 +2598,15 @@ public final class JqValues {
         // so an exception mid-object cannot poison the next user; dropped
         // when the finished object leaves more slack than MAX_SCRATCH_SLACK.
         private long[][] dupTables;
+        // Schema-shape exemption (issue #194): the previous strict-
+        // completed object's keys, when the completed object is proven
+        // unique (tracked-clean under REJECT, collapsed-unique under
+        // KEEP_LAST). Lenient shapes are never admitted, since lenient
+        // permits duplicates. A single previous shape only: a ring would
+        // charge every non-matching object a scan, regressing varied
+        // traffic to fund rotating-schema wins. Holds the same array
+        // reference the share cache stores — no new arrays.
+        private String[] prevExempt;
 
         JsonByteReader(byte[] data, int offset, int end) {
             this.data = data;
@@ -2694,6 +2703,18 @@ public final class JqValues {
             tables[depth] = table;
         }
 
+        /** Admit a strict-completed object's keys as the exemption shape. */
+        void rememberExempt(String[] exactKeys) {
+            // Longest wins: shapes of two keys or fewer can never exempt
+            // (adoption needs length above two), so tiny objects neither
+            // admit nor evict — they keep zero per-object bookkeeping.
+            // Equal lengths keep the incumbent for stability.
+            String[] prev = prevExempt;
+            if (exactKeys.length > 2 && (prev == null || exactKeys.length > prev.length)) {
+                prevExempt = exactKeys;
+            }
+        }
+
         String[] findSharedKeys(String[] keys, int count) {
             String[] prev = previousKeys;
             if (prev != null && prev.length == count) {
@@ -2712,7 +2733,7 @@ public final class JqValues {
             return null;
         }
 
-        void rememberKeys(String[] exactKeys) {
+        void rememberKeys(String[] exactKeys, int count, boolean exemptible) {
             previousKeys = exactKeys;
             String[][] cache = schemaCache;
             if (cache == null) {
@@ -2721,6 +2742,14 @@ public final class JqValues {
             }
             cache[schemaCacheNext] = exactKeys;
             schemaCacheNext = (schemaCacheNext + 1) & (SCHEMA_CACHE_SIZE - 1);
+            // Exemption admission rides this existing share call (issue
+            // #194): only shapes above two keys can exempt (adoption needs
+            // length above two), longest wins for stability. Tiny objects
+            // pay no extra call.
+            if (exemptible && count > 2) {
+                String[] prev = prevExempt;
+                if (prev == null || exactKeys.length > prev.length) prevExempt = exactKeys;
+            }
         }
 
         int peek() { return data[pos] & 0xFF; }
@@ -3003,6 +3032,14 @@ public final class JqValues {
         // branch per key and nothing else.
         long[] dupSlots = null;
         int dupSize = 0;
+        // Duplicate tracking runs on strict REJECT/KEEP_LAST only;
+        // TRUST_UNIQUE skips it entirely and lenient never had it.
+        boolean trackDup = r.strict
+                && r.duplicatePolicy != ParseOptions.DuplicatePolicy.TRUST_UNIQUE;
+        // Exemption candidate (issue #194): adopted at the third key so
+        // smaller objects stay on the exact base path; null means full
+        // tracking. One pointer compare per key while it survives.
+        String[] exemptShape = null;
         while (true) {
             r.skipWs();
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '"') {
@@ -3018,54 +3055,80 @@ public final class JqValues {
             // Keys interned for deduplication and reference equality in JqObject.get()
             keys[count] = parseAndInternKeyBytes(r);
             boolean dup = false;
-            if (r.strict) {
+            if (trackDup) {
                 String key = keys[count];
-                if (dupSlots != null) {
-                    int hash = JqObject.mix(key.hashCode());
-                    int mask = dupSlots.length - 1;
-                    int slot = hash & mask;
-                    while (true) {
-                        long entry = dupSlots[slot];
-                        if (entry == 0) {
-                            dupSlots[slot] = ((long) hash << 32) | (count + 1);
-                            if (++dupSize * 4 >= dupSlots.length * 3) {
-                                dupSlots = dupGrow(dupSlots, keys, count);
-                            }
-                            break;
-                        }
-                        int idx = (int) entry - 1;
-                        if ((int) (entry >>> 32) == hash
-                                && (keys[idx] == key || keys[idx].equals(key))) {
-                            dup = true;
-                            break;
-                        }
-                        slot = (slot + 1) & mask;
+                // Adopt the previous shape once two keys are known; inline
+                // (not a call) so ≥3-key objects pay branches, not call
+                // overhead. Smaller objects never engage and stay on the
+                // exact base path.
+                if (count == 2) {
+                    String[] prev = r.prevExempt;
+                    if (prev != null && prev.length > 2 && prev[0] == keys[0]
+                            && prev[1] == keys[1]) {
+                        exemptShape = prev;
                     }
-                } else if (count <= DUP_LINEAR_MAX) {
-                    // Escaped keys may not be interned, so == needs the
-                    // equals fallback (same rule as the KEEP_LAST scan below).
-                    for (int i = 0; i < count; i++) {
-                        if (keys[i] == key || keys[i].equals(key)) {
-                            dup = true;
-                            break;
-                        }
-                    }
-                    if (!dup && count == DUP_LINEAR_MAX) {
-                        // Genuinely growing past the linear range: take the
-                        // retained per-depth table when it fits, else a fresh
-                        // one. A dup at exactly MAX leaves count frozen, so
-                        // count can never exceed MAX with dupSlots == null
-                        // after this point.
-                        dupSlots = r.checkoutDupTable(depth);
-                        if (dupSlots == null) dupSlots = new long[128];
+                }
+                // While the key matches the live exempt shape at this
+                // position, the prefix is proven unique and no work runs.
+                // Escaped keys that decode equal but are not identical
+                // instances diverge here into full tracking. Any later
+                // divergence resumes tracking below; the linear scan is
+                // stateless and the table bulk-loads history on promotion.
+                if (exemptShape != null && (count >= exemptShape.length
+                        || exemptShape[count] != key)) {
+                    exemptShape = null;
+                }
+                if (exemptShape == null) {
+                    if (dupSlots != null) {
+                        int hash = JqObject.mix(key.hashCode());
                         int mask = dupSlots.length - 1;
-                        for (int i = 0; i <= count; i++) {
-                            int hash = JqObject.mix(keys[i].hashCode());
-                            int slot = hash & mask;
-                            while (dupSlots[slot] != 0) slot = (slot + 1) & mask;
-                            dupSlots[slot] = ((long) hash << 32) | (i + 1);
+                        int slot = hash & mask;
+                        while (true) {
+                            long entry = dupSlots[slot];
+                            if (entry == 0) {
+                                dupSlots[slot] = ((long) hash << 32) | (count + 1);
+                                if (++dupSize * 4 >= dupSlots.length * 3) {
+                                    dupSlots = dupGrow(dupSlots, keys, count);
+                                }
+                                break;
+                            }
+                            int idx = (int) entry - 1;
+                            if ((int) (entry >>> 32) == hash
+                                    && (keys[idx] == key || keys[idx].equals(key))) {
+                                dup = true;
+                                break;
+                            }
+                            slot = (slot + 1) & mask;
                         }
-                        dupSize = count + 1;
+                    } else {
+                        // Escaped keys may not be interned, so == needs the
+                        // equals fallback (same rule as the KEEP_LAST scan below).
+                        // Stateless over all prior keys, so pre-divergence
+                        // keys are covered without any insertion history.
+                        for (int i = 0; i < count; i++) {
+                            if (keys[i] == key || keys[i].equals(key)) {
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup && count >= DUP_LINEAR_MAX) {
+                            // Genuinely past the linear range: take the
+                            // retained per-depth table when it fits, else a
+                            // fresh one. A dup at exactly MAX leaves count
+                            // frozen, so an always-tracking object can only
+                            // reach past MAX here after an exempt prefix
+                            // diverged late with no table yet built.
+                            dupSlots = r.checkoutDupTable(depth);
+                            if (dupSlots == null) dupSlots = new long[128];
+                            int mask = dupSlots.length - 1;
+                            for (int i = 0; i <= count; i++) {
+                                int hash = JqObject.mix(keys[i].hashCode());
+                                int slot = hash & mask;
+                                while (dupSlots[slot] != 0) slot = (slot + 1) & mask;
+                                dupSlots[slot] = ((long) hash << 32) | (i + 1);
+                            }
+                            dupSize = count + 1;
+                        }
                     }
                 }
             }
@@ -3112,10 +3175,11 @@ public final class JqValues {
         // Reference equality is safe because all keys are interned.
         String[] sharedKeys = r.findSharedKeys(keys, count);
         if (sharedKeys != null) {
+            if (trackDup && count > 2) r.rememberExempt(sharedKeys);
             return JqObject.ofArrays(sharedKeys, values, count);
         }
         String[] exactKeys = (scratch || count != keys.length) ? java.util.Arrays.copyOf(keys, count) : keys;
-        r.rememberKeys(exactKeys);
+        r.rememberKeys(exactKeys, count, trackDup);
         return JqObject.ofArrays(exactKeys, values, count);
     }
 

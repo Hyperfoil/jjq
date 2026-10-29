@@ -45,7 +45,16 @@ public final class ParseOptions {
          * Later value wins at the first-seen key position (serde
          * compatibility; matches {@code LinkedHashMap} put semantics).
          */
-        KEEP_LAST
+        KEEP_LAST,
+        /**
+         * Skip duplicate detection entirely: the caller guarantees unique
+         * keys. Duplicate entries survive side by side exactly as lenient
+         * parsing keeps them (first wins on lookup, both serialize), so a
+         * violated guarantee reintroduces the lookup/serialization
+         * disagreement of issue #132. Trusted input only; never the
+         * default.
+         */
+        TRUST_UNIQUE
     }
 
     /**

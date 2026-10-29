@@ -1907,6 +1907,91 @@ class JqValueTest {
                 () -> ParseOptions.defaults().withDuplicatePolicy(null));
     }
 
+    // ---- Duplicate policy TRUST_UNIQUE + schema-shape exemption (#194) ----
+
+    private static ParseOptions trustUnique() {
+        return ParseOptions.defaults()
+                .withDuplicatePolicy(ParseOptions.DuplicatePolicy.TRUST_UNIQUE);
+    }
+
+    @Test
+    void trustUniqueKeepsBothLikeLenient() {
+        // Opt-in only: duplicate detection skipped, both entries survive
+        // exactly as lenient parsing keeps them (first wins on lookup).
+        String doc = "{\"status\":\"Running\",\"status\":\"Frozen\"}";
+        assertEquals(JqValues.parse(doc).toJsonString(),
+                JqValues.parseStrict(doc, trustUnique()).toJsonString());
+        assertEquals("{\"status\":\"Running\",\"status\":\"Frozen\"}",
+                JqValues.parseStrict(doc, trustUnique()).toJsonString());
+    }
+
+    @Test
+    void trustUniqueNestedDuplicatesKept() {
+        String doc = "{\"a\":{\"x\":1,\"x\":2},\"a\":0}";
+        assertEquals(JqValues.parse(doc).toJsonString(),
+                JqValues.parseStrict(doc, trustUnique()).toJsonString());
+    }
+
+    @Test
+    void exemptRepeatedObjectsStillReject() {
+        // The first objects admit the shape; the duplicate in the third
+        // must still throw with the key and position.
+        String doc = "[{\"a\":1,\"b\":2},{\"a\":1,\"b\":2},{\"a\":1,\"a\":2}]";
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(doc));
+        assertTrue(e.getMessage().contains("\"a\""), e.getMessage());
+        assertTrue(e.getMessage().contains("column"), e.getMessage());
+    }
+
+    @Test
+    void exemptRepeatedObjectsKeepLast() {
+        String doc = "[{\"a\":1,\"b\":2},{\"a\":1,\"b\":2},{\"a\":1,\"b\":2,\"a\":3}]";
+        assertEquals("[{\"a\":1,\"b\":2},{\"a\":1,\"b\":2},{\"a\":3,\"b\":2}]",
+                JqValues.parseStrict(doc, keepLast()).toJsonString());
+    }
+
+    @Test
+    void exemptLateDivergencePastPromotion() {
+        // Forty identical 40-key objects admit the shape; the duplicate at
+        // key 35 of the next diverges past the linear range with no table
+        // yet built, forcing late promotion. Must still throw naming k35.
+        StringBuilder obj = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) obj.append(',');
+            obj.append("\"k").append(i).append("\":").append(i);
+        }
+        obj.append('}');
+        StringBuilder doc = new StringBuilder("[");
+        for (int i = 0; i < 40; i++) {
+            if (i > 0) doc.append(',');
+            doc.append(obj);
+        }
+        doc.append(",{\"k0\":0");
+        for (int i = 1; i < 40; i++) doc.append(",\"k").append(i).append("\":").append(i);
+        doc.append(",\"k35\":\"dup\"}]");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict(doc.toString()));
+        assertTrue(e.getMessage().contains("\"k35\""), e.getMessage());
+    }
+
+    @Test
+    void exemptNestedSameNames() {
+        // Same key names at different depths: exemption is per object, so
+        // the inner duplicate still throws.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"x\":{\"a\":1},\"y\":{\"a\":1},\"z\":{\"a\":1,\"a\":2}}"));
+        assertTrue(e.getMessage().contains("\"a\""), e.getMessage());
+    }
+
+    @Test
+    void exemptEscapedKeyDiverges() {
+        // Escaped keys are not reference-identical to the admitted shape,
+        // so they fall back to full tracking and the duplicate throws.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("[{\"a\":1},{\"\\u0061\":1,\"\\u0061\":2}]"));
+        assertTrue(e.getMessage().contains("\"a\""), e.getMessage());
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================
