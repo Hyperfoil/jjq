@@ -16,12 +16,15 @@ import jakarta.ws.rs.ext.Provider;
 import io.hyperfoil.tools.jjq.mapper.JqMapper;
 import io.hyperfoil.tools.jjq.mapper.TypeConverter;
 import io.hyperfoil.tools.jjq.value.BytOutput;
+import io.hyperfoil.tools.jjq.value.JqArray;
+import io.hyperfoil.tools.jjq.value.JqNull;
 import io.hyperfoil.tools.jjq.value.JqObject;
 import io.hyperfoil.tools.jjq.value.JqString;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import io.quarkiverse.httpproblem.HttpProblem;
 import io.quarkiverse.httpproblem.InstanceUtils;
+import io.quarkiverse.httpproblem.validation.Violation;
 
 /**
  * Renders {@link HttpProblem} entities as {@code application/problem+json}
@@ -101,9 +104,49 @@ public class JqProblemWriter implements MessageBodyWriter<HttpProblem> {
             builder.put("instance", JqString.of(InstanceUtils.instanceToPath(problem.getInstance())));
         }
         for (var entry : problem.getParameters().entrySet()) {
-            builder.put(entry.getKey(), TypeConverter.toJqValue(entry.getValue(), mapper));
+            builder.put(entry.getKey(), problemParameter(entry.getValue()));
         }
         return builder.build();
+    }
+
+    /**
+     * Parameter conversion with an escape hatch for http-problem's own
+     * value types: {@link Violation} has public final fields but no
+     * no-arg constructor, so the generic POJO mapper cannot bind it.
+     * Collections and maps recurse through this method so nested
+     * violations (e.g. a {@code List} under {@code "violations"}) bind
+     * the same way; everything else converts generically.
+     *
+     * @param value the parameter value (may be null or nested)
+     * @return the JqValue form, nulls included like the engine
+     */
+    private JqValue problemParameter(Object value) {
+        if (value instanceof Violation violation) {
+            return JqObject.builder(3)
+                    .put("field", str(violation.field))
+                    .put("in", str(violation.in))
+                    .put("message", str(violation.message))
+                    .build();
+        }
+        if (value instanceof java.util.Collection<?> items) {
+            java.util.List<JqValue> out = new java.util.ArrayList<>(items.size());
+            for (Object item : items) {
+                out.add(problemParameter(item));
+            }
+            return JqArray.of(out);
+        }
+        if (value instanceof java.util.Map<?, ?> map) {
+            var obj = JqObject.builder(map.size());
+            for (var entry : map.entrySet()) {
+                obj.put(String.valueOf(entry.getKey()), problemParameter(entry.getValue()));
+            }
+            return obj.build();
+        }
+        return TypeConverter.toJqValue(value, mapper);
+    }
+
+    private static JqValue str(String text) {
+        return text == null ? JqNull.NULL : JqString.of(text);
     }
 
     private static JqValue intValue(int statusCode) {

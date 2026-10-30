@@ -17,6 +17,7 @@ import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.Test;
 
 import io.quarkiverse.httpproblem.HttpProblem;
+import io.quarkiverse.httpproblem.validation.Violation;
 
 /**
  * {@code JqProblemWriter} must render byte-identical bodies to the
@@ -68,6 +69,22 @@ class JqProblemWriterTest {
                 .build();
     }
 
+    static HttpProblem validationViolations() {
+        // Real http-problem value types: Violation has public final fields
+        // but no no-arg constructor, so the generic POJO mapper cannot bind
+        // it — the writer maps it explicitly (nested list included).
+        List<Violation> violations = List.of(
+                Violation.In.body.field("name").message("must not be blank"),
+                Violation.In.query.field("page").message("must be greater than 0"));
+        return HttpProblem.builder()
+                .withStatus(Response.Status.BAD_REQUEST)
+                .withTitle("Constraint Violation")
+                .withDetail("Invalid query")
+                .with("violations", violations)
+                .with("nested", Map.of("issues", violations))
+                .build();
+    }
+
     static String engineRender(HttpProblem problem) throws Exception {
         Jsonb jsonb = JsonbBuilder.newBuilder().withConfig(new JsonbConfig()
                 .withSerializers(
@@ -92,7 +109,7 @@ class JqProblemWriterTest {
     @Test
     void rendersByteIdenticalToEngine() throws Exception {
         for (HttpProblem problem : List.of(
-                forbidden(), forbiddenWithDetail(), validation(), serverError())) {
+                forbidden(), forbiddenWithDetail(), validation(), validationViolations(), serverError())) {
             assertEquals(engineRender(problem), writerRender(writer, problem),
                     "problem shape diverged: " + problem.getTitle());
         }
