@@ -1992,6 +1992,36 @@ class JqValueTest {
         assertTrue(e.getMessage().contains("\"a\""), e.getMessage());
     }
 
+    // ---- Instance reuse on repeated schemas (issue #195) ----
+
+    @Test
+    void repeatedSchemaKeysAreIdenticalInstances() {
+        // Contract the #195 fast path relies on: interning returns the
+        // canonical instance per content, so repeated schemas share key
+        // references and byte-equal input must resolve identically.
+        var first = (JqObject) JqValues.parseStrict("{\"a\":1,\"b\":2}");
+        var second = (JqObject) JqValues.parseStrict("{\"a\":3,\"b\":4}");
+        assertSame(first.keyAt(0), second.keyAt(0));
+        assertSame(first.keyAt(1), second.keyAt(1));
+    }
+
+    @Test
+    void escapedSpellingDecodesToCanonicalInstance() {
+        // Different bytes, same content: must still reach the canonical
+        // instance (slow path), never a decoded duplicate.
+        var raw = (JqObject) JqValues.parseStrict("{\"a\":1}");
+        var escaped = (JqObject) JqValues.parseStrict("{\"\\u0061\":2}");
+        assertSame(raw.keyAt(0), escaped.keyAt(0));
+    }
+
+    @Test
+    void nonUniformKeysFallBackToDistinctInstances() {
+        // Sanity anchor: different contents are never identical, so a
+        // shape fast path can rely on byte inequality implying fallback.
+        var obj = (JqObject) JqValues.parseStrict("{\"a\":1,\"b\":2}");
+        assertNotSame(obj.keyAt(0), obj.keyAt(1));
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================
