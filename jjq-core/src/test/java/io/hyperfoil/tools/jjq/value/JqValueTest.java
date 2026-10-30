@@ -2022,6 +2022,74 @@ class JqValueTest {
         assertNotSame(obj.keyAt(0), obj.keyAt(1));
     }
 
+    // ---- Caller-compiled key schemas, opt-in (#1 exploration) ----
+
+    private static CompiledKeys abSchema() {
+        return CompiledKeys.of("a", "b");
+    }
+
+    @Test
+    void schemaHitResolvesIdenticalInstances() {
+        var schema = abSchema();
+        var v = JqValues.parseStrict("{\"a\":1,\"b\":2}".getBytes(StandardCharsets.UTF_8),
+                ParseOptions.defaults(), schema);
+        assertEquals("{\"a\":1,\"b\":2}", v.toJsonString());
+        var obj = (JqObject) v;
+        assertSame(schema.keys[0], obj.keyAt(0));
+        assertSame(schema.keys[1], obj.keyAt(1));
+    }
+
+    @Test
+    void schemaMismatchFallsBackSilently() {
+        var schema = abSchema();
+        // Wrong order, extra key, fewer keys: full path, same values.
+        assertEquals("{\"b\":2,\"a\":1}",
+                JqValues.parseStrict("{\"b\":2,\"a\":1}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults(), schema).toJsonString());
+        assertEquals("{\"a\":1,\"b\":2,\"c\":3}",
+                JqValues.parseStrict("{\"a\":1,\"b\":2,\"c\":3}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults(), schema).toJsonString());
+        assertEquals("{\"a\":1}",
+                JqValues.parseStrict("{\"a\":1}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults(), schema).toJsonString());
+    }
+
+    @Test
+    void schemaEscapedKeysFallBackToCanonical() {
+        var schema = abSchema();
+        var v = JqValues.parseStrict("{\"\\u0061\":1,\"b\":2}".getBytes(StandardCharsets.UTF_8),
+                ParseOptions.defaults(), schema);
+        assertEquals("{\"a\":1,\"b\":2}", v.toJsonString());
+        assertSame(schema.keys[0], ((JqObject) v).keyAt(0));
+    }
+
+    @Test
+    void schemaDuplicatesStillThrow() {
+        var schema = abSchema();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"a\":1,\"a\":2}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults(), schema));
+        assertTrue(e.getMessage().contains("\"a\""), e.getMessage());
+    }
+
+    @Test
+    void schemaKeepLastStillOverwrites() {
+        var schema = abSchema();
+        assertEquals("{\"a\":3,\"b\":2}",
+                JqValues.parseStrict("{\"a\":1,\"b\":2,\"a\":3}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults().withDuplicatePolicy(
+                                ParseOptions.DuplicatePolicy.KEEP_LAST),
+                        schema).toJsonString());
+    }
+
+    @Test
+    void schemaNullBehavesLikeToday() {
+        // Explicit null schema is today's behavior, byte-identical.
+        assertEquals("{\"a\":1,\"b\":2}",
+                JqValues.parseStrict("{\"a\":1,\"b\":2}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults(), null).toJsonString());
+    }
+
     // ========================================================================
     //  JqValue.asInt(int) tests
     // ========================================================================

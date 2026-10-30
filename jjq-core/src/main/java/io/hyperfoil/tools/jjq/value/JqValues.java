@@ -1272,7 +1272,7 @@ public final class JqValues {
         }
         if (json.length() <= BYTE_DELEGATION_THRESHOLD) {
             byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-            return parseStrictBytes(bytes, 0, bytes.length, json, options);
+            return parseStrictBytes(bytes, 0, bytes.length, json, options, null);
         }
         // Large string: use char-based parser
         String trimmed = json.trim();
@@ -1333,6 +1333,29 @@ public final class JqValues {
      * invalid input by catch-umbrella instead of matching messages.
      */
     public static JqValue parseStrict(byte[] bytes, ParseOptions options) {
+        return parseStrict(bytes, options, null);
+    }
+
+    /**
+     * Strict parse of a UTF-8 JSON byte array with a caller-compiled key
+     * schema: keys matching the schema by bytes reuse its canonical
+     * instances with no hash computation and no table probes; any
+     * mismatch falls back to the full interning path per key, and
+     * duplicate detection runs unchanged. A null schema behaves exactly
+     * like {@link #parseStrict(byte[], ParseOptions)}.
+     *
+     * @param bytes   the UTF-8 JSON document
+     * @param options the strict-parse options (non-null)
+     * @param schema  the compiled expected keys, or null for today's behavior
+     * @return the parsed value ({@code null} for empty input)
+     * @throws IllegalArgumentException with line/column position on malformed
+     *         input or policy violation
+     * Every malformed document surfaces exclusively as
+     * {@code IllegalArgumentException} (positions included) — adapters map
+     * invalid input by catch-umbrella instead of matching messages.
+     */
+    public static JqValue parseStrict(byte[] bytes, ParseOptions options,
+                                      CompiledKeys schema) {
         int bad = Utf8.validate(bytes, 0, bytes.length);
         if (bad >= 0) throw utf8Error(bytes, 0, bad);
         if (options.nulPolicy() == ParseOptions.NulPolicy.REJECT) {
@@ -1344,7 +1367,7 @@ public final class JqValues {
                 }
             }
         }
-        return parseStrictBytes(bytes, 0, bytes.length, null, options);
+        return parseStrictBytes(bytes, 0, bytes.length, null, options, schema);
     }
 
     /** Malformed-UTF-8 error with line/column for a byte offset (cold path). */
@@ -1367,7 +1390,8 @@ public final class JqValues {
 
     /** Byte-based strict parse with trailing content validation. */
     private static JqValue parseStrictBytes(byte[] bytes, int offset, int length,
-                                            String originalForError, ParseOptions options) {
+                                            String originalForError, ParseOptions options,
+                                            CompiledKeys schema) {
         int end = offset + length;
         int docStart = offset;
         while (offset < end && isWsByte(bytes[offset])) offset++;
@@ -1389,6 +1413,7 @@ public final class JqValues {
         reader.maxDepth = options.maxDepth();
         reader.duplicatePolicy = options.duplicatePolicy();
         reader.loneReplace = options.loneSurrogatePolicy() == ParseOptions.LoneSurrogatePolicy.REPLACE;
+        reader.schema = schema;
         JqValue result = parseValueBytes(reader, 0);
         reader.skipWs();
         if (reader.pos < reader.end) {
@@ -2573,6 +2598,10 @@ public final class JqValues {
         // Lone-surrogate policy for strict strings (REPLACE opt-in):
         // materialization decodes unpaired escapes as U+FFFD.
         boolean loneReplace;
+        // Caller-compiled expected keys (opt-in #1 exploration): null
+        // unless parseStrict was given a schema. Loop-invariant per parse,
+        // so the per-key null test is perfectly predictable.
+        CompiledKeys schema;
         // Key sharing: track previous object's keys for schema detection.
         // When consecutive objects have the same interned keys (reference equality),
         // share the keys[] array to reduce heap pressure and improve L1 cache locality.
@@ -3036,6 +3065,9 @@ public final class JqValues {
         // TRUST_UNIQUE skips it entirely and lenient never had it.
         boolean trackDup = r.strict
                 && r.duplicatePolicy != ParseOptions.DuplicatePolicy.TRUST_UNIQUE;
+        // Caller schema hoisted out of the member loop: loop-invariant per
+        // parse, so member keys pay only the null test, never a reload.
+        CompiledKeys schema = r.schema;
         // Exemption candidate (issue #194): adopted at the third key so
         // smaller objects stay on the exact base path; null means full
         // tracking. One pointer compare per key while it survives.
@@ -3052,8 +3084,13 @@ public final class JqValues {
                 grew = true;
             }
             int keyStart = r.pos;
-            // Keys interned for deduplication and reference equality in JqObject.get()
-            keys[count] = parseAndInternKeyBytes(r);
+            // Keys interned for deduplication and reference equality in JqObject.get().
+            // With a caller schema, byte-match first (no hash, no probes);
+            // anything else takes the full path below. One predictable
+            // branch per key; null-schema parses keep the direct call.
+            keys[count] = schema != null
+                    ? parseKeyWithSchema(r, schema, count)
+                    : parseAndInternKeyBytes(r);
             boolean dup = false;
             if (trackDup) {
                 String key = keys[count];
@@ -3342,6 +3379,38 @@ public final class JqValues {
     private static String internKeyEscaped(JsonByteReader r, int start) {
         r.pos = start - 1;
         return internFieldName(parseStringRawBytes(r));
+    }
+
+    /**
+     * Parse a key against a caller-compiled schema (opt-in #1
+     * exploration): scan bytes comparing to the expected spelling with no
+     * hash accumulation. A full match returns the canonical instance
+     * directly — no probes, no verification re-reads. Any divergence
+     * (different order or content, extra keys, escaped spellings, length
+     * mismatch, truncated input) falls back to the full path with the
+     * reader position untouched, so behavior is identical to unscanned
+     * parsing. Only called with a non-null schema.
+     */
+    private static String parseKeyWithSchema(JsonByteReader r, CompiledKeys schema, int count) {
+        if (count >= schema.keys.length) return parseAndInternKeyBytes(r);
+        byte[] expected = schema.bytes[count];
+        final byte[] d = r.data;
+        final int end = r.end;
+        int p = r.pos + 1;
+        int i = 0;
+        int n = expected.length;
+        while (p < end) {
+            int b = d[p] & 0xFF;
+            if ((b == '"') | (b == '\\')) break;
+            if (i >= n || b != (expected[i] & 0xFF)) return parseAndInternKeyBytes(r);
+            i++;
+            p++;
+        }
+        if (p < end && (d[p] & 0xFF) == '"' && i == n) {
+            r.pos = p + 1;
+            return schema.keys[count];
+        }
+        return parseAndInternKeyBytes(r);
     }
 
     /**
