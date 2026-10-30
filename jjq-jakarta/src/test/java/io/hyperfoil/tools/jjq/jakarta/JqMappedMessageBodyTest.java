@@ -59,6 +59,35 @@ class JqMappedMessageBodyTest {
         assertFalse(reader.isReadable(String.class, String.class, null, null));
     }
 
+    // ---- Collection matrix anchors for the build-time report mirror (#198) ----
+
+    java.util.List<SimpleUser> userListField;
+    java.util.List<String> stringListField;
+    java.util.Map<String, SimpleUser> userMapField;
+    java.util.Map<String, Integer> intMapField;
+    java.util.List rawListField;
+    SimpleUser[] userArrayField;
+
+    private static java.lang.reflect.Type genericType(String field) throws Exception {
+        return JqMappedMessageBodyTest.class.getDeclaredField(field).getGenericType();
+    }
+
+    @Test
+    void isReadable_collectionMatrix() throws Exception {
+        assertTrue(reader.isReadable(java.util.List.class, genericType("userListField"), null, null));
+        assertFalse(reader.isReadable(java.util.List.class, genericType("stringListField"), null, null));
+        assertTrue(reader.isReadable(java.util.Map.class, genericType("userMapField"), null, null));
+        assertFalse(reader.isReadable(java.util.Map.class, genericType("intMapField"), null, null));
+        assertFalse(reader.isReadable(java.util.List.class, genericType("rawListField"), null, null));
+        assertTrue(reader.isReadable(SimpleUser[].class, genericType("userArrayField"), null, null));
+    }
+
+    @Test
+    void isWriteable_collectionMatrix() throws Exception {
+        assertTrue(writer.isWriteable(java.util.List.class, genericType("userListField"), null, null));
+        assertFalse(writer.isWriteable(java.util.Map.class, genericType("intMapField"), null, null));
+    }
+
     @Test
     void isWriteable_jqMappedRecord() {
         assertTrue(writer.isWriteable(SimpleUser.class, SimpleUser.class, null, null));

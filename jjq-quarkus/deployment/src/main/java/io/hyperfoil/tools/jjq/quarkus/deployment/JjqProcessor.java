@@ -1259,6 +1259,43 @@ public class JjqProcessor {
         }
     }
 
+    /**
+     * Build-time report of JSON endpoints jjq serves vs declines (issue
+     * #198): turns the silent container-default fallback into log lines.
+     * Warn-only by design — this step never fails the build. Consuming the
+     * mapped-type and poly-family lists orders it after discovery.
+     */
+    @BuildStep
+    void reportJsonEndpoints(Capabilities capabilities,
+            CombinedIndexBuildItem combinedIndex,
+            List<JjqMappedTypeBuildItem> mappedTypes,
+            List<JjqPolyFamilyBuildItem> polyFamilies,
+            BuildProducer<JjqEndpointReportBuildItem> report) {
+        if (capabilities.isMissing(Capability.REST)) {
+            return;
+        }
+        List<EndpointReport.Entry> entries =
+                EndpointReport.endpointReportEntries(combinedIndex.getIndex());
+        report.produce(new JjqEndpointReportBuildItem(entries));
+        long served = entries.stream().filter(e -> e.verdict() == EndpointReport.Verdict.SERVED).count();
+        long declined = entries.stream().filter(e -> e.verdict() == EndpointReport.Verdict.DECLINED).count();
+        long unknown = entries.stream().filter(e -> e.verdict() == EndpointReport.Verdict.UNKNOWN).count();
+        LOG.infof("jjq: JSON endpoints: %d served, %d declined to container default, "
+                + "%d unverifiable (%d mapped types, %d polymorphic families)",
+                served, declined, unknown, mappedTypes.size(), polyFamilies.size());
+        for (EndpointReport.Entry entry : entries) {
+            if (entry.verdict() == EndpointReport.Verdict.DECLINED) {
+                LOG.warnf("jjq: %s %s %s %s declined to container default (%s)",
+                        entry.httpMethod(), entry.path(), entry.direction(),
+                        entry.javaType(), entry.reason());
+            } else if (entry.verdict() == EndpointReport.Verdict.UNKNOWN) {
+                LOG.infof("jjq: %s %s %s %s unverifiable (%s)",
+                        entry.httpMethod(), entry.path(), entry.direction(),
+                        entry.javaType(), entry.reason());
+            }
+        }
+    }
+
     @BuildStep
     void registerClassicProviders(Capabilities capabilities,
             CurateOutcomeBuildItem curateOutcome,
