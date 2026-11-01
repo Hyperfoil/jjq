@@ -7,6 +7,11 @@ a Quarkus application: Jandex discovery of `@JqMapped` types, a CDI-managed
 provider registration for both REST stacks, and optional Hibernate
 `FormatMapper` support for Jackson-free applications.
 
+Migrating from Jackson or JSON-B? Start with
+[Coming from Jackson/JSON-B](../docs/migration-jackson.md): the
+dependency surgery, null-semantics deltas, and per-type checklist in
+dependency order.
+
 ## What gets registered
 
 - `@JqMapped` records/classes: their `_JqMapping` classes are instantiated
