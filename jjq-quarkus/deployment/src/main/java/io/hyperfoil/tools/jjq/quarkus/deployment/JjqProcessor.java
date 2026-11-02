@@ -7,10 +7,12 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.jboss.jandex.AnnotationInstance;
@@ -223,6 +225,7 @@ public class JjqProcessor {
      */
     @BuildStep
     void rejectJacksonExtension(Capabilities capabilities, ValidationPhaseBuildItem validationPhase,
+            CurateOutcomeBuildItem curateOutcome,
             BuildProducer<ValidationPhaseBuildItem.ValidationErrorBuildItem> validationErrors) {
         // quarkus-rest-jackson and quarkus-resteasy-jackson both depend on
         // quarkus-jackson, so the single JACKSON capability covers every variant.
@@ -231,10 +234,98 @@ public class JjqProcessor {
                     "jjq-quarkus and quarkus-jackson were both detected on the classpath,"
                             + " but they cannot be used together.\n"
                             + "These two JSON mapping extensions are mutually exclusive: please use only one of them.\n"
+                            + jacksonCarrierReport(curateOutcome)
                             + "Either remove quarkus-jackson (including quarkus-rest-jackson or quarkus-resteasy-jackson,"
                             + " which depend on it) and keep jjq-quarkus,"
                             + " or remove jjq-quarkus and keep Jackson.")));
         }
+    }
+
+    /**
+     * Names the dependency chain pulling in {@code quarkus-jackson}, so a
+     * transitively-arriving Jackson (Roq today, something else tomorrow)
+     * does not require {@code dependency:tree} archaeology (issue #200).
+     * Best effort: any model surprise yields "" and the error keeps its
+     * previous text. At most three chains; the hard fail stays as strict.
+     */
+    static String jacksonCarrierReport(CurateOutcomeBuildItem curateOutcome) {
+        try {
+            var childrenByParent = new java.util.LinkedHashMap<String, List<String>>();
+            for (ResolvedDependency dep : curateOutcome.getApplicationModel().getDependencies()) {
+                var children = new ArrayList<String>();
+                for (var coords : dep.getDependencies()) {
+                    children.add(coords.getGroupId() + ":" + coords.getArtifactId());
+                }
+                childrenByParent.put(dep.getGroupId() + ":" + dep.getArtifactId(), children);
+            }
+            List<List<String>> chains =
+                    carrierChains(childrenByParent, "io.quarkus:quarkus-jackson");
+            if (chains.isEmpty()) return "";
+            var out = new StringBuilder();
+            for (List<String> chain : chains) {
+                if (chain.size() == 1) {
+                    out.append("quarkus-jackson is declared directly in your dependencies.\n");
+                } else {
+                    out.append("quarkus-jackson is present via: ")
+                            .append(String.join(" <- ", shortNames(chain)))
+                            .append(" <- your dependencies.\n");
+                }
+            }
+            return out.toString();
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    private static List<String> shortNames(List<String> coordinates) {
+        var shortNames = new ArrayList<String>(coordinates.size());
+        for (String coordinate : coordinates) {
+            int colon = coordinate.indexOf(':');
+            shortNames.add(colon < 0 ? coordinate : coordinate.substring(colon + 1));
+        }
+        return shortNames;
+    }
+
+    /**
+     * Shortest dependent chains from {@code target} up to model roots,
+     * broadest-first, capped at three. Pure function of the graph for
+     * unit testing; each chain lists target first and a root last.
+     * Cycles terminate via per-path visited sets.
+     *
+     * @param childrenByParent parent coordinates to direct-child coordinates
+     * @param target the coordinates to trace upward
+     * @return up to three target-first chains (never null, possibly empty)
+     */
+    static List<List<String>> carrierChains(java.util.Map<String, List<String>> childrenByParent,
+            String target) {
+        var parents = new java.util.LinkedHashMap<String, List<String>>();
+        for (var entry : childrenByParent.entrySet()) {
+            for (String child : entry.getValue()) {
+                parents.computeIfAbsent(child, k -> new ArrayList<>()).add(entry.getKey());
+            }
+        }
+        if (!parents.containsKey(target) && !childrenByParent.containsKey(target)) {
+            return List.of();
+        }
+        var chains = new ArrayList<List<String>>();
+        var queue = new ArrayDeque<List<String>>();
+        queue.add(new ArrayList<>(List.of(target)));
+        while (!queue.isEmpty() && chains.size() < 3) {
+            List<String> path = queue.removeFirst();
+            String head = path.get(path.size() - 1);
+            List<String> ups = parents.getOrDefault(head, List.of());
+            if (ups.isEmpty()) {
+                chains.add(path);
+                continue;
+            }
+            for (String up : ups) {
+                if (path.contains(up)) continue;
+                var longer = new ArrayList<>(path);
+                longer.add(up);
+                queue.add(longer);
+            }
+        }
+        return chains;
     }
 
     /**
