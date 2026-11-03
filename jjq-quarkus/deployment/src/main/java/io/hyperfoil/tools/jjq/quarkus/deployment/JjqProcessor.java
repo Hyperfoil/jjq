@@ -103,6 +103,7 @@ public class JjqProcessor {
 
     private static final DotName JQ_MAPPED = DotName.createSimple(JqMapped.class.getName());
     private static final DotName JQ_TYPE = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqType");
+    private static final DotName JQ_NAME = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqName");
     private static final DotName JQ_KEYS = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqKeys");
     private static final DotName SINGLETON = DotName.createSimple(Singleton.class.getName());
 
@@ -360,6 +361,151 @@ public class JjqProcessor {
                 families.produce(new JjqPolyFamilyBuildItem(className));
             }
         }
+    }
+
+    /**
+     * Fail the build when a discriminator wire value cannot match its
+     * enum-typed discriminator field (issue #201): typos and dead derived
+     * values surface here instead of as runtime unknown-value failures.
+     * Explicit mappings keep overriding everything; this step only
+     * verifies values against the enum, never invents mappings. Warn-only
+     * gates stay elsewhere — a violation here is always an error.
+     */
+    @BuildStep
+    void validatePolyEnumMappings(ValidationPhaseBuildItem validationPhase,
+            CombinedIndexBuildItem combinedIndex,
+            BuildProducer<ValidationPhaseBuildItem.ValidationErrorBuildItem> validationErrors) {
+        for (String violation : polyEnumViolations(combinedIndex.getIndex())) {
+            validationErrors.produce(new ValidationPhaseBuildItem.ValidationErrorBuildItem(
+                    new ConfigurationException(violation)));
+        }
+    }
+
+    /**
+     * Verify discriminator wire values against enum-typed discriminator
+     * fields, purely over Jandex (issue #201): no reflection, no
+     * classloading. Pure function of the index for unit testing.
+     *
+     * <p>Mirrors the runtime rule in {@code PolyMapping} (derived wire
+     * values are {@code @JqName} values else simple names; explicit
+     * mappings override) and adds the check the runtime cannot do
+     * cheaply: every wire value must name a constant of the enum where
+     * the discriminator field is enum-typed. Non-enum, injected
+     * (non-{@code existingProperty}), and unresolvable families keep
+     * today's behavior untouched.</p>
+     *
+     * @param index the application index (non-null)
+     * @return violation messages, empty when every checkable family is clean
+     */
+    static List<String> polyEnumViolations(IndexView index) {
+        var violations = new ArrayList<String>();
+        for (AnnotationInstance spec : index.getAnnotations(JQ_TYPE)) {
+            if (spec.target().kind() != AnnotationTarget.Kind.CLASS) continue;
+            DotName base = spec.target().asClass().name();
+            boolean existingProperty = spec.value("existingProperty") != null
+                    && spec.value("existingProperty").asBoolean();
+            if (!existingProperty) continue;
+            String discriminator = spec.value("discriminator") != null
+                    ? spec.value("discriminator").asString()
+                    : "type";
+            // Explicit wire values, or derived from the members below.
+            var explicit = new java.util.LinkedHashMap<String, String>();
+            if (spec.value("mappings") != null) {
+                for (AnnotationInstance mapping : spec.value("mappings").asNestedArray()) {
+                    if (mapping.value("value") == null || mapping.value("type") == null) continue;
+                    explicit.put(mapping.value("value").asString(),
+                            mapping.value("type").asClass().name().toString());
+                }
+            }
+            var members = new ArrayList<org.jboss.jandex.ClassInfo>();
+            org.jboss.jandex.ClassInfo baseInfo = index.getClassByName(base);
+            if (baseInfo != null && baseInfo.isSealed()) {
+                // Authoritative permits set; an unresolvable member means
+                // incomplete info, so the family keeps today's behavior.
+                boolean complete = true;
+                for (DotName permitted : baseInfo.permittedSubclasses()) {
+                    org.jboss.jandex.ClassInfo member = index.getClassByName(permitted);
+                    if (member == null) {
+                        complete = false;
+                        break;
+                    }
+                    members.add(member);
+                }
+                if (!complete) continue;
+            } else {
+                members.addAll(index.getAllKnownSubclasses(base));
+            }
+            if (members.isEmpty()) continue;
+            // The enum behind the discriminator field, when every
+            // declaring member agrees on one; disagreeing or absent
+            // fields keep today's behavior (with an ambiguity error for
+            // genuine disagreement).
+            String enumName = null;
+            boolean ambiguous = false;
+            for (org.jboss.jandex.ClassInfo member : members) {
+                org.jboss.jandex.FieldInfo field = null;
+                for (org.jboss.jandex.FieldInfo candidate : member.fields()) {
+                    if (candidate.name().equals(discriminator)) {
+                        field = candidate;
+                        break;
+                    }
+                }
+                if (field == null || field.type().kind() != org.jboss.jandex.Type.Kind.CLASS) continue;
+                DotName fieldType = field.type().asClassType().name();
+                org.jboss.jandex.ClassInfo fieldInfo = index.getClassByName(fieldType);
+                if (fieldInfo == null || !fieldInfo.isEnum()) continue;
+                if (enumName == null) {
+                    enumName = fieldType.toString();
+                } else if (!enumName.equals(fieldType.toString())) {
+                    ambiguous = true;
+                }
+            }
+            if (ambiguous) {
+                violations.add("jjq: @" + base + " discriminator '" + discriminator
+                        + "' has mismatched enum types across variants;"
+                        + " declare mappings explicitly");
+                continue;
+            }
+            if (enumName == null) continue;
+            var constants = new java.util.HashSet<String>();
+            org.jboss.jandex.ClassInfo enumInfo = index.getClassByName(DotName.createSimple(enumName));
+            if (enumInfo != null) {
+                for (org.jboss.jandex.FieldInfo constant : enumInfo.fields()) {
+                    if (constant.isEnumConstant()) constants.add(constant.name());
+                }
+            }
+            if (explicit.isEmpty()) {
+                for (org.jboss.jandex.ClassInfo member : members) {
+                    String wire = polyWireValue(member);
+                    if (!constants.contains(wire)) {
+                        violations.add("jjq: @" + base + " discriminator '" + discriminator
+                                + "' value '" + wire + "' is not a constant of " + enumName
+                                + "; declare mappings explicitly");
+                    }
+                }
+            } else {
+                for (var entry : explicit.entrySet()) {
+                    if (!constants.contains(entry.getKey())) {
+                        violations.add("jjq: @" + base + " discriminator '" + discriminator
+                                + "' value '" + entry.getKey() + "' is not a constant of "
+                                + enumName);
+                    }
+                }
+            }
+        }
+        return violations;
+    }
+
+    /**
+     * Mirror of {@code PolyMapping.polyWireValue} over Jandex: an explicit
+     * {@code @JqName} value, else the simple class name.
+     */
+    static String polyWireValue(org.jboss.jandex.ClassInfo member) {
+        AnnotationInstance rename = member.declaredAnnotation(JQ_NAME);
+        if (rename != null && rename.value() != null && !rename.value().asString().isEmpty()) {
+            return rename.value().asString();
+        }
+        return member.name().local();
     }
 
     /**
