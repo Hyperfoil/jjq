@@ -132,13 +132,20 @@ public final class JqMapper {
 
     /**
      * Cached {@code @JsonValue}/{@code @JsonCreator} handlers for an enum class.
-     * Empty when the class declares neither.
+     * Empty when the class declares neither. Reads through {@code get} first:
+     * the per-value {@code computeIfAbsent} path allocates its function and
+     * probes the table on every conversion, while hits settle for one
+     * volatile read here. Same map, same values, same first-use failure.
      *
      * @param type the enum class
      * @return the resolved handlers, or empty
      */
     Optional<TypeConverter.EnumHandlers> enumHandlers(Class<?> type) {
-        return enumHandlers.computeIfAbsent(type, t -> TypeConverter.resolveEnumHandlers(t, bridges));
+        Optional<TypeConverter.EnumHandlers> handlers = enumHandlers.get(type);
+        if (handlers == null) {
+            handlers = enumHandlers.computeIfAbsent(type, t -> TypeConverter.resolveEnumHandlers(t, bridges));
+        }
+        return handlers;
     }
 
     /**
