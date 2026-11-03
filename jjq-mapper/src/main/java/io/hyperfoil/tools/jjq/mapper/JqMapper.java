@@ -70,18 +70,20 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class JqMapper {
 
     private final ConcurrentHashMap<Class<?>, LastHit> cache = new ConcurrentHashMap<>();
-    // Single-entry memo for the last resolved mapping: repeated binds of one
-    // type (record arrays, repeated config loads) skip the map lookup with one
-    // volatile read + ref compare. The holder lives in the map, so misses
-    // publish without allocating; the immutable holder publishes atomically,
-    // so races are benign (last writer wins with an always-valid pair).
-    // Single-entry memo for the last resolved mapping: repeated binds of one
-    // type (record arrays, repeated config loads) skip the map lookup with one
-    // volatile read + ref compare. Immutable holder publishes atomically, so
-    // races are benign (last writer wins with an always-valid pair).
-    private volatile LastHit lastHit;
+    // Two-entry memo for resolved mappings: repeated binds of one type
+    // (record arrays, repeated config loads) skip the map lookup, and —
+    // critically — parent/child alternation on nested records, which
+    // thrashed the previous single slot on every lookup (measured 18% of
+    // nested bind time in CHM.get). Each slot is one volatile read + ref
+    // compare; hits never write. Misses demote once (B takes old A) and
+    // deeper rotation falls through to the map, exactly as before. The
+    // holder lives in the map, so misses publish without allocating; the
+    // immutable holder publishes atomically, so races are benign (last
+    // writer wins with an always-valid pair).
+    private volatile LastHit lastHitA;
+    private volatile LastHit lastHitB;
 
-    /** Immutable (type, mapping) pair for {@link #lastHit}. */
+    /** Immutable (type, mapping) pair for {@link #lastHitA}. */
     private record LastHit(Class<?> type, Mapping<?> mapping) {}
     private final List<AnnotationBridge> bridges;
     private final boolean failOnUnknownProperties;
@@ -718,7 +720,9 @@ public final class JqMapper {
 
     @SuppressWarnings("unchecked")
     <T> Mapping<T> getMapping(Class<T> type) {
-        LastHit hit = lastHit;
+        LastHit hit = lastHitA;
+        if (hit != null && hit.type() == type) return (Mapping<T>) hit.mapping();
+        hit = lastHitB;
         if (hit != null && hit.type() == type) return (Mapping<T>) hit.mapping();
         LastHit resolved = cache.get(type);
         if (resolved == null) {
@@ -728,7 +732,8 @@ public final class JqMapper {
         // the alternative — fill-once sticks with setup order and can miss
         // forever (measured: worse than baseline). Strict alternation pays one
         // volatile write per op; every repeating shape wins.
-        lastHit = resolved;
+        lastHitB = lastHitA;
+        lastHitA = resolved;
         return (Mapping<T>) resolved.mapping();
     }
 
@@ -742,7 +747,11 @@ public final class JqMapper {
      * @return true when a registered {@code PolyMapping}/{@code KeyPolyMapping} is cached
      */
     boolean hasFamilyMapping(Class<?> type) {
-        LastHit hit = lastHit;
+        LastHit hit = lastHitA;
+        if (hit != null && hit.type() == type) {
+            return hit.mapping() instanceof PolyMapping || hit.mapping() instanceof KeyPolyMapping;
+        }
+        hit = lastHitB;
         if (hit != null && hit.type() == type) {
             return hit.mapping() instanceof PolyMapping || hit.mapping() instanceof KeyPolyMapping;
         }
