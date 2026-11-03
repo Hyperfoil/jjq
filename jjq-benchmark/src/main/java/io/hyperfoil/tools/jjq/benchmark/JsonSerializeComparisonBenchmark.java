@@ -9,6 +9,8 @@ import org.openjdk.jmh.annotations.*;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
@@ -52,12 +54,42 @@ public class JsonSerializeComparisonBenchmark {
     private JqValue jjqValue;
     private Object fastjsonValue;
 
+    // Sink destinations: measure serialization without the final
+    // String/byte[] materialization. Never compare these rows against
+    // final-String rows; they measure different work.
+    //
+    // Close-ignoring sinks (not nullWriter/nullOutputStream): Jackson
+    // closes its generator after every write, which would close a shared
+    // null sink on the first op and fail every later one.
+    private Writer sinkWriter;
+    private OutputStream sinkStream;
+
+    private static final class SinkWriter extends Writer {
+        @Override
+        public void write(char[] cbuf, int off, int len) { }
+        @Override
+        public void flush() { }
+        @Override
+        public void close() { }
+    }
+
+    private static final class SinkStream extends OutputStream {
+        @Override
+        public void write(int b) { }
+        @Override
+        public void write(byte[] b, int off, int len) { }
+        @Override
+        public void close() { }
+    }
+
     @Setup(Level.Trial)
     public void setup() throws IOException {
         String paramJson = loadResource("benchmark-data/" + structure + "-" + size + ".json");
         jacksonValue = MAPPER.readTree(paramJson);
         jjqValue = JqValues.parse(paramJson);
         fastjsonValue = JSON.parse(paramJson);
+        sinkWriter = new SinkWriter();
+        sinkStream = new SinkStream();
     }
 
     @Benchmark
@@ -73,6 +105,32 @@ public class JsonSerializeComparisonBenchmark {
     @Benchmark
     public String serialize_fastjson2() {
         return JSON.toJSONString(fastjsonValue);
+    }
+
+    // ========================================================================
+    //  Serialize to a sink (#207 phase 0): separate rows per destination.
+    //  Writer/OutputStream rows skip the final String/byte[] copy, so they
+    //  are comparable across libraries but never against the rows above.
+    // ========================================================================
+
+    @Benchmark
+    public void serialize_jjq_toWriter() throws IOException {
+        JqValues.serializeTo(jjqValue, sinkWriter);
+    }
+
+    @Benchmark
+    public void serialize_jackson_toWriter() throws IOException {
+        MAPPER.writeValue(sinkWriter, jacksonValue);
+    }
+
+    @Benchmark
+    public void serialize_jjq_toStream() throws IOException {
+        JqValues.serializeTo(jjqValue, sinkStream);
+    }
+
+    @Benchmark
+    public void serialize_jackson_toStream() throws IOException {
+        MAPPER.writeValue(sinkStream, jacksonValue);
     }
 
     private static String loadResource(String name) throws IOException {

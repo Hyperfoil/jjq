@@ -38,6 +38,13 @@ import java.util.concurrent.TimeUnit;
  * -p script=ascii,latin1,bmp,supplementary,mixed -p profileMode=clean,primed,mixed
  * -p stringLength=16,100,512 -p escapePosition=random,early,late
  * </pre>
+ * <p>Issue #207 evidence uses a focused selection, not the full Cartesian
+ * product (clean input, one early escape, one late escape, escape-heavy,
+ * ASCII and mixed scripts at 5/16/100/512 chars), for example:</p>
+ * <pre>
+ * -p stringLength=5,16,100,512 -p escapePercentage=0,1,10
+ * -p escapePosition=random,early,late -p script=ascii,mixed
+ * </pre>
  * <p>Evidence runs use at least 3 forks, {@code -prof gc}, and JSON output;
  * compare supported JDK 21/25 with JDK 27 where available.</p>
  *
@@ -107,7 +114,7 @@ public class JqEscapeBenchmark {
     int escapePercentage;
 
     /** Length of each generated string, in chars. */
-    @Param({"16", "100", "512"})
+    @Param({"5", "16", "100", "512"})
     int stringLength;
 
     /** Number of distinct inputs to cycle through. */
@@ -128,7 +135,7 @@ public class JqEscapeBenchmark {
      * {@code random} (probabilistic draw only), {@code early} (forced at
      * index 0), {@code late} (forced at the last char boundary).
      */
-    @Param({"random"})
+    @Param({"random", "early", "late"})
     String escapePosition;
 
     /**
@@ -244,6 +251,21 @@ public class JqEscapeBenchmark {
         String input = nextString();
         sb.setLength(0);
         JqString.escapeJson(input, sb);
+        return sb.toString();
+    }
+
+    /**
+     * jjq char-based first-use tree route (#207 phase 0): a fresh
+     * {@code JqString} per op, so no cleanliness memo carries over and every
+     * op pays the cold escape run. Compare with {@code ser_jjq_escapeJson}
+     * (raw String, no tree) and {@code ser_jjq_serializeToBytes} (warm memo
+     * after the first op on each reused value).
+     */
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @Benchmark
+    public String ser_jjq_appendTo_firstUse() {
+        sb.setLength(0);
+        JqString.of(nextString()).appendTo(sb);
         return sb.toString();
     }
 

@@ -94,6 +94,9 @@ public class JqMapperBenchmark {
         jqMapper = JqMapper.create();
         jacksonMapper = new ObjectMapper();
 
+        // Fail loudly when codegen output is absent (stale build trap).
+        assertGeneratedMappingsPresent();
+
         // Simple record JSON
         simpleJson = "{\"name\":\"Alice\",\"age\":30,\"score\":98.5,\"active\":true,\"email\":\"alice@example.com\"}";
         simpleJsonBytes = simpleJson.getBytes();
@@ -166,6 +169,29 @@ public class JqMapperBenchmark {
 
         // Warmup nested POJO mapping cache
         jqMapper.toJsonBytes(pojoPerson);
+    }
+
+    /**
+     * Loud precondition (#207 phase 0): every generated_* row must measure
+     * the generated mapping, never the reflective fallback. Missing
+     * {@code _JqMapping} classes (stale incremental build, processor off)
+     * used to fail silently into reflection; now setup fails loudly.
+     */
+    private static void assertGeneratedMappingsPresent() {
+        for (Class<?> c : new Class<?>[]{
+                BenchmarkRecords.SimpleRecord.class, BenchmarkRecords.PersonRecord.class,
+                BenchmarkRecords.Address.class, BenchmarkRecords.Item.class,
+                BenchmarkRecords.OrderRecord.class, BenchmarkRecords.SimplePojo.class,
+                BenchmarkRecords.PojoPerson.class, BenchmarkRecords.PojoAddress.class}) {
+            String generatedName = c.getName().replace('$', '_') + "_JqMapping";
+            try {
+                Class.forName(generatedName, true, c.getClassLoader());
+            } catch (ClassNotFoundException e) {
+                throw new IllegalStateException(
+                        "Missing generated mapping " + generatedName
+                                + " — rebuild with the annotation processor", e);
+            }
+        }
     }
 
     // ========================================================================
