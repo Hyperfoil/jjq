@@ -60,6 +60,15 @@ class JsonStringScratchTest {
                 String huge = "x".repeat(9000) + "\\t";
                 assertEquals("x".repeat(9000) + "\t", decode(huge));
                 assertSame(borrowed, pool.get(), "oversized decoding must not grow retained storage");
+                String longer = raw + "z";
+                assertEquals("\u4E2D".repeat(600) + "\nz", decode(longer));
+                char[] grown = pool.get();
+                assertNotSame(borrowed, grown);
+                assertTrue(grown.length <= 8192);
+                for (int i = 1; i <= 16; i++) {
+                    assertEquals("\u4E2D".repeat(600) + "\nz" + "x".repeat(i), decode(longer + "x".repeat(i)));
+                    assertSame(grown, pool.get(), "incremental sizes should reuse growth headroom");
+                }
             } catch (Throwable caught) {
                 failure.set(caught);
             }
