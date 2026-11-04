@@ -152,6 +152,61 @@ public final class JqString implements JqValue {
 
     /** Policy-aware variant: unpaired surrogate escapes decode as U+FFFD when {@code loneReplace}. */
     static String unescapeJson(String source, int start, int end, boolean loneReplace) {
+        int length = end - start;
+        if (length == 0) return "";
+        if (length < 0 || length > 8192) return unescapeJsonLarge(source, start, end, loneReplace);
+        // Reuse the existing bounded scan workspace. No callback or recursive
+        // operation runs while it is borrowed, and String copies the result.
+        char[] chars = SCAN_SCRATCH.get();
+        source.getChars(start, end, chars, 0);
+        int written = 0;
+        int pos = start;
+        while (pos < end) {
+            char c = chars[pos - start];
+            if (c == '\\' && pos + 1 < end) {
+                pos++;
+                char esc = chars[pos - start];
+                switch (esc) {
+                    case '"', '\\', '/' -> chars[written++] = esc;
+                    case 'b' -> chars[written++] = '\b';
+                    case 'f' -> chars[written++] = '\f';
+                    case 'n' -> chars[written++] = '\n';
+                    case 'r' -> chars[written++] = '\r';
+                    case 't' -> chars[written++] = '\t';
+                    case 'u' -> {
+                        // Keep the original parser and offsets for malformed
+                        // Unicode, including its exception class and message.
+                        int cp = Integer.parseInt(source, pos + 1, pos + 5, 16);
+                        boolean paired = false;
+                        if (cp >= 0xD800 && cp <= 0xDBFF && pos + 7 < end
+                                && chars[pos + 5 - start] == '\\'
+                                && chars[pos + 6 - start] == 'u') {
+                            int low = Integer.parseInt(source, pos + 7, pos + 11, 16);
+                            paired = low >= 0xDC00 && low <= 0xDFFF;
+                            if (paired) {
+                                chars[written++] = (char) cp;
+                                chars[written++] = (char) low;
+                                pos += 10;
+                            }
+                        }
+                        if (!paired) {
+                            if (cp >= 0xD800 && cp <= 0xDFFF && loneReplace) cp = 0xFFFD;
+                            chars[written++] = (char) cp;
+                            pos += 4;
+                        }
+                    }
+                    default -> chars[written++] = esc;
+                }
+            } else {
+                chars[written++] = c;
+            }
+            pos++;
+        }
+        return new String(chars, 0, written);
+    }
+
+    /** Original decoder retained for strings exceeding the reusable workspace. */
+    private static String unescapeJsonLarge(String source, int start, int end, boolean loneReplace) {
         var sb = new StringBuilder(end - start);
         int pos = start;
         while (pos < end) {
