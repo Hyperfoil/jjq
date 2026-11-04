@@ -154,10 +154,25 @@ public final class JqString implements JqValue {
     static String unescapeJson(String source, int start, int end, boolean loneReplace) {
         int length = end - start;
         if (length == 0) return "";
-        if (length < 0 || length > 8192) return unescapeJsonLarge(source, start, end, loneReplace);
-        // Reuse the existing bounded scan workspace. No callback or recursive
-        // operation runs while it is borrowed, and String copies the result.
+        if (length <= SHORT_SCAN_MAX || length > MAX_SCRATCH_CHARS) {
+            return unescapeJsonFallback(source, start, end, loneReplace);
+        }
         char[] chars = SCAN_SCRATCH.get();
+        if (chars == null) {
+            // Admit only after prior string work on this thread. A one-off
+            // decode records a marker, not a potentially large char array.
+            SCAN_SCRATCH.set(SCRATCH_SEEN);
+            return unescapeJsonFallback(source, start, end, loneReplace);
+        }
+        if (chars.length < length) {
+            int capacity = Math.max(length, Math.min(MAX_SCRATCH_CHARS, chars.length * 2));
+            SCAN_SCRATCH.set(chars = new char[capacity]);
+        }
+        return unescapeJsonChars(source, start, end, loneReplace, chars);
+    }
+
+    /** Borrowed storage cannot escape; String copies the decoded result. */
+    private static String unescapeJsonChars(String source, int start, int end, boolean loneReplace, char[] chars) {
         source.getChars(start, end, chars, 0);
         int written = 0;
         int pos = start;
@@ -205,8 +220,8 @@ public final class JqString implements JqValue {
         return new String(chars, 0, written);
     }
 
-    /** Original decoder retained for strings exceeding the reusable workspace. */
-    private static String unescapeJsonLarge(String source, int start, int end, boolean loneReplace) {
+    /** Original decoder for tiny, one-off, and oversized strings. */
+    private static String unescapeJsonFallback(String source, int start, int end, boolean loneReplace) {
         var sb = new StringBuilder(end - start);
         int pos = start;
         while (pos < end) {
@@ -409,13 +424,24 @@ public final class JqString implements JqValue {
     /** Chunk size for the immune scan tier: bounds wasted copy on early exit. */
     private static final int SCAN_CHUNK = 256;
 
+    private static final int MAX_SCRATCH_CHARS = 8192;
+    private static final char[] SCRATCH_SEEN = new char[0];
+
     /**
-     * Retained scan scratch for {@link #needsEscaping}: one 8K-char window
-     * (16 KB) per thread, so retention stays bounded no matter how large
-     * any single string is.
+     * Shared scan/decode scratch. Scans need one 256-char chunk. Repeated
+     * eligible decodes grow storage geometrically, capped at 8K chars.
+     * Tiny decoding never consults this pool; first eligible decoding
+     * records only SCRATCH_SEEN. No eager per-thread char allocation.
      */
-    private static final ThreadLocal<char[]> SCAN_SCRATCH =
-            ThreadLocal.withInitial(() -> new char[8192]);
+    private static final ThreadLocal<char[]> SCAN_SCRATCH = new ThreadLocal<>();
+
+    private static char[] scanScratch() {
+        char[] scratch = SCAN_SCRATCH.get();
+        if (scratch == null || scratch.length < SCAN_CHUNK) {
+            SCAN_SCRATCH.set(scratch = new char[SCAN_CHUNK]);
+        }
+        return scratch;
+    }
 
     /**
      * Check if a string contains any characters that require JSON escaping.
@@ -432,7 +458,7 @@ public final class JqString implements JqValue {
             }
             return false;
         }
-        char[] scratch = SCAN_SCRATCH.get();
+        char[] scratch = scanScratch();
         int off = 0;
         while (off < len) {
             int wEnd = Math.min(off + SCAN_CHUNK, len);

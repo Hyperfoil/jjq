@@ -9,6 +9,12 @@ import static org.junit.jupiter.api.Assertions.*;
 class JsonStringUnescapeTest {
     @Test
     void everyEscapedUtf16UnitKeepsItsPolicy() {
+        String padding = "x".repeat(80);
+        // Admit and size the decoder workspace before the padded corpus.
+        for (int i = 0; i < 2; i++) {
+            String prime = padding + "\\n";
+            assertEquals(padding + "\n", JqString.deferred(prime, 0, prime.length(), true).stringValue());
+        }
         for (int code = 0; code <= 0xFFFF; code++) {
             String hex = Integer.toHexString(code);
             String escaped = "\\u" + "0".repeat(4 - hex.length()) + hex;
@@ -17,6 +23,11 @@ class JsonStringUnescapeTest {
             assertEquals(literal, JqString.deferred(source, 6, 12, true).stringValue(), "unit " + code);
             String replaced = Character.isSurrogate((char) code) ? "\uFFFD" : literal;
             assertEquals(replaced, JqString.deferred(source, 6, 12, true, true).stringValue(), "replace " + code);
+            String padded = padding + escaped;
+            assertEquals(padding + literal, JqString.deferred(padded, 0, padded.length(), true).stringValue(),
+                    "workspace unit " + code);
+            assertEquals(padding + replaced, JqString.deferred(padded, 0, padded.length(), true, true).stringValue(),
+                    "workspace replacement " + code);
         }
     }
 
@@ -40,8 +51,11 @@ class JsonStringUnescapeTest {
         String[] preserved = {"\uD83D\uDE00", "\uD83DA", "\uDC00x", "\uD83Dx"};
         String[] replaced = {"\uD83D\uDE00", "\uFFFDA", "\uFFFDx", "\uFFFDx"};
         for (int i = 0; i < raw.length; i++) {
-            assertEquals(preserved[i], JqString.deferred(raw[i], 0, raw[i].length(), true).stringValue());
-            assertEquals(replaced[i], JqString.deferred(raw[i], 0, raw[i].length(), true, true).stringValue());
+            for (String prefix : new String[]{"", "x".repeat(80)}) {
+                String input = prefix + raw[i];
+                assertEquals(prefix + preserved[i], JqString.deferred(input, 0, input.length(), true).stringValue());
+                assertEquals(prefix + replaced[i], JqString.deferred(input, 0, input.length(), true, true).stringValue());
+            }
         }
     }
 
