@@ -6,8 +6,8 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Provisional char-buffer experiment for #207. Existing serializers do not
- * use this class. Completed segments never need copying during growth.
+ * Segmented char-buffer backend for #207 serialization. Completed segments
+ * never need copying during growth.
  */
 public final class CharOutput implements AutoCloseable {
     private static final int SEGMENT_CHARS = 8192;
@@ -59,7 +59,21 @@ public final class CharOutput implements AutoCloseable {
     }
 
     public CharOutput append(Object value) {
+        if (value instanceof StringBuilder builder) return appendBuilder(builder);
         return append(String.valueOf(value));
+    }
+
+    private CharOutput appendBuilder(StringBuilder builder) {
+        int offset = 0;
+        int length = builder.length();
+        while (offset < length) {
+            if (position == buffer.length) nextSegment();
+            int n = Math.min(length - offset, buffer.length - position);
+            builder.getChars(offset, offset + n, buffer, position);
+            position += n;
+            offset += n;
+        }
+        return this;
     }
 
     public CharOutput append(int value) {

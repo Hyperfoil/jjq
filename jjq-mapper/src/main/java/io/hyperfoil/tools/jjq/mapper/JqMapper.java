@@ -631,18 +631,42 @@ public final class JqMapper {
      * Serialize a Java record to a JSON string.
      * Uses direct-to-JSON serialization when a generated mapping provides
      * {@code appendJson}, bypassing intermediate JqValue tree construction.
+     * Native buffered writers opt in explicitly; existing StringBuilder
+     * writers retain their dispatch.
      *
      * @param value the record instance to serialize
      * @return the compact JSON string representation
      */
+    @SuppressWarnings("unchecked")
     public String toJson(Object value) {
         if (value == null) return "null";
-        StringBuilder sb = JqValues.acquireSerializerBuffer();
-        appendJson(value, sb);
-        return JqValues.releaseSerializerBuffer(sb);
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            if (value.getClass().isArray()) {
+                StringBuilder sb = JqValues.acquireSerializerBuffer();
+                toJqValue(value).appendTo(sb);
+                return JqValues.releaseSerializerBuffer(sb);
+            }
+            Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+            if (usesBufferedJsonWriter(mapping)) {
+                try (CharOutput out = CharOutput.acquire()) {
+                    mapping.appendJson(value, out, this);
+                    return out.toString();
+                }
+            }
+            StringBuilder sb = JqValues.acquireSerializerBuffer();
+            mapping.appendJson(value, sb, this);
+            return JqValues.releaseSerializerBuffer(sb);
+        } finally {
+            scope.close();
+        }
     }
 
-    /** Provisional #207 experiment; the existing toJson route does not call this. */
+    private static boolean usesBufferedJsonWriter(Mapping<?> mapping) {
+        return mapping instanceof GeneratedMapping<?> generated && generated.usesBufferedJsonWriter();
+    }
+
+    /** Explicit buffered output, using a compatibility bridge for legacy writers. */
     public String toJsonBuffered(Object value) {
         if (value == null) return "null";
         try (CharOutput out = CharOutput.acquire()) {
@@ -659,7 +683,7 @@ public final class JqMapper {
         }
     }
 
-    /** Provisional #207 overload used by actual generated mappings. */
+    /** Append through an opted-in char writer, or preserve the legacy writer through a bridge. */
     @SuppressWarnings("unchecked")
     public void appendJson(Object value, CharOutput out) {
         IdentityScope scope = IdentityScope.enter();
@@ -668,7 +692,8 @@ public final class JqMapper {
             else if (value.getClass().isArray()) toJqValue(value).appendTo(out);
             else {
                 Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
-                mapping.appendJson(value, out, this);
+                if (usesBufferedJsonWriter(mapping)) mapping.appendJson(value, out, this);
+                else LegacyJsonOutput.append(mapping, value, out, this);
             }
         } finally {
             scope.close();

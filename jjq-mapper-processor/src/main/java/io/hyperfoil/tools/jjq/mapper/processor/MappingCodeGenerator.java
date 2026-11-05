@@ -157,7 +157,14 @@ final class MappingCodeGenerator {
 
         // appendJson method — direct-to-JSON, bypasses JqValue tree
         generateAppendJson(sb, recordSimpleName, components, anyInfo);
-        generateAppendJson(sb, recordSimpleName, components, anyInfo, "CharOutput");
+        boolean buffered = !anyInfo.hasGetter() && components.stream()
+                .filter(c -> !c.ignored() && !c.skipSerialize())
+                .allMatch(c -> c.converterClass() == null && c.adapter() == null && !c.stringShape()
+                        && (c.format() != null || isDirectBufferedType(c.typeName(), c.nestedRecord() || c.nestedMapped())));
+        if (buffered) {
+            emitBufferedWriterOptIn(sb);
+            generateAppendJson(sb, recordSimpleName, components, anyInfo, "CharOutput");
+        }
 
         // appendJsonBytes method — direct-to-bytes, bypasses JqValue tree
         generateAppendJsonBytes(sb, recordSimpleName, components, anyInfo);
@@ -880,6 +887,29 @@ final class MappingCodeGenerator {
             sb.append("    private static final byte[] KEYB_").append(prop.name().toUpperCase())
               .append(" = jsonKeyBytes(\"").append(escapeJava(prop.jsonName())).append("\");\n");
         }
+    }
+
+    private static void emitBufferedWriterOptIn(StringBuilder sb) {
+        sb.append("    @Override\n");
+        sb.append("    protected boolean usesBufferedJsonWriter() { return true; }\n\n");
+    }
+
+    /** Keep known tree/converter fallbacks on their existing StringBuilder writer. */
+    private static boolean isDirectBufferedType(String typeName, boolean nested) {
+        if (nested) return true;
+        return switch (typeName) {
+            case "java.lang.String", "char", "java.lang.Character",
+                    "int", "java.lang.Integer", "long", "java.lang.Long",
+                    "double", "java.lang.Double", "float", "java.lang.Float",
+                    "boolean", "java.lang.Boolean", "short", "java.lang.Short",
+                    "byte", "java.lang.Byte", "java.math.BigInteger",
+                    "java.util.UUID", "java.net.URI", "java.net.URL",
+                    "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period", "java.time.Year", "java.time.YearMonth",
+                    "java.time.MonthDay", "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" -> true;
+            default -> false;
+        };
     }
 
     private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
@@ -1861,7 +1891,14 @@ final class MappingCodeGenerator {
 
         // appendJson — direct-to-JSON, bypasses JqValue tree
         generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo);
-        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "CharOutput");
+        boolean buffered = !anyInfo.hasGetter() && properties.stream()
+                .filter(p -> !p.ignored() && !p.skipSerialize())
+                .allMatch(p -> p.converterClass() == null && p.adapter() == null && !p.stringShape()
+                        && (p.format() != null || isDirectBufferedType(p.typeName(), p.nestedRecord() || p.nestedMapped())));
+        if (buffered) {
+            emitBufferedWriterOptIn(sb);
+            generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "CharOutput");
+        }
 
         // appendJsonBytes — direct-to-bytes, bypasses JqValue tree
         generateAppendJsonBytesForPojo(sb, classSimpleName, properties, anyInfo);

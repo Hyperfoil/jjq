@@ -60,6 +60,18 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     protected GeneratedMapping() {}
 
     /**
+     * Opt in to the native CharOutput writer for mapper String serialization.
+     * Older generated classes and caller-provided StringBuilder writers keep
+     * their existing dispatch unless they explicitly override this method.
+     * An opted-in mapping must provide a matching CharOutput emitter.
+     *
+     * @return true when the mapping provides a native buffered writer
+     */
+    protected boolean usesBufferedJsonWriter() {
+        return false;
+    }
+
+    /**
      * Return the record class this mapping handles.
      *
      * @return the mapped record class

@@ -11,6 +11,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class CharOutputTest {
 
     @Test
+    void appendingBuilderOwnsItsSnapshotAcrossSegments() {
+        String text = "\uD83D\uDE00\u4E2D".repeat(40);
+        StringBuilder source = new StringBuilder(text);
+        String expected = "x".repeat(31) + text;
+        try (CharOutput out = new CharOutput(32)) {
+            out.append("x".repeat(31));
+            out.append((Object) source);
+            String retained = out.toString();
+            source.setLength(0);
+            source.append("different");
+            assertEquals(expected, retained);
+            assertEquals(expected, out.toString());
+        }
+    }
+
+    @Test
     void segmentsPreserveOrderForStringAndWriter() throws Exception {
         String prefix = "a".repeat(31);
         String suffix = "\uD83D\uDE00\u4E2D".repeat(30);

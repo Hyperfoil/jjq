@@ -61,9 +61,9 @@ sealed interface Mapping<T> permits ClassMapping, GeneratedMapping, PolyMapping,
         toJqValue(instance, mapper).appendTo(sb);
     }
 
-    /** Provisional #207 route; wrappers keep their identity-aware tree fallback. */
+    /** Preserve existing StringBuilder overrides when no native char writer is provided. */
     default void appendJson(T instance, CharOutput out, JqMapper mapper) {
-        toJqValue(instance, mapper).appendTo(out);
+        LegacyJsonOutput.append(this, instance, out, mapper);
     }
 
     /**

@@ -26,6 +26,101 @@ import static org.junit.jupiter.api.Assertions.*;
 class JqMapperProcessorTest {
 
     @Test
+    void generatedDefaultOutputKeepsOuterJsonDuringReentrantGetter() throws Exception {
+        String source = """
+                package test;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqMapper;
+                @JqMapped
+                public record DefaultReentrantMessage(String text) {
+                    public String text() {
+                        JqMapper.create().toJson(new Inner("nested"));
+                        return text;
+                    }
+                    public record Inner(String value) {}
+                }
+                """;
+        Class<?> type = compileAndLoad("test.DefaultReentrantMessage", source);
+        Object value = type.getDeclaredConstructor(String.class).newInstance("outer");
+        JqMapper mapper = JqMapper.create();
+        assertEquals("{\"text\":\"outer\"}", mapper.toJson(value));
+    }
+
+    @Test
+    void generatedPojoDefaultKeepsOuterJsonDuringReentrantGetter() throws Exception {
+        String source = """
+                package test;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqMapper;
+                @JqMapped
+                public class DefaultReentrantBean {
+                    private String text;
+                    public DefaultReentrantBean() {}
+                    public String getText() {
+                        JqMapper.create().toJson(new Inner("nested"));
+                        return text;
+                    }
+                    public void setText(String text) { this.text = text; }
+                    public record Inner(String value) {}
+                }
+                """;
+        Class<?> type = compileAndLoad("test.DefaultReentrantBean", source);
+        Object value = type.getDeclaredConstructor().newInstance();
+        type.getMethod("setText", String.class).invoke(value, "outer");
+        assertEquals("{\"text\":\"outer\"}", JqMapper.create().toJson(value));
+    }
+
+    @Test
+    void generatedTreeValuesRetainLegacyWriters() throws Exception {
+        String source = """
+                package test;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqAnyGetter;
+                import io.hyperfoil.tools.jjq.value.JqValue;
+                import java.math.BigDecimal;
+                public class TreeModels {
+                    @JqMapped public record TreeRecord(JqValue value) {}
+                    @JqMapped public record DecimalRecord(BigDecimal value) {}
+                    @JqMapped public record ExtrasRecord(String name) {
+                        @JqAnyGetter public java.util.Map<String, JqValue> extras() {
+                            return java.util.Map.of("score", io.hyperfoil.tools.jjq.value.JqNumber.of(1.25));
+                        }
+                    }
+                    @JqMapped public static class TreeBean {
+                        private JqValue value;
+                        public TreeBean() {}
+                        public JqValue getValue() { return value; }
+                        public void setValue(JqValue value) { this.value = value; }
+                    }
+                }
+                """;
+        Class<?> models = compileAndLoad("test.TreeModels", source);
+        ClassLoader loader = models.getClassLoader();
+        JqValue tree = JqValues.parse("[1.25,-0,1e30]");
+        Class<?> record = Class.forName("test.TreeModels$TreeRecord", true, loader);
+        Class<?> decimal = Class.forName("test.TreeModels$DecimalRecord", true, loader);
+        Class<?> bean = Class.forName("test.TreeModels$TreeBean", true, loader);
+        Class<?> extras = Class.forName("test.TreeModels$ExtrasRecord", true, loader);
+        Object beanValue = bean.getDeclaredConstructor().newInstance();
+        bean.getMethod("setValue", JqValue.class).invoke(beanValue, tree);
+        Object[] values = {record.getDeclaredConstructor(JqValue.class).newInstance(tree),
+                decimal.getDeclaredConstructor(java.math.BigDecimal.class)
+                        .newInstance(new java.math.BigDecimal("12345678901234567890.12500")), beanValue,
+                extras.getDeclaredConstructor(String.class).newInstance("extra")};
+        JqMapper mapper = JqMapper.create();
+        for (Object value : values) {
+            Class<?> type = value.getClass();
+            Class<?> mapping = Class.forName(type.getName().replace('$', '_') + "_JqMapping", true, loader);
+            assertThrows(NoSuchMethodException.class, () -> mapping.getDeclaredMethod("appendJson", type,
+                    io.hyperfoil.tools.jjq.value.CharOutput.class, JqMapper.class));
+            StringBuilder reference = new StringBuilder();
+            mapper.appendJson(value, reference);
+            assertEquals(reference.toString(), mapper.toJson(value));
+            assertEquals(reference.toString(), mapper.toJsonBuffered(value));
+        }
+    }
+
+    @Test
     void generatedBufferedOutputKeepsOuterJsonDuringReentrantGetter() throws Exception {
         String source = """
                 package test;
