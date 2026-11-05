@@ -128,7 +128,7 @@ public final class JqString implements JqValue {
                     : s.substring(start, end);
         } else if (source instanceof byte[] bytes) {
             if ((hasEscapes & FLAG_HAS_ESCAPES) != 0 && end - start > 4 * SHORT_SCAN_MAX) {
-                String decoded = tryUnescapeJsonBytes(bytes, start, end);
+                String decoded = tryUnescapeJsonBytes(bytes, start, end, (hasEscapes & FLAG_LONE_REPLACE) != 0);
                 if (decoded != null) return decoded;
             }
             String raw = new String(bytes, start, end - start, StandardCharsets.UTF_8);
@@ -140,7 +140,7 @@ public final class JqString implements JqValue {
     }
 
     /** Reuse admitted storage; unsupported input keeps the original byte/String path. */
-    private static String tryUnescapeJsonBytes(byte[] bytes, int start, int end) {
+    private static String tryUnescapeJsonBytes(byte[] bytes, int start, int end, boolean loneReplace) {
         int length = end - start;
         // Conservative byte bounds preserve the UTF-16 tiny/oversized policy
         // without a counting pass or extra storage. Even four bytes per unit
@@ -156,49 +156,93 @@ public final class JqString implements JqValue {
             if (written == chars.length) return null;
             int b = bytes[pos++] & 0xFF;
             rawUnits++;
+            int code;
             if (b == '\\') {
                 if (pos == end) return null;
                 rawUnits++;
                 switch (bytes[pos++]) {
-                    case '"' -> chars[written++] = '"';
-                    case '\\' -> chars[written++] = '\\';
-                    case '/' -> chars[written++] = '/';
-                    case 'b' -> chars[written++] = '\b';
-                    case 'f' -> chars[written++] = '\f';
-                    case 'n' -> chars[written++] = '\n';
-                    case 'r' -> chars[written++] = '\r';
-                    case 't' -> chars[written++] = '\t';
-                    // In particular, Unicode escapes retain the original
-                    // surrogate policy and exact malformed-escape errors.
+                    case '"' -> { chars[written++] = '"'; continue; }
+                    case '\\' -> { chars[written++] = '\\'; continue; }
+                    case '/' -> { chars[written++] = '/'; continue; }
+                    case 'b' -> { chars[written++] = '\b'; continue; }
+                    case 'f' -> { chars[written++] = '\f'; continue; }
+                    case 'n' -> { chars[written++] = '\n'; continue; }
+                    case 'r' -> { chars[written++] = '\r'; continue; }
+                    case 't' -> { chars[written++] = '\t'; continue; }
+                    case 'u' -> {
+                        long escape = decodeUnicodeEscape(bytes, pos, end, loneReplace);
+                        if (escape < 0) return null;
+                        int sourceUnits = (int) (escape >>> 32);
+                        pos += sourceUnits;
+                        rawUnits += sourceUnits;
+                        code = (int) escape;
+                    }
                     default -> { return null; }
                 }
             } else if (b < 0x80) {
                 chars[written++] = (char) b;
+                continue;
             } else {
                 int from = pos - 1;
                 int next = Utf8.sequenceEnd(bytes, from, end);
                 if (next < 0) return null;
-                int code = switch (next - from) {
-                    case 2 -> (b & 0x1F) << 6 | bytes[from + 1] & 0x3F;
-                    case 3 -> (b & 0x0F) << 12 | (bytes[from + 1] & 0x3F) << 6
-                            | bytes[from + 2] & 0x3F;
-                    default -> (b & 7) << 18 | (bytes[from + 1] & 0x3F) << 12
-                            | (bytes[from + 2] & 0x3F) << 6 | bytes[from + 3] & 0x3F;
-                };
-                if (code >= 0x10000) {
-                    if (written + 1 == chars.length) return null;
-                    rawUnits++;
-                    chars[written++] = Character.highSurrogate(code);
-                    chars[written++] = Character.lowSurrogate(code);
-                } else {
-                    chars[written++] = (char) code;
-                }
+                code = utf8CodePoint(bytes, from, next);
+                rawUnits += Character.charCount(code) - 1;
                 pos = next;
+            }
+            if (code >= 0x10000) {
+                if (written + 1 == chars.length) return null;
+                chars[written++] = Character.highSurrogate(code);
+                chars[written++] = Character.lowSurrogate(code);
+            } else {
+                chars[written++] = (char) code;
             }
         }
         // A shorter decoded result must not skip the existing raw-size growth
         // contract. Cold admission and all growth stay on the original path.
         return rawUnits <= chars.length ? new String(chars, 0, written) : null;
+    }
+
+    /** The sequence bounds have already been checked by Utf8.sequenceEnd. */
+    private static int utf8CodePoint(byte[] bytes, int from, int end) {
+        int b = bytes[from] & 0xFF;
+        return switch (end - from) {
+            case 2 -> (b & 0x1F) << 6 | bytes[from + 1] & 0x3F;
+            case 3 -> (b & 0x0F) << 12 | (bytes[from + 1] & 0x3F) << 6 | bytes[from + 2] & 0x3F;
+            default -> (b & 7) << 18 | (bytes[from + 1] & 0x3F) << 12
+                    | (bytes[from + 2] & 0x3F) << 6 | bytes[from + 3] & 0x3F;
+        };
+    }
+
+    /** High word: source units after 'u'; low word: code point. No per-escape object. */
+    private static long decodeUnicodeEscape(byte[] bytes, int pos, int end, boolean loneReplace) {
+        int code = asciiHex4(bytes, pos, end);
+        if (code < 0) return -1;
+        int units = 4;
+        if (code >= 0xD800 && code <= 0xDBFF && end - pos >= 6
+                && bytes[pos + 4] == '\\' && bytes[pos + 5] == 'u') {
+            int low = asciiHex4(bytes, pos + 6, end);
+            if (low < 0) return -1;
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                code = Character.toCodePoint((char) code, (char) low);
+                units = 10;
+            }
+        }
+        if (units == 4 && loneReplace && code >= 0xD800 && code <= 0xDFFF) code = 0xFFFD;
+        return (long) units << 32 | code;
+    }
+
+    private static int asciiHex4(byte[] bytes, int pos, int end) {
+        if (end - pos < 4) return -1;
+        int code = 0;
+        for (int i = 0; i < 4; i++) {
+            int b = bytes[pos + i] & 0xFF;
+            if (b >= 0x80) return -1;
+            int digit = Character.digit((char) b, 16);
+            if (digit < 0) return -1;
+            code = code << 4 | digit;
+        }
+        return code;
     }
 
     /** Record a cleanliness verdict from an escape run (cold path). */
