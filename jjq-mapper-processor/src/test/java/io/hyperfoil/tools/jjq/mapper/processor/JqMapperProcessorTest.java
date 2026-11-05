@@ -81,6 +81,8 @@ class JqMapperProcessorTest {
                 public class TreeModels {
                     @JqMapped public record TreeRecord(JqValue value) {}
                     @JqMapped public record DecimalRecord(BigDecimal value) {}
+                    public record UnmappedChild(String name) {}
+                    @JqMapped public record LegacyContainer(UnmappedChild value) {}
                     @JqMapped public record ExtrasRecord(String name) {
                         @JqAnyGetter public java.util.Map<String, JqValue> extras() {
                             return java.util.Map.of("score", io.hyperfoil.tools.jjq.value.JqNumber.of(1.25));
@@ -92,6 +94,12 @@ class JqMapperProcessorTest {
                         public JqValue getValue() { return value; }
                         public void setValue(JqValue value) { this.value = value; }
                     }
+                    @JqMapped public static class LegacyBean {
+                        private UnmappedChild value;
+                        public LegacyBean() {}
+                        public UnmappedChild getValue() { return value; }
+                        public void setValue(UnmappedChild value) { this.value = value; }
+                    }
                 }
                 """;
         Class<?> models = compileAndLoad("test.TreeModels", source);
@@ -101,18 +109,25 @@ class JqMapperProcessorTest {
         Class<?> decimal = Class.forName("test.TreeModels$DecimalRecord", true, loader);
         Class<?> bean = Class.forName("test.TreeModels$TreeBean", true, loader);
         Class<?> extras = Class.forName("test.TreeModels$ExtrasRecord", true, loader);
+        Class<?> child = Class.forName("test.TreeModels$UnmappedChild", true, loader);
+        Object childValue = child.getDeclaredConstructor(String.class).newInstance("leaf");
+        Class<?> legacyContainer = Class.forName("test.TreeModels$LegacyContainer", true, loader);
+        Class<?> legacyBean = Class.forName("test.TreeModels$LegacyBean", true, loader);
+        Object legacyBeanValue = legacyBean.getDeclaredConstructor().newInstance();
+        legacyBean.getMethod("setValue", child).invoke(legacyBeanValue, childValue);
         Object beanValue = bean.getDeclaredConstructor().newInstance();
         bean.getMethod("setValue", JqValue.class).invoke(beanValue, tree);
         Object[] values = {record.getDeclaredConstructor(JqValue.class).newInstance(tree),
                 decimal.getDeclaredConstructor(java.math.BigDecimal.class)
                         .newInstance(new java.math.BigDecimal("12345678901234567890.12500")), beanValue,
-                extras.getDeclaredConstructor(String.class).newInstance("extra")};
+                extras.getDeclaredConstructor(String.class).newInstance("extra"),
+                legacyContainer.getDeclaredConstructor(child).newInstance(childValue), legacyBeanValue};
         JqMapper mapper = JqMapper.create();
         for (Object value : values) {
             Class<?> type = value.getClass();
             Class<?> mapping = Class.forName(type.getName().replace('$', '_') + "_JqMapping", true, loader);
             assertThrows(NoSuchMethodException.class, () -> mapping.getDeclaredMethod("appendJson", type,
-                    io.hyperfoil.tools.jjq.value.CharOutput.class, JqMapper.class));
+                    io.hyperfoil.tools.jjq.value.CharOutput.class, JqMapper.class), type.getName());
             StringBuilder reference = new StringBuilder();
             mapper.appendJson(value, reference);
             assertEquals(reference.toString(), mapper.toJson(value));

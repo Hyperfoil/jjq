@@ -160,7 +160,7 @@ final class MappingCodeGenerator {
         boolean buffered = !anyInfo.hasGetter() && components.stream()
                 .filter(c -> !c.ignored() && !c.skipSerialize())
                 .allMatch(c -> c.converterClass() == null && c.adapter() == null && !c.stringShape()
-                        && (c.format() != null || isDirectBufferedType(c.typeName(), c.nestedRecord() || c.nestedMapped())));
+                        && (c.format() != null || isDirectBufferedType(c.typeName(), c.nestedMapped())));
         if (buffered) {
             emitBufferedWriterOptIn(sb);
             generateAppendJson(sb, recordSimpleName, components, anyInfo, "CharOutput");
@@ -894,7 +894,7 @@ final class MappingCodeGenerator {
         sb.append("    protected boolean usesBufferedJsonWriter() { return true; }\n\n");
     }
 
-    /** Keep known tree/converter fallbacks on their existing StringBuilder writer. */
+    /** Keep tree/converter fallbacks and unmapped child types on StringBuilder. */
     private static boolean isDirectBufferedType(String typeName, boolean nested) {
         if (nested) return true;
         return switch (typeName) {
@@ -1894,7 +1894,7 @@ final class MappingCodeGenerator {
         boolean buffered = !anyInfo.hasGetter() && properties.stream()
                 .filter(p -> !p.ignored() && !p.skipSerialize())
                 .allMatch(p -> p.converterClass() == null && p.adapter() == null && !p.stringShape()
-                        && (p.format() != null || isDirectBufferedType(p.typeName(), p.nestedRecord() || p.nestedMapped())));
+                        && (p.format() != null || isDirectBufferedType(p.typeName(), p.nestedMapped())));
         if (buffered) {
             emitBufferedWriterOptIn(sb);
             generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "CharOutput");
