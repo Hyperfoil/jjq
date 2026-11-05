@@ -127,7 +127,7 @@ public final class JqString implements JqValue {
                     ? unescapeJson(s, start, end, (hasEscapes & FLAG_LONE_REPLACE) != 0)
                     : s.substring(start, end);
         } else if (source instanceof byte[] bytes) {
-            if ((hasEscapes & FLAG_HAS_ESCAPES) != 0) {
+            if ((hasEscapes & FLAG_HAS_ESCAPES) != 0 && end - start > 4 * SHORT_SCAN_MAX) {
                 String decoded = tryUnescapeJsonBytes(bytes, start, end);
                 if (decoded != null) return decoded;
             }
