@@ -11,6 +11,36 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class JsonByteStringUnescapeTest {
     @Test
+    void everyEscapedUtf16UnitKeepsItsByteSourcePolicy() {
+        primeWorkspace();
+        String prefix = "x".repeat(300);
+        for (int code = 0; code <= 0xFFFF; code++) {
+            String hex = Integer.toHexString(code);
+            byte[] raw = (prefix + "\\u" + "0".repeat(4 - hex.length()) + hex)
+                    .getBytes(StandardCharsets.UTF_8);
+            assertEquals(prefix + (char) code,
+                    JqString.deferredBytes(raw, 0, raw.length, true, false).stringValue(), "preserve " + code);
+            char replaced = Character.isSurrogate((char) code) ? '\uFFFD' : (char) code;
+            assertEquals(prefix + replaced,
+                    JqString.deferredBytes(raw, 0, raw.length, true, true).stringValue(), "replace " + code);
+        }
+    }
+
+    @Test
+    void nonstandardUnicodeDigitsKeepTheLenientFactoryContract() {
+        primeWorkspace();
+        String prefix = "x".repeat(300);
+        String[] raw = {"\\u+123", "\\u-001", "\\u\uFF11\uFF12\uFF13\uFF14", "\\uD83D\\u+123"};
+        String[] kept = {"\u0123", "\uFFFF", "\u1234", "\uD83D\u0123"};
+        String[] replaced = {"\u0123", "\uFFFF", "\u1234", "\uFFFD\u0123"};
+        for (int i = 0; i < raw.length; i++) {
+            byte[] bytes = (prefix + raw[i]).getBytes(StandardCharsets.UTF_8);
+            assertEquals(prefix + kept[i], JqString.deferredBytes(bytes, 0, bytes.length, true, false).stringValue());
+            assertEquals(prefix + replaced[i], JqString.deferredBytes(bytes, 0, bytes.length, true, true).stringValue());
+        }
+    }
+
+    @Test
     void everyUtf8ScalarSurvivesEscapedByteMaterialization() {
         primeWorkspace();
         String padding = "x".repeat(300);

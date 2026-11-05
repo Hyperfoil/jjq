@@ -75,6 +75,13 @@ class JsonStringScratchTest {
                 assertNotSame(grown, pool.get(), "byte decoding must grow for raw size even when the result fits");
                 assertTrue(pool.get().length >= bytes.length);
                 assertTrue(pool.get().length <= 8192);
+                char[] beforeUnicode = pool.get();
+                int units = beforeUnicode.length / 6 + 1;
+                byte[] unicode = "\\u0041".repeat(units).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                assertEquals("A".repeat(units), JqString.deferredBytes(unicode, 0, unicode.length, true).stringValue());
+                assertNotSame(beforeUnicode, pool.get(), "Unicode decoding must count six raw units per escape");
+                assertTrue(pool.get().length >= unicode.length);
+                assertTrue(pool.get().length <= 8192);
             } catch (Throwable caught) {
                 failure.set(caught);
             }
