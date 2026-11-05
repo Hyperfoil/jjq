@@ -127,12 +127,78 @@ public final class JqString implements JqValue {
                     ? unescapeJson(s, start, end, (hasEscapes & FLAG_LONE_REPLACE) != 0)
                     : s.substring(start, end);
         } else if (source instanceof byte[] bytes) {
+            if ((hasEscapes & FLAG_HAS_ESCAPES) != 0) {
+                String decoded = tryUnescapeJsonBytes(bytes, start, end);
+                if (decoded != null) return decoded;
+            }
             String raw = new String(bytes, start, end - start, StandardCharsets.UTF_8);
             return (hasEscapes & FLAG_HAS_ESCAPES) != 0
                     ? unescapeJson(raw, 0, raw.length(), (hasEscapes & FLAG_LONE_REPLACE) != 0)
                     : raw;
         }
         throw new IllegalStateException("Deferred JqString with no source");
+    }
+
+    /** Reuse admitted storage; unsupported input keeps the original byte/String path. */
+    private static String tryUnescapeJsonBytes(byte[] bytes, int start, int end) {
+        int length = end - start;
+        // Conservative byte bounds preserve the UTF-16 tiny/oversized policy
+        // without a counting pass or extra storage. Even four bytes per unit
+        // cannot put an attempted range on the tiny path.
+        if (length <= 4 * SHORT_SCAN_MAX || length > MAX_SCRATCH_CHARS
+                || start < 0 || end > bytes.length) return null;
+        char[] chars = SCAN_SCRATCH.get();
+        if (chars == null || chars.length == 0) return null;
+        int pos = start;
+        int written = 0;
+        int rawUnits = 0;
+        while (pos < end) {
+            if (written == chars.length) return null;
+            int b = bytes[pos++] & 0xFF;
+            rawUnits++;
+            if (b == '\\') {
+                if (pos == end) return null;
+                rawUnits++;
+                switch (bytes[pos++]) {
+                    case '"' -> chars[written++] = '"';
+                    case '\\' -> chars[written++] = '\\';
+                    case '/' -> chars[written++] = '/';
+                    case 'b' -> chars[written++] = '\b';
+                    case 'f' -> chars[written++] = '\f';
+                    case 'n' -> chars[written++] = '\n';
+                    case 'r' -> chars[written++] = '\r';
+                    case 't' -> chars[written++] = '\t';
+                    // In particular, Unicode escapes retain the original
+                    // surrogate policy and exact malformed-escape errors.
+                    default -> { return null; }
+                }
+            } else if (b < 0x80) {
+                chars[written++] = (char) b;
+            } else {
+                int from = pos - 1;
+                int next = Utf8.sequenceEnd(bytes, from, end);
+                if (next < 0) return null;
+                int code = switch (next - from) {
+                    case 2 -> (b & 0x1F) << 6 | bytes[from + 1] & 0x3F;
+                    case 3 -> (b & 0x0F) << 12 | (bytes[from + 1] & 0x3F) << 6
+                            | bytes[from + 2] & 0x3F;
+                    default -> (b & 7) << 18 | (bytes[from + 1] & 0x3F) << 12
+                            | (bytes[from + 2] & 0x3F) << 6 | bytes[from + 3] & 0x3F;
+                };
+                if (code >= 0x10000) {
+                    if (written + 1 == chars.length) return null;
+                    rawUnits++;
+                    chars[written++] = Character.highSurrogate(code);
+                    chars[written++] = Character.lowSurrogate(code);
+                } else {
+                    chars[written++] = (char) code;
+                }
+                pos = next;
+            }
+        }
+        // A shorter decoded result must not skip the existing raw-size growth
+        // contract. Cold admission and all growth stay on the original path.
+        return rawUnits <= chars.length ? new String(chars, 0, written) : null;
     }
 
     /** Record a cleanliness verdict from an escape run (cold path). */
