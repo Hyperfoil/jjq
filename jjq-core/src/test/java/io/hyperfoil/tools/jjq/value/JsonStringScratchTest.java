@@ -69,6 +69,12 @@ class JsonStringScratchTest {
                     assertEquals("\u4E2D".repeat(600) + "\nz" + "x".repeat(i), decode(longer + "x".repeat(i)));
                     assertSame(grown, pool.get(), "incremental sizes should reuse growth headroom");
                 }
+                int escapes = grown.length / 2 + 1;
+                byte[] bytes = "\\n".repeat(escapes).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                assertEquals("\n".repeat(escapes), JqString.deferredBytes(bytes, 0, bytes.length, true).stringValue());
+                assertNotSame(grown, pool.get(), "byte decoding must grow for raw size even when the result fits");
+                assertTrue(pool.get().length >= bytes.length);
+                assertTrue(pool.get().length <= 8192);
             } catch (Throwable caught) {
                 failure.set(caught);
             }

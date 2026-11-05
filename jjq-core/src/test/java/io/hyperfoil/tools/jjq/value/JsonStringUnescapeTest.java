@@ -61,13 +61,15 @@ class JsonStringUnescapeTest {
 
     @Test
     void longAndShortResultsDoNotAliasReusableStorage() {
+        String otherRaw = "other\\t".repeat(64);
+        String other = "other\t".repeat(64);
         for (int length : new int[]{0, 1, 63, 64, 255, 256, 8191, 8192, 8193, 16385}) {
             String prefix = "\u00E9\u4E2D".repeat(length);
             String raw = prefix + "\\n\\uD83D\\uDE00";
             String expected = prefix + "\n\uD83D\uDE00";
             String first = JqString.deferred(raw, 0, raw.length(), true).stringValue();
             assertEquals(expected, first);
-            assertEquals("other\t", JqString.deferred("other\\t", 0, 7, true).stringValue());
+            assertEquals(other, JqString.deferred(otherRaw, 0, otherRaw.length(), true).stringValue());
             assertEquals(expected, first);
         }
     }
