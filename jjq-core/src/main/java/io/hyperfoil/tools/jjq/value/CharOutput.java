@@ -28,6 +28,7 @@ public final class CharOutput implements AutoCloseable {
     private int completedChars;
     private int allocatedSegments = 1;
     private boolean inUse;
+    private StringBuilder numberScratch;
 
     public CharOutput() {
         this(SEGMENT_CHARS);
@@ -95,9 +96,26 @@ public final class CharOutput implements AutoCloseable {
         if ((double) integral == value) {
             append(integral);
         } else if ((value > 1e-3 && value < 1e15) || (value < -1e-3 && value > -1e15)) {
-            append(Double.toString(value));
+            appendFractionalDouble(value);
         } else {
             append(java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString());
+        }
+    }
+
+    /** JDK formatting without an intermediate String; common double text fits 32 chars. */
+    private void appendFractionalDouble(double value) {
+        StringBuilder number = numberScratch;
+        if (number == null) numberScratch = number = new StringBuilder(32);
+        number.setLength(0);
+        number.append(value);
+        int length = number.length();
+        int first = Math.min(length, buffer.length - position);
+        number.getChars(0, first, buffer, position);
+        position += first;
+        if (first < length) {
+            nextSegment();
+            number.getChars(first, length, buffer, 0);
+            position = length - first;
         }
     }
 
