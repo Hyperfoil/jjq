@@ -26,6 +26,30 @@ import static org.junit.jupiter.api.Assertions.*;
 class JqMapperProcessorTest {
 
     @Test
+    void generatedBufferedOutputKeepsOuterJsonDuringReentrantGetter() throws Exception {
+        String source = """
+                package test;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                import io.hyperfoil.tools.jjq.mapper.JqMapper;
+                @JqMapped
+                public record ReentrantMessage(String text) {
+                    public String text() {
+                        JqMapper.create().toJsonBuffered(new Inner("nested"));
+                        return text;
+                    }
+                    public record Inner(String value) {}
+                }
+                """;
+        Class<?> type = compileAndLoad("test.ReentrantMessage", source);
+        Object value = type.getDeclaredConstructor(String.class).newInstance("outer");
+        JqMapper mapper = JqMapper.create();
+        String retained = mapper.toJsonBuffered(value);
+        assertEquals("{\"text\":\"outer\"}", retained);
+        assertEquals(retained, mapper.toJsonBuffered(value));
+        assertEquals("{\"text\":\"outer\"}", retained);
+    }
+
+    @Test
     void generatedBufferedOutputHasItsOwnEmitterAndMatchesExistingOutput() throws Exception {
         String source = """
                 package test;
@@ -43,10 +67,13 @@ class JqMapperProcessorTest {
         for (String text : new String[]{null, "clean", "\"\\\n\u0000\u00E9\u4E2D\uD83D\uDE00",
                 "x".repeat(8191) + "\uD83D\uDE00\"", "x".repeat(8192) + "\\"}) {
             Object value = constructor.newInstance(text, -42, -0.0);
-            assertEquals(mapper.toJson(value), mapper.toJsonBuffered(value));
+            StringBuilder reference = new StringBuilder();
+            mapper.appendJson(value, reference);
+            assertEquals(reference.toString(), mapper.toJson(value));
+            assertEquals(reference.toString(), mapper.toJsonBuffered(value));
             java.io.StringWriter writer = new java.io.StringWriter();
             mapper.writeJsonBuffered(value, writer);
-            assertEquals(mapper.toJson(value), writer.toString());
+            assertEquals(reference.toString(), writer.toString());
         }
     }
 
