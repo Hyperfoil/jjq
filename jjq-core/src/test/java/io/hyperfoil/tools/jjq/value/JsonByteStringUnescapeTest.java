@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
@@ -30,14 +31,18 @@ class JsonByteStringUnescapeTest {
     void nonstandardUnicodeDigitsKeepTheLenientFactoryContract() {
         primeWorkspace();
         String prefix = "x".repeat(300);
-        String[] raw = {"\\u+123", "\\u-001", "\\u\uFF11\uFF12\uFF13\uFF14", "\\uD83D\\u+123"};
-        String[] kept = {"\u0123", "\uFFFF", "\u1234", "\uD83D\u0123"};
-        String[] replaced = {"\u0123", "\uFFFF", "\u1234", "\uFFFD\u0123"};
-        for (int i = 0; i < raw.length; i++) {
-            byte[] bytes = (prefix + raw[i]).getBytes(StandardCharsets.UTF_8);
-            assertEquals(prefix + kept[i], JqString.deferredBytes(bytes, 0, bytes.length, true, false).stringValue());
-            assertEquals(prefix + replaced[i], JqString.deferredBytes(bytes, 0, bytes.length, true, true).stringValue());
+        var cases = Map.of("\\u+123", "\u0123", "\\u-001", "\uFFFF",
+                "\\u\uFF11\uFF12\uFF13\uFF14", "\u1234");
+        for (boolean replace : new boolean[]{false, true}) {
+            for (var entry : cases.entrySet()) {
+                byte[] bytes = (prefix + entry.getKey()).getBytes(StandardCharsets.UTF_8);
+                assertEquals(prefix + entry.getValue(),
+                        JqString.deferredBytes(bytes, 0, bytes.length, true, replace).stringValue());
+            }
         }
+        byte[] signedLow = (prefix + "\\uD83D\\u+123").getBytes(StandardCharsets.UTF_8);
+        assertEquals(prefix + "\uD83D\u0123", JqString.deferredBytes(signedLow, 0, signedLow.length, true, false).stringValue());
+        assertEquals(prefix + "\uFFFD\u0123", JqString.deferredBytes(signedLow, 0, signedLow.length, true, true).stringValue());
     }
 
     @Test
