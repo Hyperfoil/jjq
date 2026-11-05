@@ -157,6 +157,7 @@ final class MappingCodeGenerator {
 
         // appendJson method — direct-to-JSON, bypasses JqValue tree
         generateAppendJson(sb, recordSimpleName, components, anyInfo);
+        generateAppendJson(sb, recordSimpleName, components, anyInfo, "CharOutput");
 
         // appendJsonBytes method — direct-to-bytes, bypasses JqValue tree
         generateAppendJsonBytes(sb, recordSimpleName, components, anyInfo);
@@ -884,12 +885,18 @@ final class MappingCodeGenerator {
     private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
                                              List<JqMapperProcessor.ComponentInfo> components,
                                              JqMapperProcessor.AnyInfo anyInfo) {
+        generateAppendJson(sb, recordSimpleName, components, anyInfo, "StringBuilder");
+    }
+
+    private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
+                                             List<JqMapperProcessor.ComponentInfo> components,
+                                             JqMapperProcessor.AnyInfo anyInfo, String outputType) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public void appendJson(").append(recordSimpleName)
-          .append(" instance, StringBuilder _sb, JqMapper mapper) {\n");
+          .append(" instance, ").append(outputType).append(" _sb, JqMapper mapper) {\n");
         if (anyInfo.hasGetter()) {
             // Any-getter extras need tree materialization — fall back (issue #87).
             // Emitting only the fallback: body after return would be unreachable code.
@@ -1854,6 +1861,7 @@ final class MappingCodeGenerator {
 
         // appendJson — direct-to-JSON, bypasses JqValue tree
         generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo);
+        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "CharOutput");
 
         // appendJsonBytes — direct-to-bytes, bypasses JqValue tree
         generateAppendJsonBytesForPojo(sb, classSimpleName, properties, anyInfo);
@@ -1874,12 +1882,18 @@ final class MappingCodeGenerator {
     private static void generateAppendJsonForPojo(StringBuilder sb, String classSimpleName,
                                                     List<JqMapperProcessor.PropertyInfo> properties,
                                                     JqMapperProcessor.AnyInfo anyInfo) {
+        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "StringBuilder");
+    }
+
+    private static void generateAppendJsonForPojo(StringBuilder sb, String classSimpleName,
+                                                    List<JqMapperProcessor.PropertyInfo> properties,
+                                                    JqMapperProcessor.AnyInfo anyInfo, String outputType) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
 
         sb.append("    @Override\n");
         sb.append("    public void appendJson(").append(classSimpleName)
-          .append(" instance, StringBuilder _sb, JqMapper mapper) {\n");
+          .append(" instance, ").append(outputType).append(" _sb, JqMapper mapper) {\n");
         if (anyInfo.hasGetter()) {
             // Any-getter extras need tree materialization — fall back (issue #87).
             // Emitting only the fallback: body after return would be unreachable code.

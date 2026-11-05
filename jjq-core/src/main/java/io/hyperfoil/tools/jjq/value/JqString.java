@@ -626,6 +626,26 @@ public final class JqString implements JqValue {
         sb.append('"');
     }
 
+    /** Provisional #207 route, retaining the existing deferred and memo rules. */
+    @Override
+    public void appendTo(CharOutput out) {
+        out.append('"');
+        String v = value;
+        if (v != null) {
+            byte memo = cleanMemo;
+            if (memo == 1) out.append(v);
+            else if (memo == 2) out.escapeJson(v);
+            else memoClean(out.escapeJson(v));
+        } else if (source instanceof String s && (hasEscapes & FLAG_HAS_ESCAPES) == 0) {
+            out.append(s, start, end);
+        } else if (source instanceof byte[] && (hasEscapes & FLAG_HAS_ESCAPES) == 0) {
+            out.append(stringValue());
+        } else if (source != null) {
+            out.escapeJson(stringValue());
+        }
+        out.append('"');
+    }
+
     @Override
     public void appendToBytes(BytOutput out) {
         out.writeByte('"');

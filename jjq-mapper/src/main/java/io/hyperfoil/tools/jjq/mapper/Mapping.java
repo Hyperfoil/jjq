@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.jjq.mapper;
 
 import io.hyperfoil.tools.jjq.value.BytOutput;
+import io.hyperfoil.tools.jjq.value.CharOutput;
 import io.hyperfoil.tools.jjq.value.JqValue;
 
 /**
@@ -58,6 +59,11 @@ sealed interface Mapping<T> permits ClassMapping, GeneratedMapping, PolyMapping,
      */
     default void appendJson(T instance, StringBuilder sb, JqMapper mapper) {
         toJqValue(instance, mapper).appendTo(sb);
+    }
+
+    /** Provisional #207 route; wrappers keep their identity-aware tree fallback. */
+    default void appendJson(T instance, CharOutput out, JqMapper mapper) {
+        toJqValue(instance, mapper).appendTo(out);
     }
 
     /**

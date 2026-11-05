@@ -606,6 +606,50 @@ public final class JqValues {
         return out;
     }
 
+    // Provisional #207 overloads for generated char-buffer writers.
+    public static void appendJsonString(CharOutput out, String value) {
+        out.appendJsonString(value);
+    }
+
+    public static void appendJsonString(CharOutput out, Character value) {
+        out.appendJsonString(value == null ? null : String.valueOf((char) value));
+    }
+
+    public static void appendJsonDouble(CharOutput out, double value) {
+        out.appendDouble(value);
+    }
+
+    public static void appendJsonDouble(CharOutput out, float value) {
+        out.appendDouble(value);
+    }
+
+    public static void appendJsonDouble(CharOutput out, Double value) {
+        if (value == null) out.append("null");
+        else out.appendDouble(value);
+    }
+
+    public static void appendJsonDouble(CharOutput out, Float value) {
+        if (value == null) out.append("null");
+        else out.appendDouble(value);
+    }
+
+    public static void appendJsonDecimal(CharOutput out, java.math.BigDecimal value) {
+        if (value == null) out.append("null");
+        else out.appendValue(JqNumber.of(value));
+    }
+
+    public static void appendJqValue(CharOutput out, JqValue value) {
+        out.appendValue(value);
+    }
+
+    /** Provisional #207 Writer route with exception-safe buffer release. */
+    public static void serializeBufferedTo(JqValue value, Writer writer) throws IOException {
+        try (CharOutput out = CharOutput.acquire()) {
+            out.appendValue(value);
+            out.writeTo(writer);
+        }
+    }
+
     /**
      * Release the thread-local byte buffer, returning its contents as a
      * freshly allocated array (safe ownership transfer — the thread-local

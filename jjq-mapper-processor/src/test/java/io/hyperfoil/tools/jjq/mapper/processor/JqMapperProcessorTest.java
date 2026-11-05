@@ -25,6 +25,31 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class JqMapperProcessorTest {
 
+    @Test
+    void generatedBufferedOutputHasItsOwnEmitterAndMatchesExistingOutput() throws Exception {
+        String source = """
+                package test;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                @JqMapped
+                public record BufferedMessage(String text, int code, double score) {}
+                """;
+        Class<?> type = compileAndLoad("test.BufferedMessage", source);
+        Class<?> mapping = Class.forName("test.BufferedMessage_JqMapping", true, type.getClassLoader());
+        // getDeclaredMethod rejects a silent inherited tree fallback.
+        mapping.getDeclaredMethod("appendJson", type,
+                io.hyperfoil.tools.jjq.value.CharOutput.class, JqMapper.class);
+        JqMapper mapper = JqMapper.create();
+        var constructor = type.getDeclaredConstructor(String.class, int.class, double.class);
+        for (String text : new String[]{null, "clean", "\"\\\n\u0000\u00E9\u4E2D\uD83D\uDE00",
+                "x".repeat(8191) + "\uD83D\uDE00\"", "x".repeat(8192) + "\\"}) {
+            Object value = constructor.newInstance(text, -42, -0.0);
+            assertEquals(mapper.toJson(value), mapper.toJsonBuffered(value));
+            java.io.StringWriter writer = new java.io.StringWriter();
+            mapper.writeJsonBuffered(value, writer);
+            assertEquals(mapper.toJson(value), writer.toString());
+        }
+    }
+
     /**
      * Compile a record source with the processor, load the generated mapping,
      * and verify it works end-to-end.

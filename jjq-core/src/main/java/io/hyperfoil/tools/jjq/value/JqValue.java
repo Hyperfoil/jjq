@@ -898,7 +898,12 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
      *
      * @param sb the StringBuilder to append to
      */
-     void appendTo(StringBuilder sb);
+      void appendTo(StringBuilder sb);
+
+    /** Provisional #207 char-buffer route; the existing overload is unchanged. */
+    default void appendTo(CharOutput out) {
+        out.appendValue(this);
+    }
 
     /**
      * Serialize this value directly to a UTF-8 byte buffer.

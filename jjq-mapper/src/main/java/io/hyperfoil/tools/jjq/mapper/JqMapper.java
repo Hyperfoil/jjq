@@ -2,6 +2,7 @@ package io.hyperfoil.tools.jjq.mapper;
 
 import io.hyperfoil.tools.jjq.mapper.spi.AnnotationBridge;
 import io.hyperfoil.tools.jjq.value.BytOutput;
+import io.hyperfoil.tools.jjq.value.CharOutput;
 import io.hyperfoil.tools.jjq.value.JqNull;
 import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
@@ -639,6 +640,39 @@ public final class JqMapper {
         StringBuilder sb = JqValues.acquireSerializerBuffer();
         appendJson(value, sb);
         return JqValues.releaseSerializerBuffer(sb);
+    }
+
+    /** Provisional #207 experiment; the existing toJson route does not call this. */
+    public String toJsonBuffered(Object value) {
+        if (value == null) return "null";
+        try (CharOutput out = CharOutput.acquire()) {
+            appendJson(value, out);
+            return out.toString();
+        }
+    }
+
+    /** Provisional #207 Writer route; never closes the caller's Writer. */
+    public void writeJsonBuffered(Object value, java.io.Writer writer) throws java.io.IOException {
+        try (CharOutput out = CharOutput.acquire()) {
+            appendJson(value, out);
+            out.writeTo(writer);
+        }
+    }
+
+    /** Provisional #207 overload used by actual generated mappings. */
+    @SuppressWarnings("unchecked")
+    public void appendJson(Object value, CharOutput out) {
+        IdentityScope scope = IdentityScope.enter();
+        try {
+            if (value == null) out.append("null");
+            else if (value.getClass().isArray()) toJqValue(value).appendTo(out);
+            else {
+                Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+                mapping.appendJson(value, out, this);
+            }
+        } finally {
+            scope.close();
+        }
     }
 
     /**
