@@ -639,6 +639,10 @@ public final class JqValues {
     }
 
     public static void appendJqValue(CharOutput out, JqValue value) {
+        if (value == null) {
+            out.append("null");
+            return;
+        }
         out.appendValue(value);
     }
 

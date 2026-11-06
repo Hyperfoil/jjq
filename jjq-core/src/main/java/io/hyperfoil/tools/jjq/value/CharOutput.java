@@ -224,8 +224,8 @@ public final class CharOutput implements AutoCloseable {
 
     /** Tree fallback for the prototype. Generated scalar writers bypass it. */
     public void appendValue(JqValue value) {
+        java.util.Objects.requireNonNull(value, "null JqValue child");
         switch (value) {
-            case null -> append("null");
             case JqNull ignored -> append("null");
             case JqString s -> s.appendTo(this);
             case JqBoolean b -> append(b.booleanValue());

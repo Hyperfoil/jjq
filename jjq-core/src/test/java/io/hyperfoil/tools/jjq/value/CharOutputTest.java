@@ -113,6 +113,25 @@ class CharOutputTest {
     }
 
     @Test
+    void nullChildrenPreserveLegacyRejection() throws Exception {
+        JqValue objectChild = JqObject.of("v", (JqValue) null);
+        assertThrows(NullPointerException.class, () -> objectChild.appendTo(new StringBuilder()));
+        assertThrows(NullPointerException.class,
+                () -> JqValues.serializeBufferedTo(objectChild, new StringWriter()));
+        JqValue arrayChild = JqArray.ofTrusted(new JqValue[]{null});
+        assertThrows(NullPointerException.class, () -> arrayChild.appendTo(new StringBuilder()));
+        assertThrows(NullPointerException.class,
+                () -> JqValues.serializeBufferedTo(arrayChild, new StringWriter()));
+        StringBuilder legacyHelper = new StringBuilder();
+        JqValues.appendJqValue(legacyHelper, null);
+        assertEquals("null", legacyHelper.toString());
+        try (CharOutput out = CharOutput.acquire()) {
+            JqValues.appendJqValue(out, null);
+            assertEquals("null", out.toString());
+        }
+    }
+
+    @Test
     void nestedAcquisitionDoesNotResetOuterOutput() {
         try (CharOutput outer = CharOutput.acquire()) {
             outer.append("before");

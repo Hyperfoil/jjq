@@ -53,11 +53,15 @@ public class CharOutputBenchmark {
             assertGenerated(value.getClass());
             if (value instanceof BenchmarkRecords.PersonRecord) assertGenerated(BenchmarkRecords.Address.class);
             if (value instanceof BenchmarkRecords.PojoPerson) assertGenerated(BenchmarkRecords.PojoAddress.class);
-            String expected = mapper.toJson(value);
-            if (!expected.equals(mapper.toJsonBuffered(value))) throw new IllegalStateException("String parity: " + shape);
+            StringBuilder legacy = new StringBuilder();
+            mapper.appendJson(value, legacy);
+            String builderJson = legacy.toString();
+            String bufferedJson = mapper.toJsonBuffered(value);
+            if (!builderJson.equals(bufferedJson)) throw new IllegalStateException("String parity: " + shape);
+            if (!builderJson.equals(mapper.toJson(value))) throw new IllegalStateException("Default parity: " + shape);
             StringWriter check = new StringWriter();
             mapper.writeJsonBuffered(value, check);
-            if (!expected.equals(check.toString())) throw new IllegalStateException("Writer parity: " + shape);
+            if (!builderJson.equals(check.toString())) throw new IllegalStateException("Writer parity: " + shape);
         } else {
             try (InputStream input = getClass().getClassLoader()
                     .getResourceAsStream("benchmark-data/nested-100kb.json")) {
@@ -92,7 +96,12 @@ public class CharOutputBenchmark {
 
     @Benchmark
     public String serialize(Blackhole blackhole) throws IOException {
-        if (tree == null) return buffered ? mapper.toJsonBuffered(value) : mapper.toJson(value);
+        if (tree == null) {
+            if (buffered) return mapper.toJsonBuffered(value);
+            StringBuilder sb = JqValues.acquireSerializerBuffer();
+            mapper.appendJson(value, sb);
+            return JqValues.releaseSerializerBuffer(sb);
+        }
         writer.blackhole = blackhole;
         writer.written = 0;
         if (buffered) JqValues.serializeBufferedTo(tree, writer);
