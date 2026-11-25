@@ -38,8 +38,10 @@ public final class VirtualMachine {
     private final JqValue fastConst;  // cached for PIPE_FIELD_ARITH
     private final int fastArithOp;    // cached for PIPE_FIELD_ARITH
 
-    // Pre-allocated VM state (reused across executions)
-    private JqValue[] stack;
+    // Pre-allocated VM state (reused across executions).
+    // Stored as Object[] rather than JqValue[] to avoid interface-array aastore
+    // subtype checks on every push/store; only JqValue instances are written.
+    private Object[] stack;
     private int sp;
     private BacktrackPoint[] btStack;
     private int btp;
@@ -52,13 +54,13 @@ public final class VirtualMachine {
     private int pc;
     private boolean halted;
     // Indexed variable slots
-    private JqValue[] varSlots;
+    private Object[] varSlots;
     // Output collection state
     private boolean singleOutputMode;
     private JqValue firstOutput;
     private ArrayList<JqValue> multiOutputs;
     // Reusable scratch array for BUILD_OBJECT / STRING_CONCAT (avoids per-op allocation)
-    private JqValue[] scratchValues;
+    private Object[] scratchValues;
     // Reusable StringBuilder for STRING_CONCAT (avoids per-interpolation allocation)
     private final StringBuilder concatBuffer = new StringBuilder(64);
 
@@ -97,15 +99,15 @@ public final class VirtualMachine {
         this.bytecode = bytecode;
         this.builtins = builtins;
         this.treeWalker = ExprEvaluator.create(builtins);
-        this.stack = new JqValue[INIT_STACK];
+        this.stack = new Object[INIT_STACK];
         this.btStack = new BacktrackPoint[INIT_BT];
         for (int i = 0; i < INIT_BT; i++) btStack[i] = new BacktrackPoint();
         this.tryStack = new TryPoint[INIT_TRY];
         for (int i = 0; i < INIT_TRY; i++) tryStack[i] = new TryPoint();
         this.collectStack = new List[INIT_COLLECT];
         for (int i = 0; i < INIT_COLLECT; i++) collectStack[i] = new ArrayList<>();
-        this.varSlots = bytecode.varSlotCount() > 0 ? new JqValue[bytecode.varSlotCount()] : null;
-        this.scratchValues = new JqValue[computeMaxScratchSize(bytecode)];
+        this.varSlots = bytecode.varSlotCount() > 0 ? new Object[bytecode.varSlotCount()] : null;
+        this.scratchValues = new Object[computeMaxScratchSize(bytecode)];
         this.shape = detectShape();
         this.needsEnv = detectNeedsEnv();
         this.needsMutableEnv = detectNeedsMutableEnv();
@@ -324,14 +326,18 @@ public final class VirtualMachine {
         };
     }
 
-    private static JqValue fieldAccess(JqValue val, String field) {
+    private static JqValue fieldAccess(Object val, String field) {
         if (val instanceof JqObject obj) return obj.get(field);
-        if (val instanceof JqNull) return JqNull.NULL;
-        throw new JqException("Cannot index " + val.type().jqName() + " with string (\"" + field + "\")");
+        if (val == JqNull.NULL) return JqNull.NULL;
+        throw new JqException("Cannot index " + ((JqValue) val).type().jqName() + " with string (\"" + field + "\")");
     }
 
-    private static JqValue fieldAccess2(JqValue val, String f1, String f2) {
+    private static JqValue fieldAccess2(Object val, String f1, String f2) {
         return fieldAccess(fieldAccess(val, f1), f2);
+    }
+
+    private static boolean isTruthy(Object val) {
+        return val != JqNull.NULL && (!(val instanceof JqBoolean b) || b.booleanValue());
     }
 
     public List<JqValue> execute(JqValue inputValue, Environment environment) {
@@ -377,11 +383,11 @@ public final class VirtualMachine {
                     case PUSH_NULL -> push(JqNull.NULL);
                     case PUSH_TRUE -> push(JqBoolean.TRUE);
                     case PUSH_FALSE -> push(JqBoolean.FALSE);
-                    case POP -> pop();
-                    case DUP -> push(peek());
+                    case POP -> sp--;
+                    case DUP -> push(peekRaw());
                     case SWAP -> {
-                        JqValue a = pop();
-                        JqValue b = pop();
+                        Object a = popRaw();
+                        Object b = popRaw();
                         push(a);
                         push(b);
                     }
@@ -392,7 +398,7 @@ public final class VirtualMachine {
                     case SET_INPUT_PEEK -> input = peek();
 
                     // Field access
-                    case DOT_FIELD -> push(fieldAccess(pop(), names[arg1s[curPc]]));
+                    case DOT_FIELD -> push(fieldAccess(popRaw(), names[arg1s[curPc]]));
 
                     case INDEX -> {
                         JqValue index = pop();
@@ -401,7 +407,7 @@ public final class VirtualMachine {
                     }
 
                     case EACH -> {
-                        JqValue val = pop();
+                        Object val = popRaw();
                         if (val instanceof JqArray arr) {
                             var items = arr.arrayValue();
                             if (!items.isEmpty()) {
@@ -423,12 +429,12 @@ public final class VirtualMachine {
                                 doBacktrack();
                             }
                         } else {
-                            throw cannotIterate(val);
+                            throw cannotIterate((JqValue) val);
                         }
                     }
 
                     // Compound field access
-                    case DOT_FIELD2 -> push(fieldAccess2(pop(), names[arg1s[curPc]], names[arg2s[curPc]]));
+                    case DOT_FIELD2 -> push(fieldAccess2(popRaw(), names[arg1s[curPc]], names[arg2s[curPc]]));
 
                     // Inlined builtins — dispatched to separate method to keep runLoop() small
                     // for JIT optimization (see issue #61, Norman Maurer's inlining article).
@@ -456,16 +462,16 @@ public final class VirtualMachine {
                     case GE -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.compareTo(r) >= 0)); }
 
                     // Logic
-                    case NOT -> push(JqBoolean.of(!pop().isTruthy()));
+                    case NOT -> push(JqBoolean.of(!isTruthy(popRaw())));
 
                     // Control flow
                     case FORK -> btPush(arg1s[curPc], sp, input, env, null);
 
                     case JUMP -> pc = arg1s[curPc];
 
-                    case JUMP_IF_TRUE -> { if (pop().isTruthy()) pc = arg1s[curPc]; }
+                    case JUMP_IF_TRUE -> { if (isTruthy(popRaw())) pc = arg1s[curPc]; }
 
-                    case JUMP_IF_FALSE -> { if (!pop().isTruthy()) pc = arg1s[curPc]; }
+                    case JUMP_IF_FALSE -> { if (!isTruthy(popRaw())) pc = arg1s[curPc]; }
 
                     case BACKTRACK -> doBacktrack();
 
@@ -508,8 +514,8 @@ public final class VirtualMachine {
                     }
 
                     // Indexed variable slots
-                    case LOAD_SLOT -> { JqValue sv = varSlots[arg1s[curPc]]; push(sv != null ? sv : JqNull.NULL); }
-                    case STORE_SLOT -> varSlots[arg1s[curPc]] = pop();
+                    case LOAD_SLOT -> { Object sv = varSlots[arg1s[curPc]]; push(sv != null ? sv : JqNull.NULL); }
+                    case STORE_SLOT -> varSlots[arg1s[curPc]] = popRaw();
 
                     // Scope
                     case PUSH_SCOPE -> env = env.child();
@@ -540,16 +546,16 @@ public final class VirtualMachine {
 
                     // Fused collect-iterate: [.[] | simple-expr]
                     case COLLECT_ITERATE -> {
-                        JqValue val = pop(); // the array to iterate
+                        Object val = popRaw(); // the array to iterate
                         int bodyLen = arg1s[curPc];
                         int bodyStart = pc;
                         pc = bodyStart + bodyLen; // skip body in main loop
                         if (val instanceof JqArray arr) {
                             push(collectIterateArray(arr, bodyStart, bodyLen));
-                        } else if (val instanceof JqNull) {
+                        } else if (val == JqNull.NULL) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw cannotIterate(val);
+                            throw cannotIterate((JqValue) val);
                         }
                     }
 
@@ -557,44 +563,44 @@ public final class VirtualMachine {
                     // Single field access per element with resolve-once positional lookup
                     // for uniform object arrays (shared keys[]).
                     case COLLECT_FIELD -> {
-                        JqValue val = pop(); // the array to iterate
+                        Object val = popRaw(); // the array to iterate
                         String field = names[arg1s[curPc]];
                         boolean indexSemantics = arg2s[curPc] != 0;
                         if (val instanceof JqArray arr) {
                             push(collectFieldArray(arr, field, indexSemantics));
-                        } else if (val instanceof JqNull) {
+                        } else if (val == JqNull.NULL) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw cannotIterate(val);
+                            throw cannotIterate((JqValue) val);
                         }
                     }
 
                     // Fused collect-select-iterate: [.[] | select(cond) | expr]
                     case COLLECT_SELECT_ITERATE -> {
-                        JqValue val = pop();
+                        Object val = popRaw();
                         int bodyLen = arg1s[curPc];
                         int bodyStart = pc;
                         pc = bodyStart + bodyLen; // skip body in main loop
                         if (val instanceof JqArray arr) {
                             push(collectSelectIterateArray(arr, bodyStart, bodyLen));
-                        } else if (val instanceof JqNull) {
+                        } else if (val == JqNull.NULL) {
                             push(JqArray.EMPTY);
                         } else {
-                            throw cannotIterate(val);
+                            throw cannotIterate((JqValue) val);
                         }
                     }
 
                     // Fused reduce-iterate: reduce .[] as $x (init; . op $x)
                     case REDUCE_ITERATE -> {
-                        JqValue val = pop(); // the array to iterate
+                        Object val = popRaw(); // the array to iterate
                         JqValue initVal = consts[arg1s[curPc]];
                         int op = arg2s[curPc];
                         if (val instanceof JqArray arr) {
                             push(reduceIterateArray(arr, initVal, op));
-                        } else if (val instanceof JqNull) {
+                        } else if (val == JqNull.NULL) {
                             push(initVal);
                         } else {
-                            throw cannotIterate(val);
+                            throw cannotIterate((JqValue) val);
                         }
                     }
 
@@ -605,16 +611,16 @@ public final class VirtualMachine {
                         // Values are on stack with first field's value deepest.
                         // Pop all values into reusable scratch array (reverse order).
                         for (int i = count - 1; i >= 0; i--) {
-                            scratchValues[i] = pop();
+                            scratchValues[i] = popRaw();
                         }
                         var builder = JqObject.builder(count);
                         if (uniqueLayouts[arg2s[curPc]]) {
                             for (int i = 0; i < count; i++) {
-                                builder.putUnchecked(names[layout[i]], scratchValues[i]);
+                                builder.putUnchecked(names[layout[i]], (JqValue) scratchValues[i]);
                             }
                         } else {
                             for (int i = 0; i < count; i++) {
-                                builder.put(names[layout[i]], scratchValues[i]);
+                                builder.put(names[layout[i]], (JqValue) scratchValues[i]);
                             }
                         }
                         push(builder.build());
@@ -624,13 +630,13 @@ public final class VirtualMachine {
                     case STRING_CONCAT -> {
                         int partCount = arg1s[curPc];
                         for (int i = partCount - 1; i >= 0; i--) {
-                            scratchValues[i] = pop();
+                            scratchValues[i] = popRaw();
                         }
                         concatBuffer.setLength(0);
                         for (int i = 0; i < partCount; i++) {
-                            JqValue v = scratchValues[i];
+                            Object v = scratchValues[i];
                             if (v instanceof JqString s) concatBuffer.append(s.stringValue());
-                            else concatBuffer.append(v.toJsonString());
+                            else concatBuffer.append(((JqValue) v).toJsonString());
                         }
                         push(JqString.of(concatBuffer.toString()));
                     }
@@ -689,17 +695,25 @@ public final class VirtualMachine {
         push(results.getFirst());
     }
 
-    private void push(JqValue val) {
+    private void push(Object val) {
         if (sp >= stack.length) stack = java.util.Arrays.copyOf(stack, stack.length * 2);
         stack[sp++] = val;
     }
 
-    private JqValue pop() {
+    private Object popRaw() {
         return stack[--sp];
     }
 
-    private JqValue peek() {
+    private Object peekRaw() {
         return stack[sp - 1];
+    }
+
+    private JqValue pop() {
+        return (JqValue) stack[--sp];
+    }
+
+    private JqValue peek() {
+        return (JqValue) stack[sp - 1];
     }
 
     /**
@@ -730,7 +744,7 @@ public final class VirtualMachine {
                 } else throw builtinTypeError(val, "has no keys");
             }
             case BUILTIN_VALUES -> { if (val instanceof JqNull) doBacktrack(); else push(val); }
-            case BUILTIN_NOT -> push(JqBoolean.of(!val.isTruthy()));
+            case BUILTIN_NOT -> push(JqBoolean.of(!isTruthy(val)));
             case BUILTIN_EMPTY -> doBacktrack();
             case BUILTIN_TOSTRING -> push(val instanceof JqString ? val : JqString.of(val.toJsonString()));
             case BUILTIN_TONUMBER -> dispatchToNumber(val);
@@ -979,8 +993,7 @@ public final class VirtualMachine {
     }
 
     private JqArray collectIterateArray(JqArray arr, int bodyStart, int bodyLen) {
-        var items = arr.arrayValue();
-        int size = items.size();
+        int size = arr.size();
         if (size == 0) return JqArray.EMPTY;
 
         // Fast path: detect common body patterns to avoid stack/dispatch overhead
@@ -994,33 +1007,33 @@ public final class VirtualMachine {
                 // For integer * integer, use raw long math
                 if (ops[bodyStart + 2] == Opcode.MUL && constVal instanceof JqNumber cn && cn.isIntegral()) {
                     long multiplier = cn.longValue();
-                    var result = new JqValue[size];
+                    var result = JqArray.arrayBuilder(size);
                     boolean allIntegral = true;
                     for (int i = 0; i < size; i++) {
-                        JqValue item = items.get(i);
+                        JqValue item = arr.elementAt(i);
                         if (item instanceof JqNumber n && n.isIntegral()) {
-                            result[i] = JqNumber.of(Math.multiplyExact(n.longValue(), multiplier));
+                            result.setUnchecked(i, JqNumber.of(Math.multiplyExact(n.longValue(), multiplier)));
                         } else {
                             allIntegral = false;
                             break;
                         }
                     }
-                    if (allIntegral) return JqArray.ofTrusted(result);
+                    if (allIntegral) return result.build(size);
                 }
                 // General arith: apply via JqValue methods (no stack needed)
-                var result = new JqValue[size];
+                var result = JqArray.arrayBuilder(size);
                 for (int i = 0; i < size; i++) {
-                    JqValue item = items.get(i);
-                    result[i] = switch (ops[bodyStart + 2]) {
+                    JqValue item = arr.elementAt(i);
+                    result.setUnchecked(i, switch (ops[bodyStart + 2]) {
                         case ADD -> item.add(constVal);
                         case SUB -> item.subtract(constVal);
                         case MUL -> item.multiply(constVal);
                         case DIV -> item.divide(constVal);
                         case MOD -> item.modulo(constVal);
                         default -> collectIterateBodyGeneral(item, bodyStart, bodyLen);
-                    };
+                    });
                 }
-                return JqArray.ofTrusted(result);
+                return result.build(size);
             }
         }
 
@@ -1030,18 +1043,18 @@ public final class VirtualMachine {
         if (sp + 16 >= stack.length) {
             stack = java.util.Arrays.copyOf(stack, Math.max(stack.length * 2, sp + 16));
         }
-        var result = new JqValue[size];
+        var result = JqArray.arrayBuilder(size);
         int savedSp = sp;
         JqValue savedInput = input;
         for (int i = 0; i < size; i++) {
-            input = items.get(i);
+            input = arr.elementAt(i);
             sp = savedSp;
             collectIterateBody(bodyStart, bodyLen);
-            result[i] = pop();
+            result.setUnchecked(i, pop());
         }
         sp = savedSp;
         input = savedInput;
-        return JqArray.ofTrusted(result);
+        return result.build(size);
     }
 
     private JqValue collectIterateBodyGeneral(JqValue item, int bodyStart, int bodyLen) {
@@ -1064,69 +1077,67 @@ public final class VirtualMachine {
      * Error semantics match the unfused body exactly (dot vs index).
      */
     private JqArray collectFieldArray(JqArray arr, String field, boolean indexSemantics) {
-        var items = arr.arrayValue();
-        int size = items.size();
+        int size = arr.size();
         if (size == 0) return JqArray.EMPTY;
 
-        var result = new JqValue[size];
+        var result = JqArray.arrayBuilder(size);
         JqObject layoutOwner = null;
         int idx = -1;
         boolean haveLayout = false;
         for (int i = 0; i < size; i++) {
-            JqValue item = items.get(i);
+            JqValue item = arr.elementAt(i);
             if (item instanceof JqObject obj) {
                 if (haveLayout && obj.sharesKeysWith(layoutOwner)) {
-                    result[i] = idx >= 0 ? obj.valueAt(idx) : JqNull.NULL;
+                    result.setUnchecked(i, idx >= 0 ? obj.valueAt(idx) : JqNull.NULL);
                 } else if (obj.isArrayBacked()) {
                     int found = obj.indexOfKey(field);
                     layoutOwner = obj;
                     idx = found;
                     haveLayout = true;
-                    result[i] = found >= 0 ? obj.valueAt(found) : JqNull.NULL;
+                    result.setUnchecked(i, found >= 0 ? obj.valueAt(found) : JqNull.NULL);
                 } else {
-                    result[i] = obj.get(field);
+                    result.setUnchecked(i, obj.get(field));
                     haveLayout = false;
                 }
-            } else if (item instanceof JqNull) {
-                result[i] = JqNull.NULL;
+            } else if (item == JqNull.NULL) {
+                result.setUnchecked(i, JqNull.NULL);
             } else if (indexSemantics) {
                 // Cold: preserve the exact INDEX error (JqTypeError).
-                result[i] = JqValues.indexValue(item, JqString.of(field));
+                result.setUnchecked(i, JqValues.indexValue(item, JqString.of(field)));
             } else {
                 // Cold: preserve the exact DOT_FIELD error (JqException).
-                result[i] = fieldAccess(item, field);
+                result.setUnchecked(i, fieldAccess(item, field));
             }
         }
-        return JqArray.ofTrusted(result);
+        return result.build(size);
     }
 
     private JqArray collectSelectIterateArray(JqArray arr, int bodyStart, int bodyLen) {
-        var items = arr.arrayValue();
-        int size = items.size();
+        int size = arr.size();
         if (size == 0) return JqArray.EMPTY;
 
         // Pre-ensure stack capacity
         if (sp + 16 >= stack.length) {
             stack = java.util.Arrays.copyOf(stack, Math.max(stack.length * 2, sp + 16));
         }
-        var result = new JqValue[size];
+        var result = JqArray.arrayBuilder(size);
         int count = 0;
         int savedSp = sp;
         JqValue savedInput = input;
         for (int i = 0; i < size; i++) {
-            input = items.get(i);
+            input = arr.elementAt(i);
             sp = savedSp;
             // Execute body: condition check + JUMP_IF_FALSE + map expr
             // Body contains: <cond>, JUMP_IF_FALSE <bodyEnd>, <mapExpr>
             collectIterateBody(bodyStart, bodyLen);
             // If JUMP_IF_FALSE jumped past bodyEnd, sp == savedSp (nothing pushed)
             if (sp > savedSp) {
-                result[count++] = pop();
+                result.setUnchecked(count++, pop());
             }
         }
         sp = savedSp;
         input = savedInput;
-        return JqArray.ofTrusted(result, count);
+        return result.build(count);
     }
 
     private void collectIterateBody(int bodyStart, int bodyLen) {
@@ -1153,10 +1164,10 @@ public final class VirtualMachine {
                 case DIV -> { JqValue r = pop(); JqValue l = pop(); push(l.divide(r)); }
                 case MOD -> { JqValue r = pop(); JqValue l = pop(); push(l.modulo(r)); }
                 case NEGATE -> push(pop().negate());
-                case DOT_FIELD -> push(fieldAccess(pop(), names[arg1s[bpc]]));
-                case DOT_FIELD2 -> push(fieldAccess2(pop(), names[arg1s[bpc]], names[arg2s[bpc]]));
+                case DOT_FIELD -> push(fieldAccess(popRaw(), names[arg1s[bpc]]));
+                case DOT_FIELD2 -> push(fieldAccess2(popRaw(), names[arg1s[bpc]], names[arg2s[bpc]]));
 
-                case NOT -> push(JqBoolean.of(!pop().isTruthy()));
+                case NOT -> push(JqBoolean.of(!isTruthy(popRaw())));
                 case EQ -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.equals(r))); }
                 case NEQ -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(!l.equals(r))); }
                 case LT -> { JqValue r = pop(); JqValue l = pop(); push(JqBoolean.of(l.compareTo(r) < 0)); }
@@ -1179,16 +1190,16 @@ public final class VirtualMachine {
                     if (v instanceof JqString) push(v);
                     else push(JqString.of(v.toJsonString()));
                 }
-                case BUILTIN_NOT -> { JqValue v = pop(); push(JqBoolean.of(!v.isTruthy())); }
-                case DUP -> push(peek());
-                case SWAP -> { JqValue a = pop(); JqValue b = pop(); push(a); push(b); }
-                case POP -> pop();
+                case BUILTIN_NOT -> push(JqBoolean.of(!isTruthy(popRaw())));
+                case DUP -> push(peekRaw());
+                case SWAP -> { Object a = popRaw(); Object b = popRaw(); push(a); push(b); }
+                case POP -> sp--;
                 case JUMP -> bodyPc = arg1s[bpc];
-                case JUMP_IF_TRUE -> { if (pop().isTruthy()) bodyPc = arg1s[bpc]; }
-                case JUMP_IF_FALSE -> { if (!pop().isTruthy()) bodyPc = arg1s[bpc]; }
+                case JUMP_IF_TRUE -> { if (isTruthy(popRaw())) bodyPc = arg1s[bpc]; }
+                case JUMP_IF_FALSE -> { if (!isTruthy(popRaw())) bodyPc = arg1s[bpc]; }
                 case SET_INPUT_PEEK -> input = peek();
-                case LOAD_SLOT -> { JqValue sv2 = varSlots[arg1s[bpc]]; push(sv2 != null ? sv2 : JqNull.NULL); }
-                case STORE_SLOT -> varSlots[arg1s[bpc]] = pop();
+                case LOAD_SLOT -> { Object sv2 = varSlots[arg1s[bpc]]; push(sv2 != null ? sv2 : JqNull.NULL); }
+                case STORE_SLOT -> varSlots[arg1s[bpc]] = popRaw();
                 case BUILTIN_FLOOR -> {
                     JqValue v = pop();
                     if (v instanceof JqNumber n) push(JqNumber.of((long) Math.floor(n.doubleValue())));
@@ -1283,23 +1294,23 @@ public final class VirtualMachine {
                 case BUILD_OBJECT -> {
                     int count = arg1s[bpc];
                     int[] layout = bytecode.objectLayout(arg2s[bpc]);
-                    for (int j = count - 1; j >= 0; j--) scratchValues[j] = pop();
+                    for (int j = count - 1; j >= 0; j--) scratchValues[j] = popRaw();
                     var builder = JqObject.builder(count);
                     if (uniqueLayouts[arg2s[bpc]]) {
-                        for (int j = 0; j < count; j++) builder.putUnchecked(names[layout[j]], scratchValues[j]);
+                        for (int j = 0; j < count; j++) builder.putUnchecked(names[layout[j]], (JqValue) scratchValues[j]);
                     } else {
-                        for (int j = 0; j < count; j++) builder.put(names[layout[j]], scratchValues[j]);
+                        for (int j = 0; j < count; j++) builder.put(names[layout[j]], (JqValue) scratchValues[j]);
                     }
                     push(builder.build());
                 }
                 case STRING_CONCAT -> {
                     int partCount = arg1s[bpc];
-                    for (int j = partCount - 1; j >= 0; j--) scratchValues[j] = pop();
+                    for (int j = partCount - 1; j >= 0; j--) scratchValues[j] = popRaw();
                     concatBuffer.setLength(0);
                     for (int j = 0; j < partCount; j++) {
-                        JqValue v = scratchValues[j];
+                        Object v = scratchValues[j];
                         if (v instanceof JqString s) concatBuffer.append(s.stringValue());
-                        else concatBuffer.append(v.toJsonString());
+                        else concatBuffer.append(((JqValue) v).toJsonString());
                     }
                     push(JqString.of(concatBuffer.toString()));
                 }
@@ -1309,8 +1320,7 @@ public final class VirtualMachine {
     }
 
     private JqValue reduceIterateArray(JqArray arr, JqValue initVal, int op) {
-        var items = arr.arrayValue();
-        int size = items.size();
+        int size = arr.size();
         if (size == 0) return initVal;
 
         // Fast path: integer-only reduce with add — use raw long accumulation
@@ -1318,7 +1328,7 @@ public final class VirtualMachine {
             long acc = initNum.longValue();
             boolean allIntegral = true;
             for (int i = 0; i < size; i++) {
-                JqValue item = items.get(i);
+                JqValue item = arr.elementAt(i);
                 if (item instanceof JqNumber n && n.isIntegral()) {
                     acc = Math.addExact(acc, n.longValue());
                 } else {
@@ -1334,7 +1344,7 @@ public final class VirtualMachine {
             long acc = initNum.longValue();
             boolean allIntegral = true;
             for (int i = 0; i < size; i++) {
-                JqValue item = items.get(i);
+                JqValue item = arr.elementAt(i);
                 if (item instanceof JqNumber n && n.isIntegral()) {
                     acc = Math.multiplyExact(acc, n.longValue());
                 } else {
@@ -1349,9 +1359,9 @@ public final class VirtualMachine {
         JqValue acc = initVal;
         for (int i = 0; i < size; i++) {
             acc = switch (op) {
-                case 0 -> acc.add(items.get(i));
-                case 1 -> acc.subtract(items.get(i));
-                case 2 -> acc.multiply(items.get(i));
+                case 0 -> acc.add(arr.elementAt(i));
+                case 1 -> acc.subtract(arr.elementAt(i));
+                case 2 -> acc.multiply(arr.elementAt(i));
                 default -> throw new JqException("Unknown reduce op: " + op);
             };
         }
