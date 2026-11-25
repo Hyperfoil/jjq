@@ -1005,18 +1005,22 @@ public final class VirtualMachine {
             if (ops[bodyStart] == Opcode.LOAD_INPUT && ops[bodyStart + 1] == Opcode.PUSH_CONST) {
                 JqValue constVal = consts[arg1s[bodyStart + 1]];
                 // For integer * integer, use raw long math
-                if (ops[bodyStart + 2] == Opcode.MUL && constVal instanceof JqNumber cn && cn.isIntegral()) {
+                if (ops[bodyStart + 2] == Opcode.MUL && constVal instanceof JqNumber cn && cn.isLongBacked()) {
                     long multiplier = cn.longValue();
                     var result = JqArray.arrayBuilder(size);
                     boolean allIntegral = true;
-                    for (int i = 0; i < size; i++) {
-                        JqValue item = arr.elementAt(i);
-                        if (item instanceof JqNumber n && n.isIntegral()) {
-                            result.setUnchecked(i, JqNumber.of(Math.multiplyExact(n.longValue(), multiplier)));
-                        } else {
-                            allIntegral = false;
-                            break;
+                    try {
+                        for (int i = 0; i < size; i++) {
+                            JqValue item = arr.elementAt(i);
+                            if (item instanceof JqNumber n && n.isLongBacked()) {
+                                result.setUnchecked(i, JqNumber.of(Math.multiplyExact(n.longValue(), multiplier)));
+                            } else {
+                                allIntegral = false;
+                                break;
+                            }
                         }
+                    } catch (ArithmeticException ignored) {
+                        allIntegral = false;
                     }
                     if (allIntegral) return result.build(size);
                 }
@@ -1324,33 +1328,41 @@ public final class VirtualMachine {
         if (size == 0) return initVal;
 
         // Fast path: integer-only reduce with add — use raw long accumulation
-        if (op == 0 && initVal instanceof JqNumber initNum && initNum.isIntegral()) {
+        if (op == 0 && initVal instanceof JqNumber initNum && initNum.isLongBacked()) {
             long acc = initNum.longValue();
             boolean allIntegral = true;
-            for (int i = 0; i < size; i++) {
-                JqValue item = arr.elementAt(i);
-                if (item instanceof JqNumber n && n.isIntegral()) {
-                    acc = Math.addExact(acc, n.longValue());
-                } else {
-                    allIntegral = false;
-                    break;
+            try {
+                for (int i = 0; i < size; i++) {
+                    JqValue item = arr.elementAt(i);
+                    if (item instanceof JqNumber n && n.isLongBacked()) {
+                        acc = Math.addExact(acc, n.longValue());
+                    } else {
+                        allIntegral = false;
+                        break;
+                    }
                 }
+            } catch (ArithmeticException ignored) {
+                allIntegral = false;
             }
             if (allIntegral) return JqNumber.of(acc);
         }
 
         // Fast path: integer-only reduce with multiply
-        if (op == 2 && initVal instanceof JqNumber initNum && initNum.isIntegral()) {
+        if (op == 2 && initVal instanceof JqNumber initNum && initNum.isLongBacked()) {
             long acc = initNum.longValue();
             boolean allIntegral = true;
-            for (int i = 0; i < size; i++) {
-                JqValue item = arr.elementAt(i);
-                if (item instanceof JqNumber n && n.isIntegral()) {
-                    acc = Math.multiplyExact(acc, n.longValue());
-                } else {
-                    allIntegral = false;
-                    break;
+            try {
+                for (int i = 0; i < size; i++) {
+                    JqValue item = arr.elementAt(i);
+                    if (item instanceof JqNumber n && n.isLongBacked()) {
+                        acc = Math.multiplyExact(acc, n.longValue());
+                    } else {
+                        allIntegral = false;
+                        break;
+                    }
                 }
+            } catch (ArithmeticException ignored) {
+                allIntegral = false;
             }
             if (allIntegral) return JqNumber.of(acc);
         }

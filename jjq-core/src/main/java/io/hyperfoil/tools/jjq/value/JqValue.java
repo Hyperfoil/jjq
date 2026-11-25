@@ -634,8 +634,12 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
         return switch (this) {
             case JqNull ignored -> other;
             case JqNumber n when other instanceof JqNumber m -> {
-                if (n.isIntegral() && m.isIntegral()) {
-                    yield JqNumber.of(Math.addExact(n.longValue(), m.longValue()));
+                if (n.isLongBacked() && m.isLongBacked()) {
+                    try {
+                        yield JqNumber.of(Math.addExact(n.longValue(), m.longValue()));
+                    } catch (ArithmeticException ignored) {
+                        // Fall through to BigDecimal on 64-bit overflow
+                    }
                 }
                 if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
                     yield JqNumber.of(n.doubleValue() + m.doubleValue());
@@ -659,8 +663,12 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
         if (this instanceof JqNull && other instanceof JqNull) return JqNumber.of(0);
         return switch (this) {
             case JqNumber n when other instanceof JqNumber m -> {
-                if (n.isIntegral() && m.isIntegral()) {
-                    yield JqNumber.of(Math.subtractExact(n.longValue(), m.longValue()));
+                if (n.isLongBacked() && m.isLongBacked()) {
+                    try {
+                        yield JqNumber.of(Math.subtractExact(n.longValue(), m.longValue()));
+                    } catch (ArithmeticException ignored) {
+                        // Fall through to BigDecimal on 64-bit overflow
+                    }
                 }
                 if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
                     yield JqNumber.of(n.doubleValue() - m.doubleValue());
@@ -683,8 +691,12 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
             return JqNull.NULL;
         }
         if (this instanceof JqNumber n && other instanceof JqNumber m) {
-            if (n.isIntegral() && m.isIntegral()) {
-                return JqNumber.of(Math.multiplyExact(n.longValue(), m.longValue()));
+            if (n.isLongBacked() && m.isLongBacked()) {
+                try {
+                    return JqNumber.of(Math.multiplyExact(n.longValue(), m.longValue()));
+                } catch (ArithmeticException ignored) {
+                    // Fall through to BigDecimal on 64-bit overflow
+                }
             }
             if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
                 return JqNumber.of(n.doubleValue() * m.doubleValue());

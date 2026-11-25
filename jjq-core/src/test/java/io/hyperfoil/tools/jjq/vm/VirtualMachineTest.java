@@ -480,4 +480,27 @@ class VirtualMachineTest {
             assertTrue(asm.contains("ADD"), "ADD should NOT be folded: " + asm);
         }
     }
+
+    @Nested
+    class FusedIntegralOverflow {
+        @Test void reduceAddOverflowFallsBack() {
+            assertEquals("9223372036854775808",
+                    vmOne("reduce .[] as $x (0; . + $x)", "[9223372036854775807, 1]").toJsonString());
+        }
+
+        @Test void reduceMulOverflowFallsBack() {
+            assertEquals("18446744073709551614",
+                    vmOne("reduce .[] as $x (1; . * $x)", "[9223372036854775807, 2]").toJsonString());
+        }
+
+        @Test void reduceBeyondLongIntegerDoesNotTruncate() {
+            assertEquals("100000000000000000001",
+                    vmOne("reduce .[] as $x (0; . + $x)", "[100000000000000000000, 1]").toJsonString());
+        }
+
+        @Test void collectIterateMulOverflowFallsBack() {
+            assertEquals("[18446744073709551614]",
+                    vmOne("[.[] | . * 2]", "[9223372036854775807]").toJsonString());
+        }
+    }
 }
