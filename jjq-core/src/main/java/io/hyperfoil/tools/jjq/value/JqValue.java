@@ -793,7 +793,43 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
 
     @Override
     default int compareTo(JqValue other) {
+        if (this instanceof JqString a && other instanceof JqString b) {
+            return a.stringValue().compareTo(b.stringValue());
+        }
+        if (this instanceof JqNumber a && other instanceof JqNumber b
+                && a.isLongBacked() && b.isLongBacked()) {
+            return Long.compare(a.longValue(), b.longValue());
+        }
         return compareToDepth(this, other, 0);
+    }
+
+    private static int typeRank(JqValue v) {
+        if (v instanceof JqNumber) return Type.NUMBER.ordinal();
+        if (v instanceof JqString) return Type.STRING.ordinal();
+        if (v instanceof JqObject) return Type.OBJECT.ordinal();
+        if (v instanceof JqArray) return Type.ARRAY.ordinal();
+        if (v instanceof JqBoolean) return Type.BOOLEAN.ordinal();
+        if (v instanceof JqNull) return Type.NULL.ordinal();
+        throw new NullPointerException();
+    }
+
+    private static int compareNumbers(JqNumber n, JqNumber m) {
+        // Signed zero compares equal to any zero (jq numeric order).
+        if ((n.isNegativeZero() || m.isNegativeZero())
+                && n.doubleValue() == 0.0 && m.doubleValue() == 0.0) {
+            return 0;
+        }
+        if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
+            return Double.compare(n.doubleValue(), m.doubleValue());
+        }
+        if (n.isLongBacked() && m.isLongBacked()) {
+            return Long.compare(n.longValue(), m.longValue());
+        }
+        // Fast path: compare via doubles when no BigDecimal is involved
+        if (!n.isLongBacked() && !m.isLongBacked()) {
+            return Double.compare(n.doubleValue(), m.doubleValue());
+        }
+        return n.decimalValue().compareTo(m.decimalValue());
     }
 
     /**
@@ -810,55 +846,50 @@ public sealed interface JqValue extends Comparable<JqValue>, Serializable
             if (depth > MAX_MERGE_DEPTH) {
                 throw new JqTypeError("Comparison too deep");
             }
-            if (a.type() != b.type()) {
-                return a.type().ordinal() - b.type().ordinal();
-            }
             switch (a) {
-                case JqNull ignored -> { return 0; }
-                case JqBoolean ab -> { return Boolean.compare(ab.booleanValue(), b.booleanValue()); }
-                case JqNumber n -> {
-                    JqNumber m = (JqNumber) b;
-                    // Signed zero compares equal to any zero (jq numeric order).
-                    if ((n.isNegativeZero() || m.isNegativeZero())
-                            && n.doubleValue() == 0.0 && m.doubleValue() == 0.0) {
-                        return 0;
-                    }
-                    if (n.isNaN() || n.isInfinite() || m.isNaN() || m.isInfinite()) {
-                        return Double.compare(n.doubleValue(), m.doubleValue());
-                    }
-                    if (n.isLongBacked() && m.isLongBacked()) {
-                        return Long.compare(n.longValue(), m.longValue());
-                    }
-                    // Fast path: compare via doubles when no BigDecimal is involved
-                    if (!n.isLongBacked() && !m.isLongBacked()) {
-                        return Double.compare(n.doubleValue(), m.doubleValue());
-                    }
-                    return n.decimalValue().compareTo(m.decimalValue());
+                case JqNull ignored -> {
+                    return b instanceof JqNull ? 0 : Type.NULL.ordinal() - typeRank(b);
                 }
-                case JqString s -> { return s.stringValue().compareTo(b.stringValue()); }
+                case JqBoolean ab -> {
+                    if (b instanceof JqBoolean bb) return Boolean.compare(ab.booleanValue(), bb.booleanValue());
+                    return Type.BOOLEAN.ordinal() - typeRank(b);
+                }
+                case JqNumber n -> {
+                    if (b instanceof JqNumber m) return compareNumbers(n, m);
+                    return Type.NUMBER.ordinal() - typeRank(b);
+                }
+                case JqString s -> {
+                    if (b instanceof JqString bs) return s.stringValue().compareTo(bs.stringValue());
+                    return Type.STRING.ordinal() - typeRank(b);
+                }
                 case JqArray arr -> {
-                    var thisArr = arr.arrayValue();
-                    var otherArr = b.arrayValue();
-                    int minSize = Math.min(thisArr.size(), otherArr.size());
-                    if (minSize == 0) return Integer.compare(thisArr.size(), otherArr.size());
+                    if (!(b instanceof JqArray other)) {
+                        return Type.ARRAY.ordinal() - typeRank(b);
+                    }
+                    int thisSize = arr.size();
+                    int otherSize = other.size();
+                    int minSize = Math.min(thisSize, otherSize);
+                    if (minSize == 0) return Integer.compare(thisSize, otherSize);
                     // Compare all but the last element recursively
                     for (int i = 0; i < minSize - 1; i++) {
-                        int cmp = compareToDepth(thisArr.get(i), otherArr.get(i), depth + 1);
+                        int cmp = compareToDepth(arr.elementAt(i), other.elementAt(i), depth + 1);
                         if (cmp != 0) return cmp;
                     }
                     // Tail-iterate on the last element
-                    if (thisArr.size() != otherArr.size()) {
-                        int cmp = compareToDepth(thisArr.get(minSize - 1), otherArr.get(minSize - 1), depth + 1);
+                    if (thisSize != otherSize) {
+                        int cmp = compareToDepth(arr.elementAt(minSize - 1), other.elementAt(minSize - 1), depth + 1);
                         if (cmp != 0) return cmp;
-                        return Integer.compare(thisArr.size(), otherArr.size());
+                        return Integer.compare(thisSize, otherSize);
                     }
-                    a = thisArr.get(minSize - 1);
-                    b = otherArr.get(minSize - 1);
+                    a = arr.elementAt(minSize - 1);
+                    b = other.elementAt(minSize - 1);
                     depth++;
                     continue; // iterate instead of recurse
                 }
                 case JqObject obj -> {
-                    JqObject otherObj = (JqObject) b;
+                    if (!(b instanceof JqObject otherObj)) {
+                        return Type.OBJECT.ordinal() - typeRank(b);
+                    }
                     int sizeCmp = Integer.compare(obj.size(), otherObj.size());
                     if (sizeCmp != 0) return sizeCmp;
                     String[] thisKeys = obj.sortedKeys();
