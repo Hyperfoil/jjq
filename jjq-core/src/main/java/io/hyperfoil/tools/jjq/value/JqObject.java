@@ -649,9 +649,10 @@ public final class JqObject implements JqValue {
         if (size == 1) return key == keys[0] || key.equals(keys[0]) ? values[0] : JqNull.NULL;
         if (size <= HASH_THRESHOLD) {
             for (int i = 0; i < size; i++) {
-                if (key == keys[i] || key.equals(keys[i])) return values[i];
+                if (key == keys[i]) return values[i];
             }
-            return JqNull.NULL;
+            int idx = linearScanEquals(key);
+            return idx >= 0 ? values[idx] : JqNull.NULL;
         }
         int idx = hashLookup(key);
         return idx >= 0 ? values[idx] : JqNull.NULL;
@@ -680,13 +681,7 @@ public final class JqObject implements JqValue {
         }
         if (size == 0) return Optional.empty();
         if (size == 1) return key == keys[0] || key.equals(keys[0]) ? Optional.of(values[0]) : Optional.empty();
-        if (size <= HASH_THRESHOLD) {
-            for (int i = 0; i < size; i++) {
-                if (key == keys[i] || key.equals(keys[i])) return Optional.of(values[i]);
-            }
-            return Optional.empty();
-        }
-        int idx = hashLookup(key);
+        int idx = size <= HASH_THRESHOLD ? linearScan(key) : hashLookup(key);
         return idx >= 0 ? Optional.of(values[idx]) : Optional.empty();
     }
 
@@ -695,13 +690,27 @@ public final class JqObject implements JqValue {
         if (externalMap != null) return externalMap.containsKey(key);
         if (size == 0) return false;
         if (size == 1) return key == keys[0] || key.equals(keys[0]);
-        if (size <= HASH_THRESHOLD) {
-            for (int i = 0; i < size; i++) {
-                if (key == keys[i] || key.equals(keys[i])) return true;
-            }
-            return false;
+        return (size <= HASH_THRESHOLD ? linearScan(key) : hashLookup(key)) >= 0;
+    }
+
+    /**
+     * Two-pass linear scan for small objects ({@code size <= HASH_THRESHOLD}):
+     * check reference identity across all slots first so interned hits never
+     * chase {@code String.equals} on non-matching keys, then fall back to
+     * {@code equals} for non-interned caller strings.
+     */
+    private int linearScan(String key) {
+        for (int i = 0; i < size; i++) {
+            if (key == keys[i]) return i;
         }
-        return hashLookup(key) >= 0;
+        return linearScanEquals(key);
+    }
+
+    private int linearScanEquals(String key) {
+        for (int i = 0; i < size; i++) {
+            if (key.equals(keys[i])) return i;
+        }
+        return -1;
     }
 
 
@@ -754,13 +763,7 @@ public final class JqObject implements JqValue {
         }
         if (size == 0) return -1;
         if (size == 1) return (key == keys[0] || key.equals(keys[0])) ? 0 : -1;
-        if (size <= HASH_THRESHOLD) {
-            for (int i = 0; i < size; i++) {
-                if (key == keys[i] || key.equals(keys[i])) return i;
-            }
-            return -1;
-        }
-        return hashLookup(key);
+        return size <= HASH_THRESHOLD ? linearScan(key) : hashLookup(key);
     }
 
     /**
