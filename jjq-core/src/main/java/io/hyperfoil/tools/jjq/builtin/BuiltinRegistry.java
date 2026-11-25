@@ -554,40 +554,81 @@ public final class BuiltinRegistry {
             case "sort_by/1" -> (input, args, env, eval, out) -> {
 
             JqArray arr = requireArray(input, "sort_by");
-            var list = new ArrayList<>(arr.arrayValue());
-            list.sort((a, b) -> {
-                var keysA = eval.eval(args.getFirst(), a, env);
-                var keysB = eval.eval(args.getFirst(), b, env);
-                for (int i = 0; i < Math.min(keysA.size(), keysB.size()); i++) {
-                    int cmp = keysA.get(i).compareTo(keysB.get(i));
-                    if (cmp != 0) return cmp;
+            int n = arr.size();
+            if (n <= 1) {
+                out.accept(arr);
+                return;
+            }
+            JqExpr keyExpr = args.getFirst();
+            SortEntry[] entries = new SortEntry[n];
+            if (keyExpr instanceof JqExpr.DotFieldExpr df) {
+                String field = df.field();
+                for (int i = 0; i < n; i++) {
+                    JqValue elem = arr.elementAt(i);
+                    JqValue key = extractFieldKey(elem, field, keyExpr, env, eval);
+                    entries[i] = new SortEntry(elem, key, null);
                 }
-                return Integer.compare(keysA.size(), keysB.size());
-            });
-            out.accept(JqArray.of(list));
+                Arrays.sort(entries, (a, b) -> a.firstKey.compareTo(b.firstKey));
+            } else {
+                boolean allSingle = true;
+                for (int i = 0; i < n; i++) {
+                    JqValue elem = arr.elementAt(i);
+                    var keys = eval.eval(keyExpr, elem, env);
+                    if (keys.size() == 1) {
+                        entries[i] = new SortEntry(elem, keys.getFirst(), null);
+                    } else {
+                        allSingle = false;
+                        entries[i] = new SortEntry(elem, null, keys);
+                    }
+                }
+                if (allSingle) {
+                    Arrays.sort(entries, (a, b) -> a.firstKey.compareTo(b.firstKey));
+                } else {
+                    Arrays.sort(entries, BuiltinRegistry::compareSortEntries);
+                }
+            }
+            var result = JqArray.arrayBuilder(n);
+            for (int i = 0; i < n; i++) {
+                result.setUnchecked(i, entries[i].value);
+            }
+            out.accept(result.build(n));
         };
             case "group_by/1" -> (input, args, env, eval, out) -> {
 
             JqArray arr = requireArray(input, "group_by");
+            int n = arr.size();
+            if (n == 0) {
+                out.accept(JqArray.EMPTY);
+                return;
+            }
+            JqExpr keyExpr = args.getFirst();
+            SortEntry[] entries = new SortEntry[n];
+            String field = keyExpr instanceof JqExpr.DotFieldExpr df ? df.field() : null;
+            for (int i = 0; i < n; i++) {
+                JqValue elem = arr.elementAt(i);
+                JqValue key = field != null
+                        ? extractFieldKey(elem, field, keyExpr, env, eval)
+                        : eval.eval(keyExpr, elem, env).getFirst();
+                entries[i] = new SortEntry(elem, key, null);
+            }
+            if (n > 1) {
+                Arrays.sort(entries, (a, b) -> a.firstKey.compareTo(b.firstKey));
+            }
             var groups = new LinkedHashMap<String, List<JqValue>>();
-            var sortedList = new ArrayList<>(arr.arrayValue());
-            sortedList.sort((a, b) -> {
-                JqValue ka = eval.eval(args.getFirst(), a, env).getFirst();
-                JqValue kb = eval.eval(args.getFirst(), b, env).getFirst();
-                return ka.compareTo(kb);
-            });
-            for (JqValue elem : sortedList) {
-                JqValue key = eval.eval(args.getFirst(), elem, env).getFirst();
+            for (SortEntry entry : entries) {
+                JqValue key = entry.firstKey;
                 // Group keys are rendered text; -0.0 would split from +0,
                 // but jq groups zeros together (numeric equality).
                 String ks = key.toJsonString();
-                if (key instanceof JqNumber n && n.isNegativeZero()) ks = "0";
-                groups.computeIfAbsent(ks, k -> new ArrayList<>()).add(elem);
+                if (key instanceof JqNumber num && num.isNegativeZero()) ks = "0";
+                groups.computeIfAbsent(ks, k -> new ArrayList<>()).add(entry.value);
             }
-            var result = groups.values().stream()
-                    .map(g -> (JqValue) JqArray.of(g))
-                    .toList();
-            out.accept(JqArray.of(result));
+            var result = JqArray.arrayBuilder(groups.size());
+            int idx = 0;
+            for (List<JqValue> g : groups.values()) {
+                result.setUnchecked(idx++, JqArray.of(g));
+            }
+            out.accept(result.build(idx));
         };
             case "unique/0" -> (input, args, env, eval, out) -> {
 
@@ -647,27 +688,48 @@ public final class BuiltinRegistry {
         };
             case "min_by/1" -> (input, args, env, eval, out) -> {
 
-            if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
+            if (!(input instanceof JqArray arr) || arr.size() == 0) {
                 out.accept(JqNull.NULL);
                 return;
             }
-            out.accept(arr.arrayValue().stream()
-                    .min((a, b) -> eval.eval(args.getFirst(), a, env).getFirst()
-                            .compareTo(eval.eval(args.getFirst(), b, env).getFirst()))
-                    .orElse(JqNull.NULL));
+            JqExpr keyExpr = args.getFirst();
+            String field = keyExpr instanceof JqExpr.DotFieldExpr df ? df.field() : null;
+            JqValue minElem = arr.elementAt(0);
+            JqValue minKey = field != null
+                    ? extractFieldKey(minElem, field, keyExpr, env, eval)
+                    : eval.eval(keyExpr, minElem, env).getFirst();
+            int n = arr.size();
+            for (int i = 1; i < n; i++) {
+                JqValue elem = arr.elementAt(i);
+                JqValue key = field != null
+                        ? extractFieldKey(elem, field, keyExpr, env, eval)
+                        : eval.eval(keyExpr, elem, env).getFirst();
+                if (key.compareTo(minKey) < 0) {
+                    minElem = elem;
+                    minKey = key;
+                }
+            }
+            out.accept(minElem);
         };
             case "max_by/1" -> (input, args, env, eval, out) -> {
 
-            if (!(input instanceof JqArray arr) || arr.arrayValue().isEmpty()) {
+            if (!(input instanceof JqArray arr) || arr.size() == 0) {
                 out.accept(JqNull.NULL);
                 return;
             }
             // jq's max_by returns the LAST element with the max key
-            JqValue maxElem = arr.arrayValue().getFirst();
-            JqValue maxKey = eval.eval(args.getFirst(), maxElem, env).getFirst();
-            for (int i = 1; i < arr.arrayValue().size(); i++) {
-                JqValue elem = arr.arrayValue().get(i);
-                JqValue key = eval.eval(args.getFirst(), elem, env).getFirst();
+            JqExpr keyExpr = args.getFirst();
+            String field = keyExpr instanceof JqExpr.DotFieldExpr df ? df.field() : null;
+            JqValue maxElem = arr.elementAt(0);
+            JqValue maxKey = field != null
+                    ? extractFieldKey(maxElem, field, keyExpr, env, eval)
+                    : eval.eval(keyExpr, maxElem, env).getFirst();
+            int n = arr.size();
+            for (int i = 1; i < n; i++) {
+                JqValue elem = arr.elementAt(i);
+                JqValue key = field != null
+                        ? extractFieldKey(elem, field, keyExpr, env, eval)
+                        : eval.eval(keyExpr, elem, env).getFirst();
                 if (key.compareTo(maxKey) >= 0) {
                     maxElem = elem;
                     maxKey = key;
@@ -3114,6 +3176,31 @@ public final class BuiltinRegistry {
         double xx = ax - 2.356194491;
         double result = Math.sqrt(0.636619772 / ax) * Math.cos(xx);
         return x < 0 ? -result : result;
+    }
+
+    private record SortEntry(JqValue value, JqValue firstKey, List<JqValue> allKeys) {}
+
+    private static JqValue extractFieldKey(JqValue elem, String field, JqExpr keyExpr,
+                                           Environment env, ExprEvaluator eval) {
+        if (elem instanceof JqObject obj) return obj.get(field);
+        if (elem == JqNull.NULL) return JqNull.NULL;
+        return eval.eval(keyExpr, elem, env).getFirst();
+    }
+
+    private static int compareSortEntries(SortEntry a, SortEntry b) {
+        if (a.allKeys == null && b.allKeys == null) {
+            return a.firstKey.compareTo(b.firstKey);
+        }
+        int sizeA = a.allKeys == null ? 1 : a.allKeys.size();
+        int sizeB = b.allKeys == null ? 1 : b.allKeys.size();
+        int min = Math.min(sizeA, sizeB);
+        for (int i = 0; i < min; i++) {
+            JqValue ka = a.allKeys == null ? a.firstKey : a.allKeys.get(i);
+            JqValue kb = b.allKeys == null ? b.firstKey : b.allKeys.get(i);
+            int cmp = ka.compareTo(kb);
+            if (cmp != 0) return cmp;
+        }
+        return Integer.compare(sizeA, sizeB);
     }
 
     /** Truncate a value string for error messages, matching jq's behavior (25 chars + "...") */
