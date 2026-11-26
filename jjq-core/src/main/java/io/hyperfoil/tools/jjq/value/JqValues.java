@@ -2698,7 +2698,7 @@ public final class JqValues {
         }
     }
 
-    private static final class JsonByteReader {
+    static final class JsonByteReader {
         final byte[] data;
         final int end;
         int pos;
@@ -2994,7 +2994,34 @@ public final class JqValues {
         else if (value instanceof JqArray arr && arr != JqArray.EMPTY) arr.setSourceLengthBytes(length);
     }
 
-    private static JqValue parseValueBytes(JsonByteReader r, int depth) {
+    /** @hidden */
+    public static byte[] cleanUtf8Key(String name) {
+        return JsonByteSkipper.cleanUtf8Key(name);
+    }
+
+    /** @hidden */
+    public static JqValue extractPath(byte[] bytes, int offset, int length,
+                                      byte[][] fieldSteps, int[] indexSteps) {
+        return JsonByteSkipper.extractPath(bytes, offset, length, fieldSteps, indexSteps);
+    }
+
+    /** @hidden */
+    public static JqValue extractCollectField(byte[] bytes, int offset, int length,
+                                              byte[][] prefixFields, int[] prefixIndices,
+                                              byte[][] tailFields, int[] tailIndices) {
+        return JsonByteSkipper.extractCollectField(bytes, offset, length,
+                prefixFields, prefixIndices, tailFields, tailIndices);
+    }
+
+    /** @hidden */
+    public static JqValue extractObjectFields(byte[] bytes, int offset, int length,
+                                              byte[][] prefixFields, int[] prefixIndices,
+                                              String[] outKeys, byte[][] srcFields) {
+        return JsonByteSkipper.extractObjectFields(bytes, offset, length,
+                prefixFields, prefixIndices, outKeys, srcFields);
+    }
+
+    static JqValue parseValueBytes(JsonByteReader r, int depth) {
         r.skipWs();
         // Single diversion keeps this hot dispatch at baseline size: the JIT
         // inlines it at element sites (hot budget 325 bytes), which the

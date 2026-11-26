@@ -43,6 +43,8 @@ public final class JqProgram {
     private final String fastField1; // cached for FIELD_ACCESS / FIELD_ACCESS2
     private final String fastField2; // cached for FIELD_ACCESS2
     private final int builtinOp;     // cached for BUILTIN shape
+    // Optional on-demand byte[] extraction plan (null for unsupported shapes)
+    private final BytePathPlan bytePathPlan;
 
     /**
      * Per-thread cached VM instance. Each thread gets its own VM to avoid
@@ -100,6 +102,7 @@ public final class JqProgram {
             this.fastField2 = null;
             this.builtinOp = 0;
         }
+        this.bytePathPlan = this.shape == ProgramShape.IDENTITY ? null : BytePathPlan.compile(ast);
     }
 
     public static JqProgram compile(String expression) {
@@ -134,6 +137,51 @@ public final class JqProgram {
 
     public JqValue apply(JqValue input, Environment env) {
         return getVM().executeOne(input, env != null ? env : Environment.EMPTY);
+    }
+
+    /**
+     * Execute this program directly against UTF-8 JSON bytes using lenient
+     * on-demand path extraction when supported, avoiding full tree
+     * materialization on skipped subtrees.
+     *
+     * <p>For supported path shapes (field access, chained field/index paths,
+     * array field collection, and flat object projection), unvisited subtrees
+     * are skipped structurally and execution stops as soon as the matched
+     * value(s) are extracted — trailing bytes after an early match are not
+     * validated. Unsupported queries, escaped wire keys, or malformed inputs
+     * fall back transparently to {@code apply(JqValues.parse(json))}.</p>
+     *
+     * @param json UTF-8 encoded JSON bytes
+     * @return the first result (or {@link JqNull#NULL} if no output)
+     */
+    public JqValue apply(byte[] json) {
+        java.util.Objects.requireNonNull(json, "json");
+        return apply(json, 0, json.length);
+    }
+
+    /**
+     * Execute this program directly against a UTF-8 JSON byte slice.
+     *
+     * @param json   UTF-8 encoded JSON buffer
+     * @param offset start offset (inclusive)
+     * @param length slice length in bytes
+     * @return the first result (or {@link JqNull#NULL} if no output)
+     * @see #apply(byte[])
+     */
+    public JqValue apply(byte[] json, int offset, int length) {
+        java.util.Objects.requireNonNull(json, "json");
+        java.util.Objects.checkFromIndexSize(offset, length, json.length);
+        if (shape == ProgramShape.IDENTITY) {
+            return JqValues.parse(json, offset, length);
+        }
+        BytePathPlan plan = this.bytePathPlan;
+        if (plan != null) {
+            JqValue extracted = plan.execute(json, offset, length);
+            if (extracted != null) {
+                return extracted;
+            }
+        }
+        return apply(JqValues.parse(json, offset, length));
     }
 
     /**
@@ -428,4 +476,5 @@ public final class JqProgram {
 
     public String expression() { return expression; }
     public JqExpr ast() { return ast; }
+    boolean hasBytePathPlan() { return bytePathPlan != null; }
 }
