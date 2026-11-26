@@ -70,12 +70,25 @@ final class MappingCodeGenerator {
         sb.append("public final class ").append(mappingClassName);
         sb.append(" extends GeneratedMapping<").append(recordSimpleName).append("> {\n\n");
 
+        // Slow-path direct lookups: with no @JqField program anywhere in the
+        // bound fields (and no delegating creator), the object-shape gate
+        // guarantees null/JqNull/JqObject at extraction, where
+        // getField(K_) matches program semantics exactly — so no per-field
+        // JqProgram compiles at class-init and the slow path reads through
+        // the interned constant (same change POJOs already made).
+        boolean slowPathDirect = !hasDelegating
+                && components.stream().filter(c -> !c.ignored() && !c.skipDeserialize())
+                        .noneMatch(JqMapperProcessor.ComponentInfo::hasJqField)
+                && deser.stream().filter(c -> !c.ignored() && !c.skipDeserialize())
+                        .noneMatch(JqMapperProcessor.ComponentInfo::hasJqField);
         // Static JqProgram fields for each non-ignored deserialization
         // component (creator params when a property creator is present).
         // Delegating creators bind one scalar inline — no programs at all.
         // Aliased fields skip programs (they bind through firstPresent).
+        // Direct-field records under slowPathDirect skip them too (see above).
         for (var comp : deser) {
-            if (!comp.ignored() && !hasDelegating && comp.aliases().isEmpty()) {
+            if (!comp.ignored() && !hasDelegating && comp.aliases().isEmpty()
+                    && (comp.hasJqField() || !slowPathDirect)) {
                 sb.append("    private static final JqProgram P_")
                   .append(comp.name().toUpperCase())
                   .append(" = JqProgram.compile(\"")
@@ -94,13 +107,21 @@ final class MappingCodeGenerator {
                     .filter(c -> !c.ignored() && !c.skipDeserialize())
                     .toList()
                 : java.util.List.of();
-        // Interned key constants for the positional checks (identity compares)
-        for (var comp : positional) {
-            sb.append("    private static final String K_")
-              .append(comp.name().toUpperCase())
-              .append(" = JqValues.internFieldName(\"")
-              .append(escapeJava(comp.jsonName()))
-              .append("\");\n");
+        // Interned key constants for the positional checks (identity
+        // compares) and, under slowPathDirect, the slow-path getField
+        // lookups. Same membership as the positional set when positional
+        // eligibility holds; the extra condition covers direct-slow-path
+        // records whose serialized-only @JqField component blocks
+        // positional eligibility but not the direct lookups.
+        if (positionalEligible || slowPathDirect) {
+            for (var comp : deser) {
+                if (comp.ignored() || comp.skipDeserialize() || comp.hasJqField()) continue;
+                sb.append("    private static final String K_")
+                  .append(comp.name().toUpperCase())
+                  .append(" = JqValues.internFieldName(\"")
+                  .append(escapeJava(comp.jsonName()))
+                  .append("\");\n");
+            }
         }
         // Static formatters for @JqFormat fields (shared by deser and ser)
         for (var comp : components) {
@@ -166,7 +187,8 @@ final class MappingCodeGenerator {
         if (hasDelegating) {
             emitDelegatingFromJqValue(sb, recordSimpleName, deser.get(0), creator, typeRefs);
         } else {
-            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator, required, typeRefs);
+            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator, required,
+                    typeRefs, slowPathDirect);
         }
 
         // toJqValue method (serialization iterates the ordered view;
@@ -226,10 +248,16 @@ final class MappingCodeGenerator {
     /**
      * Deserialization apply expression for a component: the compiled program
      * for plain fields, first-present lookup for aliased ones (an explicitly
-     * present null counts as present, mirroring the reflection path).
+     * present null counts as present, mirroring the reflection path). Under
+     * {@code slowPathDirect} the plain-field form reads through the interned
+     * K_ constant instead — the shape gate guarantees null/JqNull/JqObject
+     * there, where getField matches program semantics exactly.
      */
-    private static String deserApply(JqMapperProcessor.ComponentInfo comp) {
+    private static String deserApply(JqMapperProcessor.ComponentInfo comp, boolean slowPathDirect) {
         if (comp.aliases().isEmpty()) {
+            if (!comp.hasJqField() && slowPathDirect) {
+                return "input.getField(K_" + comp.name().toUpperCase() + ")";
+            }
             return "P_" + comp.name().toUpperCase() + ".apply(input)";
         }
         var sb = new StringBuilder("firstPresent(input, \"")
@@ -306,7 +334,8 @@ final class MappingCodeGenerator {
                                              List<JqMapperProcessor.ComponentInfo> positional,
                                              JqMapperProcessor.CreatorInfo creator,
                                              List<String> required,
-                                             java.util.Map<String, String> typeRefs) {
+                                             java.util.Map<String, String> typeRefs,
+                                             boolean slowPathDirect) {
         String constructPrefix = creator != null ? creator.constructPrefix()
                 : "new " + recordSimpleName + "(";
         sb.append("    @Override\n");
@@ -369,7 +398,7 @@ final class MappingCodeGenerator {
             // Optional fields evaluate their source twice inside the empty-or-
             // present ternary: hoist the program/lookup result into a local
             // so it runs once.
-            String hoistApply = deserApply(comp);
+            String hoistApply = deserApply(comp, slowPathDirect);
             if (comp.typeName().startsWith("java.util.Optional<")) {
                 sb.append("        JqValue _v").append(i).append(" = ").append(hoistApply).append(";\n");
                 hoistApply = "_v" + i;
@@ -409,7 +438,7 @@ final class MappingCodeGenerator {
             } else if (isFallibleExtraction(comp)) {
                 sb.append("_c").append(i);
             } else {
-                generateExtraction(sb, comp, deserApply(comp), typeRefs);
+                generateExtraction(sb, comp, deserApply(comp, slowPathDirect), typeRefs);
             }
             if (i < components.size() - 1) sb.append(",");
             sb.append("\n");
