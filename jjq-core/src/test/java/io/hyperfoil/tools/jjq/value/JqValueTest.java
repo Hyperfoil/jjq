@@ -2064,6 +2064,22 @@ class JqValueTest {
     }
 
     @Test
+    void schemaWithEscapableCharactersInCompiledKeysFallsBackSafely() {
+        var schema = CompiledKeys.of("a\\b", "c\"d", "e\nf");
+        var v = JqValues.parseStrict("{\"a\\\\b\":1,\"c\\\"d\":2,\"e\\nf\":3}".getBytes(StandardCharsets.UTF_8),
+                ParseOptions.defaults(), schema);
+        var obj = (JqObject) v;
+        assertEquals(1, obj.get("a\\b").intValue());
+        assertEquals(2, obj.get("c\"d").intValue());
+        assertEquals(3, obj.get("e\nf").intValue());
+        assertSame(schema.keys[0], obj.keyAt(0));
+        // Schema with '\\' must fall back so invalid JSON escapes still fail in strict mode
+        assertThrows(IllegalArgumentException.class,
+                () -> JqValues.parseStrict("{\"a\\x\":1}".getBytes(StandardCharsets.UTF_8),
+                        ParseOptions.defaults(), CompiledKeys.of("a\\x")));
+    }
+
+    @Test
     void schemaDuplicatesStillThrow() {
         var schema = abSchema();
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,

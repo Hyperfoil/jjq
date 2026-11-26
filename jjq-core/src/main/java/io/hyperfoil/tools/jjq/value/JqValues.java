@@ -3544,20 +3544,14 @@ public final class JqValues {
     private static String parseKeyWithSchema(JsonByteReader r, CompiledKeys schema, int count) {
         if (count >= schema.keys.length) return parseAndInternKeyBytes(r);
         byte[] expected = schema.bytes[count];
+        if (expected == null) return parseAndInternKeyBytes(r);
         final byte[] d = r.data;
-        final int end = r.end;
-        int p = r.pos + 1;
-        int i = 0;
-        int n = expected.length;
-        while (p < end) {
-            int b = d[p] & 0xFF;
-            if ((b == '"') | (b == '\\')) break;
-            if (i >= n || b != (expected[i] & 0xFF)) return parseAndInternKeyBytes(r);
-            i++;
-            p++;
-        }
-        if (p < end && (d[p] & 0xFF) == '"' && i == n) {
-            r.pos = p + 1;
+        final int start = r.pos + 1;
+        final int n = expected.length;
+        final int close = start + n;
+        if (close < r.end && d[close] == '"'
+                && java.util.Arrays.equals(d, start, close, expected, 0, n)) {
+            r.pos = close + 1;
             return schema.keys[count];
         }
         return parseAndInternKeyBytes(r);

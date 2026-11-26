@@ -41,7 +41,19 @@ public final class CompiledKeys {
         for (int i = 0; i < keys.length; i++) {
             Objects.requireNonNull(keys[i], "keys[" + i + "]");
             canonical[i] = JqValues.internFieldName(keys[i]);
-            encodings[i] = keys[i].getBytes(StandardCharsets.UTF_8);
+            byte[] encoded = keys[i].getBytes(StandardCharsets.UTF_8);
+            // Any key containing '"', '\\', or an unescaped control byte cannot
+            // match raw JSON bytes directly; mark null so parseKeyWithSchema
+            // falls back to parseAndInternKeyBytes.
+            boolean clean = true;
+            for (byte b : encoded) {
+                int ub = b & 0xFF;
+                if (ub == '"' || ub == '\\' || ub < 0x20) {
+                    clean = false;
+                    break;
+                }
+            }
+            encodings[i] = clean ? encoded : null;
         }
         return new CompiledKeys(canonical, encodings);
     }
