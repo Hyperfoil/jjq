@@ -125,6 +125,42 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Precomputed quoted JSON key with a fused structural prefix
+     * ({@code "{\"name\":}"} for the first serialized field,
+     * {@code ",\"name\":"} for the rest): the no-inclusion serialization
+     * path writes one constant per field instead of separate separator and
+     * key appends. Same escaping as {@link #jsonKey(String)}.
+     *
+     * @param key    the raw wire name
+     * @param prefix the structural byte before the key ({@code '{'} or {@code ','})
+     * @return the prefixed quoted key with trailing colon
+     */
+    protected static String jsonKeyPrefixed(String key, char prefix) {
+        StringBuilder sb = new StringBuilder(key.length() + 4);
+        sb.append(prefix);
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(sb, key);
+        sb.append(':');
+        return sb.toString();
+    }
+
+    /**
+     * Precomputed quoted JSON key as UTF-8 bytes with a fused structural
+     * prefix; see {@link #jsonKeyPrefixed(String, char)}.
+     *
+     * @param key    the raw wire name
+     * @param prefix the structural byte before the key ({@code '{'} or {@code ','})
+     * @return the prefixed quoted key bytes with trailing colon
+     */
+    protected static byte[] jsonKeyPrefixedBytes(String key, char prefix) {
+        io.hyperfoil.tools.jjq.value.BytOutput out =
+                new io.hyperfoil.tools.jjq.value.BytOutput(key.length() * 3 + 4);
+        out.writeByte(prefix);
+        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(out, key);
+        out.writeByte(':');
+        return out.toByteArray();
+    }
+
+    /**
      * Emit any-getter extras into a builder after mapped fields (generated-code
      * counterpart of the reflection path). {@code JqObject} entries are used
      * directly; {@code Map} values are converted ({@code null} becomes JSON

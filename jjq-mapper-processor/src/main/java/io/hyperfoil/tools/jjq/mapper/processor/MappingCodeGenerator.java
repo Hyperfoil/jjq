@@ -194,6 +194,27 @@ final class MappingCodeGenerator {
         // toJqValue method (serialization iterates the ordered view;
         // binding above stays declaration-ordered for constructor alignment)
         sortSerView(components, JqMapperProcessor.ComponentInfo::jsonName, order);
+        // Fused separator-key constants for the no-inclusion serialization
+        // path: the first serialized field's key carries the opening brace,
+        // the rest the comma, so each field is one buffer call. Emitted only
+        // when the appenders take that path (no inclusion filter, no
+        // any-getter tree fallback) and at least one field serializes.
+        if (!anyInfo.hasGetter() && components.stream()
+                .noneMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()))
+                && components.stream().anyMatch(c -> !c.ignored() && !c.skipSerialize())) {
+            boolean firstKey = true;
+            for (var comp : components) {
+                if (comp.ignored() || comp.skipSerialize()) continue;
+                char prefix = firstKey ? '{' : ',';
+                sb.append("    private static final String KEYF_").append(comp.name().toUpperCase())
+                  .append(" = jsonKeyPrefixed(\"").append(escapeJava(comp.jsonName()))
+                  .append("\", '").append(prefix).append("');\n");
+                sb.append("    private static final byte[] KEYFB_").append(comp.name().toUpperCase())
+                  .append(" = jsonKeyPrefixedBytes(\"").append(escapeJava(comp.jsonName()))
+                  .append("\", '").append(prefix).append("');\n");
+                firstKey = false;
+            }
+        }
         generateToJqValue(sb, recordSimpleName, components, anyInfo);
 
         // appendJson method — direct-to-JSON, bypasses JqValue tree
@@ -1003,6 +1024,10 @@ final class MappingCodeGenerator {
                                              JqMapperProcessor.AnyInfo anyInfo, String outputType) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
+        // Fused keys apply when the constants exist (see generate): no
+        // inclusion filter and at least one serialized field.
+        boolean fuse = !hasInclusion && components.stream()
+                .anyMatch(c -> !c.ignored() && !c.skipSerialize());
 
         sb.append("    @Override\n");
         sb.append("    public void appendJson(").append(recordSimpleName)
@@ -1014,15 +1039,15 @@ final class MappingCodeGenerator {
             sb.append("    }\n\n");
             return;
         }
-        sb.append("        _sb.append('{');\n");
+        if (!fuse) sb.append("        _sb.append('{');\n");
 
         if (!hasInclusion) {
             // No inclusion filtering — all fields always present, known separator positions
             boolean first = true;
             for (var comp : components) {
                 if (comp.ignored() || comp.skipSerialize()) continue;
-                if (!first) sb.append("        _sb.append(',');\n");
-                appendJsonField(sb, comp);
+                if (!first && !fuse) sb.append("        _sb.append(',');\n");
+                appendJsonField(sb, comp, fuse);
                 first = false;
             }
         } else {
@@ -1033,7 +1058,7 @@ final class MappingCodeGenerator {
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
-                    appendJsonField(sb, comp);
+                    appendJsonField(sb, comp, false);
                 } else {
                     appendJsonFieldWithInclusion(sb, comp, accessor);
                 }
@@ -1045,10 +1070,12 @@ final class MappingCodeGenerator {
     }
 
     /** Append a single field as JSON key:value to the StringBuilder. */
-    private static void appendJsonField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
+    private static void appendJsonField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
+            boolean fused) {
         String accessor = "instance." + comp.name() + "()";
         // Key — pre-escaped literal since JSON keys from Java identifiers never need escaping
-        sb.append("        _sb.append(KEY_").append(comp.name().toUpperCase()).append(");\n");
+        sb.append("        _sb.append(").append(fused ? "KEYF_" : "KEY_")
+          .append(comp.name().toUpperCase()).append(");\n");
         // Value
         appendJsonValue(sb, comp, accessor);
     }
@@ -1161,6 +1188,8 @@ final class MappingCodeGenerator {
                                                      JqMapperProcessor.AnyInfo anyInfo) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
+        boolean fuse = !hasInclusion && components.stream()
+                .anyMatch(c -> !c.ignored() && !c.skipSerialize());
 
         sb.append("    @Override\n");
         sb.append("    public void appendJsonBytes(").append(recordSimpleName)
@@ -1172,14 +1201,14 @@ final class MappingCodeGenerator {
             sb.append("    }\n\n");
             return;
         }
-        sb.append("        _out.writeByte('{');\n");
+        if (!fuse) sb.append("        _out.writeByte('{');\n");
 
         if (!hasInclusion) {
             boolean first = true;
             for (var comp : components) {
                 if (comp.ignored() || comp.skipSerialize()) continue;
-                if (!first) sb.append("        _out.writeByte(',');\n");
-                appendJsonBytesField(sb, comp);
+                if (!first && !fuse) sb.append("        _out.writeByte(',');\n");
+                appendJsonBytesField(sb, comp, fuse);
                 first = false;
             }
         } else {
@@ -1189,7 +1218,7 @@ final class MappingCodeGenerator {
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
-                    appendJsonBytesField(sb, comp);
+                    appendJsonBytesField(sb, comp, false);
                 } else {
                     appendJsonBytesFieldWithInclusion(sb, comp, accessor);
                 }
@@ -1201,9 +1230,11 @@ final class MappingCodeGenerator {
     }
 
     /** Append a single field as JSON key:value bytes. */
-    private static void appendJsonBytesField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp) {
+    private static void appendJsonBytesField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
+            boolean fused) {
         String accessor = "instance." + comp.name() + "()";
-        sb.append("        _out.writeBytes(KEYB_").append(comp.name().toUpperCase()).append(");\n");
+        sb.append("        _out.writeBytes(").append(fused ? "KEYFB_" : "KEYB_")
+          .append(comp.name().toUpperCase()).append(");\n");
         appendJsonBytesValue(sb, comp, accessor);
     }
 
@@ -1950,6 +1981,27 @@ final class MappingCodeGenerator {
         // toJqValue: getter calls (serialization iterates the ordered view;
         // binding above stays declaration-ordered for constructor alignment)
         sortSerView(properties, JqMapperProcessor.PropertyInfo::jsonName, order);
+        // Fused separator-key constants for the no-inclusion serialization
+        // path (see the record generator); the POJO filter also drops
+        // properties with no readable accessor, matching the appenders.
+        if (!anyInfo.hasGetter() && properties.stream()
+                .noneMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()))
+                && properties.stream()
+                        .anyMatch(p -> !p.ignored() && !p.skipSerialize()
+                                && resolvePojoReadExpr(p) != null)) {
+            boolean firstKey = true;
+            for (var prop : properties) {
+                if (prop.ignored() || prop.skipSerialize() || resolvePojoReadExpr(prop) == null) continue;
+                char prefix = firstKey ? '{' : ',';
+                sb.append("    private static final String KEYF_").append(prop.name().toUpperCase())
+                  .append(" = jsonKeyPrefixed(\"").append(escapeJava(prop.jsonName()))
+                  .append("\", '").append(prefix).append("');\n");
+                sb.append("    private static final byte[] KEYFB_").append(prop.name().toUpperCase())
+                  .append(" = jsonKeyPrefixedBytes(\"").append(escapeJava(prop.jsonName()))
+                  .append("\", '").append(prefix).append("');\n");
+                firstKey = false;
+            }
+        }
         int activeCount = (int) properties.stream().filter(p -> !p.ignored()).count();
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
@@ -2044,6 +2096,8 @@ final class MappingCodeGenerator {
                                                     JqMapperProcessor.AnyInfo anyInfo, String outputType) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
+        boolean fuse = !hasInclusion && properties.stream()
+                .anyMatch(p -> !p.ignored() && !p.skipSerialize() && resolvePojoReadExpr(p) != null);
 
         sb.append("    @Override\n");
         sb.append("    public void appendJson(").append(classSimpleName)
@@ -2055,7 +2109,7 @@ final class MappingCodeGenerator {
             sb.append("    }\n\n");
             return;
         }
-        sb.append("        _sb.append('{');\n");
+        if (!fuse) sb.append("        _sb.append('{');\n");
 
         if (!hasInclusion) {
             boolean first = true;
@@ -2063,8 +2117,9 @@ final class MappingCodeGenerator {
                 if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
-                if (!first) sb.append("        _sb.append(',');\n");
-                sb.append("        _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
+                if (!first && !fuse) sb.append("        _sb.append(',');\n");
+                sb.append("        _sb.append(").append(fuse ? "KEYF_" : "KEY_")
+                  .append(prop.name().toUpperCase()).append(");\n");
                 appendJsonValueForPojo(sb, prop, readExpr);
                 first = false;
             }
@@ -2096,6 +2151,8 @@ final class MappingCodeGenerator {
                                                          JqMapperProcessor.AnyInfo anyInfo) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
+        boolean fuse = !hasInclusion && properties.stream()
+                .anyMatch(p -> !p.ignored() && !p.skipSerialize() && resolvePojoReadExpr(p) != null);
 
         sb.append("    @Override\n");
         sb.append("    public void appendJsonBytes(").append(classSimpleName)
@@ -2107,7 +2164,7 @@ final class MappingCodeGenerator {
             sb.append("    }\n\n");
             return;
         }
-        sb.append("        _out.writeByte('{');\n");
+        if (!fuse) sb.append("        _out.writeByte('{');\n");
 
         if (!hasInclusion) {
             boolean first = true;
@@ -2115,8 +2172,9 @@ final class MappingCodeGenerator {
                 if (prop.ignored() || prop.skipSerialize()) continue;
                 String readExpr = resolvePojoReadExpr(prop);
                 if (readExpr == null) continue;
-                if (!first) sb.append("        _out.writeByte(',');\n");
-                sb.append("        _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
+                if (!first && !fuse) sb.append("        _out.writeByte(',');\n");
+                sb.append("        _out.writeBytes(").append(fuse ? "KEYFB_" : "KEYB_")
+                  .append(prop.name().toUpperCase()).append(");\n");
                 appendJsonBytesValueForPojo(sb, prop, readExpr);
                 first = false;
             }
