@@ -18,6 +18,23 @@ final class JsonByteSkipper {
     private static final int NOT_FOUND = -1;
     private static final int FALLBACK = -2;
 
+    /**
+     * Optional accelerated container skipper (jjq-vector, issue #211
+     * Phase 3B), discovered once. Null when the module is absent — the
+     * scalar SWAR path below then runs unchanged, keeping jjq-core
+     * dependency-free.
+     */
+    private static final JsonByteSkipKernel VECTOR_KERNEL = loadVectorKernel();
+
+    private static JsonByteSkipKernel loadVectorKernel() {
+        try {
+            var it = java.util.ServiceLoader.load(JsonByteSkipKernel.class).iterator();
+            return it.hasNext() ? it.next() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private JsonByteSkipper() {}
 
     /**
@@ -379,9 +396,18 @@ final class JsonByteSkipper {
 
     /**
      * Advance from inside an already-open container (depth = 1) to the byte
-     * immediately past its matching closing brace/bracket.
+     * immediately past its matching closing brace/bracket. Dispatches to the
+     * optional jjq-vector kernel when present and enabled.
      */
     private static int skipToContainerEnd(byte[] d, int startPos, int end) {
+        JsonByteSkipKernel kernel = VECTOR_KERNEL;
+        if (kernel != null && kernel.isEnabled()) {
+            return kernel.skipToContainerEnd(d, startPos, end, JqValues.MAX_PARSE_DEPTH);
+        }
+        return skipToContainerEndScalar(d, startPos, end);
+    }
+
+    private static int skipToContainerEndScalar(byte[] d, int startPos, int end) {
         int depth = 1;
         int p = startPos;
         while (p < end) {
