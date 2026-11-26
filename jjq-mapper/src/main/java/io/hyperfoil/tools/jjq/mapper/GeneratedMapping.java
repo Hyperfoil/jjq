@@ -175,6 +175,60 @@ public abstract non-sealed class GeneratedMapping<T> implements Mapping<T> {
     }
 
     /**
+     * Null-preserving boxed-scalar coercions mirroring the shared
+     * {@code TypeConverter.convert} semantics for reference targets: absent
+     * and explicit-null keys bind {@code null} (Jackson parity), non-null
+     * inputs convert exactly like the primitive helpers. Small enough to
+     * inline at every call site, unlike the {@code convert} switch.
+     */
+    protected static java.lang.Integer asIntegerChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceInt(value);
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Long asLongBoxedChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceLong(value, "long");
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Double asDoubleBoxedChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceDouble(value, "double");
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Float asFloatBoxedChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return (float) TypeConverter.coerceDouble(value, "float");
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Boolean asBooleanBoxedChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceBoolean(value);
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Short asShortBoxedChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceShort(value);
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Byte asByteBoxedChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceByte(value);
+    }
+
+    /** Null-preserving boxed coercion; see {@link #asIntegerChecked}. */
+    protected static java.lang.Character asCharacterChecked(JqValue value) {
+        if (value == null || value instanceof io.hyperfoil.tools.jjq.value.JqNull) return null;
+        return TypeConverter.coerceChar(value);
+    }
+
+    /**
      * Lenient int coercion mirroring {@code TypeConverter} semantics, with
      * range checking: exact integral values that fit in 32 bits bind,
      * fractions and out-of-range magnitudes are shape mismatches.

@@ -133,6 +133,25 @@ final class MappingCodeGenerator {
             }
         }
         emitRecordKeyConstants(sb, components);
+        // Hoisted generic types: parameterized field types bind through a
+        // TypeToken captured once at class-init instead of a per-call
+        // anonymous instance plus reflective superclass walk.
+        var typeRefs = new java.util.LinkedHashMap<String, String>();
+        for (var comp : components) collectTypeRef(comp.typeName(), comp.name(), typeRefs, false);
+        for (var comp : deser) collectTypeRef(comp.typeName(), comp.name(), typeRefs, false);
+        for (var entry : typeRefs.entrySet()) {
+            sb.append("    private static final java.lang.reflect.Type ").append(entry.getValue())
+              .append(" = new io.hyperfoil.tools.jjq.mapper.TypeToken<").append(entry.getKey())
+              .append(">(){}.getType();\n");
+        }
+        if (!required.isEmpty()) {
+            sb.append("    private static final java.util.List<String> _REQUIRED = java.util.List.of(");
+            for (int i = 0; i < required.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append("\"").append(escapeJava(required.get(i))).append("\"");
+            }
+            sb.append(");\n");
+        }
         sb.append("\n");
 
         // Known-field set for unknown-key forwarding (issue #87)
@@ -145,9 +164,9 @@ final class MappingCodeGenerator {
 
         // fromJqValue method
         if (hasDelegating) {
-            emitDelegatingFromJqValue(sb, recordSimpleName, deser.get(0), creator);
+            emitDelegatingFromJqValue(sb, recordSimpleName, deser.get(0), creator, typeRefs);
         } else {
-            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator, required);
+            generateFromJqValue(sb, recordSimpleName, deser, anyInfo, positional, creator, required, typeRefs);
         }
 
         // toJqValue method (serialization iterates the ordered view;
@@ -262,14 +281,15 @@ final class MappingCodeGenerator {
      */
     private static void emitDelegatingFromJqValue(StringBuilder sb, String recordSimpleName,
                                                   JqMapperProcessor.ComponentInfo arg,
-                                                  JqMapperProcessor.CreatorInfo creator) {
+                                                  JqMapperProcessor.CreatorInfo creator,
+                                                  java.util.Map<String, String> typeRefs) {
         sb.append("    @Override\n");
         sb.append("    public ").append(recordSimpleName).append(" fromJqValue(JqValue input, JqMapper mapper) {\n");
         sb.append("        if (input == null || input instanceof JqNull) return null;\n");
         sb.append("        if (input instanceof JqObject) throw mismatchObject(input, \"").append(recordSimpleName).append("\");\n");
         sb.append("        try {\n");
         sb.append("            return ").append(creator.constructPrefix());
-        generateExtraction(sb, arg, "input");
+        generateExtraction(sb, arg, "input", typeRefs);
         sb.append(");\n");
         sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
         sb.append("            throw _e;\n");
@@ -285,7 +305,8 @@ final class MappingCodeGenerator {
                                              JqMapperProcessor.AnyInfo anyInfo,
                                              List<JqMapperProcessor.ComponentInfo> positional,
                                              JqMapperProcessor.CreatorInfo creator,
-                                             List<String> required) {
+                                             List<String> required,
+                                             java.util.Map<String, String> typeRefs) {
         String constructPrefix = creator != null ? creator.constructPrefix()
                 : "new " + recordSimpleName + "(";
         sb.append("    @Override\n");
@@ -316,7 +337,7 @@ final class MappingCodeGenerator {
                 if (comp.ignored() || comp.skipDeserialize()) {
                     sb.append(defaultLiteral(comp.typeName()));
                 } else {
-                    generateExtraction(sb, comp, "_o.valueAt(" + (slot++) + ")");
+                    generateExtraction(sb, comp, "_o.valueAt(" + (slot++) + ")", typeRefs);
                 }
                 if (i < components.size() - 1) sb.append(",");
                 sb.append("\n");
@@ -345,9 +366,17 @@ final class MappingCodeGenerator {
             var comp = components.get(i);
             if (comp.ignored() || comp.skipDeserialize() || !isFallibleExtraction(comp)) continue;
             sb.append("        ").append(comp.typeName()).append(" _c").append(i).append(";\n");
+            // Optional fields evaluate their source twice inside the empty-or-
+            // present ternary: hoist the program/lookup result into a local
+            // so it runs once.
+            String hoistApply = deserApply(comp);
+            if (comp.typeName().startsWith("java.util.Optional<")) {
+                sb.append("        JqValue _v").append(i).append(" = ").append(hoistApply).append(";\n");
+                hoistApply = "_v" + i;
+            }
             sb.append("        try {\n");
             sb.append("            _c").append(i).append(" = ");
-            generateExtraction(sb, comp, deserApply(comp));
+            generateExtraction(sb, comp, hoistApply, typeRefs);
             sb.append(";\n");
             sb.append("        } catch (io.hyperfoil.tools.jjq.mapper.JqMapperException _e) {\n");
             sb.append("            throw _e.prependPath(\"").append(escapeJava(comp.jsonName())).append("\");\n");
@@ -380,7 +409,7 @@ final class MappingCodeGenerator {
             } else if (isFallibleExtraction(comp)) {
                 sb.append("_c").append(i);
             } else {
-                generateExtraction(sb, comp, deserApply(comp));
+                generateExtraction(sb, comp, deserApply(comp), typeRefs);
             }
             if (i < components.size() - 1) sb.append(",");
             sb.append("\n");
@@ -461,8 +490,19 @@ final class MappingCodeGenerator {
         return true;
     }
 
+    /**
+     * Emitted scalar gate for one extraction: the wrapper looks redundant
+     * (every coercion performs the identical container check), but removing
+     * it was measured as a stable regression on mixed-scalar records — the
+     * batched checks schedule better than checks interleaved with each
+     * field's conversion chain — so it stays.
+     */
+    private static String gate(String apply, String expectedType, String name) {
+        return "requireScalar(" + apply + ", " + expectedType + ", \"" + name + "\")";
+    }
+
     private static void generateExtraction(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
-                                             String apply) {
+                                             String apply, java.util.Map<String, String> typeRefs) {
         // Custom converter takes priority
         if (comp.converterClass() != null) {
             sb.append("(").append(comp.typeName()).append(") ")
@@ -485,90 +525,89 @@ final class MappingCodeGenerator {
             return;
         }
 
+        // Scalar gates stay (see gate): removal measured as a regression.
         switch (comp.typeName()) {
             case "java.lang.String" -> sb.append("asStringChecked(").append(apply).append(")");
-            case "int" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
-            // Boxed scalars route through the shared convert() path so
-            // absent/null keys bind null (JSON-B parity) instead of the
-            // primitive zero-value; generated and reflective behavior stay
-            // identical by construction. Non-null inputs convert exactly
-            // like the static helpers (same coerce functions). fromJqValue
-            // itself cannot be used: it only serves records/POJOs/enums.
-            case "java.lang.Integer" -> appendBoxedScalar(sb, apply, "Integer", "INT");
-            case "long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
-            case "java.lang.Long" -> appendBoxedScalar(sb, apply, "Long", "LONG");
-            case "double" -> sb.append("asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\"))");
-            case "java.lang.Double" -> appendBoxedScalar(sb, apply, "Double", "DOUBLE");
-            case "float" -> sb.append("(float) asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\"))");
-            case "java.lang.Float" -> appendBoxedScalar(sb, apply, "Float", "FLOAT");
-            case "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
-            case "java.lang.Boolean" -> appendBoxedScalar(sb, apply, "Boolean", "BOOLEAN");
-            case "short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
-            case "java.lang.Short" -> appendBoxedScalar(sb, apply, "Short", "SHORT");
-            case "byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
-            case "java.lang.Byte" -> appendBoxedScalar(sb, apply, "Byte", "BYTE");
+            case "int" -> sb.append("asIntChecked(").append(gate(apply, "JqValue.Type.NUMBER", "int")).append(")");
+            // Boxed scalars bind through the small null-preserving helpers
+            // instead of the shared convert switch (above the hot-inline
+            // budget): absent/null keys bind null, non-null inputs convert
+            // exactly like the primitive helpers — same semantics.
+            case "java.lang.Integer" -> sb.append("asIntegerChecked(").append(apply).append(")");
+            case "long" -> sb.append("asLongChecked(").append(gate(apply, "JqValue.Type.NUMBER", "long")).append(")");
+            case "java.lang.Long" -> sb.append("asLongBoxedChecked(").append(apply).append(")");
+            case "double" -> sb.append("asDoubleChecked(").append(gate(apply, "JqValue.Type.NUMBER", "double")).append(")");
+            case "java.lang.Double" -> sb.append("asDoubleBoxedChecked(").append(apply).append(")");
+            case "float" -> sb.append("(float) asDoubleChecked(").append(gate(apply, "JqValue.Type.NUMBER", "float")).append(")");
+            case "java.lang.Float" -> sb.append("asFloatBoxedChecked(").append(apply).append(")");
+            case "boolean" -> sb.append("asBooleanChecked(").append(gate(apply, "JqValue.Type.BOOLEAN", "boolean")).append(")");
+            case "java.lang.Boolean" -> sb.append("asBooleanBoxedChecked(").append(apply).append(")");
+            case "short" -> sb.append("asShortChecked(").append(gate(apply, "JqValue.Type.NUMBER", "short")).append(")");
+            case "java.lang.Short" -> sb.append("asShortBoxedChecked(").append(apply).append(")");
+            case "byte" -> sb.append("asByteChecked(").append(gate(apply, "JqValue.Type.NUMBER", "byte")).append(")");
+            case "java.lang.Byte" -> sb.append("asByteBoxedChecked(").append(apply).append(")");
             case "char" -> {
-                sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
+                sb.append("asCharChecked(").append(gate(apply, "JqValue.Type.STRING", "char")).append(")");
             }
             case "java.lang.Character" -> {
-                appendBoxedScalar(sb, apply, "Character", "CHAR");
+                sb.append("asCharacterChecked(").append(apply).append(")");
             }
             case "java.math.BigDecimal" -> {
-                sb.append("asBigDecimalChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\"))");
+                sb.append("asBigDecimalChecked(").append(apply).append(")");
             }
             case "java.math.BigInteger" -> {
-                sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
+                sb.append("asBigIntegerChecked(").append(apply).append(")");
             }
             case "java.util.UUID" -> {
-                sb.append("asUuidChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"UUID\"))");
+                sb.append("asUuidChecked(").append(apply).append(")");
             }
             case "java.net.URI" -> {
-                sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
+                sb.append("asUriChecked(").append(apply).append(")");
             }
             case "java.net.URL" -> {
-                sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
+                sb.append("asUrlChecked(").append(apply).append(")");
             }
             case "java.time.Instant" -> {
-                sb.append("asInstantChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Instant\"))");
+                sb.append("asInstantChecked(").append(apply).append(")");
             }
             case "java.time.LocalDate" -> {
-                sb.append("asLocalDateChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDate\"))");
+                sb.append("asLocalDateChecked(").append(apply).append(")");
             }
             case "java.time.LocalTime" -> {
-                sb.append("asLocalTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalTime\"))");
+                sb.append("asLocalTimeChecked(").append(apply).append(")");
             }
             case "java.time.LocalDateTime" -> {
-                sb.append("asLocalDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDateTime\"))");
+                sb.append("asLocalDateTimeChecked(").append(apply).append(")");
             }
             case "java.time.OffsetDateTime" -> {
-                sb.append("asOffsetDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetDateTime\"))");
+                sb.append("asOffsetDateTimeChecked(").append(apply).append(")");
             }
             case "java.time.ZonedDateTime" -> {
-                sb.append("asZonedDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZonedDateTime\"))");
+                sb.append("asZonedDateTimeChecked(").append(apply).append(")");
             }
             case "java.time.Duration" -> {
-                sb.append("asDurationChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Duration\"))");
+                sb.append("asDurationChecked(").append(apply).append(")");
             }
             case "java.time.Period" -> {
-                sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
+                sb.append("asPeriodChecked(").append(apply).append(")");
             }
             case "java.time.Year" -> {
-                sb.append("asYearChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Year\"))");
+                sb.append("asYearChecked(").append(apply).append(")");
             }
             case "java.time.YearMonth" -> {
-                sb.append("asYearMonthChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"YearMonth\"))");
+                sb.append("asYearMonthChecked(").append(apply).append(")");
             }
             case "java.time.MonthDay" -> {
-                sb.append("asMonthDayChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"MonthDay\"))");
+                sb.append("asMonthDayChecked(").append(apply).append(")");
             }
             case "java.time.OffsetTime" -> {
-                sb.append("asOffsetTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetTime\"))");
+                sb.append("asOffsetTimeChecked(").append(apply).append(")");
             }
             case "java.time.ZoneId" -> {
-                sb.append("asZoneIdChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneId\"))");
+                sb.append("asZoneIdChecked(").append(apply).append(")");
             }
             case "java.time.ZoneOffset" -> {
-                sb.append("asZoneOffsetChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneOffset\"))");
+                sb.append("asZoneOffsetChecked(").append(apply).append(")");
             }
             default -> {
                 String typeName = comp.typeName();
@@ -585,7 +624,7 @@ final class MappingCodeGenerator {
                     String elementType = extractGenericArg(typeName);
                     if (elementType.contains("<")) {
                         sb.append("mapper.fromJqValue(").append(apply).append(", ")
-                          .append(typeTokenExpr(typeName)).append(")");
+                          .append(typeRef(typeName, typeRefs)).append(")");
                     } else {
                         sb.append("_toList(").append(apply).append(", mapper, ").append(elementType).append(".class)");
                     }
@@ -595,13 +634,13 @@ final class MappingCodeGenerator {
                 // leaving values untyped unlike the reflection path.
                 else if (typeName.startsWith("java.util.Map<")) {
                     sb.append("mapper.fromJqValue(").append(apply).append(", ")
-                      .append(typeTokenExpr(typeName)).append(")");
+                      .append(typeRef(typeName, typeRefs)).append(")");
                 }
                 // Optional<T>
                 else if (typeName.startsWith("java.util.Optional<")) {
                     String innerType = extractGenericArg(typeName);
                     sb.append(apply).append(" instanceof JqNull ? Optional.empty() : Optional.ofNullable(");
-                    generateScalarConversion(sb, innerType, apply);
+                    generateScalarConversion(sb, innerType, apply, typeRefs);
                     sb.append(")");
                 }
                 // Enum
@@ -609,7 +648,7 @@ final class MappingCodeGenerator {
                     // Assume it's a record or enum — delegate to mapper.
                     // A parameterized type cannot form a .class literal:
                     // capture it with a TypeToken instead (issue #101).
-                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName)).append(")");
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName, typeRefs)).append(")");
                 }
                 // Plain Object fields hold any shape: convert to plain Java
                 // values like the reflection path (issue #106). Introspecting
@@ -619,62 +658,74 @@ final class MappingCodeGenerator {
                 }
                 else {
                     // Fallback — delegate to mapper
-                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName)).append(")");
+                    sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeLiteral(typeName, typeRefs)).append(")");
                 }
             }
         }
     }
 
-    private static void generateScalarConversion(StringBuilder sb, String typeName, String apply) {
+    private static void generateScalarConversion(StringBuilder sb, String typeName, String apply,
+            java.util.Map<String, String> typeRefs) {
+        // The JqNull case is pre-guarded by the Optional ternary at the call
+        // site; scalar gates stay (see gate).
         switch (typeName) {
             case "java.lang.String", "String" -> sb.append("asStringChecked(").append(apply).append(")");
-            case "java.lang.Integer", "Integer", "int" -> sb.append("asIntChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"int\"))");
-            case "java.lang.Long", "Long", "long" -> sb.append("asLongChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"long\"))");
-            case "java.lang.Double", "Double", "double" -> sb.append("asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"double\"))");
-            case "java.lang.Float", "Float", "float" -> sb.append("(float) asDoubleChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"float\"))");
-            case "java.lang.Boolean", "Boolean", "boolean" -> sb.append("asBooleanChecked(requireScalar(").append(apply).append(", JqValue.Type.BOOLEAN, \"boolean\"))");
-            case "java.lang.Short", "Short", "short" -> sb.append("asShortChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"short\"))");
-            case "java.lang.Byte", "Byte", "byte" -> sb.append("asByteChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"byte\"))");
-            case "java.lang.Character", "Character", "char" ->
-                sb.append("asCharChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"char\"))");
+            case "int", "Integer" -> sb.append("asIntChecked(").append(gate(apply, "JqValue.Type.NUMBER", "int")).append(")");
+            case "java.lang.Integer" -> sb.append("asIntegerChecked(").append(apply).append(")");
+            case "long", "Long" -> sb.append("asLongChecked(").append(gate(apply, "JqValue.Type.NUMBER", "long")).append(")");
+            case "java.lang.Long" -> sb.append("asLongBoxedChecked(").append(apply).append(")");
+            case "double", "Double" -> sb.append("asDoubleChecked(").append(gate(apply, "JqValue.Type.NUMBER", "double")).append(")");
+            case "java.lang.Double" -> sb.append("asDoubleBoxedChecked(").append(apply).append(")");
+            case "float", "Float" -> sb.append("(float) asDoubleChecked(").append(gate(apply, "JqValue.Type.NUMBER", "float")).append(")");
+            case "java.lang.Float" -> sb.append("asFloatBoxedChecked(").append(apply).append(")");
+            case "boolean", "Boolean" -> sb.append("asBooleanChecked(").append(gate(apply, "JqValue.Type.BOOLEAN", "boolean")).append(")");
+            case "java.lang.Boolean" -> sb.append("asBooleanBoxedChecked(").append(apply).append(")");
+            case "short", "Short" -> sb.append("asShortChecked(").append(gate(apply, "JqValue.Type.NUMBER", "short")).append(")");
+            case "java.lang.Short" -> sb.append("asShortBoxedChecked(").append(apply).append(")");
+            case "byte", "Byte" -> sb.append("asByteChecked(").append(gate(apply, "JqValue.Type.NUMBER", "byte")).append(")");
+            case "java.lang.Byte" -> sb.append("asByteBoxedChecked(").append(apply).append(")");
+            case "char", "Character" ->
+                sb.append("asCharChecked(").append(gate(apply, "JqValue.Type.STRING", "char")).append(")");
+            case "java.lang.Character" ->
+                sb.append("asCharacterChecked(").append(apply).append(")");
             case "java.math.BigDecimal", "BigDecimal" ->
-                sb.append("asBigDecimalChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigDecimal\"))");
+                sb.append("asBigDecimalChecked(").append(apply).append(")");
             case "java.time.Instant", "Instant" ->
-                sb.append("asInstantChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Instant\"))");
+                sb.append("asInstantChecked(").append(apply).append(")");
             case "java.time.LocalDate", "LocalDate" ->
-                sb.append("asLocalDateChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDate\"))");
+                sb.append("asLocalDateChecked(").append(apply).append(")");
             case "java.time.LocalTime", "LocalTime" ->
-                sb.append("asLocalTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalTime\"))");
+                sb.append("asLocalTimeChecked(").append(apply).append(")");
             case "java.time.LocalDateTime", "LocalDateTime" ->
-                sb.append("asLocalDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"LocalDateTime\"))");
+                sb.append("asLocalDateTimeChecked(").append(apply).append(")");
             case "java.time.OffsetDateTime", "OffsetDateTime" ->
-                sb.append("asOffsetDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetDateTime\"))");
+                sb.append("asOffsetDateTimeChecked(").append(apply).append(")");
             case "java.time.ZonedDateTime", "ZonedDateTime" ->
-                sb.append("asZonedDateTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZonedDateTime\"))");
+                sb.append("asZonedDateTimeChecked(").append(apply).append(")");
             case "java.time.Duration", "Duration" ->
-                sb.append("asDurationChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Duration\"))");
+                sb.append("asDurationChecked(").append(apply).append(")");
             case "java.time.Period", "Period" ->
-                sb.append("asPeriodChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Period\"))");
+                sb.append("asPeriodChecked(").append(apply).append(")");
             case "java.time.Year", "Year" ->
-                sb.append("asYearChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"Year\"))");
+                sb.append("asYearChecked(").append(apply).append(")");
             case "java.time.YearMonth", "YearMonth" ->
-                sb.append("asYearMonthChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"YearMonth\"))");
+                sb.append("asYearMonthChecked(").append(apply).append(")");
             case "java.time.MonthDay", "MonthDay" ->
-                sb.append("asMonthDayChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"MonthDay\"))");
+                sb.append("asMonthDayChecked(").append(apply).append(")");
             case "java.time.OffsetTime", "OffsetTime" ->
-                sb.append("asOffsetTimeChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"OffsetTime\"))");
+                sb.append("asOffsetTimeChecked(").append(apply).append(")");
             case "java.time.ZoneId", "ZoneId" ->
-                sb.append("asZoneIdChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneId\"))");
+                sb.append("asZoneIdChecked(").append(apply).append(")");
             case "java.time.ZoneOffset", "ZoneOffset" ->
-                sb.append("asZoneOffsetChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"ZoneOffset\"))");
+                sb.append("asZoneOffsetChecked(").append(apply).append(")");
             case "java.math.BigInteger", "BigInteger" ->
-                sb.append("asBigIntegerChecked(requireScalar(").append(apply).append(", JqValue.Type.NUMBER, \"BigInteger\"))");
+                sb.append("asBigIntegerChecked(").append(apply).append(")");
             case "java.util.UUID", "UUID" ->
-                sb.append("asUuidChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"UUID\"))");
+                sb.append("asUuidChecked(").append(apply).append(")");
             case "java.net.URI", "URI" ->
-                sb.append("asUriChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URI\"))");
+                sb.append("asUriChecked(").append(apply).append(")");
             case "java.net.URL", "URL" ->
-                sb.append("asUrlChecked(requireScalar(").append(apply).append(", JqValue.Type.STRING, \"URL\"))");
+                sb.append("asUrlChecked(").append(apply).append(")");
             default -> {
                 // Nested record/enum/POJO: bind structurally (fail-fast on shape
                 // mismatch, mirroring the reflection path). A parameterized type
@@ -687,7 +738,7 @@ final class MappingCodeGenerator {
                     sb.append("mapper.fromJqValue(").append(apply).append(", ").append(typeName).append(".class)");
                 } else if (typeName.contains("<")) {
                     sb.append("mapper.fromJqValue(").append(apply).append(", ")
-                      .append(typeTokenExpr(typeName)).append(")");
+                      .append(typeRef(typeName, typeRefs)).append(")");
                 } else if (typeName.contains(".") && !typeName.startsWith("java.")
                         && !typeName.equals("JqValue")
                         && !typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
@@ -1305,17 +1356,13 @@ final class MappingCodeGenerator {
      * right after the positional fast path (a positional hit proves every
      * key present, so the scan runs only on fallthrough — free on hits).
      * Nothing is emitted for mappings without required properties (zero
-     * diff for existing mappings).
+     * diff for existing mappings). The name list is the hoisted
+     * {@code _REQUIRED} constant, so the call allocates nothing.
      */
     private static void emitRequiredCheck(StringBuilder sb, String simpleName, List<String> required) {
         if (required.isEmpty()) return;
-        sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.checkRequired(input, ");
-        sb.append("java.util.List.of(");
-        for (int i = 0; i < required.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append("\"").append(escapeJava(required.get(i))).append("\"");
-        }
-        sb.append("), \"").append(simpleName).append("\");\n");
+        sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.checkRequired(input, _REQUIRED, \"")
+          .append(simpleName).append("\");\n");
     }
 
     /**
@@ -1386,45 +1433,65 @@ final class MappingCodeGenerator {
     }
 
     /**
-     * A {@code Class} literal for plain types, or a {@code TypeToken} capture
-     * for parameterized ones — a parameterized {@code .class} literal is
-     * illegal Java (issue #101). The emitted form needs no import (fully
-     * qualified) and its type arguments are already fully qualified, so it
-     * resolves in any generated package.
+     * A {@code Class} literal for plain types, or the hoisted
+     * {@code TypeToken} constant for parameterized ones — a parameterized
+     * {@code .class} literal is illegal Java (issue #101). The constants are
+     * collected per mapping up front; a type missing from the map falls back
+     * to the inline capture (defensive — the pre-scan covers every emitted
+     * site).
      */
-    private static String typeLiteral(String typeName) {
-        if (typeName.contains("<")) return typeTokenExpr(typeName);
+    private static String typeLiteral(String typeName, java.util.Map<String, String> typeRefs) {
+        if (typeName.contains("<")) return typeRef(typeName, typeRefs);
         return typeName + ".class";
     }
 
     /**
-     * Deserialization expression for a boxed scalar component (e.g.
-     * {@code Long}, {@code Boolean}): the shared {@code TypeConverter}
-     * path, which binds absent/null keys to null for reference targets
-     * while converting non-null inputs exactly like the static helpers.
-     * Single evaluation, no allocation beyond the boxing itself.
-     *
-     * @param sb        where to emit
-     * @param apply     the value expression (evaluated once)
-     * @param boxedName the simple boxed class name (e.g. {@code "Long"})
-     * @param kind      the {@code TypeConverter.Kind} name (e.g. {@code "LONG"})
+     * Emitted type reference for a parameterized type: the hoisted
+     * {@code T_} constant when collected, else the inline capture.
      */
-    private static void appendBoxedScalar(StringBuilder sb, String apply, String boxedName, String kind) {
-        sb.append(boxedScalarExpr(apply, boxedName, kind));
+    private static String typeRef(String typeName, java.util.Map<String, String> typeRefs) {
+        String constant = typeRefs.get(typeName);
+        return constant != null ? constant : typeTokenExpr(typeName);
     }
 
     /**
-     * Null-preserving extraction for a boxed scalar: absent and explicit-null
-     * keys bind null (Jackson parity, same {@code convert} path the
-     * reflection binding uses), non-null inputs convert exactly like the
-     * primitive helpers. Callers must have {@code mapper} in scope.
+     * Collect the parameterized types one component references, including
+     * the inner type of {@code Optional} fields (the Optional conversion
+     * binds generic inners through the same token). Keyed by type so
+     * repeated shapes share one constant.
+     *
+     * @param pojoBinding true on the POJO path, where every parameterized
+     *        field routes through the mapper default branch; records emit
+     *        specialized forms for {@code List} (non-generic elements) and
+     *        {@code Optional} (ternary) that never reference the whole-type
+     *        token, so only actually-referenced shapes are collected
      */
-    private static String boxedScalarExpr(String apply, String boxedName, String kind) {
-        return "(java.lang." + boxedName + ") "
-          + "io.hyperfoil.tools.jjq.mapper.TypeConverter.convert(" + apply
-          + ", io.hyperfoil.tools.jjq.mapper.TypeConverter.Kind." + kind
-          + ", java.lang." + boxedName + ".class"
-          + ", java.lang." + boxedName + ".class, mapper)";
+    private static void collectTypeRef(String typeName, String fieldName,
+            java.util.Map<String, String> typeRefs, boolean pojoBinding) {
+        if (typeName.contains("<") && (pojoBinding || referencesTypeToken(typeName))) {
+            typeRefs.putIfAbsent(typeName, "T_" + fieldName.toUpperCase());
+        }
+        if (typeName.startsWith("java.util.Optional<")) {
+            String inner = extractGenericArg(typeName);
+            if (inner.contains("<")) {
+                typeRefs.putIfAbsent(inner, "T_" + fieldName.toUpperCase());
+            }
+        }
+    }
+
+    /**
+     * Whether the record-path emission references the whole parameterized
+     * type through a token: {@code Map} and every other generic do,
+     * {@code Optional} binds through the empty-or-present ternary, and
+     * {@code List} only when its element is itself generic (otherwise the
+     * element-class {@code _toList} form applies).
+     */
+    private static boolean referencesTypeToken(String typeName) {
+        if (typeName.startsWith("java.util.Optional<")) return false;
+        if (typeName.startsWith("java.util.List<")) {
+            return extractGenericArg(typeName).contains("<");
+        }
+        return true;
     }
 
     /** {@code new TypeToken<T>(){}.getType()} for a parameterized type string. */
@@ -1625,6 +1692,27 @@ final class MappingCodeGenerator {
             }
         }
         emitPojoKeyConstants(sb, properties);
+        // Hoisted generic types (same as the record path): one TypeToken
+        // constant per parameterized shape instead of a per-call anonymous
+        // instance plus reflective superclass walk.
+        var typeRefs = new java.util.LinkedHashMap<String, String>();
+        for (var prop : properties) collectTypeRef(prop.typeName(), prop.name(), typeRefs, true);
+        if (creator != null && !creator.delegating()) {
+            for (var p : creator.params()) collectTypeRef(p.typeName(), p.name(), typeRefs, true);
+        }
+        for (var entry : typeRefs.entrySet()) {
+            sb.append("    private static final java.lang.reflect.Type ").append(entry.getValue())
+              .append(" = new io.hyperfoil.tools.jjq.mapper.TypeToken<").append(entry.getKey())
+              .append(">(){}.getType();\n");
+        }
+        if (!required.isEmpty()) {
+            sb.append("    private static final java.util.List<String> _REQUIRED = java.util.List.of(");
+            for (int i = 0; i < required.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append("\"").append(escapeJava(required.get(i))).append("\"");
+            }
+            sb.append(");\n");
+        }
         // Static formatters for @JqFormat properties (shared by deser and ser)
         for (var prop : properties) {
             if (!prop.ignored() && prop.format() != null) {
@@ -1702,7 +1790,7 @@ final class MappingCodeGenerator {
             sb.append("        if (input instanceof JqObject) throw mismatchObject(input, \"").append(classSimpleName).append("\");\n");
             sb.append("        try {\n");
             sb.append("            return ").append(creator.constructPrefix());
-            sb.append(buildExtraction(creatorProperty(creator.params().get(0)), "input"));
+            sb.append(buildExtraction(creatorProperty(creator.params().get(0)), "input", typeRefs));
             sb.append(");\n");
             emitCreatorCatch(sb, classSimpleName, creator.label());
         } else if (hasPojoCreator) {
@@ -1710,7 +1798,7 @@ final class MappingCodeGenerator {
                 var p = creator.params().get(i);
                 sb.append("        var _carg").append(i).append(" = ")
                   .append(buildExtraction(creatorProperty(p),
-                          "input.tryGet(C_" + p.name().toUpperCase() + ").orElse(JqNull.NULL)"))
+                          "input.tryGet(C_" + p.name().toUpperCase() + ").orElse(JqNull.NULL)", typeRefs))
                   .append(";\n");
             }
             sb.append("        ").append(classSimpleName).append(" instance;\n");
@@ -1750,7 +1838,7 @@ final class MappingCodeGenerator {
             int slot = 0;
             for (var prop : pojoPositional) {
                 String statement = pojoWriteStatement(prop,
-                        buildExtraction(prop, "_o.valueAt(" + (slot++) + ")"));
+                        buildExtraction(prop, "_o.valueAt(" + (slot++) + ")", typeRefs));
                 sb.append("                ").append(statement).append("\n");
             }
             sb.append("                return instance;\n");
@@ -1778,7 +1866,7 @@ final class MappingCodeGenerator {
             if (prop.hasJqField()) {
                 // Custom @JqField expression: absence is unprovable, keep the program
                 String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
-                writeExpr = buildExtraction(prop, apply);
+                writeExpr = buildExtraction(prop, apply, typeRefs);
                 optVar = null;
             } else {
                 // Single lookup: tryGet distinguishes absent keys (skip, keep
@@ -1792,7 +1880,7 @@ final class MappingCodeGenerator {
                     sb.append("        if (").append(optVar).append(".isEmpty()) ").append(optVar)
                       .append(" = input.tryGet(\"").append(escapeJava(alias)).append("\");\n");
                 }
-                writeExpr = buildExtraction(prop, optVar + ".get()");
+                writeExpr = buildExtraction(prop, optVar + ".get()", typeRefs);
             }
 
             String statement = pojoWriteStatement(prop, writeExpr);
@@ -1821,7 +1909,7 @@ final class MappingCodeGenerator {
         }
 
         if (builder != null) {
-            emitPojoBuilderBlock(sb, classSimpleName, properties, builder);
+            emitPojoBuilderBlock(sb, classSimpleName, properties, builder, typeRefs);
         }
 
         if (anyInfo.hasSetter()) {
@@ -2216,7 +2304,8 @@ final class MappingCodeGenerator {
     }
 
     /** Build a type-coerced extraction expression for a POJO field. */
-    private static String buildExtraction(JqMapperProcessor.PropertyInfo prop, String apply) {
+    private static String buildExtraction(JqMapperProcessor.PropertyInfo prop, String apply,
+            java.util.Map<String, String> typeRefs) {
         // Custom converter takes priority (mirrors record generateExtraction)
         if (prop.converterClass() != null) {
             return "(" + prop.typeName() + ") " + prop.converterField()
@@ -2234,44 +2323,45 @@ final class MappingCodeGenerator {
                     + formatConst(prop.name()) + ")";
         }
         String typeName = prop.typeName();
+        // Boxed scalars bind through the small null-preserving helpers (same
+        // semantics as the shared convert path, below the inline budget).
         return switch (typeName) {
             case "java.lang.String" -> "asStringChecked(" + apply + ")";
-            case "int" -> "asIntChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"int\"))";
-            case "java.lang.Integer" -> boxedScalarExpr(apply, "Integer", "INT");
-            case "long" -> "asLongChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"long\"))";
-            case "java.lang.Long" -> boxedScalarExpr(apply, "Long", "LONG");
-            case "double" -> "asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"double\"))";
-            case "java.lang.Double" -> boxedScalarExpr(apply, "Double", "DOUBLE");
-            case "float" -> "(float) asDoubleChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"float\"))";
-            case "java.lang.Float" -> boxedScalarExpr(apply, "Float", "FLOAT");
-            case "boolean" -> "asBooleanChecked(requireScalar(" + apply + ", JqValue.Type.BOOLEAN, \"boolean\"))";
-            case "java.lang.Boolean" -> boxedScalarExpr(apply, "Boolean", "BOOLEAN");
-            case "short" -> "asShortChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"short\"))";
-            case "java.lang.Short" -> boxedScalarExpr(apply, "Short", "SHORT");
-            case "byte" -> "asByteChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"byte\"))";
-            case "java.lang.Byte" -> boxedScalarExpr(apply, "Byte", "BYTE");
-            case "char" ->
-                "asCharChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"char\"))";
-            case "java.lang.Character" -> boxedScalarExpr(apply, "Character", "CHAR");
-            case "java.math.BigDecimal" -> "asBigDecimalChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigDecimal\"))";
-            case "java.math.BigInteger" -> "asBigIntegerChecked(requireScalar(" + apply + ", JqValue.Type.NUMBER, \"BigInteger\"))";
-            case "java.util.UUID" -> "asUuidChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"UUID\"))";
-            case "java.net.URI" -> "asUriChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"URI\"))";
-            case "java.net.URL" -> "asUrlChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"URL\"))";
-            case "java.time.Instant" -> "asInstantChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Instant\"))";
-            case "java.time.LocalDate" -> "asLocalDateChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"LocalDate\"))";
-            case "java.time.LocalTime" -> "asLocalTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"LocalTime\"))";
-            case "java.time.LocalDateTime" -> "asLocalDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"LocalDateTime\"))";
-            case "java.time.OffsetDateTime" -> "asOffsetDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"OffsetDateTime\"))";
-            case "java.time.ZonedDateTime" -> "asZonedDateTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZonedDateTime\"))";
-            case "java.time.Duration" -> "asDurationChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Duration\"))";
-            case "java.time.Period" -> "asPeriodChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Period\"))";
-            case "java.time.Year" -> "asYearChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"Year\"))";
-            case "java.time.YearMonth" -> "asYearMonthChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"YearMonth\"))";
-            case "java.time.MonthDay" -> "asMonthDayChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"MonthDay\"))";
-            case "java.time.OffsetTime" -> "asOffsetTimeChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"OffsetTime\"))";
-            case "java.time.ZoneId" -> "asZoneIdChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZoneId\"))";
-            case "java.time.ZoneOffset" -> "asZoneOffsetChecked(requireScalar(" + apply + ", JqValue.Type.STRING, \"ZoneOffset\"))";
+            case "int" -> "asIntChecked(" + gate(apply, "JqValue.Type.NUMBER", "int") + ")";
+            case "java.lang.Integer" -> "asIntegerChecked(" + apply + ")";
+            case "long" -> "asLongChecked(" + gate(apply, "JqValue.Type.NUMBER", "long") + ")";
+            case "java.lang.Long" -> "asLongBoxedChecked(" + apply + ")";
+            case "double" -> "asDoubleChecked(" + gate(apply, "JqValue.Type.NUMBER", "double") + ")";
+            case "java.lang.Double" -> "asDoubleBoxedChecked(" + apply + ")";
+            case "float" -> "(float) asDoubleChecked(" + gate(apply, "JqValue.Type.NUMBER", "float") + ")";
+            case "java.lang.Float" -> "asFloatBoxedChecked(" + apply + ")";
+            case "boolean" -> "asBooleanChecked(" + gate(apply, "JqValue.Type.BOOLEAN", "boolean") + ")";
+            case "java.lang.Boolean" -> "asBooleanBoxedChecked(" + apply + ")";
+            case "short" -> "asShortChecked(" + gate(apply, "JqValue.Type.NUMBER", "short") + ")";
+            case "java.lang.Short" -> "asShortBoxedChecked(" + apply + ")";
+            case "byte" -> "asByteChecked(" + gate(apply, "JqValue.Type.NUMBER", "byte") + ")";
+            case "java.lang.Byte" -> "asByteBoxedChecked(" + apply + ")";
+            case "char" -> "asCharChecked(" + gate(apply, "JqValue.Type.STRING", "char") + ")";
+            case "java.lang.Character" -> "asCharacterChecked(" + apply + ")";
+            case "java.math.BigDecimal" -> "asBigDecimalChecked(" + apply + ")";
+            case "java.math.BigInteger" -> "asBigIntegerChecked(" + apply + ")";
+            case "java.util.UUID" -> "asUuidChecked(" + apply + ")";
+            case "java.net.URI" -> "asUriChecked(" + apply + ")";
+            case "java.net.URL" -> "asUrlChecked(" + apply + ")";
+            case "java.time.Instant" -> "asInstantChecked(" + apply + ")";
+            case "java.time.LocalDate" -> "asLocalDateChecked(" + apply + ")";
+            case "java.time.LocalTime" -> "asLocalTimeChecked(" + apply + ")";
+            case "java.time.LocalDateTime" -> "asLocalDateTimeChecked(" + apply + ")";
+            case "java.time.OffsetDateTime" -> "asOffsetDateTimeChecked(" + apply + ")";
+            case "java.time.ZonedDateTime" -> "asZonedDateTimeChecked(" + apply + ")";
+            case "java.time.Duration" -> "asDurationChecked(" + apply + ")";
+            case "java.time.Period" -> "asPeriodChecked(" + apply + ")";
+            case "java.time.Year" -> "asYearChecked(" + apply + ")";
+            case "java.time.YearMonth" -> "asYearMonthChecked(" + apply + ")";
+            case "java.time.MonthDay" -> "asMonthDayChecked(" + apply + ")";
+            case "java.time.OffsetTime" -> "asOffsetTimeChecked(" + apply + ")";
+            case "java.time.ZoneId" -> "asZoneIdChecked(" + apply + ")";
+            case "java.time.ZoneOffset" -> "asZoneOffsetChecked(" + apply + ")";
             default -> {
                 if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue") || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
@@ -2287,7 +2377,7 @@ final class MappingCodeGenerator {
                 // generic (List/Map/Set/Optional/...) since the POJO path has
                 // no per-container branches; the runtime binds them from the
                 // captured Type exactly like the reflection path.
-                yield "mapper.fromJqValue(" + apply + ", " + typeLiteral(typeName) + ")";
+                yield "mapper.fromJqValue(" + apply + ", " + typeLiteral(typeName, typeRefs) + ")";
             }
         };
     }
@@ -2314,7 +2404,8 @@ final class MappingCodeGenerator {
      */
     private static void emitPojoBuilderBlock(StringBuilder sb, String classSimpleName,
                                              List<JqMapperProcessor.PropertyInfo> properties,
-                                             JqMapperProcessor.BuilderInfo builder) {
+                                             JqMapperProcessor.BuilderInfo builder,
+                                             java.util.Map<String, String> typeRefs) {
         var byJson = new java.util.HashMap<String, JqMapperProcessor.BuilderFieldInfo>();
         for (var b : builder.bound()) byJson.put(b.jsonName(), b);
         for (var prop : properties) {
@@ -2325,13 +2416,13 @@ final class MappingCodeGenerator {
             String optVar;
             if (prop.hasJqField()) {
                 String apply = "P_" + prop.name().toUpperCase() + ".apply(input)";
-                writeExpr = buildExtraction(prop, apply);
+                writeExpr = buildExtraction(prop, apply, typeRefs);
                 optVar = null;
             } else {
                 optVar = "_v_" + prop.name();
                 sb.append("        var ").append(optVar).append(" = input.tryGet(K_")
                   .append(prop.name().toUpperCase()).append(");\n");
-                writeExpr = buildExtraction(prop, optVar + ".get()");
+                writeExpr = buildExtraction(prop, optVar + ".get()", typeRefs);
             }
             String invoke = b.isVoid()
                     ? "_b." + b.binderName() + "(" + writeExpr + ")"
