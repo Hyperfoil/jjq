@@ -63,6 +63,29 @@ final class IdentityScope {
     }
 
     /**
+     * Enter a scope unless one is already active. Returns the scope the
+     * caller must close, or {@code null} when the current thread already
+     * runs inside an operation: nested calls then share the ambient scope,
+     * which is exactly what nested {@link #enter()} calls did — the scope
+     * object was always shared down the call chain, so only the depth
+     * bookkeeping and the try/finally are skipped. Exceptions still unwind
+     * to the owning call's {@code close()}, and the scope stays active
+     * throughout.
+     *
+     * @return the scope to close, or null when the ambient scope covers the call
+     */
+    static IdentityScope enterOwned() {
+        IdentityScope scope = CURRENT.get();
+        if (scope != null && scope.depth > 0) return null; // nested
+        if (scope == null) {
+            scope = new IdentityScope();
+            CURRENT.set(scope);
+        }
+        scope.depth++;
+        return scope;
+    }
+
+    /**
      * Leave a scope: the outermost close drops the maps (nested calls only
      * decrement). The scope object stays in the {@code ThreadLocal} for the
      * next operation — depth is back at zero and the maps are null, so no

@@ -399,7 +399,10 @@ public final class JqMapper {
      * @throws JqMapperException if mapping fails (type not a record, conversion error, etc.)
      */
     public <T> T fromJqValue(JqValue value, Class<T> type) {
-        IdentityScope scope = IdentityScope.enter();
+        // Nested calls (collection elements, nested records) share the
+        // ambient scope: skip the depth bookkeeping the owner already does.
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) return fromJqValueInner(value, type);
         try {
             return fromJqValueInner(value, type);
         } finally {
@@ -550,7 +553,8 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public <T> T fromJqValue(JqValue value, Type type) {
-        IdentityScope scope = IdentityScope.enter();
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) return fromJqValueInner(value, type);
         try {
             return fromJqValueInner(value, type);
         } finally {
@@ -603,7 +607,8 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public JqValue toJqValue(Object value) {
-        IdentityScope scope = IdentityScope.enter();
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) return toJqValueInner(value);
         try {
             return toJqValueInner(value);
         } finally {
@@ -640,26 +645,33 @@ public final class JqMapper {
     @SuppressWarnings("unchecked")
     public String toJson(Object value) {
         if (value == null) return "null";
-        IdentityScope scope = IdentityScope.enter();
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) return toJsonInner(value);
         try {
-            if (value.getClass().isArray()) {
-                StringBuilder sb = JqValues.acquireSerializerBuffer();
-                toJqValue(value).appendTo(sb);
-                return JqValues.releaseSerializerBuffer(sb);
-            }
-            Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
-            if (usesBufferedJsonWriter(mapping)) {
-                try (CharOutput out = CharOutput.acquire()) {
-                    mapping.appendJson(value, out, this);
-                    return out.toString();
-                }
-            }
-            StringBuilder sb = JqValues.acquireSerializerBuffer();
-            mapping.appendJson(value, sb, this);
-            return JqValues.releaseSerializerBuffer(sb);
+            return toJsonInner(value);
         } finally {
             scope.close();
         }
+    }
+
+    /** Scope-owned body of {@link #toJson(Object)}. */
+    @SuppressWarnings("unchecked")
+    private String toJsonInner(Object value) {
+        if (value.getClass().isArray()) {
+            StringBuilder sb = JqValues.acquireSerializerBuffer();
+            toJqValue(value).appendTo(sb);
+            return JqValues.releaseSerializerBuffer(sb);
+        }
+        Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+        if (usesBufferedJsonWriter(mapping)) {
+            try (CharOutput out = CharOutput.acquire()) {
+                mapping.appendJson(value, out, this);
+                return out.toString();
+            }
+        }
+        StringBuilder sb = JqValues.acquireSerializerBuffer();
+        mapping.appendJson(value, sb, this);
+        return JqValues.releaseSerializerBuffer(sb);
     }
 
     private static boolean usesBufferedJsonWriter(Mapping<?> mapping) {
@@ -669,6 +681,16 @@ public final class JqMapper {
     /** Explicit buffered output, using a compatibility bridge for legacy writers. */
     public String toJsonBuffered(Object value) {
         if (value == null) return "null";
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) return toJsonBufferedInner(value);
+        try {
+            return toJsonBufferedInner(value);
+        } finally {
+            scope.close();
+        }
+    }
+
+    private String toJsonBufferedInner(Object value) {
         try (CharOutput out = CharOutput.acquire()) {
             appendJson(value, out);
             return out.toString();
@@ -677,6 +699,19 @@ public final class JqMapper {
 
     /** Provisional #207 Writer route; never closes the caller's Writer. */
     public void writeJsonBuffered(Object value, java.io.Writer writer) throws java.io.IOException {
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) {
+            writeJsonBufferedInner(value, writer);
+            return;
+        }
+        try {
+            writeJsonBufferedInner(value, writer);
+        } finally {
+            scope.close();
+        }
+    }
+
+    private void writeJsonBufferedInner(Object value, java.io.Writer writer) throws java.io.IOException {
         try (CharOutput out = CharOutput.acquire()) {
             appendJson(value, out);
             out.writeTo(writer);
@@ -686,17 +721,26 @@ public final class JqMapper {
     /** Append through an opted-in char writer, or preserve the legacy writer through a bridge. */
     @SuppressWarnings("unchecked")
     public void appendJson(Object value, CharOutput out) {
-        IdentityScope scope = IdentityScope.enter();
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) {
+            appendJsonInner(value, out);
+            return;
+        }
         try {
-            if (value == null) out.append("null");
-            else if (value.getClass().isArray()) toJqValue(value).appendTo(out);
-            else {
-                Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
-                if (usesBufferedJsonWriter(mapping)) mapping.appendJson(value, out, this);
-                else LegacyJsonOutput.append(mapping, value, out, this);
-            }
+            appendJsonInner(value, out);
         } finally {
             scope.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendJsonInner(Object value, CharOutput out) {
+        if (value == null) out.append("null");
+        else if (value.getClass().isArray()) toJqValue(value).appendTo(out);
+        else {
+            Mapping<Object> mapping = (Mapping<Object>) getMapping(value.getClass());
+            if (usesBufferedJsonWriter(mapping)) mapping.appendJson(value, out, this);
+            else LegacyJsonOutput.append(mapping, value, out, this);
         }
     }
 
@@ -728,7 +772,11 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public void appendJson(Object value, StringBuilder sb) {
-        IdentityScope scope = IdentityScope.enter();
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) {
+            appendJsonInner(value, sb);
+            return;
+        }
         try {
             appendJsonInner(value, sb);
         } finally {
@@ -759,7 +807,11 @@ public final class JqMapper {
      */
     @SuppressWarnings("unchecked")
     public void appendJsonBytes(Object value, BytOutput out) {
-        IdentityScope scope = IdentityScope.enter();
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) {
+            appendJsonBytesInner(value, out);
+            return;
+        }
         try {
             appendJsonBytesInner(value, out);
         } finally {
