@@ -285,6 +285,12 @@ With the default `REJECT` policy (or `KEEP_LAST`), `applyStrict` always
 composes a full strict parse — duplicate detection requires touching
 every key.
 
+**Optional SIMD acceleration** — adding the `jjq-vector` module (JDK 27+)
+and the `--add-modules jdk.incubator.vector` JVM flag speeds up subtree
+skipping in both variants by 5.9–8.2x with zero code changes (see
+[`jjq-vector/README.md`](jjq-vector/README.md)). Without it, everything
+runs on the scalar SWAR path.
+
 ### Parse from InputStream
 
 ```java
