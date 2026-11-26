@@ -185,6 +185,65 @@ public final class JqProgram {
     }
 
     /**
+     * Execute this program with strict semantics directly against UTF-8
+     * JSON bytes, avoiding full tree materialization when possible.
+     *
+     * <p>Behavior is identical to {@code apply(JqValues.parseStrict(json,
+     * options))} — including thrown exceptions — by construction: any
+     * input the fast path cannot prove strict-valid falls back to a full
+     * strict parse. Unlike the lenient {@link #apply(byte[])}, the whole
+     * document is validated (no early stop), so malformed input anywhere
+     * still reports the exact strict error.</p>
+     *
+     * <p>The on-demand fast path (skip subtrees, materialize only matches)
+     * engages only when the duplicate-key policy is
+     * {@link io.hyperfoil.tools.jjq.value.ParseOptions.DuplicatePolicy#TRUST_UNIQUE}
+     * — the caller's guarantee that keys are unique, which the parser itself
+     * already treats as lenient-identical. With the default REJECT policy
+     * (or KEEP_LAST), every call composes a full strict parse.</p>
+     *
+     * @param json    UTF-8 encoded JSON bytes
+     * @param options strict parsing options
+     * @return the first result (or {@link JqNull#NULL} if no output)
+     */
+    public JqValue applyStrict(byte[] json, io.hyperfoil.tools.jjq.value.ParseOptions options) {
+        return applyStrict(json, 0, json.length, options);
+    }
+
+    /**
+     * Execute with strict semantics against a UTF-8 JSON byte slice.
+     *
+     * @param json    UTF-8 encoded JSON buffer
+     * @param offset  start offset (inclusive)
+     * @param length  slice length in bytes
+     * @param options strict parsing options
+     * @return the first result (or {@link JqNull#NULL} if no output)
+     * @see #applyStrict(byte[], io.hyperfoil.tools.jjq.value.ParseOptions)
+     */
+    public JqValue applyStrict(byte[] json, int offset, int length,
+                               io.hyperfoil.tools.jjq.value.ParseOptions options) {
+        java.util.Objects.requireNonNull(json, "json");
+        java.util.Objects.requireNonNull(options, "options");
+        java.util.Objects.checkFromIndexSize(offset, length, json.length);
+        if (shape != ProgramShape.IDENTITY
+                && bytePathPlan != null
+                && options.duplicatePolicy()
+                        == io.hyperfoil.tools.jjq.value.ParseOptions.DuplicatePolicy.TRUST_UNIQUE) {
+            try {
+                JqValue extracted = bytePathPlan.execute(json, offset, length);
+                if (extracted != null
+                        && JqValues.strictValidate(json, offset, length, options)) {
+                    return extracted;
+                }
+            } catch (RuntimeException | StackOverflowError ignored) {
+                // Gate only: the full strict parse below produces the exact
+                // result or exception for whatever made the fast path fail.
+            }
+        }
+        return apply(JqValues.parseStrict(json, offset, length, options));
+    }
+
+    /**
      * Execute and return all results as a list.
      * Use this when the program may produce multiple outputs (e.g. {@code .[]}).
      * For IDENTITY and FIELD_ACCESS shapes, bypasses the VM entirely.

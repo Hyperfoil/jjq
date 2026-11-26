@@ -1448,6 +1448,14 @@ public final class JqValues {
     }
 
     /**
+     * Strict-parse a region of a UTF-8 byte array. Same grammar and options
+     * as {@link #parseStrict(byte[], ParseOptions)}.
+     */
+    public static JqValue parseStrict(byte[] bytes, int offset, int length, ParseOptions options) {
+        return parseStrictBytes(bytes, offset, length, null, options, null);
+    }
+
+    /**
      * Strict parse of a UTF-8 JSON byte array with a caller-compiled key
      * schema: keys matching the schema by bytes reuse its canonical
      * instances with no hash computation and no table probes; any
@@ -3019,6 +3027,11 @@ public final class JqValues {
                                               String[] outKeys, byte[][] srcFields) {
         return JsonByteSkipper.extractObjectFields(bytes, offset, length,
                 prefixFields, prefixIndices, outKeys, srcFields);
+    }
+
+    /** @hidden */
+    public static boolean strictValidate(byte[] bytes, int offset, int length, ParseOptions options) {
+        return StrictByteValidator.validate(bytes, offset, length, options);
     }
 
     static JqValue parseValueBytes(JsonByteReader r, int depth) {
