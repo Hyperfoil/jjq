@@ -29,20 +29,94 @@ no fixed overhead when it cannot help.
 
 ## Using it
 
-Add the module and the JVM flag — **no code changes**. The kernel registers
-itself via `META-INF/services` and `jjq-core` discovers it through
-`ServiceLoader` on first use:
+Add the module as a dependency and start the JVM with the incubator
+module flag — **no code changes**. The kernel registers itself via
+`META-INF/services` and `jjq-core` discovers it through `ServiceLoader`
+on first use.
+
+### Maven setup
+
+Add the dependency next to `jjq-core`:
 
 ```xml
-<dependency>
-    <groupId>io.hyperfoil.tools</groupId>
-    <artifactId>jjq-vector</artifactId>
-    <version>0.2.5-SNAPSHOT</version>
-</dependency>
+<dependencies>
+    <dependency>
+        <groupId>io.hyperfoil.tools</groupId>
+        <artifactId>jjq-core</artifactId>
+        <version>0.2.5-SNAPSHOT</version>
+    </dependency>
+    <dependency>
+        <groupId>io.hyperfoil.tools</groupId>
+        <artifactId>jjq-vector</artifactId>
+        <version>0.2.5-SNAPSHOT</version>
+    </dependency>
+</dependencies>
 ```
+
+Your build must run on **JDK 27+** — the module's class files are
+release 27, so older JDKs fail to resolve it. (The jjq reactor itself
+gates the module behind a `[27,)` profile; consumers just need the
+dependency and a new enough toolchain.)
+
+The Vector API is an incubator module, so every JVM that loads the
+kernel needs `--add-modules jdk.incubator.vector`. Wire the flag into
+each place a JVM starts:
+
+```xml
+<build>
+    <plugins>
+        <!-- Unit / integration tests -->
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+                <argLine>--add-modules jdk.incubator.vector</argLine>
+            </configuration>
+        </plugin>
+
+        <!-- Running the app with mvn exec:java -->
+        <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <configuration>
+                <executable>java</executable>
+                <arguments>
+                    <argument>--add-modules=jdk.incubator.vector</argument>
+                    <argument>-jar</argument>
+                    <argument>target/app.jar</argument>
+                </arguments>
+            </configuration>
+        </plugin>
+    </plugins>
+</build>
+```
+
+For a plain `java` launch (scripts, Docker ENTRYPOINT, service
+definitions):
 
 ```bash
 java --add-modules jdk.incubator.vector -jar app.jar
+```
+
+Forgetting the flag is safe: the module's classes fail to load,
+`jjq-core`'s `ServiceLoader` lookup catches the failure, and the
+scalar path runs unchanged — you just don't get the speedup.
+
+### Gradle
+
+```groovy
+dependencies {
+    implementation 'io.hyperfoil.tools:jjq-core:0.2.5-SNAPSHOT'
+    implementation 'io.hyperfoil.tools:jjq-vector:0.2.5-SNAPSHOT'
+}
+
+test {
+    jvmArgs '--add-modules=jdk.incubator.vector'
+}
+
+run {
+    jvmArgs '--add-modules=jdk.incubator.vector'
+}
 ```
 
 Everything that worked before keeps working, identically: the on-demand
