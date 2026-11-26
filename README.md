@@ -9,7 +9,8 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 - **Full jq syntax** — pipes, field access, iteration, array/object construction, string interpolation, reduce, foreach, try-catch, label-break, destructuring bind, function definitions, and more
 - **168 builtin functions** (195 name/arity registrations, as of 2026-09-12 — see `BuiltinRegistry.java`) — comprehensive coverage of jq's standard library including math, string, array, object, path, date/time, and format operations
 - **Bytecode VM** — fused iteration opcodes, whole-program shape detection, constant folding, peephole optimization, pre-allocated stacks
-- **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing, field name interning with hash mixing. 1.5-2.3x faster than Jackson 3 on 1MB inputs; 1.5x faster on 14MB production data
+- **Fast JSON parsing** — direct digit accumulation, deferred string values, byte[]-based parsing, field name interning with 64-bit word hashing. 1.7-2.6x faster than Jackson 3 on 1MB inputs; 2.5x faster on 14MB production data
+- **On-demand extraction from bytes** — `JqProgram.apply(byte[])` skips unparsed subtrees and materializes only matched values: `.user` on a 14MB upload in ~14 ns with 32 B of allocation (vs ~10 ms and 12 MB for a full parse). Strict variant (`applyStrict`) validates the whole document with identical semantics
 - **Zero-allocation queries** — field access, deep field chains, keys, and length on pre-parsed documents produce zero garbage
 - **Thread-safe** — compiled programs are immutable and can be shared across threads
 - **YAML support** — `jjq-yaml` parses and emits YAML with a dependency-free native parser, with optional `jjq-mapper` integration for YAML → POJO mapping via the `YamlMapper` facade
@@ -40,7 +41,7 @@ jjq provides a complete jq filter engine with zero native dependencies, making i
 | `jjq-jsonata` | Compile-time [JSONata](https://jsonata.org)-to-jq transpiler — 468/1219 conformance tests passing |
 | `jjq-jsonpath` | SQL/JSON path to jq converter with lax/strict mode support — 300/558 conformance (error agreement included) |
 | `jjq-cli` | Command-line interface (zero dependencies, GraalVM native-image ready) |
-| `jjq-vector` | Experimental explicit-Vector-API kernels — JDK 27+, strictly opt-in, scalar fallback always present |
+| `jjq-vector` | Optional SIMD kernels (JDK 27+) — Vector API container skipper for on-demand extraction, ServiceLoader-discovered, scalar fallback always present |
 | `jjq-test-suite` | 466 conformance tests + 525 upstream jq tests (96.0% passing) |
 | `jjq-benchmark` | JMH benchmarks vs Jackson 3.2.3: parsing, serialization, mapper, allocation profiling |
 
@@ -152,6 +153,8 @@ JqValues.parse(inputStream);             // InputStream (throws IOException)
 JqValues.parseStrict(jsonString);        // Rejects trailing content (for fromjson)
 JqValues.parseStrict(jsonString,         // + depth limit, BOM/NUL policy
     ParseOptions.defaults().withMaxDepth(128));
+JqValues.parseStrict(bytes, offset,      // strict byte[] slice
+    length, ParseOptions.defaults());
 JqValues.parseAll(jsonString);           // JSONL / multi-document streams
 ```
 
@@ -233,6 +236,54 @@ for (int i = 0; i < n; i++) {
 Optional<JqValue> maybe = config.tryGet("user");  // empty if absent
 Optional<JqValue> present = config.tryGet("nick"); // of(JqNull.NULL) if {"nick": null}
 ```
+
+### On-demand extraction from bytes
+
+For sparse queries over large documents, `apply(byte[])` extracts matched
+values directly from raw JSON bytes — skipped subtrees are never parsed
+into `JqValue` trees:
+
+```java
+JqProgram extractUser = JqProgram.compile(".user");
+JqProgram extractMetric = JqProgram.compile(
+    "[.autobench_workload.data[0].pcp_time_series[] | .[\"mem.util.used\"]]");
+
+// 14MB document: .user in ~14 ns with 32 B allocation
+// (eager parse + apply: ~10 ms and 12 MB of tree)
+JqValue user = extractUser.apply(jsonBytes);
+JqValue metric = extractMetric.apply(jsonBytes);   // ~0.3 ms, 21.7 KB
+
+// Region overload for buffer slices
+JqValue user2 = extractUser.apply(jsonBytes, offset, length);
+```
+
+Supported shapes (recognized at compile time): field access, chained
+field/index paths (`.a.b[0].c`), array field collection
+(`[.items[] | .field]`, multi-step tails), and flat object projections
+(`{a, b}` / `.cfg | {a, b}`). Anything else — plus escaped wire keys or
+malformed input — falls back transparently to
+`apply(JqValues.parse(json))`, so results and errors always match the
+eager path. Lenient semantics: extraction stops once the matches are
+found (trailing bytes are not validated).
+
+**Strict variant** — `applyStrict(byte[], ParseOptions)` validates the
+whole document and behaves exactly like
+`apply(JqValues.parseStrict(json, options))`, including thrown errors.
+The skip-and-materialize fast path engages when the duplicate-key policy
+is `TRUST_UNIQUE` (the caller's uniqueness guarantee):
+
+```java
+ParseOptions options = ParseOptions.defaults()
+    .withDuplicatePolicy(ParseOptions.DuplicatePolicy.TRUST_UNIQUE);
+
+// 14MB document, whole-document strict validation included: ~5.2 ms
+// (eager strict parse + apply: ~12.5 ms and 12 MB of tree)
+JqValue user = extractUser.applyStrict(jsonBytes, options);
+```
+
+With the default `REJECT` policy (or `KEEP_LAST`), `applyStrict` always
+composes a full strict parse — duplicate detection requires touching
+every key.
 
 ### Parse from InputStream
 
@@ -568,36 +619,51 @@ echo '{"spec":{"replicas":2}}' | jjq --output-format yaml '.'
 
 ### JSON Parsing: jjq vs Jackson 3
 
-Parsing throughput on `byte[]` inputs (ms/op, lower is better). Measured with JMH, 3 forks, 5+5 iterations, JDK 25.0.4 Temurin. Jackson version: 3.2.3.
+Parsing throughput on `byte[]` inputs (ms/op, lower is better). Measured with JMH, 3 forks, 5+5 iterations, JDK 27 Temurin. Jackson version: 3.2.3.
 
 | Input | jjq (byte[]) | Jackson 3 (byte[]) | jjq speedup |
 |-------|-------------|-------------------|-------------|
-| flat 1MB | **1.68 ms** | 2.73 ms | **1.6x** |
-| strings 1MB | **0.82 ms** | 1.84 ms | **2.2x** |
-| numbers 1MB | **1.84 ms** | 3.24 ms | **1.8x** |
-| nested 1MB | **1.70 ms** | 2.61 ms | **1.5x** |
-| **Production 14MB** | **14.2 ms** | **21.6 ms** | **1.5x** |
+| flat 1MB | **1.80 ms** | 3.03 ms | **1.7x** |
+| strings 1MB | **0.78 ms** | 2.00 ms | **2.6x** |
+| numbers 1MB | **1.84 ms** | 3.58 ms | **1.9x** |
+| nested 1MB | **1.50 ms** | 2.84 ms | **1.9x** |
+| **Production 14MB** | **9.66 ms** | 23.69 ms | **2.5x** |
 
-jjq's byte[] parser is **1.5-2.2x faster than Jackson 3** across all input types. The biggest win is on string-heavy JSON (2.2x) where deferred string construction avoids allocating Java Strings for untouched values. Field name interning with hash mixing enables zero-allocation queries on the parsed document.
+jjq's byte[] parser is **1.7-2.6x faster than Jackson 3** across all input types. The biggest win is on string-heavy JSON (2.6x) where deferred string construction avoids allocating Java Strings for untouched values. Field name interning with 64-bit word hashing enables zero-allocation queries on the parsed document. Strict parsing (full-document UTF-8 and grammar validation) parses the same 14MB file in 14.4 ms.
+
+### On-demand extraction from bytes
+
+`JqProgram.apply(byte[])` on the 14MB production upload (351K nodes) versus eager `parse(byte[])` + `apply`. JMH, 3 forks, JDK 27 Temurin:
+
+| Query | Eager parse + apply | `apply(byte[])` | Speedup | Allocation |
+|-------|--------------------|-----------------|---------|------------|
+| `.user` | 10.6 ms | **0.014 us** | **734,000x** | 12.08 MB → **32 B** |
+| `{user, uuid, run_id, start_time, end_time}` | 10.7 ms | **0.14 us** | **77,000x** | 12.08 MB → **240 B** |
+| `.rhivos_config \| {build, model, kernel, architecture}` | 10.4 ms | **22 us** | **465x** | 12.08 MB → **209 B** |
+| `.autobench_workload.data[0].results.autobench_results` | 10.2 ms | **112 us** | **91x** | 12.08 MB → **3.7 KB** |
+| `[.stressng_workload.data[] \| .sample_uuid]` | 10.2 ms | **109 us** | **93x** | 12.08 MB → **342 B** |
+| `[.pcp_time_series[] \| .["mem.util.used"]]` (502 entries) | 10.1 ms | **286 us** | **35x** | 12.08 MB → **21.7 KB** |
+
+Skipped subtrees are never parsed into `JqValue` trees — only the matched values materialize. The same queries through `applyStrict(bytes, TRUST_UNIQUE)` (whole-document strict validation included) run in **~5.2 ms**, a **2.2-2.6x** speedup over eager strict parse + apply with the same near-zero allocation.
 
 ### Production Query Execution on 14MB Document
 
-Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects). Times via `JqProgram.apply()` — the library API path including compiled program dispatch:
+Query execution on a pre-parsed 14MB production upload (351K nodes, 3,668 objects). Times via `JqProgram.apply()` — the library API path including compiled program dispatch. JMH, 3 forks, JDK 27 Temurin:
 
 | Query | Expression | Time | Allocation |
 |-------|-----------|------|------------|
-| Top-level field | `.user` | **3.1 ns** | **0 B** |
-| Deep field (4 levels) | `.autobench_workload.data[0].results` | 63 ns | 0 B |
-| Keys (127-key object) | `.data[0].pcp_time_series[0] \| keys` | 69 ns | 0 B |
-| Array length | `.data[0].pcp_time_series \| length` | 64 ns | 0 B |
-| PCP entry (127-key object) | `.data[0].pcp_time_series[0]` | 69 ns | 0 B |
-| Object construction | `{user, uuid, run_id, start_time, end_time}` | 95 ns | 168 B |
-| Config extract | `.rhivos_config \| {build, model, kernel, architecture}` | 105 ns | 144 B |
-| Iterate + extract | `[.stressng_workload.data[] \| .sample_uuid]` | 150 ns | 80 B |
-| Extract metric (502 entries) | `[.pcp_time_series[] \| .["mem.util.used"]]` | 13 us | 2.1 KB |
-| Round-trip (extract + serialize) | `.user` | 15 ns | 56 B |
+| Top-level field | `.user` | **1.6 ns** | **0 B** |
+| Deep field (4 levels) | `.autobench_workload.data[0].results` | 46 ns | 0 B |
+| Deep field (5 levels) | `.autobench_workload.data[0].results.autobench_results` | 56 ns | 0 B |
+| Keys (127-key object) | `.data[0].pcp_time_series[0] \| keys` | 62 ns | 0 B |
+| Array length | `.data[0].pcp_time_series \| length` | 52 ns | 0 B |
+| PCP entry (127-key object) | `.data[0].pcp_time_series[0]` | 55 ns | 0 B |
+| Object construction | `{user, uuid, run_id, start_time, end_time}` | 81 ns | 112 B |
+| Config extract | `.rhivos_config \| {build, model, kernel, architecture}` | 85 ns | 112 B |
+| Iterate + extract | `[.stressng_workload.data[] \| .sample_uuid]` | 51 ns | 64 B |
+| Extract metric (502 entries) | `[.pcp_time_series[] \| .["mem.util.used"]]` | 1.5 us | 2.1 KB |
 
-Five of the ten production benchmarks above achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation. Single field access bypasses the VM entirely via inlined fast path detection.
+Six of the ten production benchmarks above achieve **zero allocation per query** — the result comes directly from the pre-parsed document with no object creation. Single field access bypasses the VM entirely via inlined fast path detection.
 
 ### Record Data Binding: jjq-mapper vs Jackson 3
 
@@ -695,7 +761,11 @@ All JqValue types implement `Serializable` for Hibernate second-level cache supp
 - **byte[]-based parser** (`JqValues.parse(byte[])`) — parses UTF-8 bytes directly, no intermediate String
 - **SWAR scanning** — finds `"` and `\` in 8 bytes per iteration using Netty-style bit manipulation
 - **Deferred string values** — string values hold source references, materialized only when accessed
-- **Field name interning** — open-addressing hash table (4096 slots, 8-probe linear probing, plus per-thread L1 with 256 slots and 2 probes) with fused SWAR+hash computation. Quad-based cache verification (1-3 int comparisons for keys <=12 bytes) with hash fast-reject. Cache hits return the same String instance without `substring()`. Pre-computed `"key":` JSON form eliminates escape scanning during serialization.
+- **Field name interning** — open-addressing hash table (4096 slots, 8-probe linear probing, plus per-thread L1 with 256 slots and 2 probes). Keys hash with a dependency-free 64-bit word hash (`fmix64` over first/last 8 bytes, length, and middle words for long keys) fused into the 8-byte SWAR delimiter scan — no serial `31*h+b` recurrence. Slots verify with `(w0, wLast)` 64-bit word comparisons plus 8-byte middle loads for keys >16 bytes. Cache hits return the same String instance without `substring()`. A lazy secondary table keyed by `String.hashCode()` keeps pre-computed `"key":` JSON forms O(1) for serialization.
+- **Vectorized schema key matching** — opt-in `CompiledKeys` parsing matches expected keys with `Arrays.equals` (C2 `vectorizedMismatch` intrinsic) plus a closing-quote check; keys containing escapable characters decline to the full path
+- **Bulk UTF-8 validation** — `Utf8.validate` resumes 32-byte SWAR ASCII skipping after multibyte sequences (5x on early-Unicode, 2.3x on mixed documents like twitter.json) while staying on the straight scalar path across dense Unicode
+- **On-demand path extraction** (`JqProgram.apply(byte[])`) — compile-time path plans (`BytePathPlan`) drive a zero-allocation SWAR skipper (`JsonByteSkipper`) that walks raw bytes, skipping unmatched strings and containers structurally and materializing only matched values. Strict variant (`applyStrict`) gates the fast path with a whole-document grammar validator (`StrictByteValidator`) that falls back to the full strict parser on any rejection, keeping results and errors identical
+- **Optional SIMD container skipper** — `jjq-vector` (JDK 27+, opt-in) registers a Vector API kernel via `ServiceLoader` that classifies quotes/backslashes/braces into bitmasks per 64-byte vector, computes the in-string mask with a prefix-XOR scan, and updates container depth in aggregate per block (5.9-8.2x over the SWAR skipper; scan rates of 12-24 GB/s). `jjq-core` stays dependency-free: without the module, the scalar path runs unchanged
 - **Direct digit accumulation** — integers and decimals parsed to `long`/`double` without `BigDecimal` or `substring()` for numbers with ≤15 significant digits
 - **Thread-local buffer reuse** — both char-based (StringBuilder) and byte-based (BytOutput) serialization buffers grow once and are reused across calls
 - **Direct byte serialization** (`JqValues.serializeToBytes(JqValue)`) — serializes directly to UTF-8 bytes without intermediate String. Deferred-bytes strings copy raw source bytes (zero encoding). Interned field names use pre-computed byte forms. Numbers serialize directly to ASCII digits.
