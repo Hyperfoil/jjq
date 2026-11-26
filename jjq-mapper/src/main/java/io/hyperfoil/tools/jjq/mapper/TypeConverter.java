@@ -752,6 +752,10 @@ public final class TypeConverter {
         if (value == null || value instanceof JqNull) return 0L;
         if (value.isContainer()) throw mismatch(JqValue.Type.NUMBER, target, value);
         if (value instanceof JqNumber n) {
+            // Long-backed numbers are exact longs by construction: skip
+            // the BigDecimal materialization (and its per-instance cache)
+            // that every fresh parse outside the value cache would pay.
+            if (n.isLongBacked()) return n.longValue();
             // Non-finite values have no integral form (jq never holds them);
             // silently yielding 0 would be a wrong value, so they mismatch.
             if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, target, value);
@@ -913,6 +917,10 @@ public final class TypeConverter {
             if (n.isNaN() || n.isInfinite()) {
                 throw mismatch(JqValue.Type.NUMBER, "BigInteger", value);
             }
+            // Long-backed: BigInteger.valueOf(long) is exactly what
+            // decimalValue().toBigIntegerExact() computes, without the
+            // BigDecimal materialization.
+            if (n.isLongBacked()) return java.math.BigInteger.valueOf(n.longValue());
             try {
                 return n.decimalValue().toBigIntegerExact();
             } catch (ArithmeticException e) {
@@ -1022,6 +1030,9 @@ public final class TypeConverter {
             }
         }
         if (value instanceof JqNumber n) {
+            // Long-backed: exactly epochToInstant(BigDecimal.valueOf(v))
+            // without the BigDecimal (seconds = v, nanos = 0).
+            if (n.isLongBacked()) return java.time.Instant.ofEpochSecond(n.longValue());
             if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "Instant", value);
             try {
                 return epochToInstant(n.decimalValue());
@@ -1113,6 +1124,10 @@ public final class TypeConverter {
         }
         if (value instanceof JqNumber n) {
             if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "OffsetDateTime", value);
+            // Long-backed: seconds = v, nanos = 0 (see coerceInstant).
+            if (n.isLongBacked()) {
+                return java.time.Instant.ofEpochSecond(n.longValue()).atOffset(java.time.ZoneOffset.UTC);
+            }
             try {
                 return epochToInstant(n.decimalValue()).atOffset(java.time.ZoneOffset.UTC);
             } catch (ArithmeticException e) {
@@ -1139,6 +1154,10 @@ public final class TypeConverter {
         }
         if (value instanceof JqNumber n) {
             if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "ZonedDateTime", value);
+            // Long-backed: seconds = v, nanos = 0 (see coerceInstant).
+            if (n.isLongBacked()) {
+                return java.time.Instant.ofEpochSecond(n.longValue()).atZone(java.time.ZoneOffset.UTC);
+            }
             try {
                 return epochToInstant(n.decimalValue()).atZone(java.time.ZoneOffset.UTC);
             } catch (ArithmeticException e) {
@@ -1165,6 +1184,9 @@ public final class TypeConverter {
         }
         if (value instanceof JqNumber n) {
             if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "Duration", value);
+            // Long-backed: seconds = v, nanos = 0 — exactly what the
+            // BigDecimal split computes, without the BigDecimal.
+            if (n.isLongBacked()) return java.time.Duration.ofSeconds(n.longValue());
             try {
                 BigDecimal decimal = n.decimalValue();
                 long seconds = decimal.setScale(0, java.math.RoundingMode.DOWN).longValueExact();
@@ -1213,6 +1235,15 @@ public final class TypeConverter {
         }
         if (value instanceof JqNumber n) {
             if (n.isNaN() || n.isInfinite()) throw mismatch(JqValue.Type.NUMBER, "Year", value);
+            // Long-backed: Math.toIntExact mirrors decimalValue().intValueExact()
+            // (both throw ArithmeticException outside int range).
+            if (n.isLongBacked()) {
+                try {
+                    return java.time.Year.of(Math.toIntExact(n.longValue()));
+                } catch (ArithmeticException | java.time.DateTimeException e) {
+                    throw mismatch(JqValue.Type.NUMBER, "Year", value);
+                }
+            }
             try {
                 return java.time.Year.of(n.decimalValue().intValueExact());
             } catch (ArithmeticException | java.time.DateTimeException e) {
