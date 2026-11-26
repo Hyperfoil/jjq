@@ -28,21 +28,35 @@ public final class Utf8 {
         int end = offset + length;
         // Tiny inputs stay on the original scalar path verbatim so its
         // compiled shape (and inline budget) does not change; larger inputs
-        // skip 16 ASCII bytes per iteration in a separate helper.
+        // use the bulk SWAR loop with tight non-ASCII runs so mixed Unicode
+        // resumes 32-byte ASCII skipping without penalizing dense Unicode.
         if (length < 64) return validateScalar(bytes, offset, end);
-        int i = offset;
-        while (i + 32 <= end) {
-            if (!SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i))
-                    || !SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i + 8))
-                    || !SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i + 16))
-                    || !SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i + 24))) break;
-            i += 32;
+        return validateBulk(bytes, offset, end);
+    }
+
+    private static int validateBulk(byte[] bytes, int i, int end) {
+        while (i < end) {
+            int b = bytes[i] & 0xFF;
+            if (b < 0x80) {
+                i++;
+                while (i + 32 <= end) {
+                    long w = SwarUtil.loadLong(bytes, i)
+                            | SwarUtil.loadLong(bytes, i + 8)
+                            | SwarUtil.loadLong(bytes, i + 16)
+                            | SwarUtil.loadLong(bytes, i + 24);
+                    if (!SwarUtil.isAscii8(w)) break;
+                    i += 32;
+                }
+                while (i + 8 <= end && SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i))) {
+                    i += 8;
+                }
+                continue;
+            }
+            int next = sequenceEnd(bytes, i, end);
+            if (next < 0) return i;
+            i = next;
         }
-        while (i + 8 <= end) {
-            if (!SwarUtil.isAscii8(SwarUtil.loadLong(bytes, i))) break;
-            i += 8;
-        }
-        return validateScalar(bytes, i, end);
+        return -1;
     }
 
     /**
