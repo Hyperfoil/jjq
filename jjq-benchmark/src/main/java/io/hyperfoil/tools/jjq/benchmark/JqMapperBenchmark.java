@@ -70,6 +70,11 @@ public class JqMapperBenchmark {
     public record GenericRecord(java.util.Map<String, Long> counts,
             java.util.Optional<Long> opt, java.util.List<String> tags) {}
 
+    /** Collection-kind fixture (reflection twin of {@link BenchmarkRecords.GenCollectionsRecord}). */
+    public record CollectionsRecord(java.util.List<String> tags,
+            java.util.List<Long> numbers, java.util.Map<String, Long> counts,
+            java.util.Optional<String> nickname) {}
+
     // ========================================================================
     //  Benchmark state
     // ========================================================================
@@ -94,6 +99,13 @@ public class JqMapperBenchmark {
     private String genericJson;
     private byte[] genericJsonBytes;
     private JqValue genericJqValue;
+
+    // Collection serialization fixtures (list-of-records, scalar lists, map, optional)
+    private BenchmarkRecords.GenOrderRecord genOrderRecord;
+    private BenchmarkRecords.GenCollectionsRecord genCollectionsRecord;
+    private CollectionsRecord collectionsRecord;
+    private String collectionsJson;
+    private byte[] collectionsJsonBytes;
 
     // Pre-parsed JqValue (for jjq pre-parsed path)
     private JqValue simpleJqValue;
@@ -157,6 +169,28 @@ public class JqMapperBenchmark {
         genericJsonBytes = genericJson.getBytes();
         genericJqValue = JqValues.parse(genericJsonBytes);
 
+        // Collection fixtures: the generated serializers route these through
+        // the tree fallback today (TypeConverter.toJqValue per field).
+        genOrderRecord = new BenchmarkRecords.GenOrderRecord("order-42", "Alice", List.of(
+                new BenchmarkRecords.Item("Widget", 9.99, 3),
+                new BenchmarkRecords.Item("Gadget", 24.99, 1),
+                new BenchmarkRecords.Item("Doohickey", 4.50, 10)));
+        genCollectionsRecord = new BenchmarkRecords.GenCollectionsRecord(
+                List.of("alpha", "beta", "gamma"),
+                java.util.List.of(1732627200000123L, 42L),
+                java.util.Map.of("a", 1732627200000123L, "b", 42L),
+                java.util.Optional.of("ann"));
+        collectionsRecord = new CollectionsRecord(
+                List.of("alpha", "beta", "gamma"),
+                java.util.List.of(1732627200000123L, 42L),
+                java.util.Map.of("a", 1732627200000123L, "b", 42L),
+                java.util.Optional.of("ann"));
+        collectionsJson = "{\"tags\":[\"alpha\",\"beta\",\"gamma\"],"
+                + "\"numbers\":[1732627200000123,42],"
+                + "\"counts\":{\"a\":1732627200000123,\"b\":42},"
+                + "\"nickname\":\"ann\"}";
+        collectionsJsonBytes = collectionsJson.getBytes();
+
         // Pre-parse for the pre-parsed benchmarks
         simpleJqValue = JqValues.parse(simpleJsonBytes);
         nestedJqValue = JqValues.parse(nestedJsonBytes);
@@ -184,6 +218,15 @@ public class JqMapperBenchmark {
         jqMapper.fromJqValue(JqValues.parse(idsReorderedJsonBytes), BenchmarkRecords.GenIdsRecord.class);
         jqMapper.fromJqValue(genericJqValue, GenericRecord.class);
         jqMapper.fromJqValue(genericJqValue, BenchmarkRecords.GenGenericRecord.class);
+        jqMapper.fromJqValue(JqValues.parse(collectionsJsonBytes), BenchmarkRecords.GenCollectionsRecord.class);
+        jqMapper.fromJqValue(JqValues.parse(collectionsJsonBytes), CollectionsRecord.class);
+        jqMapper.fromJqValue(listJqValue, BenchmarkRecords.GenOrderRecord.class);
+        // Warm the serialization paths for the collection fixtures.
+        jqMapper.toJson(genOrderRecord);
+        jqMapper.toJsonBytes(genOrderRecord);
+        jqMapper.toJson(genCollectionsRecord);
+        jqMapper.toJsonBytes(genCollectionsRecord);
+        jqMapper.toJson(collectionsRecord);
 
         // Generated mapping record instances (for serialization benchmarks)
         genSimpleRecord = new BenchmarkRecords.SimpleRecord("Alice", 30, 98.5, true, "alice@example.com");
@@ -231,7 +274,8 @@ public class JqMapperBenchmark {
                 BenchmarkRecords.Address.class, BenchmarkRecords.Item.class,
                 BenchmarkRecords.OrderRecord.class, BenchmarkRecords.SimplePojo.class,
                 BenchmarkRecords.PojoPerson.class, BenchmarkRecords.PojoAddress.class,
-                BenchmarkRecords.GenIdsRecord.class, BenchmarkRecords.GenGenericRecord.class}) {
+                BenchmarkRecords.GenIdsRecord.class, BenchmarkRecords.GenGenericRecord.class,
+                BenchmarkRecords.GenOrderRecord.class, BenchmarkRecords.GenCollectionsRecord.class}) {
             String generatedName = c.getName().replace('$', '_') + "_JqMapping";
             try {
                 Class.forName(generatedName, true, c.getClassLoader());
@@ -399,6 +443,44 @@ public class JqMapperBenchmark {
     @Benchmark
     public BenchmarkRecords.GenGenericRecord deser_generic_jjq_generated_preParsed() {
         return jqMapper.fromJqValue(genericJqValue, BenchmarkRecords.GenGenericRecord.class);
+    }
+
+    // ========================================================================
+    //  Serialization: collections (list of records, scalar lists, map, optional)
+    // ========================================================================
+
+    /** Generated: nested-record list (tree fallback today). */
+    @Benchmark
+    public String ser_order_jjq_generated() {
+        return jqMapper.toJson(genOrderRecord);
+    }
+
+    @Benchmark
+    public byte[] ser_order_jjq_generated_bytes() {
+        return jqMapper.toJsonBytes(genOrderRecord);
+    }
+
+    /** Generated: scalar lists, map and optional (tree fallback today). */
+    @Benchmark
+    public String ser_collections_jjq_generated() {
+        return jqMapper.toJson(genCollectionsRecord);
+    }
+
+    @Benchmark
+    public byte[] ser_collections_jjq_generated_bytes() {
+        return jqMapper.toJsonBytes(genCollectionsRecord);
+    }
+
+    /** Reflection control for the collections shape (unchanged code path). */
+    @Benchmark
+    public String ser_collections_jjq() {
+        return jqMapper.toJson(collectionsRecord);
+    }
+
+    /** Deser control (wave 2 changes serialization only). */
+    @Benchmark
+    public BenchmarkRecords.GenCollectionsRecord deser_collections_jjq_generated_fromBytes() {
+        return jqMapper.fromJson(collectionsJsonBytes, BenchmarkRecords.GenCollectionsRecord.class);
     }
 
     // ========================================================================

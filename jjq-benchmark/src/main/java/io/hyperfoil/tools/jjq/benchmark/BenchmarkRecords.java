@@ -66,6 +66,23 @@ public final class BenchmarkRecords {
     public record GenGenericRecord(java.util.Map<String, Long> counts,
             java.util.Optional<Long> opt, java.util.List<String> tags) {}
 
+    /**
+     * Collection-heavy fixture: nested-record list (the generated twin of
+     * the reflection {@code OrderRecord} ser rows).
+     */
+    @JqMapped
+    public record GenOrderRecord(String id, String customer, List<Item> items) {}
+
+    /**
+     * Collection-kind fixture: scalar lists, a string-keyed map and an
+     * optional — the shapes generated serializers route through the tree
+     * fallback today.
+     */
+    @JqMapped
+    public record GenCollectionsRecord(java.util.List<String> tags,
+            java.util.List<Long> numbers, java.util.Map<String, Long> counts,
+            java.util.Optional<String> nickname) {}
+
     /** Nested POJO fixture: nested values previously serialized via the tree. */
     @JqMapped
     public static class PojoAddress {
