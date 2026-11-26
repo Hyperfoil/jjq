@@ -54,20 +54,18 @@ public final class JqValues {
         final String key;
         final byte[] keyBytes;
         final int hash;
-        final int q1;
-        final int q2;
-        final int q3;
+        final long w0;
+        final long wLast;
         final int qlen;
         volatile String jsonKey;
         volatile byte[] jsonKeyBytes;
 
-        InternSlot(String key, byte[] keyBytes, int hash, int q1, int q2, int q3, int qlen) {
+        InternSlot(String key, byte[] keyBytes, int hash, long w0, long wLast, int qlen) {
             this.key = key;
             this.keyBytes = keyBytes;
             this.hash = hash;
-            this.q1 = q1;
-            this.q2 = q2;
-            this.q3 = q3;
+            this.w0 = w0;
+            this.wLast = wLast;
             this.qlen = qlen;
         }
     }
@@ -93,6 +91,9 @@ public final class JqValues {
     }
 
     private static final InternSlot[] INTERN_SLOTS = new InternSlot[INTERN_TABLE_SIZE];
+    // Secondary serialization lookup indexed by String.hashCode() so
+    // internedJsonKey/internedJsonKeyBytes stay O(1) without touching parse paths.
+    private static final InternSlot[] JSON_KEY_SLOTS = new InternSlot[INTERN_TABLE_SIZE];
 
     // Per-thread L1 intern cache — eliminates cross-thread eviction (issue #55).
     // Each thread has its own 256-slot cache with 2-probe linear probing.
@@ -103,15 +104,86 @@ public final class JqValues {
     private static final ThreadLocal<InternSlot[]> INTERN_L1 =
             ThreadLocal.withInitial(() -> new InternSlot[L1_SIZE]);
 
+    private static int hashKeyWords(long w0, long w1, long wLast, int keyLen) {
+        long h = (w0 * 0x9E3779B97F4A7C15L)
+                ^ (w1 * 0xBF58476D1CE4E5B9L)
+                ^ (wLast * 0x94D049BB133111EBL)
+                ^ (keyLen * 0x9E3779B1L);
+        h ^= h >>> 33;
+        h *= 0xFF51AFD7ED558CCDL;
+        return (int) (h ^ (h >>> 33));
+    }
+
+    private static int hashShortWord(long w0, int keyLen) {
+        long h = (w0 * 0x9E3779B97F4A7C15L) ^ (keyLen * 0x9E3779B1L);
+        h ^= h >>> 33;
+        h *= 0xFF51AFD7ED558CCDL;
+        return (int) (h ^ (h >>> 33));
+    }
+
+    private static long packShortBytes(byte[] data, int start, int len) {
+        long w = 0L;
+        for (int i = 0; i < len; i++) {
+            w |= (data[start + i] & 0xFFL) << (i << 3);
+        }
+        return w;
+    }
+
+    private static long packStringLong(String s, int off) {
+        return (s.charAt(off) & 0xFFL)
+                | ((s.charAt(off + 1) & 0xFFL) << 8)
+                | ((s.charAt(off + 2) & 0xFFL) << 16)
+                | ((s.charAt(off + 3) & 0xFFL) << 24)
+                | ((s.charAt(off + 4) & 0xFFL) << 32)
+                | ((s.charAt(off + 5) & 0xFFL) << 40)
+                | ((s.charAt(off + 6) & 0xFFL) << 48)
+                | ((s.charAt(off + 7) & 0xFFL) << 56);
+    }
+
+    private static long packStringShort(String s, int off, int len) {
+        long w = 0L;
+        for (int i = 0; i < len; i++) {
+            w |= (s.charAt(off + i) & 0xFFL) << (i << 3);
+        }
+        return w;
+    }
+
+    private static int hashKeyString(String name) {
+        int len = name.length();
+        for (int i = 0; i < len; i++) {
+            if (name.charAt(i) >= 0x80) {
+                byte[] utf8 = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                return hashKeyByteArray(utf8, 0, utf8.length);
+            }
+        }
+        if (len < 8) {
+            return hashShortWord(packStringShort(name, 0, len), len);
+        }
+        long w0 = packStringLong(name, 0);
+        long wLast = packStringLong(name, len - 8);
+        long w1 = len > 16 ? packStringLong(name, 8) : 0L;
+        return hashKeyWords(w0, w1, wLast, len);
+    }
+
+    private static int hashKeyByteArray(byte[] data, int start, int len) {
+        if (len < 8) {
+            return hashShortWord(packShortBytes(data, start, len), len);
+        }
+        long w0 = SwarUtil.loadLong(data, start);
+        long wLast = SwarUtil.loadLong(data, start + len - 8);
+        long w1 = len > 16 ? SwarUtil.loadLong(data, start + 8) : 0L;
+        return hashKeyWords(w0, w1, wLast, len);
+    }
+
     /**
      * Intern a field name from a byte range, without materializing an
      * intermediate String on lookup hits. The range must hold the key's UTF-8
      * bytes (no surrounding quotes or whitespace).
      *
-     * <p>ASCII ranges hash inline (identical to {@link String#hashCode}); ranges
-     * containing non-ASCII bytes fall back to materializing once and delegating
-     * to {@link #internFieldName(String)}. Returned instances come from the
-     * same shared table in both cases.</p>
+     * <p>ASCII ranges hash inline using a 64-bit word hash; ranges containing
+     * non-ASCII bytes fall back to materializing once and delegating to
+     * {@link #internFieldName(String)}. Returned instances come from the same
+     * shared table in both cases.</p>
      *
      * @param src   source buffer holding the key bytes
      * @param start start offset (inclusive) of the key
@@ -119,18 +191,12 @@ public final class JqValues {
      * @return the interned (canonical) key instance
      */
     public static String internFieldName(byte[] src, int start, int end) {
-        int hash = 0;
-        int p = start;
-        while (p < end) {
-            int b = src[p] & 0xFF;
-            if (b >= 0x80) {
-                return internFieldName(new String(src, start, end - start,
-                        java.nio.charset.StandardCharsets.UTF_8));
-            }
-            hash = hash * 31 + b;
-            p++;
+        int len = end - start;
+        if (!SwarUtil.isAscii(src, start, len)) {
+            return internFieldName(new String(src, start, len,
+                    java.nio.charset.StandardCharsets.UTF_8));
         }
-        return internKeyWithHash(src, start, end, hash);
+        return internKeyBytes(src, start, end);
     }
 
     /**
@@ -143,43 +209,72 @@ public final class JqValues {
      * (worst case: one write is lost, no corruption or torn reads).
      */
     public static String internFieldName(String name) {
-        int hash = name.hashCode();
+        int hash = hashKeyString(name);
         // L1 lookup (thread-local, no contention)
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
+            InternSlot cached = l1[(hash + p) & L1_MASK];
             if (cached != null && name.equals(cached.key)) return cached.key;
         }
         // L2 lookup (global, atomic snapshots)
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (mix(hash) + probe) & INTERN_MASK;
+            int s = (hash + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) {
                 InternSlot newSlot = createInternSlot(name, hash);
                 INTERN_SLOTS[s] = newSlot;
-                l1[mix(hash) & L1_MASK] = newSlot; // promote to L1
+                l1[hash & L1_MASK] = newSlot; // promote to L1
                 return name;
             }
             if (name.equals(slot.key)) {
-                l1[mix(hash) & L1_MASK] = slot; // promote to L1
+                l1[hash & L1_MASK] = slot; // promote to L1
                 return slot.key;
             }
         }
         // All probes occupied — evict first slot
-        int s = mix(hash) & INTERN_MASK;
+        int s = hash & INTERN_MASK;
         InternSlot newSlot = createInternSlot(name, hash);
         INTERN_SLOTS[s] = newSlot;
-        l1[mix(hash) & L1_MASK] = newSlot; // promote to L1
+        l1[hash & L1_MASK] = newSlot; // promote to L1
         return name;
     }
 
     private static InternSlot createInternSlot(String name, int hash) {
         byte[] keyBytes = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         int qlen = keyBytes.length;
-        int q1 = qlen >= 4 ? SwarUtil.loadInt(keyBytes, 0) : SwarUtil.packPartialQuad(keyBytes, 0, qlen);
-        int q2 = qlen >= 8 ? SwarUtil.loadInt(keyBytes, 4) : (qlen > 4 ? SwarUtil.packPartialQuad(keyBytes, 4, qlen - 4) : 0);
-        int q3 = qlen >= 12 ? SwarUtil.loadInt(keyBytes, 8) : (qlen > 8 ? SwarUtil.packPartialQuad(keyBytes, 8, qlen - 8) : 0);
-        return new InternSlot(name, keyBytes, hash, q1, q2, q3, qlen);
+        if (qlen < 8) {
+            return new InternSlot(name, keyBytes, hash, packShortBytes(keyBytes, 0, qlen), 0L, qlen);
+        }
+        long w0 = SwarUtil.loadLong(keyBytes, 0);
+        long wLast = SwarUtil.loadLong(keyBytes, qlen - 8);
+        return new InternSlot(name, keyBytes, hash, w0, wLast, qlen);
+    }
+
+    private static InternSlot findJsonKeySlot(String key) {
+        int strIdx = mix(key.hashCode()) & INTERN_MASK;
+        InternSlot fast = JSON_KEY_SLOTS[strIdx];
+        if (fast != null && fast.key == key) return fast;
+
+        int hash = hashKeyString(key);
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.key == key) {
+                JSON_KEY_SLOTS[strIdx] = cached;
+                return cached;
+            }
+        }
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (hash + probe) & INTERN_MASK;
+            InternSlot slot = INTERN_SLOTS[s];
+            if (slot == null) break;
+            if (slot.key == key) {
+                l1[hash & L1_MASK] = slot;
+                JSON_KEY_SLOTS[strIdx] = slot;
+                return slot;
+            }
+        }
+        return null;
     }
 
     /**
@@ -192,24 +287,8 @@ public final class JqValues {
      * is used for the cache check (no content comparison).
      */
     public static String internedJsonKey(String key) {
-        int hash = key.hashCode();
-        // L1 lookup (reference equality — interned keys match by identity)
-        InternSlot[] l1 = INTERN_L1.get();
-        for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
-            if (cached != null && cached.key == key) return jsonKeyOf(cached);
-        }
-        // L2 lookup
-        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (mix(hash) + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[s];
-            if (slot == null) break;
-            if (slot.key == key) {
-                l1[mix(hash) & L1_MASK] = slot; // promote to L1
-                return jsonKeyOf(slot);
-            }
-        }
-        return null;
+        InternSlot slot = findJsonKeySlot(key);
+        return slot != null ? jsonKeyOf(slot) : null;
     }
 
     /**
@@ -217,24 +296,8 @@ public final class JqValues {
      * Returns the byte form of {@code "\"key\":"} if interned, or null otherwise.
      */
     static byte[] internedJsonKeyBytes(String key) {
-        int hash = key.hashCode();
-        // L1 lookup
-        InternSlot[] l1 = INTERN_L1.get();
-        for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
-            if (cached != null && cached.key == key) return jsonKeyBytesOf(cached);
-        }
-        // L2 lookup
-        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (mix(hash) + probe) & INTERN_MASK;
-            InternSlot slot = INTERN_SLOTS[s];
-            if (slot == null) break;
-            if (slot.key == key) {
-                l1[mix(hash) & L1_MASK] = slot; // promote to L1
-                return jsonKeyBytesOf(slot);
-            }
-        }
-        return null;
+        InternSlot slot = findJsonKeySlot(key);
+        return slot != null ? jsonKeyBytesOf(slot) : null;
     }
 
     /** Build the JSON serialization form for an object key: {@code "\"key\":"}. */
@@ -1907,14 +1970,24 @@ public final class JqValues {
      */
     private static String internKeyFromString(String s, int start, int end) {
         int keyLen = end - start;
-        int hash = 0;
         for (int i = start; i < end; i++) {
-            hash = hash * 31 + s.charAt(i);
+            if (s.charAt(i) >= 0x80) {
+                return internFieldName(s.substring(start, end));
+            }
+        }
+        int hash;
+        if (keyLen < 8) {
+            hash = hashShortWord(packStringShort(s, start, keyLen), keyLen);
+        } else {
+            long w0 = packStringLong(s, start);
+            long wLast = packStringLong(s, end - 8);
+            long w1 = keyLen > 16 ? packStringLong(s, start + 8) : 0L;
+            hash = hashKeyWords(w0, w1, wLast, keyLen);
         }
         // L1 lookup (thread-local)
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
+            InternSlot cached = l1[(hash + p) & L1_MASK];
             if (cached != null && cached.key.length() == keyLen) {
                 boolean match = true;
                 for (int i = 0; i < keyLen; i++) {
@@ -1925,7 +1998,7 @@ public final class JqValues {
         }
         // L2 lookup (global)
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int idx = (mix(hash) + probe) & INTERN_MASK;
+            int idx = (hash + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[idx];
             if (slot == null) break;
             if (slot.key.length() == keyLen) {
@@ -1934,7 +2007,7 @@ public final class JqValues {
                     if (slot.key.charAt(i) != s.charAt(start + i)) { match = false; break; }
                 }
                 if (match) {
-                    l1[mix(hash) & L1_MASK] = slot; // promote to L1
+                    l1[hash & L1_MASK] = slot; // promote to L1
                     return slot.key;
                 }
             }
@@ -3409,16 +3482,45 @@ public final class JqValues {
         final int end = r.end;
         final int start = r.pos + 1;
         int p = start;
-        int hash = 0;
+        if (p + 8 <= end) {
+            long w0 = SwarUtil.loadLong(d, p);
+            long hit = SwarUtil.applyPattern(w0, SwarUtil.QUOTE_PATTERN)
+                     | SwarUtil.applyPattern(w0, SwarUtil.BACKSLASH_PATTERN);
+            if (hit != 0) {
+                int len = SwarUtil.getIndex(hit);
+                if ((d[start + len] & 0xFF) == '"') {
+                    r.pos = start + len + 1;
+                    long masked = len == 0 ? 0L : (w0 & (-1L >>> (64 - (len << 3))));
+                    return internShortKey(d, start, len, masked);
+                }
+                return internKeyEscaped(r, start);
+            }
+            p += 8;
+            while (p + 8 <= end) {
+                long word = SwarUtil.loadLong(d, p);
+                hit = SwarUtil.applyPattern(word, SwarUtil.QUOTE_PATTERN)
+                    | SwarUtil.applyPattern(word, SwarUtil.BACKSLASH_PATTERN);
+                if (hit != 0) {
+                    p += SwarUtil.getIndex(hit);
+                    if ((d[p] & 0xFF) == '"') {
+                        r.pos = p + 1;
+                        return internLongKey(d, start, p, w0);
+                    }
+                    return internKeyEscaped(r, start);
+                }
+                p += 8;
+            }
+        }
         while (p < end) {
             int b = d[p] & 0xFF;
-            if ((b == '"') | (b == '\\')) break;
-            hash = hash * 31 + b;
+            if ((b == '"') | (b == '\\')) {
+                if (b == '"') {
+                    r.pos = p + 1;
+                    return internKeyBytes(d, start, p);
+                }
+                return internKeyEscaped(r, start);
+            }
             p++;
-        }
-        if (p < end && (d[p] & 0xFF) == '"') {
-            r.pos = p + 1;
-            return internKeyWithHash(d, start, p, hash);
         }
         return internKeyEscaped(r, start);
     }
@@ -3474,56 +3576,87 @@ public final class JqValues {
      *
      * <p>Multi-slot linear probing (max 4 probes) replaces single-slot eviction.</p>
      */
-    private static String internKeyWithHash(byte[] data, int start, int end, int hash) {
+    private static String internKeyBytes(byte[] data, int start, int end) {
         int keyLen = end - start;
+        if (keyLen < 8) {
+            return internShortKey(data, start, keyLen, packShortBytes(data, start, keyLen));
+        }
+        return internLongKey(data, start, end, SwarUtil.loadLong(data, start));
+    }
 
-        // Compute quads for this key
-        int q1 = keyLen >= 4 ? SwarUtil.loadInt(data, start) : SwarUtil.packPartialQuad(data, start, keyLen);
-        int q2 = keyLen >= 8 ? SwarUtil.loadInt(data, start + 4) : (keyLen > 4 ? SwarUtil.packPartialQuad(data, start + 4, keyLen - 4) : 0);
-        int q3 = keyLen >= 12 ? SwarUtil.loadInt(data, start + 8) : (keyLen > 8 ? SwarUtil.packPartialQuad(data, start + 8, keyLen - 8) : 0);
-
-        // L1 lookup (thread-local, no contention, no cross-thread eviction)
+    /** Fast path for keys < 8 bytes: w0 + keyLen uniquely identify the full key. */
+    private static String internShortKey(byte[] data, int start, int keyLen, long w0) {
+        int hash = hashShortWord(w0, keyLen);
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.hash == hash && cached.qlen == keyLen && cached.w0 == w0) {
+                return cached.key;
+            }
+        }
+        int firstEmpty = -1;
+        for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
+            int s = (hash + probe) & INTERN_MASK;
+            InternSlot slot = INTERN_SLOTS[s];
+            if (slot == null) {
+                if (firstEmpty < 0) firstEmpty = s;
+                break;
+            }
+            if (slot.hash != hash || slot.qlen != keyLen || slot.w0 != w0) continue;
+            l1[hash & L1_MASK] = slot;
+            return slot.key;
+        }
+        String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
+        result.hashCode();
+        int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK);
+        InternSlot newSlot = new InternSlot(result,
+                java.util.Arrays.copyOfRange(data, start, start + keyLen),
+                hash, w0, 0L, keyLen);
+        INTERN_SLOTS[storeSlot] = newSlot;
+        l1[hash & L1_MASK] = newSlot;
+        return result;
+    }
+
+    /** Path for keys >= 8 bytes: w0 (0..7), wLast (len-8..len-1), and middle longs if len > 16. */
+    private static String internLongKey(byte[] data, int start, int end, long w0) {
+        int keyLen = end - start;
+        long wLast = SwarUtil.loadLong(data, end - 8);
+        long w1 = keyLen > 16 ? SwarUtil.loadLong(data, start + 8) : 0L;
+        int hash = hashKeyWords(w0, w1, wLast, keyLen);
+
+        InternSlot[] l1 = INTERN_L1.get();
+        for (int p = 0; p < L1_MAX_PROBES; p++) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
             if (cached != null && cached.hash == hash && cached.qlen == keyLen
-                    && cached.q1 == q1
-                    && (keyLen <= 4 || cached.q2 == q2)
-                    && (keyLen <= 8 || cached.q3 == q3)
-                    && (keyLen <= 12 || matchBytesFrom(cached.keyBytes, data, start, 12, keyLen))) {
-                return cached.key; // L1 HIT — zero allocation, no L2 access
+                    && cached.w0 == w0 && cached.wLast == wLast
+                    && (keyLen <= 16 || matchMiddleLongs(cached.keyBytes, data, start, keyLen))) {
+                return cached.key;
             }
         }
 
-        // L2 lookup (global, atomic snapshots)
         int firstEmpty = -1;
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (mix(hash) + probe) & INTERN_MASK;
+            int s = (hash + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) {
                 if (firstEmpty < 0) firstEmpty = s;
                 break;
             }
             if (slot.hash != hash || slot.qlen != keyLen) continue;
-            if (q1 != slot.q1) continue;
-            if (keyLen > 4 && q2 != slot.q2) continue;
-            if (keyLen > 8 && q3 != slot.q3) continue;
-            if (keyLen > 12) {
-                if (!matchBytesFrom(slot.keyBytes, data, start, 12, keyLen)) continue;
-            }
-            l1[mix(hash) & L1_MASK] = slot; // promote to L1
+            if (slot.w0 != w0 || slot.wLast != wLast) continue;
+            if (keyLen > 16 && !matchMiddleLongs(slot.keyBytes, data, start, keyLen)) continue;
+            l1[hash & L1_MASK] = slot;
             return slot.key;
         }
 
-        // Cache miss: create string and store in both L1 and L2
         String result = new String(data, start, keyLen, java.nio.charset.StandardCharsets.UTF_8);
-        result.hashCode(); // force JDK to cache hashCode
-        int storeSlot = firstEmpty >= 0 ? firstEmpty : (mix(hash) & INTERN_MASK);
+        result.hashCode();
+        int storeSlot = firstEmpty >= 0 ? firstEmpty : (hash & INTERN_MASK);
         InternSlot newSlot = new InternSlot(result,
                 java.util.Arrays.copyOfRange(data, start, end),
-                hash, q1, q2, q3, keyLen);
+                hash, w0, wLast, keyLen);
         INTERN_SLOTS[storeSlot] = newSlot;
-        l1[mix(hash) & L1_MASK] = newSlot; // store in L1
+        l1[hash & L1_MASK] = newSlot;
         return result;
     }
 
@@ -3531,61 +3664,55 @@ public final class JqValues {
      * Look up a field name in the intern table by byte range without inserting.
      * Returns the cached instance on a hit, or null on a miss (including any
      * range containing non-ASCII bytes, which take the String interning path).
-     * <p>
-     * The lookup mirrors {@link #internKeyWithHash} exactly (same quads, same
-     * L1/L2 probes, L1 promotion on L2 hit) minus the miss-side allocation —
-     * a hit here observes the same instance an interning call would return.
-     * Used for second-sighting admission: callers intern only keys seen more
-     * than once, keeping unique keys out of the shared table.
      */
     public static String probeFieldName(byte[] data, int start, int end) {
-        int hash = 0;
-        for (int p = start; p < end; p++) {
-            int b = data[p] & 0xFF;
-            if (b >= 0x80) return null;
-            hash = hash * 31 + b;
-        }
         int keyLen = end - start;
-        int q1 = keyLen >= 4 ? SwarUtil.loadInt(data, start) : SwarUtil.packPartialQuad(data, start, keyLen);
-        int q2 = keyLen >= 8 ? SwarUtil.loadInt(data, start + 4) : (keyLen > 4 ? SwarUtil.packPartialQuad(data, start + 4, keyLen - 4) : 0);
-        int q3 = keyLen >= 12 ? SwarUtil.loadInt(data, start + 8) : (keyLen > 8 ? SwarUtil.packPartialQuad(data, start + 8, keyLen - 8) : 0);
+        if (!SwarUtil.isAscii(data, start, keyLen)) return null;
+        long w0, wLast;
+        int hash;
+        if (keyLen < 8) {
+            w0 = packShortBytes(data, start, keyLen);
+            wLast = 0L;
+            hash = hashShortWord(w0, keyLen);
+        } else {
+            w0 = SwarUtil.loadLong(data, start);
+            wLast = SwarUtil.loadLong(data, end - 8);
+            long w1 = keyLen > 16 ? SwarUtil.loadLong(data, start + 8) : 0L;
+            hash = hashKeyWords(w0, w1, wLast, keyLen);
+        }
 
         InternSlot[] l1 = INTERN_L1.get();
         for (int p = 0; p < L1_MAX_PROBES; p++) {
-            InternSlot cached = l1[(mix(hash) + p) & L1_MASK];
-            if (cached != null && cached.hash == hash && cached.qlen == keyLen
-                    && cached.q1 == q1
-                    && (keyLen <= 4 || cached.q2 == q2)
-                    && (keyLen <= 8 || cached.q3 == q3)
-                    && (keyLen <= 12 || matchBytesFrom(cached.keyBytes, data, start, 12, keyLen))) {
+            InternSlot cached = l1[(hash + p) & L1_MASK];
+            if (cached != null && cached.hash == hash && cached.qlen == keyLen && cached.w0 == w0
+                    && (keyLen < 8 || (cached.wLast == wLast
+                        && (keyLen <= 16 || matchMiddleLongs(cached.keyBytes, data, start, keyLen))))) {
                 return cached.key;
             }
         }
         for (int probe = 0; probe < INTERN_MAX_PROBES; probe++) {
-            int s = (mix(hash) + probe) & INTERN_MASK;
+            int s = (hash + probe) & INTERN_MASK;
             InternSlot slot = INTERN_SLOTS[s];
             if (slot == null) return null;
-            if (slot.hash != hash || slot.qlen != keyLen) continue;
-            if (q1 != slot.q1) continue;
-            if (keyLen > 4 && q2 != slot.q2) continue;
-            if (keyLen > 8 && q3 != slot.q3) continue;
-            if (keyLen > 12) {
-                if (!matchBytesFrom(slot.keyBytes, data, start, 12, keyLen)) continue;
+            if (slot.hash != hash || slot.qlen != keyLen || slot.w0 != w0) continue;
+            if (keyLen >= 8) {
+                if (slot.wLast != wLast) continue;
+                if (keyLen > 16 && !matchMiddleLongs(slot.keyBytes, data, start, keyLen)) continue;
             }
-            l1[mix(hash) & L1_MASK] = slot; // promote to L1
+            l1[hash & L1_MASK] = slot;
             return slot.key;
         }
         return null;
     }
 
-    /**
-     * Compare bytes from a given offset (for keys > 12 bytes where quads cover first 12).
-     */
-    private static boolean matchBytesFrom(byte[] cached, byte[] data, int dataStart, int fromOffset, int totalLen) {
-        for (int i = fromOffset; i < totalLen; i++) {
-            if (cached[i] != data[dataStart + i]) return false;
+    /** Compare bytes [8, keyLen - 8) using 8-byte loads (caller guarantees keyLen > 16). */
+    private static boolean matchMiddleLongs(byte[] cached, byte[] data, int dataStart, int keyLen) {
+        int limit = keyLen - 8;
+        for (int i = 8; i + 8 <= limit; i += 8) {
+            if (SwarUtil.loadLong(cached, i) != SwarUtil.loadLong(data, dataStart + i)) return false;
         }
-        return true;
+        int tail = limit - 8;
+        return SwarUtil.loadLong(cached, tail) == SwarUtil.loadLong(data, dataStart + tail);
     }
 
     private static String parseStringRawBytes(JsonByteReader r) {

@@ -3267,6 +3267,44 @@ class JqValueTest {
     }
 
     @Test
+    void testByteKeyWordHashBoundariesAndMiddleDiffs() {
+        String tag = Long.toHexString(System.nanoTime());
+        int[] lengths = {0, 1, 2, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 40};
+        for (int len : lengths) {
+            StringBuilder sb = new StringBuilder(len);
+            for (int i = 0; i < len; i++) {
+                sb.append((char) ('a' + ((i + tag.charAt(i % tag.length())) % 26)));
+            }
+            String key = sb.toString();
+            String json = "{\"" + key + "\":1}";
+            JqObject parsed = (JqObject) JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+            String fromParse = parsed.keyAt(0);
+            String fromString = JqValues.internFieldName(key);
+            byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
+            String fromBytes = JqValues.internFieldName(keyBytes, 0, keyBytes.length);
+            assertSame(fromParse, fromString, "parse(byte[]) and internFieldName(String) must share instance for len=" + len);
+            assertSame(fromParse, fromBytes, "parse(byte[]) and internFieldName(byte[]) must share instance for len=" + len);
+            assertSame(fromParse, JqValues.probeFieldName(keyBytes, 0, keyBytes.length), "probeFieldName must hit for len=" + len);
+            assertEquals("\"" + key + "\":", JqValues.internedJsonKey(fromParse), "internedJsonKey must hit for len=" + len);
+        }
+
+        // Long keys sharing identical first-8 and last-8 bytes, differing only in middle bytes
+        String prefix = "abcdefgh";
+        String suffix = "STUVWXYZ";
+        String m1 = prefix + "01234567" + "AAAABBBB" + suffix;
+        String m2 = prefix + "01234567" + "AAAAXBBB" + suffix;
+        String m3 = prefix + "01234567" + "XAAABBBB" + suffix;
+        String m4 = prefix + "X1234567" + "AAAABBBB" + suffix;
+        String json = "{\"" + m1 + "\":1,\"" + m2 + "\":2,\"" + m3 + "\":3,\"" + m4 + "\":4}";
+        JqObject obj = (JqObject) JqValues.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertEquals(4, obj.size());
+        assertEquals(1, obj.get(m1).intValue());
+        assertEquals(2, obj.get(m2).intValue());
+        assertEquals(3, obj.get(m3).intValue());
+        assertEquals(4, obj.get(m4).intValue());
+    }
+
+    @Test
     void testByteParserInternQuadVerification() {
         // Parse JSON with byte[] — exercises internKeyWithHash with quad verification
         // Key lengths: 2-byte, 4-byte, 8-byte, 13-byte (crosses quad boundary)
