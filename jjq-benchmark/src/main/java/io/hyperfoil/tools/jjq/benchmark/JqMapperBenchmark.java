@@ -56,6 +56,20 @@ public class JqMapperBenchmark {
     public record Item(String name, double price, int quantity) {}
     public record OrderRecord(String id, String customer, List<Item> items) {}
 
+    /**
+     * Large-integer fixture (reflection twin of
+     * {@link BenchmarkRecords.GenIdsRecord}): values outside the
+     * {@code JqNumber} [-128, 1023] value cache.
+     */
+    public record IdsRecord(long id, long timestamp, int count, String tag) {}
+
+    /**
+     * Generic-container fixture (reflection twin of
+     * {@link BenchmarkRecords.GenGenericRecord}).
+     */
+    public record GenericRecord(java.util.Map<String, Long> counts,
+            java.util.Optional<Long> opt, java.util.List<String> tags) {}
+
     // ========================================================================
     //  Benchmark state
     // ========================================================================
@@ -69,6 +83,17 @@ public class JqMapperBenchmark {
     private byte[] simpleJsonBytes;
     private byte[] nestedJsonBytes;
     private byte[] listJsonBytes;
+
+    // Large-integer fixtures (values outside the JqNumber value cache)
+    private String idsJson;
+    private byte[] idsJsonBytes;
+    private byte[] idsReorderedJsonBytes;
+    private JqValue idsJqValue;
+
+    // Generic-container fixtures (Map / Optional / List fields)
+    private String genericJson;
+    private byte[] genericJsonBytes;
+    private JqValue genericJqValue;
 
     // Pre-parsed JqValue (for jjq pre-parsed path)
     private JqValue simpleJqValue;
@@ -114,6 +139,24 @@ public class JqMapperBenchmark {
                 ]}""";
         listJsonBytes = listJson.getBytes();
 
+        // Large integers: every value outside [-128, 1023], so a fresh
+        // parse yields long-backed numbers whose first integral
+        // conversion would allocate (BigDecimal path) without a
+        // long-backed fast path.
+        idsJson = "{\"id\":1732627200000123,\"timestamp\":9223372036854775,"
+                + "\"count\":2000000000,\"tag\":\"ann\"}";
+        idsJsonBytes = idsJson.getBytes();
+        // Same document with reversed key order: the positional fast
+        // path fails on the first key, forcing the generated slow path.
+        idsReorderedJsonBytes = ("{\"tag\":\"ann\",\"count\":2000000000,"
+                + "\"timestamp\":9223372036854775,\"id\":1732627200000123}").getBytes();
+        idsJqValue = JqValues.parse(idsJsonBytes);
+
+        genericJson = "{\"counts\":{\"a\":1732627200000123,\"b\":42},"
+                + "\"opt\":2000000000,\"tags\":[\"x\",\"y\",\"z\"]}";
+        genericJsonBytes = genericJson.getBytes();
+        genericJqValue = JqValues.parse(genericJsonBytes);
+
         // Pre-parse for the pre-parsed benchmarks
         simpleJqValue = JqValues.parse(simpleJsonBytes);
         nestedJqValue = JqValues.parse(nestedJsonBytes);
@@ -136,6 +179,11 @@ public class JqMapperBenchmark {
         jqMapper.fromJqValue(simpleJqValue, SimpleRecord.class);
         jqMapper.fromJqValue(nestedJqValue, PersonRecord.class);
         jqMapper.fromJqValue(listJqValue, OrderRecord.class);
+        jqMapper.fromJqValue(idsJqValue, IdsRecord.class);
+        jqMapper.fromJqValue(idsJqValue, BenchmarkRecords.GenIdsRecord.class);
+        jqMapper.fromJqValue(JqValues.parse(idsReorderedJsonBytes), BenchmarkRecords.GenIdsRecord.class);
+        jqMapper.fromJqValue(genericJqValue, GenericRecord.class);
+        jqMapper.fromJqValue(genericJqValue, BenchmarkRecords.GenGenericRecord.class);
 
         // Generated mapping record instances (for serialization benchmarks)
         genSimpleRecord = new BenchmarkRecords.SimpleRecord("Alice", 30, 98.5, true, "alice@example.com");
@@ -182,7 +230,8 @@ public class JqMapperBenchmark {
                 BenchmarkRecords.SimpleRecord.class, BenchmarkRecords.PersonRecord.class,
                 BenchmarkRecords.Address.class, BenchmarkRecords.Item.class,
                 BenchmarkRecords.OrderRecord.class, BenchmarkRecords.SimplePojo.class,
-                BenchmarkRecords.PojoPerson.class, BenchmarkRecords.PojoAddress.class}) {
+                BenchmarkRecords.PojoPerson.class, BenchmarkRecords.PojoAddress.class,
+                BenchmarkRecords.GenIdsRecord.class, BenchmarkRecords.GenGenericRecord.class}) {
             String generatedName = c.getName().replace('$', '_') + "_JqMapping";
             try {
                 Class.forName(generatedName, true, c.getClassLoader());
@@ -294,6 +343,62 @@ public class JqMapperBenchmark {
     @Benchmark
     public OrderRecord deser_list_jackson_preParsed() throws JacksonException {
         return jacksonMapper.treeToValue(listJsonNode, OrderRecord.class);
+    }
+
+    // ========================================================================
+    //  Deserialization: large integers (values outside the JqNumber cache)
+    // ========================================================================
+
+    /** Fresh parse per op: every integral bind converts a new long-backed number. */
+    @Benchmark
+    public IdsRecord deser_ids_jjq_fromBytes() {
+        return jqMapper.fromJson(idsJsonBytes, IdsRecord.class);
+    }
+
+    /** Control: steady state on a stable tree (cachedDecimal absorbs the cost). */
+    @Benchmark
+    public IdsRecord deser_ids_jjq_preParsed() {
+        return jqMapper.fromJqValue(idsJqValue, IdsRecord.class);
+    }
+
+    /** Fresh parse per op through the generated mapping. */
+    @Benchmark
+    public BenchmarkRecords.GenIdsRecord deser_ids_jjq_generated_fromBytes() {
+        return jqMapper.fromJson(idsJsonBytes, BenchmarkRecords.GenIdsRecord.class);
+    }
+
+    /** Control: steady state on a stable tree through the generated mapping. */
+    @Benchmark
+    public BenchmarkRecords.GenIdsRecord deser_ids_jjq_generated_preParsed() {
+        return jqMapper.fromJqValue(idsJqValue, BenchmarkRecords.GenIdsRecord.class);
+    }
+
+    /** Reordered keys defeat the positional fast path, measuring the generated slow path. */
+    @Benchmark
+    public BenchmarkRecords.GenIdsRecord deser_ids_jjq_generated_fromBytesReordered() {
+        return jqMapper.fromJson(idsReorderedJsonBytes, BenchmarkRecords.GenIdsRecord.class);
+    }
+
+    // ========================================================================
+    //  Deserialization: generic containers (Map / Optional / List fields)
+    // ========================================================================
+
+    /** Reflection path: per-element conversion through TypeConverter (control). */
+    @Benchmark
+    public GenericRecord deser_generic_jjq_fromBytes() {
+        return jqMapper.fromJson(genericJsonBytes, GenericRecord.class);
+    }
+
+    /** Generated path: Map/Optional fields bind through per-call TypeToken capture today. */
+    @Benchmark
+    public BenchmarkRecords.GenGenericRecord deser_generic_jjq_generated_fromBytes() {
+        return jqMapper.fromJson(genericJsonBytes, BenchmarkRecords.GenGenericRecord.class);
+    }
+
+    /** Generated path on a stable tree (TypeToken cost is per call, so this still pays it). */
+    @Benchmark
+    public BenchmarkRecords.GenGenericRecord deser_generic_jjq_generated_preParsed() {
+        return jqMapper.fromJqValue(genericJqValue, BenchmarkRecords.GenGenericRecord.class);
     }
 
     // ========================================================================

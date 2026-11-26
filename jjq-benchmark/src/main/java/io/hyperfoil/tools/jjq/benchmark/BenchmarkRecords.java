@@ -49,6 +49,23 @@ public final class BenchmarkRecords {
     @JqMapped
     public record OrderRecord(String id, String customer, List<Item> items) {}
 
+    /**
+     * Large-integer fixture: every numeric value sits outside the
+     * {@code JqNumber} [-128, 1023] value cache, so each fresh parse
+     * converts a new long-backed number (the coercion fast-path target).
+     */
+    @JqMapped
+    public record GenIdsRecord(long id, long timestamp, int count, String tag) {}
+
+    /**
+     * Generic-container fixture: {@code Map} and {@code Optional} fields,
+     * which generated code binds through a per-call {@code TypeToken}
+     * capture today.
+     */
+    @JqMapped
+    public record GenGenericRecord(java.util.Map<String, Long> counts,
+            java.util.Optional<Long> opt, java.util.List<String> tags) {}
+
     /** Nested POJO fixture: nested values previously serialized via the tree. */
     @JqMapped
     public static class PojoAddress {
