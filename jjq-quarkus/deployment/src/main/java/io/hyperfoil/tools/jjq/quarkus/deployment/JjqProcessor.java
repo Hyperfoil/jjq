@@ -101,6 +101,10 @@ public class JjqProcessor {
     /** Generated CDI producer for the application mapper (one per application). */
     static final String PRODUCER_CLASS = "io.hyperfoil.tools.jjq.quarkus.generated.JjqMapperProducer";
 
+    /** Shared stackless fallback signal thrown by generated readers. */
+    private static final FieldDesc FALLBACK_INSTANCE =
+            FieldDesc.of(DirectReadFallbackException.class, "INSTANCE");
+
     /** Cursor reads for double/float fields (#206): set doubleHolder, cast on read. */
     private static final MethodDesc M_READ_DOUBLE = MethodDesc.of(
             JqValues.JqCursor.class, "readDouble", boolean.class);
@@ -930,25 +934,22 @@ public class JjqProcessor {
                     // defaults): absent fields and explicit nulls both bind
                     // these, exactly like the tree-based mapping.
                     List<LocalVar> values = new ArrayList<>(fields.size());
-                    List<LocalVar> seen = grouped ? List.of() : new ArrayList<>(fields.size());
                     for (BindingSchema.Field field : fields) {
                         values.add(newValueLocal(bc, field));
-                        if (!grouped) {
-                            seen.add(bc.localVar("s_" + field.javaName(), false));
-                        }
                     }
-                    LocalVar seenBits = grouped ? bc.localVar("seenBits", 0L) : null;
+                    // Presence/duplicate tracking as one bitmask for both shapes
+                    // (long covers the >32-field grouped readers; narrow readers
+                    // used to carry one boolean local per field).
+                    LocalVar seenBits = bc.localVar("seenBits", 0L);
                     bc.while_(cond -> cond.yield(cond.invokeVirtual(mNext, cursor)), body -> {
                         LocalVar key = body.localVar("k", body.invokeVirtual(mIndex, cursor,
                                 body.get(mc.this_().field(keysDesc)),
                                 body.get(mc.this_().field(hashesDesc))));
-                        body.if_(body.lt(key, 0), t -> t.throw_(DirectReadFallbackException.class));
-                        if (grouped) {
-                            LocalVar bit = body.localVar("bit", body.shl(Const.of(1L), key));
-                            body.if_(body.ne(body.and(seenBits, bit), Const.of(0L)),
-                                    t -> t.throw_(DirectReadFallbackException.class));
-                            body.set(seenBits, body.or(seenBits, bit));
-                        }
+                        body.if_(body.lt(key, 0), t -> t.throw_(t.getStaticField(FALLBACK_INSTANCE)));
+                        LocalVar bit = body.localVar("bit", body.shl(Const.of(1L), key));
+                        body.if_(body.ne(body.and(seenBits, bit), Const.of(0L)),
+                                t -> t.throw_(t.getStaticField(FALLBACK_INSTANCE)));
+                        body.set(seenBits, body.or(seenBits, bit));
                         body.switch_(key, sc -> {
                             for (int i = 0; i < fields.size(); i++) {
                                 if (grouped) {
@@ -959,13 +960,13 @@ public class JjqProcessor {
                                     });
                                 } else {
                                     emitFieldCase(sc, i, fields.get(i), cursor, values.get(i),
-                                            seen.get(i), cNull,
+                                            cNull,
                                             mColon, mPeek, cString, cNumber, cTrue, cFalse,
                                             mReadString, mReadLong, mLongValue, mReadInt,
                                             mIntValue, mReadBool, mBoolValue, mReadNull);
                                 }
                             }
-                            sc.default_(b -> b.throw_(DirectReadFallbackException.class));
+                            sc.default_(b -> b.throw_(b.getStaticField(FALLBACK_INSTANCE)));
                         });
                     });
                     ifNotFallback(bc, bc.invokeVirtual(mEnd, cursor));
@@ -974,14 +975,9 @@ public class JjqProcessor {
                     // failure precedence; declaration order matches
                     // TypeConverter.checkRequired exactly.
                     for (String wire : schema.required()) {
-                        if (grouped) {
-                            long mask = 1L << indexOfWire(fields, wire);
-                            bc.if_(bc.eq(bc.and(seenBits, Const.of(mask)), Const.of(0L)),
-                                    b -> emitMissingRequired(b, wire, type.getSimpleName()));
-                        } else {
-                            LocalVar flag = seen.get(indexOfWire(fields, wire));
-                            bc.ifNot(flag, b -> emitMissingRequired(b, wire, type.getSimpleName()));
-                        }
+                        long mask = 1L << indexOfWire(fields, wire);
+                        bc.if_(bc.eq(bc.and(seenBits, Const.of(mask)), Const.of(0L)),
+                                b -> emitMissingRequired(b, wire, type.getSimpleName()));
                     }
                     // The user constructor runs last: never before complete
                     // validation, never retried on fallback.
@@ -1045,17 +1041,16 @@ public class JjqProcessor {
                 "jjq: field '" + field.wireName() + "' has unsupported type " + javaType.getName());
     }
 
-    /** Emit one field case: duplicate check, presence, colon, peek, null-or-typed read. */
+    /** Emit one field case: colon, peek, null-or-typed read (the duplicate
+     *  check lives in the shared seenBits mask above the switch). */
     private static void emitFieldCase(io.quarkus.gizmo2.creator.SwitchCreator sc, int index,
-            BindingSchema.Field field, LocalVar cursor, LocalVar value, LocalVar seen,
+            BindingSchema.Field field, LocalVar cursor, LocalVar value,
             Const cNull, MethodDesc mColon, MethodDesc mPeek,
             Const cString, Const cNumber, Const cTrue, Const cFalse,
             MethodDesc mReadString, MethodDesc mReadLong, MethodDesc mLongValue,
             MethodDesc mReadInt, MethodDesc mIntValue, MethodDesc mReadBool, MethodDesc mBoolValue,
             MethodDesc mReadNull) {
         sc.caseOf(index, b -> {
-            b.if_(seen, t -> t.throw_(DirectReadFallbackException.class));
-            b.set(seen, Const.of(true));
             ifNotFallback(b, b.invokeVirtual(mColon, cursor));
             // The shape is classified after the colon, when the cursor is on
             // the value (a peek at the colon would always read OTHER).
@@ -1082,7 +1077,7 @@ public class JjqProcessor {
                 ifNotFallback(e, e.eq(peek, cString));
                 LocalVar v = e.localVar("v_" + field.javaName(),
                         e.invokeVirtual(mReadString, cursor));
-                e.ifNull(v, t -> t.throw_(DirectReadFallbackException.class));
+                e.ifNull(v, t -> t.throw_(t.getStaticField(FALLBACK_INSTANCE)));
                 e.set(value, v);
             }
             case INT -> {
@@ -1125,7 +1120,7 @@ public class JjqProcessor {
 
     /** Throw the fallback signal unless the condition holds. */
     private static void ifNotFallback(BlockCreator bc, Expr condition) {
-        bc.ifNot(condition, b -> b.throw_(DirectReadFallbackException.class));
+        bc.ifNot(condition, b -> b.throw_(b.getStaticField(FALLBACK_INSTANCE)));
     }
 
     /**

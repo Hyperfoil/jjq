@@ -16,6 +16,14 @@ package io.hyperfoil.tools.jjq.mapper;
  */
 public final class DirectReadFallbackException extends RuntimeException {
 
+    /**
+     * Shared stackless instance: the signal carries no state and no stack
+     * trace, so throwing it repeatedly (including concurrently) is safe and
+     * allocation-free. Generated readers throw it on every non-canonical
+     * input, which is a routine outcome, not a failure.
+     */
+    public static final DirectReadFallbackException INSTANCE = new DirectReadFallbackException();
+
     /** Creates a fallback signal. */
     public DirectReadFallbackException() {
         super(null, null, false, false);
