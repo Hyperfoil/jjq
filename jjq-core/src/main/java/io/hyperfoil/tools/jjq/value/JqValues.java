@@ -2329,6 +2329,15 @@ public final class JqValues {
         private boolean negated;
         private long negatedAcc;
 
+        /**
+         * Expected field position for the positional fast path in
+         * {@link #fieldIndexHashed}: the candidate index the next key is
+         * likely to match, advanced on each match and reset by
+         * {@link #beginObject()}. A hint past the last candidate simply
+         * disables the fast path until the next match resets it.
+         */
+        private int positionalHint;
+
         private JqCursor(byte[] bytes, ParseOptions options) {
             int bad = Utf8.validate(bytes, 0, bytes.length);
             if (bad >= 0) throw utf8Error(bytes, 0, bad);
@@ -2391,6 +2400,7 @@ public final class JqValues {
             if (r.pos >= r.end || (r.data[r.pos] & 0xFF) != '{') return false;
             r.pos++;
             commaRequired = false;
+            positionalHint = 0;
             return true;
         }
 
@@ -2436,6 +2446,18 @@ public final class JqValues {
          * untouched on -1) at O(length + matches) instead of O(fields
          * times length).
          *
+         * <p>Ordered documents take a positional fast path first: field
+         * {@code i} of an in-order document appears at position {@code i},
+         * so the hinted candidate is validated by its own terminator —
+         * the byte after a candidate-length run must be the closing
+         * quote — plus one key compare, with no quote scan and no hash:
+         * the FNV-1a recurrence (a serial 3-cycles-per-byte dependency)
+         * never runs. The first miss stops hinting for the rest of the
+         * document and falls through to the fused scan unchanged, so
+         * out-of-order input pays the original cost plus a single failed
+         * compare. Unique wire names per reader keep the matched index
+         * identical to the table scan by construction.</p>
+         *
          * @param known  candidate wire names as UTF-8 bytes, in field order
          * @param hashes {@link #hashFieldName} of each candidate, same order;
          *               typically a build-time constant per reader
@@ -2448,6 +2470,20 @@ public final class JqValues {
             byte[] d = r.data;
             int e = r.end;
             int start = r.pos + 1;
+            int hint = positionalHint;
+            if (hint >= 0 && hint < known.length) {
+                byte[] k = known[hint];
+                int len = k.length;
+                if (start + len < e && d[start + len] == '"'
+                        && keyEquals(d, start, k, len)) {
+                    r.pos = start + len + 1;
+                    positionalHint = hint + 1;
+                    return hint;
+                }
+                // Not the hinted key: the document is not in field order
+                // here — stop hinting it and take the fused scan below.
+                positionalHint = -1;
+            }
             int h = 0x811c9dc5;
             int p = start;
             while (p < e) {
@@ -2464,17 +2500,35 @@ public final class JqValues {
             for (int i = 0; i < n; i++) {
                 if (hashes[i] != h) continue;
                 byte[] k = known[i];
-                if (k.length != len) continue;
-                boolean eq = true;
-                for (int j = 0; j < len; j++) {
-                    if (k[j] != d[start + j]) { eq = false; break; }
-                }
-                if (eq) {
+                if (keyEquals(d, start, k, len)) {
                     r.pos = p + 1;
+                    // No hint update here: a table match means the document
+                    // already missed its hint, and re-arming it would make
+                    // every later key of an out-of-order document pay a
+                    // failed compare again.
                     return i;
                 }
             }
             return -1;
+        }
+
+        /**
+         * Exact key compare of the document range against a candidate.
+         * Scalar below the intrinsic crossover — wire names are typically
+         * 3-8 bytes, where {@code Arrays.equals} dispatch overhead exceeds
+         * the compare itself (measured: two intrinsic calls per key turned
+         * the reordered path 33% slower); the vectorized intrinsic wins on
+         * longer keys.
+         */
+        private static boolean keyEquals(byte[] d, int start, byte[] k, int len) {
+            if (k.length != len) return false;
+            if (len > 8) {
+                return java.util.Arrays.equals(d, start, start + len, k, 0, len);
+            }
+            for (int j = 0; j < len; j++) {
+                if (k[j] != d[start + j]) return false;
+            }
+            return true;
         }
 
         /**
