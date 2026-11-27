@@ -45,6 +45,9 @@ class DirectReaderGenerationTest {
     record FlatOrder(String name, int age, long score, boolean active, Integer optAge) {}
 
     @JqMapped
+    record FlatDoubles(String name, double score, Double boxed, float ratio, Float boxedRatio) {}
+
+    @JqMapped
     record Renamed(@io.hyperfoil.tools.jjq.mapper.JqName("user_name") String userName, int age) {}
 
     @JqMapped
@@ -234,6 +237,35 @@ class DirectReaderGenerationTest {
                 readDirect(reader, "{\"name\":\"a\"}"));
         assertEquals(new FlatOrder(null, 0, 0L, false, null),
                 readDirect(reader, "{}"));
+    }
+
+    @Test
+    void doubleFieldsCompleteAndMatchOracle() throws Throwable {
+        DirectReader<?> reader = loadReader(FlatDoubles.class);
+        assertEquals(new FlatDoubles("ann", 98.5, 1.5, 0.25f, 0.75f),
+                readDirect(reader, "{\"name\":\"ann\",\"score\":98.5,\"boxed\":1.5,"
+                        + "\"ratio\":0.25,\"boxedRatio\":0.75}"));
+        // Integer-lexed tokens, exponent forms and negative zero bind exactly
+        // like the oracle (bit-identical doubles).
+        assertEquals(new FlatDoubles("a", 30.0, null, 0.0f, null),
+                readDirect(reader, "{\"name\":\"a\",\"score\":30,\"ratio\":0}"));
+        assertEquals(new FlatDoubles("a", 1500.0, 0.0015, -0.0f, null),
+                readDirect(reader, "{\"name\":\"a\",\"score\":1.5e3,\"boxed\":1.5e-3,"
+                        + "\"ratio\":-0.0}"));
+        assertEquals(new FlatDoubles("a", -0.0, null, 0.5f, null),
+                readDirect(reader, "{\"name\":\"a\",\"score\":-0,\"ratio\":0.5}"));
+        // 16 total digits and 19-digit integers fall back; the oracle binds them.
+        Outcome sixteen = assertFallback(reader,
+                "{\"name\":\"a\",\"score\":1.234567890123456}");
+        assertEquals(new FlatDoubles("a", 1.234567890123456, null, 0.0f, null), sixteen.value());
+        Outcome nineteen = assertFallback(reader,
+                "{\"name\":\"a\",\"score\":1234567890123456789}");
+        assertEquals(new FlatDoubles("a", (double) 1234567890123456789L, null, 0.0f, null),
+                nineteen.value());
+        // String-for-number coercion and non-canonical grammar fall back.
+        assertFallback(reader, "{\"name\":\"a\",\"score\":\"98.5\"}");
+        assertFallback(reader, "{\"name\":\"a\",\"score\":01.5}");
+        assertFallback(reader, "{\"name\":\"a\",\"score\":1.}");
     }
 
     @Test

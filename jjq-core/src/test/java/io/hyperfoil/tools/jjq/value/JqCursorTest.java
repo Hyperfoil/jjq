@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class JqCursorTest {
 
     /** Field kinds the test driver (mimicking #173 generated code) decodes. */
-    enum Kind { STRING, INT, LONG, BOOLEAN }
+    enum Kind { STRING, INT, LONG, BOOLEAN, DOUBLE }
 
     /** Decoded outcome: complete with values, or an explicit fallback. */
     record DecodeResult(boolean complete, Map<String, Object> values) {
@@ -94,6 +94,11 @@ class JqCursorTest {
                     if (!cursor.readBoolean()) return DecodeResult.fallback();
                     out.put(names[idx], cursor.booleanValue());
                 }
+                case DOUBLE -> {
+                    if (peek != JqValues.JqCursor.ValueKind.NUMBER) return DecodeResult.fallback();
+                    if (!cursor.readDouble()) return DecodeResult.fallback();
+                    out.put(names[idx], cursor.doubleValue());
+                }
             }
         }
         if (!cursor.endInput()) return DecodeResult.fallback();
@@ -151,6 +156,11 @@ class JqCursorTest {
                     }
                     if (!cursor.readBoolean()) return DecodeResult.fallback();
                     out.put(names[idx], cursor.booleanValue());
+                }
+                case DOUBLE -> {
+                    if (peek != JqValues.JqCursor.ValueKind.NUMBER) return DecodeResult.fallback();
+                    if (!cursor.readDouble()) return DecodeResult.fallback();
+                    out.put(names[idx], cursor.doubleValue());
                 }
             }
         }
@@ -255,6 +265,7 @@ class JqCursorTest {
                     case LONG -> v.longValue();
                     case INT -> (int) v.longValue();
                     case BOOLEAN -> v.booleanValue();
+                    case DOUBLE -> v.doubleValue();
                 };
             }
             Object actual = decoded.get(names[i]);
@@ -302,6 +313,61 @@ class JqCursorTest {
         assertCompletes("{}", NAMES, KINDS);
         assertCompletes("{\"name\":\"x\"}", NAMES, KINDS);
         assertCompletes("  {\"name\":\"x\"}  ", NAMES, KINDS);
+    }
+
+    @Test
+    void canonicalDoublesComplete() {
+        String[] names = {"name", "score"};
+        Kind[] kinds = {Kind.STRING, Kind.DOUBLE};
+        assertCompletes("{\"name\":\"a\",\"score\":1.5}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":-0.5}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":-0.0}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":-0}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":0}", names, kinds);
+        // Integer-lexed tokens bind to double exactly like the tree path.
+        assertCompletes("{\"name\":\"a\",\"score\":30}", names, kinds);
+        // 19-digit integers fall back (the parser's own fast path stops at
+        // 18 digits); the tree path binds them exactly.
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":9223372036854775807}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":-9223372036854775808}"), names, kinds);
+        // Exponent forms, including exp-without-dot and both signs.
+        assertCompletes("{\"name\":\"a\",\"score\":1e2}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":1.5e-3}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":1.5E+3}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":2.5e18}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":1e-18}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":0.0}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":0.5}", names, kinds);
+        // 15 total digits: the fast-window boundary.
+        assertCompletes("{\"name\":\"a\",\"score\":123.456789012345}", names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":1.23456789012345e6}", names, kinds);
+    }
+
+    @Test
+    void nonCanonicalOrExoticDoublesFallBack() {
+        String[] names = {"name", "score"};
+        Kind[] kinds = {Kind.STRING, Kind.DOUBLE};
+        // 16 total digits: decimals fall outside the fast window; plain
+        // integers stay inside the <=18 integer window.
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1.234567890123456}"), names, kinds);
+        assertCompletes("{\"name\":\"a\",\"score\":1234567890123456}", names, kinds);
+        // 19 integer digits: beyond the long fast path.
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1234567890123456789}"), names, kinds);
+        // Exponent outside [-18, 18] and 10+ digit exponents.
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1e19}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1e-19}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1e0000000001}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1e+}"), names, kinds);
+        // Non-canonical grammar: the tree path reports the strict error.
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":01.5}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1.}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":.5}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":-}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":1e}"), names, kinds);
+        // Strings and booleans for double fields: lenient coercions and
+        // mismatches live on the fallback path.
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":\"1.5\"}"), names, kinds);
+        assertFallsBack(bytes("{\"name\":\"a\",\"score\":true}"), names, kinds);
     }
 
     @Test

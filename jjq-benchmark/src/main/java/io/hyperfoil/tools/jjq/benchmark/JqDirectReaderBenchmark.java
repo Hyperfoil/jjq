@@ -58,12 +58,17 @@ public class JqDirectReaderBenchmark {
             String s10, int i11, long l12, boolean b13, Boolean e14,
             String s15, int i16, long l17, boolean b18, String s19) {}
 
+    /** Double/float fixture: the scalar kinds the reader decodes via readDouble. */
+    @JqMapped
+    public record FlatD(String name, double score, Double boxed, float ratio, Float boxedRatio,
+            int count) {}
+
     // ========================================================================
     //  Corpus (order matters: canonical rows must complete, rest must fall back)
     // ========================================================================
 
     /** Which fixture the current iteration decodes. */
-    @Param({"flat5", "flat20"})
+    @Param({"flat5", "flat20", "flatd"})
     public String fixture;
 
     /**
@@ -91,6 +96,26 @@ public class JqDirectReaderBenchmark {
             case "unicode" -> "{\"name\":\"caf\u00e9\u4e2d\ud83d\ude00\",\"age\":1,\"score\":2,\"active\":false}";
             case "coerce" -> "{\"name\":42,\"age\":1,\"score\":2,\"active\":false}";
             case "unknown" -> "{\"name\":\"ann\",\"age\":1,\"score\":2,\"active\":false,\"extra\":1}";
+            default -> throw new IllegalArgumentException(shape);
+        };
+    }
+
+    private static String flatd(String shape) {
+        return switch (shape) {
+            case "ordered" -> "{\"name\":\"ann\",\"score\":98.5,\"boxed\":1.5,\"ratio\":0.25,"
+                    + "\"boxedRatio\":0.75,\"count\":3}";
+            case "reordered" -> "{\"count\":3,\"boxedRatio\":0.75,\"ratio\":0.25,\"boxed\":1.5,"
+                    + "\"score\":98.5,\"name\":\"ann\"}";
+            case "partial" -> "{\"name\":\"ann\"}";
+            case "nulls" -> "{\"name\":null,\"score\":1.5,\"boxed\":null,\"ratio\":null}";
+            case "escaped" -> "{\"name\":\"a\\\"b\",\"score\":98.5,\"boxed\":1.5,\"ratio\":0.25,"
+                    + "\"boxedRatio\":0.75,\"count\":3}";
+            case "unicode" -> "{\"name\":\"caf\u00e9\",\"score\":98.5,\"boxed\":1.5,\"ratio\":0.25,"
+                    + "\"boxedRatio\":0.75,\"count\":3}";
+            case "coerce" -> "{\"name\":\"ann\",\"score\":\"98.5\",\"boxed\":1.5,\"ratio\":0.25,"
+                    + "\"boxedRatio\":0.75,\"count\":3}";
+            case "unknown" -> "{\"name\":\"ann\",\"score\":98.5,\"boxed\":1.5,\"ratio\":0.25,"
+                    + "\"boxedRatio\":0.75,\"count\":3,\"extra\":1}";
             default -> throw new IllegalArgumentException(shape);
         };
     }
@@ -127,9 +152,14 @@ public class JqDirectReaderBenchmark {
 
     @Setup
     public void setup() throws Throwable {
-        String json = fixture.equals("flat5") ? flat5(shape) : flat20(shape);
+        String json = switch (fixture) {
+            case "flat5" -> flat5(shape);
+            case "flatd" -> flatd(shape);
+            default -> flat20(shape);
+        };
         document = json.getBytes(StandardCharsets.UTF_8);
-        targetType = fixture.equals("flat5") ? Flat5.class : Flat20.class;
+        targetType = fixture.equals("flat5") ? Flat5.class
+                : fixture.equals("flatd") ? FlatD.class : Flat20.class;
 
         baselineMapper = JqMapper.create();
         // Warm the baseline mapping (generated _JqMapping discovery included).
@@ -181,7 +211,11 @@ public class JqDirectReaderBenchmark {
     }
 
     private byte[] documentFor(String canonicalShape) {
-        String json = fixture.equals("flat5") ? flat5(canonicalShape) : flat20(canonicalShape);
+        String json = switch (fixture) {
+            case "flat5" -> flat5(canonicalShape);
+            case "flatd" -> flatd(canonicalShape);
+            default -> flat20(canonicalShape);
+        };
         return json.getBytes(StandardCharsets.UTF_8);
     }
 

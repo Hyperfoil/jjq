@@ -220,7 +220,7 @@ public final class BindingSchema {
     /** Conversion kinds the MVP direct reader decodes inline. */
     private static boolean isDirectScalar(TypeConverter.Kind kind) {
         return switch (kind) {
-            case STRING, INT, LONG, BOOLEAN -> true;
+            case STRING, INT, LONG, BOOLEAN, DOUBLE, FLOAT -> true;
             default -> false;
         };
     }

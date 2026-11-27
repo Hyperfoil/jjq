@@ -101,6 +101,14 @@ public class JjqProcessor {
     /** Generated CDI producer for the application mapper (one per application). */
     static final String PRODUCER_CLASS = "io.hyperfoil.tools.jjq.quarkus.generated.JjqMapperProducer";
 
+    /** Cursor reads for double/float fields (#206): set doubleHolder, cast on read. */
+    private static final MethodDesc M_READ_DOUBLE = MethodDesc.of(
+            JqValues.JqCursor.class, "readDouble", boolean.class);
+    private static final MethodDesc M_DOUBLE_VALUE = MethodDesc.of(
+            JqValues.JqCursor.class, "doubleValue", double.class);
+    private static final MethodDesc M_FLOAT_VALUE = MethodDesc.of(
+            JqValues.JqCursor.class, "floatValue", float.class);
+
     private static final DotName JQ_MAPPED = DotName.createSimple(JqMapped.class.getName());
     private static final DotName JQ_TYPE = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqType");
     private static final DotName JQ_NAME = DotName.createSimple("io.hyperfoil.tools.jjq.mapper.JqName");
@@ -796,7 +804,7 @@ public class JjqProcessor {
                         + "' of " + name + " uses the reflective path");
             }
             switch (field.kind()) {
-                case STRING, INT, LONG, BOOLEAN -> { }
+                case STRING, INT, LONG, BOOLEAN, DOUBLE, FLOAT -> { }
                 default -> throw new IllegalArgumentException("jjq: field '" + field.wireName()
                         + "' of " + name + " has kind " + field.kind());
             }
@@ -1027,7 +1035,10 @@ public class JjqProcessor {
         if (javaType == int.class) return bc.localVar(name, 0);
         if (javaType == long.class) return bc.localVar(name, 0L);
         if (javaType == boolean.class) return bc.localVar(name, false);
-        if (javaType == Integer.class || javaType == Long.class || javaType == Boolean.class) {
+        if (javaType == double.class) return bc.localVar(name, 0.0);
+        if (javaType == float.class) return bc.localVar(name, 0.0f);
+        if (javaType == Integer.class || javaType == Long.class || javaType == Boolean.class
+                || javaType == Double.class || javaType == Float.class) {
             return bc.localVar(name, javaType, Const.ofNull(javaType));
         }
         throw new IllegalArgumentException(
@@ -1086,6 +1097,14 @@ public class JjqProcessor {
                 ifNotFallback(e, e.invokeVirtual(mReadLong, cursor));
                 LocalVar holder = e.localVar("h_" + field.javaName(),
                         e.invokeVirtual(mLongValue, cursor));
+                e.set(value, javaType.isPrimitive() ? holder : e.box(holder));
+            }
+            case DOUBLE, FLOAT -> {
+                ifNotFallback(e, e.eq(peek, cNumber));
+                ifNotFallback(e, e.invokeVirtual(M_READ_DOUBLE, cursor));
+                LocalVar holder = e.localVar("h_" + field.javaName(),
+                        e.invokeVirtual(field.kind() == TypeConverter.Kind.DOUBLE
+                                ? M_DOUBLE_VALUE : M_FLOAT_VALUE, cursor));
                 e.set(value, javaType.isPrimitive() ? holder : e.box(holder));
             }
             case BOOLEAN -> {

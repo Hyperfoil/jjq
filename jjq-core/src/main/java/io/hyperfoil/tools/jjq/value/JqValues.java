@@ -2325,6 +2325,7 @@ public final class JqValues {
         private long longHolder;
         private int intHolder;
         private boolean boolHolder;
+        private double doubleHolder;
         /** Scan state shared by the integer readers (magnitude limit varies). */
         private boolean negated;
         private long negatedAcc;
@@ -2651,6 +2652,123 @@ public final class JqValues {
 
         /** Decoded value of the last successful {@link #readInt}. */
         public int intValue() { return intHolder; }
+
+        /**
+         * Decode a canonical JSON number as a double, replicating the byte
+         * parser's fast paths bit-for-bit: integer-lexed tokens of up to 18
+         * digits convert from the accumulated long, and decimals with at
+         * most 15 total digits and an exponent in [-18, 18] use the same
+         * POW10 accumulation. Longer digit runs, larger exponents,
+         * exponents of 10 or more digits, and non-canonical forms (leading
+         * zeros, bare dot, bare exponent) report fallback — the existing
+         * path then produces the identical value or error.
+         *
+         * @return true with {@link #doubleValue} set, false to fall back
+         */
+        public boolean readDouble() {
+            JsonByteReader r = this.r;
+            byte[] d = r.data;
+            int e = r.end;
+            int p = r.pos;
+            if (p >= e) return false;
+            boolean negative = false;
+            if ((d[p] & 0xFF) == '-') {
+                negative = true;
+                if (++p >= e) return false;
+            }
+            long acc = 0;
+            int intDigits = 0;
+            while (p < e) {
+                int c = (d[p] & 0xFF) - '0';
+                if (c < 0 || c > 9) break;
+                acc = acc * 10 + c;
+                intDigits++;
+                p++;
+            }
+            if (intDigits == 0) return false;
+            // Canonical integers never start with a zero digit ("0" alone).
+            if (intDigits > 1 && (d[r.pos + (negative ? 1 : 0)] & 0xFF) == '0') return false;
+            boolean decimal = false;
+            long fracPart = 0;
+            int fracCount = 0;
+            if (p < e && (d[p] & 0xFF) == '.') {
+                decimal = true;
+                p++;
+                while (p < e) {
+                    int c = (d[p] & 0xFF) - '0';
+                    if (c < 0 || c > 9) break;
+                    // Count one digit past the fast-path gate: 16+ fraction
+                    // digits always fall back, so accumulation can stop there.
+                    if (fracCount < 16) {
+                        fracPart = fracPart * 10 + c;
+                        fracCount++;
+                    }
+                    p++;
+                }
+                if (fracCount == 0) return false;
+            }
+            int expValue = 0;
+            if (p < e && ((d[p] & 0xFF) == 'e' || (d[p] & 0xFF) == 'E')) {
+                decimal = true;
+                p++;
+                boolean expNegative = false;
+                if (p < e && (d[p] & 0xFF) == '-') {
+                    expNegative = true;
+                    p++;
+                } else if (p < e && (d[p] & 0xFF) == '+') {
+                    p++;
+                }
+                int expDigits = 0;
+                while (p < e) {
+                    int c = (d[p] & 0xFF) - '0';
+                    if (c < 0 || c > 9) break;
+                    expValue = expValue * 10 + c;
+                    expDigits++;
+                    p++;
+                }
+                if (expDigits == 0) return false;
+                // Exponents of 10+ digits sit outside every fast path and
+                // can truncate the parser's capped accumulation — leave
+                // them to the existing path.
+                if (expDigits > 9) return false;
+                if (expNegative) expValue = -expValue;
+            }
+            if (!decimal) {
+                if (intDigits > 18) return false;
+                // Integer-lexed: the same double the parser's long-backed
+                // number yields (negating zero keeps negative zero).
+                double value = (double) acc;
+                doubleHolder = negative ? -value : value;
+                r.pos = p;
+                return true;
+            }
+            // Decimal fast window, mirroring the byte parser exactly.
+            if (intDigits > 15 || fracCount > 15 || intDigits + fracCount > 15
+                    || expValue < -18 || expValue > 18) {
+                return false;
+            }
+            double value = (double) acc;
+            if (fracCount > 0) value += (double) fracPart / POW10[fracCount];
+            if (expValue > 0 && expValue < POW10.length) value *= POW10[expValue];
+            else if (expValue < 0 && -expValue < POW10.length) value /= POW10[-expValue];
+            else if (expValue != 0) value *= Math.pow(10, expValue);
+            doubleHolder = negative ? -value : value;
+            r.pos = p;
+            return true;
+        }
+
+        /** Decoded value of the last successful {@link #readDouble}. */
+        public double doubleValue() {
+            return doubleHolder;
+        }
+
+        /**
+         * The last {@link #readDouble} value narrowed to float — the same
+         * Java cast the tree path applies when binding float fields.
+         */
+        public float floatValue() {
+            return (float) doubleHolder;
+        }
 
         /**
          * Scan a canonical integer capped at {@code cap * 10 + 7/8}: the
