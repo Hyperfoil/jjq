@@ -99,7 +99,10 @@ public class JqMappedMessageBodyReader implements MessageBodyReader<Object> {
                             Annotation[] annotations, MediaType mediaType,
                             MultivaluedMap<String, String> httpHeaders,
                             InputStream entityStream) throws IOException, WebApplicationException {
-        byte[] bytes = entityStream.readAllBytes();
+        // Buffered-first read: available() sizes the buffer for the common
+        // fully-buffered request body; the JDK readAllBytes would allocate
+        // its fixed 8 KB scratch plus a copy per request (#215).
+        byte[] bytes = IoSupport.readAll(entityStream);
         try {
             if (CollectionSupport.isDirectlyMappable(type)) {
                 // Strict bytes-to-target dispatch: a registered direct

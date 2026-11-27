@@ -45,7 +45,9 @@ public class JqValueMessageBodyReader implements MessageBodyReader<JqValue> {
                              Annotation[] annotations, MediaType mediaType,
                              MultivaluedMap<String, String> httpHeaders,
                              InputStream entityStream) throws IOException, WebApplicationException {
-        byte[] bytes = entityStream.readAllBytes();
+        // Buffered-first read (see IoSupport): avoids the JDK readAllBytes
+        // fixed scratch plus copy per request (#215).
+        byte[] bytes = IoSupport.readAll(entityStream);
         if (bytes.length == 0) {
             return null;
         }
