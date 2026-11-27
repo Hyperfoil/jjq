@@ -94,21 +94,49 @@ public class JqMappedMessageBodyWriter implements MessageBodyWriter<Object> {
         if (value == null) {
             return;
         }
-        BytOutput out = JqValues.acquireByteBuffer();
-        if (CollectionSupport.isDirectlyMappable(type)) {
-            mapper.appendJsonBytes(value, out);
-        } else if (value instanceof java.util.Collection<?> collection) {
-            writeCollection(collection, out);
-        } else if (value instanceof java.util.Map<?, ?> map) {
-            writeMap(map, out);
-        } else if (value instanceof Object[] array) {
-            writeArray(array, out);
-        } else {
-            // Anything else (primitive arrays and containers the mapper
-            // declines) serializes through the tree exactly as before.
-            TypeConverter.toJqValue(value, mapper).appendToBytes(out);
+        // One identity scope per response: collection elements share the
+        // @JqId dedup a single tree conversion would apply, instead of each
+        // element entering a fresh scope and duplicating repeats.
+        try {
+            mapper.runInIdentityScope(() -> {
+                try {
+                    writeToBody(value, type, entityStream);
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            });
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
         }
-        JqValues.writeByteBuffer(out, entityStream);
+    }
+
+    /**
+     * Serialize the body into the thread-local buffer and stream it. On any
+     * failure the buffer is discarded through the retention check — an
+     * oversized buffer must not stay thread-retained just because the
+     * response never completed.
+     */
+    private void writeToBody(Object value, Class<?> type, OutputStream entityStream) throws IOException {
+        BytOutput out = JqValues.acquireByteBuffer();
+        try {
+            if (CollectionSupport.isDirectlyMappable(type)) {
+                mapper.appendJsonBytes(value, out);
+            } else if (value instanceof java.util.Collection<?> collection) {
+                writeCollection(collection, out);
+            } else if (value instanceof java.util.Map<?, ?> map) {
+                writeMap(map, out);
+            } else if (value instanceof Object[] array) {
+                writeArray(array, out);
+            } else {
+                // Anything else (primitive arrays and containers the mapper
+                // declines) serializes through the tree exactly as before.
+                TypeConverter.toJqValue(value, mapper).appendToBytes(out);
+            }
+            JqValues.writeByteBuffer(out, entityStream);
+        } catch (Throwable t) {
+            JqValues.discardByteBuffer(out);
+            throw t;
+        }
     }
 
     /**

@@ -27,6 +27,10 @@ class JqMappedMessageBodyTest {
     @JqMapped
     record SimpleUser(String name, int age, boolean active) {}
 
+    @io.hyperfoil.tools.jjq.mapper.JqId
+    @JqMapped
+    record IdUser(String id, String name) {}
+
     @JqMapped
     record WithJqField(
             String user,
@@ -270,6 +274,10 @@ class JqMappedMessageBodyTest {
 
     private static java.lang.reflect.Type listOfUsers() {
         return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<SimpleUser>>() {}.getType();
+    }
+
+    private static java.lang.reflect.Type listOfIdUsers() {
+        return new io.hyperfoil.tools.jjq.mapper.TypeToken<java.util.List<IdUser>>() {}.getType();
     }
 
     private static java.lang.reflect.Type setOfUsers() {
@@ -560,6 +568,23 @@ class JqMappedMessageBodyTest {
         assertEquals(treeBytes(new SimpleUser[]{new SimpleUser("Alice", 30, true)}),
                 writeGeneric(new SimpleUser[]{new SimpleUser("Alice", 30, true)},
                         SimpleUser[].class, SimpleUser[].class));
+    }
+
+    @Test
+    void writeTo_idCollectionDedupsLikeTree() throws IOException {
+        // A repeated @JqId instance in one response collection renders as
+        // object plus id reference under one scope — the same dedup a single
+        // tree conversion applies. Previously each element entered a fresh
+        // scope and duplicated the full object.
+        var alice = new IdUser("a1", "Alice");
+        var list = java.util.Arrays.asList(alice, alice);
+        var mapper = JqMapper.create();
+        final String[] tree = new String[1];
+        mapper.runInIdentityScope(() -> tree[0] = io.hyperfoil.tools.jjq.mapper.TypeConverter
+                .toJqValue(list, mapper).toJsonString());
+        assertEquals("[{\"id\":\"a1\",\"name\":\"Alice\"},\"a1\"]", tree[0]);
+        assertEquals(tree[0], writeGeneric(new JqMappedMessageBodyWriter(mapper), list,
+                java.util.List.class, listOfIdUsers()));
     }
 
     @Test

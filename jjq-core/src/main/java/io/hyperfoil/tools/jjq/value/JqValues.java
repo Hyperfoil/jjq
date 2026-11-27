@@ -749,6 +749,20 @@ public final class JqValues {
     }
 
     /**
+     * Return the thread-local byte buffer without writing anything, applying
+     * the same retention cap as {@link #writeByteBuffer(BytOutput, java.io.OutputStream)}.
+     * Use when serialization fails mid-buffer: an oversized buffer must not
+     * stay retained just because the response never completed.
+     *
+     * @param out the buffer previously obtained from {@link #acquireByteBuffer()}
+     */
+    public static void discardByteBuffer(BytOutput out) {
+        if (out.buf.length > SERIALIZE_BUFFER_MAX_RETAINED) {
+            BYTE_SERIALIZER_BUFFER.set(new BytOutput(SERIALIZE_BUFFER_INIT));
+        }
+    }
+
+    /**
      * Return the thread-local StringBuilder for JSON serialization.
      * The caller must call {@link #releaseSerializerBuffer(StringBuilder)} after use.
      *

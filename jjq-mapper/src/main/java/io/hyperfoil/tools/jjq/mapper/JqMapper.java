@@ -690,6 +690,29 @@ public final class JqMapper {
         }
     }
 
+    /**
+     * Run a batch of mapper operations under one object-identity scope, so
+     * repeated instances across the batch deduplicate exactly as they would
+     * inside a single tree conversion — for example serializing a response
+     * collection element by element shares one {@code @JqId} scope instead
+     * of each element starting fresh. Re-entering an already-active scope is
+     * safe: the ambient scope covers the action.
+     *
+     * @param action the operations to run under one scope
+     */
+    public void runInIdentityScope(Runnable action) {
+        IdentityScope scope = IdentityScope.enterOwned();
+        if (scope == null) {
+            action.run();
+            return;
+        }
+        try {
+            action.run();
+        } finally {
+            scope.close();
+        }
+    }
+
     private String toJsonBufferedInner(Object value) {
         try (CharOutput out = CharOutput.acquire()) {
             appendJson(value, out);
