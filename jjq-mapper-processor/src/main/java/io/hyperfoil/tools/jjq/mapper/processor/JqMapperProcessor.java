@@ -326,7 +326,7 @@ public class JqMapperProcessor extends AbstractProcessor {
         if (!validateOrderSpec(recordType, components, ComponentInfo::jsonName, recordOrder)) return null;
         String source = MappingCodeGenerator.generate(
                 packageName, recordSourceName, recordQualifiedName, mappingClassName, components,
-                recordAnyInfo, recordCreator, recordRequired, recordOrder);
+                recordAnyInfo, recordCreator, recordRequired, recordOrder, this::isMappedTypeName);
 
         // Write the generated source file
         try {
@@ -553,7 +553,7 @@ public class JqMapperProcessor extends AbstractProcessor {
         if (!validateOrderSpec(classType, properties, PropertyInfo::jsonName, pojoOrder)) return null;
         String source = MappingCodeGenerator.generateForClass(
                 packageName, classSourceName, classQualifiedName, mappingClassName, properties,
-                pojoAnyInfo, pojoCreator, pojoBuilder, pojoRequired, pojoOrder);
+                pojoAnyInfo, pojoCreator, pojoBuilder, pojoRequired, pojoOrder, this::isMappedTypeName);
 
         try {
             JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedMappingName, classType);
@@ -2146,5 +2146,19 @@ public class JqMapperProcessor extends AbstractProcessor {
         if (kind != javax.lang.model.element.ElementKind.CLASS
                 && kind != javax.lang.model.element.ElementKind.RECORD) return false;
         return element.getAnnotation(JqMapped.class) != null;
+    }
+
+    /**
+     * Whether a fully-qualified type name carries {@code @JqMapped} — the
+     * code generator's element-type oracle for collection fields (the
+     * TypeMirror of the element is not threaded through ComponentInfo).
+     * Resolves through the compilation's type universe, so same-round and
+     * already-compiled mapped types both answer correctly.
+     */
+    private boolean isMappedTypeName(String typeName) {
+        if (typeName == null || typeName.indexOf('<') >= 0 || typeName.endsWith("[]")) return false;
+        javax.lang.model.element.TypeElement element =
+                processingEnv.getElementUtils().getTypeElement(typeName);
+        return element != null && element.getAnnotation(JqMapped.class) != null;
     }
 }

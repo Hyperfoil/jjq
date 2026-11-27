@@ -4427,6 +4427,103 @@ class JqMapperProcessorTest {
         return success;
     }
 
+    @Test
+    void containerSerializationMatchesTree() throws Exception {
+        String source = """
+                package test;
+                import io.hyperfoil.tools.jjq.mapper.JqMapped;
+                public class CollectionModels {
+                    public enum Kind { ALPHA, BETA }
+                    public record UnmappedChild(String name) {}
+                    @JqMapped public record Child(String name, int age) {}
+                    @JqMapped public record ContainerRecord(
+                            java.util.List<String> strings,
+                            java.util.List<Long> longs,
+                            java.util.List<Double> doubles,
+                            java.util.List<Boolean> booleans,
+                            java.util.List<java.math.BigDecimal> decimals,
+                            java.util.List<Child> children,
+                            java.util.List<Kind> enums,
+                            java.util.List<UnmappedChild> pojos,
+                            java.util.List<java.util.List<String>> nested,
+                            java.util.Set<String> set,
+                            java.util.Map<String, Long> map,
+                            java.util.Optional<String> opt) {}
+                    @JqMapped public record DirectContainers(
+                            java.util.List<String> strings,
+                            java.util.List<Long> longs,
+                            java.util.Map<String, Long> map,
+                            java.util.Optional<Child> opt,
+                            java.util.List<Child> children) {}
+                }
+                """;
+        Class<?> models = compileAndLoad("test.CollectionModels", source);
+        ClassLoader loader = models.getClassLoader();
+        Class<?> container = Class.forName("test.CollectionModels$ContainerRecord", true, loader);
+        Class<?> direct = Class.forName("test.CollectionModels$DirectContainers", true, loader);
+        Class<?> child = Class.forName("test.CollectionModels$Child", true, loader);
+        Class<?> unmapped = Class.forName("test.CollectionModels$UnmappedChild", true, loader);
+        Class<?> kind = Class.forName("test.CollectionModels$Kind", true, loader);
+
+        var childCtor = child.getDeclaredConstructor(String.class, int.class);
+        Object childA = childCtor.newInstance("a", 1);
+        Object childB = childCtor.newInstance("b", 2);
+        Object unmappedChild = unmapped.getDeclaredConstructor(String.class).newInstance("u");
+        Object[] enumConstants = kind.getEnumConstants();
+
+        var containerCtor = container.getDeclaredConstructor(
+                java.util.List.class, java.util.List.class, java.util.List.class, java.util.List.class,
+                java.util.List.class, java.util.List.class, java.util.List.class, java.util.List.class,
+                java.util.List.class, java.util.Set.class, java.util.Map.class, java.util.Optional.class);
+        // Full instance: null elements in every list kind, null map values.
+        Object full = containerCtor.newInstance(
+                java.util.Arrays.asList("a", null, "b\"c"),
+                java.util.Arrays.asList(1732627200000123L, null, 42L),
+                java.util.Arrays.asList(9.99, null, -0.0),
+                java.util.Arrays.asList(true, null, false),
+                java.util.Arrays.asList(new java.math.BigDecimal("12345678901234567890.12500"), null),
+                java.util.Arrays.asList(childA, null, childB),
+                java.util.Arrays.asList(enumConstants[0], null, enumConstants[1]),
+                java.util.Arrays.asList(unmappedChild, null),
+                java.util.Arrays.asList(java.util.List.of("x", "y"), null, java.util.List.of()),
+                new java.util.LinkedHashSet<>(java.util.Arrays.asList("s1", "s2")),
+                linkedMap("k1", 1L, "k2", null),
+                java.util.Optional.of("opt"));
+        Object nulls = containerCtor.newInstance(null, null, null, null, null, null,
+                null, null, null, null, null, null);
+        Object empties = containerCtor.newInstance(
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(), java.util.Set.of(), java.util.Map.of(), java.util.Optional.empty());
+
+        var directCtor = direct.getDeclaredConstructor(java.util.List.class, java.util.List.class,
+                java.util.Map.class, java.util.Optional.class, java.util.List.class);
+        Object directEmpty = directCtor.newInstance(
+                java.util.Arrays.asList("a", null), java.util.Arrays.asList(1L, null),
+                linkedMap("k", 2L), java.util.Optional.empty(), java.util.Arrays.asList(childA, null));
+        Object directPresent = directCtor.newInstance(
+                java.util.List.of(), java.util.List.of(), java.util.Map.of(),
+                java.util.Optional.of(childB), java.util.List.of());
+
+        JqMapper mapper = JqMapper.create();
+        for (Object value : new Object[]{full, nulls, empties, directEmpty, directPresent}) {
+            String label = value.getClass().getSimpleName();
+            String tree = mapper.toJqValue(value).toJsonString();
+            assertEquals(tree, mapper.toJson(value), "toJson " + label);
+            assertEquals(tree, mapper.toJsonBuffered(value), "buffered " + label);
+            assertEquals(tree, new String(mapper.toJsonBytes(value), java.nio.charset.StandardCharsets.UTF_8),
+                    "bytes " + label);
+        }
+    }
+
+    private static java.util.Map<String, Long> linkedMap(Object... kv) {
+        var m = new java.util.LinkedHashMap<String, Long>();
+        for (int i = 0; i < kv.length; i += 2) {
+            m.put((String) kv[i], (Long) kv[i + 1]);
+        }
+        return m;
+    }
+
     private static class InMemorySource extends SimpleJavaFileObject {
         private final String source;
 

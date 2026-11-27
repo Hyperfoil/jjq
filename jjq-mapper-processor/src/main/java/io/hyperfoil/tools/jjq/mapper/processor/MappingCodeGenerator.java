@@ -16,7 +16,8 @@ final class MappingCodeGenerator {
     static String generate(String packageName, String recordSimpleName, String recordQualifiedName,
                            String mappingClassName, List<JqMapperProcessor.ComponentInfo> components,
                            JqMapperProcessor.AnyInfo anyInfo, JqMapperProcessor.CreatorInfo creator,
-                           List<String> required, io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order) {
+                           List<String> required, io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order,
+                           java.util.function.Predicate<String> mappedTypeNames) {
         var sb = new StringBuilder(1024);
 
         // Deserialization source: creator params when a property creator is
@@ -218,18 +219,19 @@ final class MappingCodeGenerator {
         generateToJqValue(sb, recordSimpleName, components, anyInfo);
 
         // appendJson method — direct-to-JSON, bypasses JqValue tree
-        generateAppendJson(sb, recordSimpleName, components, anyInfo);
+        generateAppendJson(sb, recordSimpleName, components, anyInfo, mappedTypeNames);
         boolean buffered = !anyInfo.hasGetter() && components.stream()
                 .filter(c -> !c.ignored() && !c.skipSerialize())
                 .allMatch(c -> c.converterClass() == null && c.adapter() == null && !c.stringShape()
-                        && (c.format() != null || isDirectBufferedType(c.typeName(), c.nestedMapped())));
+                        && (c.format() != null
+                                || isDirectBufferedType(c.typeName(), c.nestedMapped(), mappedTypeNames)));
         if (buffered) {
             emitBufferedWriterOptIn(sb);
-            generateAppendJson(sb, recordSimpleName, components, anyInfo, "CharOutput");
+            generateAppendJson(sb, recordSimpleName, components, anyInfo, "CharOutput", mappedTypeNames);
         }
 
         // appendJsonBytes method — direct-to-bytes, bypasses JqValue tree
-        generateAppendJsonBytes(sb, recordSimpleName, components, anyInfo);
+        generateAppendJsonBytes(sb, recordSimpleName, components, anyInfo, mappedTypeNames);
 
         // type() method
         sb.append("    @Override\n");
@@ -997,7 +999,22 @@ final class MappingCodeGenerator {
 
     /** Keep tree/converter fallbacks and unmapped child types on StringBuilder. */
     private static boolean isDirectBufferedType(String typeName, boolean nested) {
+        return isDirectBufferedType(typeName, nested, t -> false);
+    }
+
+    private static boolean isDirectBufferedType(String typeName, boolean nested,
+            java.util.function.Predicate<String> mappedTypeNames) {
         if (nested) return true;
+        // Containers whose elements are directly encodable stream through the
+        // shared emission (issue #214); fallback elements keep the tree path,
+        // which the CharOutput overload cannot reach.
+        if (typeName.startsWith("java.util.List<") || typeName.startsWith("java.util.Set<")
+                || typeName.startsWith("java.util.Optional<")) {
+            return isDirectBufferedElement(extractGenericArg(typeName), mappedTypeNames);
+        }
+        if (typeName.startsWith("java.util.Map<")) {
+            return isDirectBufferedElement(extractMapValueType(typeName), mappedTypeNames);
+        }
         return switch (typeName) {
             case "java.lang.String", "char", "java.lang.Character",
                     "int", "java.lang.Integer", "long", "java.lang.Long",
@@ -1013,15 +1030,245 @@ final class MappingCodeGenerator {
         };
     }
 
-    private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
-                                             List<JqMapperProcessor.ComponentInfo> components,
-                                             JqMapperProcessor.AnyInfo anyInfo) {
-        generateAppendJson(sb, recordSimpleName, components, anyInfo, "StringBuilder");
+    /**
+     * Whether a container element type streams through the shared CharOutput
+     * emission: scalars and {@code @JqMapped} types do; enums, unmapped
+     * POJOs, arrays and nested generics keep the per-element tree fallback.
+     */
+    private static boolean isDirectBufferedElement(String elementType,
+            java.util.function.Predicate<String> mappedTypeNames) {
+        if (elementType == null || elementType.contains("<") || elementType.endsWith("[]")) return false;
+        if (elementType.startsWith("io.hyperfoil.tools.jjq.value.J")) return true;
+        return switch (elementType) {
+            case "java.lang.String", "java.lang.Character",
+                    "java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte",
+                    "java.lang.Double", "java.lang.Float", "java.lang.Boolean",
+                    "java.math.BigDecimal", "java.math.BigInteger",
+                    "java.util.UUID", "java.net.URI", "java.net.URL",
+                    "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                    "java.time.LocalDateTime", "java.time.OffsetDateTime", "java.time.ZonedDateTime",
+                    "java.time.Duration", "java.time.Period", "java.time.Year", "java.time.YearMonth",
+                    "java.time.MonthDay", "java.time.OffsetTime", "java.time.ZoneId", "java.time.ZoneOffset" -> true;
+            default -> mappedTypeNames.test(elementType);
+        };
+    }
+
+    // ==== Tree-free container emission (issue #214) ====
+
+    /**
+     * Whether the field type gets a direct streaming loop: declared
+     * {@code List/Set} (the tree path dispatches on the runtime class, so
+     * {@code Collection/Queue} keep it), {@code Map} and {@code Optional}.
+     */
+    private static boolean isStreamedContainer(String typeName) {
+        return typeName.startsWith("java.util.List<")
+                || typeName.startsWith("java.util.Set<")
+                || typeName.startsWith("java.util.Map<")
+                || typeName.startsWith("java.util.Optional<");
+    }
+
+    /**
+     * Value type argument of a {@code Map<K, V>} declaration: the second
+     * top-level comma-separated argument, tracking nested generics.
+     */
+    private static String extractMapValueType(String typeName) {
+        int start = typeName.indexOf('<');
+        int end = typeName.lastIndexOf('>');
+        if (start < 0 || end <= start) return "java.lang.Object";
+        String args = typeName.substring(start + 1, end);
+        int depth = 0;
+        for (int i = 0; i < args.length(); i++) {
+            char c = args.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == ',' && depth == 0) return args.substring(i + 1).trim();
+        }
+        return "java.lang.Object";
+    }
+
+    /**
+     * Emit the streaming loop for one container field (StringBuilder and
+     * CharOutput share this text — every emitted call has overloads for
+     * both). Output is byte-identical to the tree path: null fields and
+     * absent optionals render {@code null}, iteration order is the
+     * container's own, and keys stringify exactly as the tree path does.
+     */
+    private static void appendContainerValue(StringBuilder sb, String typeName, String accessor,
+            java.util.function.Predicate<String> mappedTypeNames) {
+        String values = "io.hyperfoil.tools.jjq.value.JqValues";
+        sb.append("        {\n");
+        sb.append("            var _c = ").append(accessor).append(";\n");
+        if (typeName.startsWith("java.util.Optional<")) {
+            sb.append("            if (_c == null || !_c.isPresent()) _sb.append(\"null\");\n");
+            sb.append("            else {\n");
+            appendElementValue(sb, extractGenericArg(typeName), "_c.get()", mappedTypeNames, 16);
+            sb.append("            }\n");
+        } else if (typeName.startsWith("java.util.Map<")) {
+            sb.append("            if (_c == null) _sb.append(\"null\");\n");
+            sb.append("            else {\n");
+            sb.append("                _sb.append('{');\n");
+            sb.append("                boolean _sep = false;\n");
+            sb.append("                for (var _e : _c.entrySet()) {\n");
+            sb.append("                    if (_sep) _sb.append(',');\n");
+            sb.append("                    _sep = true;\n");
+            sb.append("                    ").append(values).append(".appendJsonString(_sb, String.valueOf(_e.getKey()));\n");
+            sb.append("                    _sb.append(':');\n");
+            appendElementValue(sb, extractMapValueType(typeName), "_e.getValue()", mappedTypeNames, 20);
+            sb.append("                }\n");
+            sb.append("                _sb.append('}');\n");
+            sb.append("            }\n");
+        } else {
+            sb.append("            if (_c == null) _sb.append(\"null\");\n");
+            sb.append("            else {\n");
+            sb.append("                _sb.append('[');\n");
+            sb.append("                boolean _sep = false;\n");
+            sb.append("                for (var _e : _c) {\n");
+            sb.append("                    if (_sep) _sb.append(',');\n");
+            sb.append("                    _sep = true;\n");
+            appendElementValue(sb, extractGenericArg(typeName), "_e", mappedTypeNames, 20);
+            sb.append("                }\n");
+            sb.append("                _sb.append(']');\n");
+            sb.append("            }\n");
+        }
+        sb.append("        }\n");
+    }
+
+    /**
+     * Emit one element statement for the StringBuilder/CharOutput container
+     * loops. The CharOutput overload is only generated for directly
+     * encodable elements, so the tree fallback line never appears there.
+     */
+    private static void appendElementValue(StringBuilder sb, String elementType, String expr,
+            java.util.function.Predicate<String> mappedTypeNames, int indent) {
+        String values = "io.hyperfoil.tools.jjq.value.JqValues";
+        String line;
+        switch (elementType) {
+            case "java.lang.String", "String", "java.lang.Character", "Character" ->
+                line = values + ".appendJsonString(_sb, " + expr + ");";
+            case "java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte",
+                    "java.lang.Boolean" ->
+                // append(Object): null-safe "null", toString digits/truth
+                line = "_sb.append(" + expr + ");";
+            case "java.lang.Double", "java.lang.Float" ->
+                line = values + ".appendJsonDouble(_sb, " + expr + ");";
+            case "java.math.BigDecimal" ->
+                line = values + ".appendJsonDecimal(_sb, " + expr + ");";
+            case "java.math.BigInteger" ->
+                line = "_sb.append(" + expr + ");";
+            default -> {
+                if (elementType.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                        || elementType.equals("JqValue")
+                        || elementType.startsWith("io.hyperfoil.tools.jjq.value.J")) {
+                    line = values + ".appendJqValue(_sb, " + expr + ");";
+                } else if ((elementType.equals("java.util.UUID") || elementType.equals("java.net.URI")
+                        || elementType.equals("java.net.URL") || elementType.startsWith("java.time."))
+                        && !elementType.contains("<")) {
+                    line = values + ".appendJsonString(_sb, " + expr + " == null ? null : " + expr + ".toString());";
+                } else if (!elementType.contains("<") && !elementType.endsWith("[]")
+                        && mappedTypeNames.test(elementType)) {
+                    line = "mapper.appendJson(" + expr + ", _sb);";
+                } else {
+                    // Enums, unmapped POJOs, nested generics — per-element tree
+                    line = "io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(" + expr + ", mapper).appendTo(_sb);";
+                }
+            }
+        }
+        sb.append(" ".repeat(indent)).append(line).append("\n");
+    }
+
+    /**
+     * Emit the streaming loop for one container field (BytOutput). Same
+     * shape and parity as {@link #appendContainerValue}.
+     */
+    private static void appendContainerBytesValue(StringBuilder sb, String typeName, String accessor,
+            java.util.function.Predicate<String> mappedTypeNames) {
+        String values = "io.hyperfoil.tools.jjq.value.JqValues";
+        sb.append("        {\n");
+        sb.append("            var _c = ").append(accessor).append(";\n");
+        if (typeName.startsWith("java.util.Optional<")) {
+            sb.append("            if (_c == null || !_c.isPresent()) _out.writeNull();\n");
+            sb.append("            else {\n");
+            appendElementBytesValue(sb, extractGenericArg(typeName), "_c.get()", mappedTypeNames, 16);
+            sb.append("            }\n");
+        } else if (typeName.startsWith("java.util.Map<")) {
+            sb.append("            if (_c == null) _out.writeNull();\n");
+            sb.append("            else {\n");
+            sb.append("                _out.writeByte('{');\n");
+            sb.append("                boolean _sep = false;\n");
+            sb.append("                for (var _e : _c.entrySet()) {\n");
+            sb.append("                    if (_sep) _out.writeByte(',');\n");
+            sb.append("                    _sep = true;\n");
+            sb.append("                    ").append(values).append(".appendJsonString(_out, String.valueOf(_e.getKey()));\n");
+            sb.append("                    _out.writeByte(':');\n");
+            appendElementBytesValue(sb, extractMapValueType(typeName), "_e.getValue()", mappedTypeNames, 20);
+            sb.append("                }\n");
+            sb.append("                _out.writeByte('}');\n");
+            sb.append("            }\n");
+        } else {
+            sb.append("            if (_c == null) _out.writeNull();\n");
+            sb.append("            else {\n");
+            sb.append("                _out.writeByte('[');\n");
+            sb.append("                boolean _sep = false;\n");
+            sb.append("                for (var _e : _c) {\n");
+            sb.append("                    if (_sep) _out.writeByte(',');\n");
+            sb.append("                    _sep = true;\n");
+            appendElementBytesValue(sb, extractGenericArg(typeName), "_e", mappedTypeNames, 20);
+            sb.append("                }\n");
+            sb.append("                _out.writeByte(']');\n");
+            sb.append("            }\n");
+        }
+        sb.append("        }\n");
+    }
+
+    /** Emit one element statement for the BytOutput container loops. */
+    private static void appendElementBytesValue(StringBuilder sb, String elementType, String expr,
+            java.util.function.Predicate<String> mappedTypeNames, int indent) {
+        String values = "io.hyperfoil.tools.jjq.value.JqValues";
+        String line;
+        switch (elementType) {
+            case "java.lang.String", "String", "java.lang.Character", "Character" ->
+                line = values + ".appendJsonString(_out, " + expr + ");";
+            case "java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte" ->
+                line = values + ".appendJsonLong(_out, " + expr + ");";
+            case "java.lang.Boolean" ->
+                line = values + ".appendJsonBoolean(_out, " + expr + ");";
+            case "java.lang.Double", "java.lang.Float" ->
+                line = values + ".appendJsonDouble(_out, " + expr + ");";
+            case "java.math.BigDecimal" ->
+                line = values + ".appendJsonDecimal(_out, " + expr + ");";
+            case "java.math.BigInteger" ->
+                line = "if (" + expr + " == null) _out.writeNull(); else _out.writeAsciiString(" + expr + ".toString());";
+            default -> {
+                if (elementType.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                        || elementType.equals("JqValue")
+                        || elementType.startsWith("io.hyperfoil.tools.jjq.value.J")) {
+                    line = values + ".appendJqValue(_out, " + expr + ");";
+                } else if ((elementType.equals("java.util.UUID") || elementType.equals("java.net.URI")
+                        || elementType.equals("java.net.URL") || elementType.startsWith("java.time."))
+                        && !elementType.contains("<")) {
+                    line = values + ".appendJsonString(_out, " + expr + " == null ? null : " + expr + ".toString());";
+                } else if (!elementType.contains("<") && !elementType.endsWith("[]")
+                        && mappedTypeNames.test(elementType)) {
+                    line = "mapper.appendJsonBytes(" + expr + ", _out);";
+                } else {
+                    line = "io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(" + expr + ", mapper).appendToBytes(_out);";
+                }
+            }
+        }
+        sb.append(" ".repeat(indent)).append(line).append("\n");
     }
 
     private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
                                              List<JqMapperProcessor.ComponentInfo> components,
-                                             JqMapperProcessor.AnyInfo anyInfo, String outputType) {
+                                             JqMapperProcessor.AnyInfo anyInfo,
+                                             java.util.function.Predicate<String> mappedTypeNames) {
+        generateAppendJson(sb, recordSimpleName, components, anyInfo, "StringBuilder", mappedTypeNames);
+    }
+
+    private static void generateAppendJson(StringBuilder sb, String recordSimpleName,
+                                             List<JqMapperProcessor.ComponentInfo> components,
+                                             JqMapperProcessor.AnyInfo anyInfo, String outputType,
+                                             java.util.function.Predicate<String> mappedTypeNames) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
         // Fused keys apply when the constants exist (see generate): no
@@ -1047,7 +1294,7 @@ final class MappingCodeGenerator {
             for (var comp : components) {
                 if (comp.ignored() || comp.skipSerialize()) continue;
                 if (!first && !fuse) sb.append("        _sb.append(',');\n");
-                appendJsonField(sb, comp, fuse);
+                appendJsonField(sb, comp, fuse, mappedTypeNames);
                 first = false;
             }
         } else {
@@ -1058,9 +1305,9 @@ final class MappingCodeGenerator {
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
-                    appendJsonField(sb, comp, false);
+                    appendJsonField(sb, comp, false, mappedTypeNames);
                 } else {
-                    appendJsonFieldWithInclusion(sb, comp, accessor);
+                    appendJsonFieldWithInclusion(sb, comp, accessor, mappedTypeNames);
                 }
             }
         }
@@ -1071,37 +1318,39 @@ final class MappingCodeGenerator {
 
     /** Append a single field as JSON key:value to the StringBuilder. */
     private static void appendJsonField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
-            boolean fused) {
+            boolean fused, java.util.function.Predicate<String> mappedTypeNames) {
         String accessor = "instance." + comp.name() + "()";
         // Key — pre-escaped literal since JSON keys from Java identifiers never need escaping
         sb.append("        _sb.append(").append(fused ? "KEYF_" : "KEY_")
           .append(comp.name().toUpperCase()).append(");\n");
         // Value
-        appendJsonValue(sb, comp, accessor);
+        appendJsonValue(sb, comp, accessor, mappedTypeNames);
     }
 
     /** Append a field with inclusion check. */
     private static void appendJsonFieldWithInclusion(StringBuilder sb,
-                                                      JqMapperProcessor.ComponentInfo comp, String accessor) {
+                                                      JqMapperProcessor.ComponentInfo comp, String accessor,
+                                                      java.util.function.Predicate<String> mappedTypeNames) {
         String local = "_f_" + comp.name();
         sb.append("        var ").append(local).append(" = ").append(accessor).append(";\n");
         String condition = inclusionCondition(comp.inclusion(), local, comp.typeName());
         if ("true".equals(condition)) {
             sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
             sb.append("        _sb.append(KEY_").append(comp.name().toUpperCase()).append(");\n");
-            appendJsonValue(sb, comp, local);
+            appendJsonValue(sb, comp, local, mappedTypeNames);
             return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
         sb.append("            _sb.append(KEY_").append(comp.name().toUpperCase()).append(");\n");
         sb.append("    ");
-        appendJsonValue(sb, comp, local);
+        appendJsonValue(sb, comp, local, mappedTypeNames);
         sb.append("        }\n");
     }
 
     /** Append the JSON value for a single field. */
-    private static void appendJsonValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
+    private static void appendJsonValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
+            String accessor, java.util.function.Predicate<String> mappedTypeNames) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (comp.converterClass() != null) {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
@@ -1160,7 +1409,11 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
-                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                if (isStreamedContainer(typeName)) {
+                    // List/Set/Map/Optional — stream elements directly instead of
+                    // building the container tree (issue #214).
+                    appendContainerValue(sb, typeName, accessor, mappedTypeNames);
+                } else if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     // JqValue — null-safe via appendJqValue
@@ -1170,8 +1423,8 @@ final class MappingCodeGenerator {
                     // mapper (cache hit, no tree). Null-safe: renders JSON null.
                     sb.append("        mapper.appendJson(").append(accessor).append(", _sb);\n");
                 } else {
-                    // Enums, lists, maps, optionals, unmapped POJOs —
-                    // fall back to TypeConverter for now
+                    // Enums, raw/other containers, unmapped POJOs —
+                    // fall back to TypeConverter
                     sb.append("        io.hyperfoil.tools.jjq.mapper.TypeConverter.toJqValue(")
                       .append(accessor).append(", mapper).appendTo(_sb);\n");
                 }
@@ -1185,7 +1438,8 @@ final class MappingCodeGenerator {
      */
     private static void generateAppendJsonBytes(StringBuilder sb, String recordSimpleName,
                                                      List<JqMapperProcessor.ComponentInfo> components,
-                                                     JqMapperProcessor.AnyInfo anyInfo) {
+                                                     JqMapperProcessor.AnyInfo anyInfo,
+                                                     java.util.function.Predicate<String> mappedTypeNames) {
         boolean hasInclusion = components.stream()
                 .anyMatch(c -> !c.ignored() && !"ALWAYS".equals(c.inclusion()));
         boolean fuse = !hasInclusion && components.stream()
@@ -1208,7 +1462,7 @@ final class MappingCodeGenerator {
             for (var comp : components) {
                 if (comp.ignored() || comp.skipSerialize()) continue;
                 if (!first && !fuse) sb.append("        _out.writeByte(',');\n");
-                appendJsonBytesField(sb, comp, fuse);
+                appendJsonBytesField(sb, comp, fuse, mappedTypeNames);
                 first = false;
             }
         } else {
@@ -1218,9 +1472,9 @@ final class MappingCodeGenerator {
                 String accessor = "instance." + comp.name() + "()";
                 if ("ALWAYS".equals(comp.inclusion())) {
                     sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
-                    appendJsonBytesField(sb, comp, false);
+                    appendJsonBytesField(sb, comp, false, mappedTypeNames);
                 } else {
-                    appendJsonBytesFieldWithInclusion(sb, comp, accessor);
+                    appendJsonBytesFieldWithInclusion(sb, comp, accessor, mappedTypeNames);
                 }
             }
         }
@@ -1231,35 +1485,37 @@ final class MappingCodeGenerator {
 
     /** Append a single field as JSON key:value bytes. */
     private static void appendJsonBytesField(StringBuilder sb, JqMapperProcessor.ComponentInfo comp,
-            boolean fused) {
+            boolean fused, java.util.function.Predicate<String> mappedTypeNames) {
         String accessor = "instance." + comp.name() + "()";
         sb.append("        _out.writeBytes(").append(fused ? "KEYFB_" : "KEYB_")
           .append(comp.name().toUpperCase()).append(");\n");
-        appendJsonBytesValue(sb, comp, accessor);
+        appendJsonBytesValue(sb, comp, accessor, mappedTypeNames);
     }
 
     /** Append a field with inclusion check as bytes. */
     private static void appendJsonBytesFieldWithInclusion(StringBuilder sb,
-                                                           JqMapperProcessor.ComponentInfo comp, String accessor) {
+                                                           JqMapperProcessor.ComponentInfo comp, String accessor,
+                                                           java.util.function.Predicate<String> mappedTypeNames) {
         String local = "_f_" + comp.name();
         sb.append("        var ").append(local).append(" = ").append(accessor).append(";\n");
         String condition = inclusionCondition(comp.inclusion(), local, comp.typeName());
         if ("true".equals(condition)) {
             sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
             sb.append("        _out.writeBytes(KEYB_").append(comp.name().toUpperCase()).append(");\n");
-            appendJsonBytesValue(sb, comp, local);
+            appendJsonBytesValue(sb, comp, local, mappedTypeNames);
             return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
         sb.append("            _out.writeBytes(KEYB_").append(comp.name().toUpperCase()).append(");\n");
         sb.append("    ");
-        appendJsonBytesValue(sb, comp, local);
+        appendJsonBytesValue(sb, comp, local, mappedTypeNames);
         sb.append("        }\n");
     }
 
     /** Append the JSON bytes for a single field value. */
-    private static void appendJsonBytesValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor) {
+    private static void appendJsonBytesValue(StringBuilder sb, JqMapperProcessor.ComponentInfo comp, String accessor,
+            java.util.function.Predicate<String> mappedTypeNames) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (comp.converterClass() != null) {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
@@ -1318,7 +1574,11 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(accessor).append(" == null ? null : ").append(accessor).append(".toString());\n");
             default -> {
                 String typeName = comp.typeName();
-                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                if (isStreamedContainer(typeName)) {
+                    // List/Set/Map/Optional — stream elements directly instead of
+                    // building the container tree (issue #214).
+                    appendContainerBytesValue(sb, typeName, accessor, mappedTypeNames);
+                } else if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ").append(accessor).append(");\n");
@@ -1673,7 +1933,8 @@ final class MappingCodeGenerator {
                                     JqMapperProcessor.AnyInfo anyInfo,
                                     JqMapperProcessor.CreatorInfo creator,
                                     JqMapperProcessor.BuilderInfo builder,
-                                    List<String> required, io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order) {
+                                    List<String> required, io.hyperfoil.tools.jjq.mapper.JqOrder.Spec order,
+                                    java.util.function.Predicate<String> mappedTypeNames) {
         var sb = new StringBuilder(1024);
 
         if (!packageName.isEmpty()) {
@@ -2059,18 +2320,19 @@ final class MappingCodeGenerator {
         sb.append("    }\n\n");
 
         // appendJson — direct-to-JSON, bypasses JqValue tree
-        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo);
+        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, mappedTypeNames);
         boolean buffered = !anyInfo.hasGetter() && properties.stream()
                 .filter(p -> !p.ignored() && !p.skipSerialize())
                 .allMatch(p -> p.converterClass() == null && p.adapter() == null && !p.stringShape()
-                        && (p.format() != null || isDirectBufferedType(p.typeName(), p.nestedMapped())));
+                        && (p.format() != null
+                                || isDirectBufferedType(p.typeName(), p.nestedMapped(), mappedTypeNames)));
         if (buffered) {
             emitBufferedWriterOptIn(sb);
-            generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "CharOutput");
+            generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "CharOutput", mappedTypeNames);
         }
 
         // appendJsonBytes — direct-to-bytes, bypasses JqValue tree
-        generateAppendJsonBytesForPojo(sb, classSimpleName, properties, anyInfo);
+        generateAppendJsonBytesForPojo(sb, classSimpleName, properties, anyInfo, mappedTypeNames);
 
         // type()
         sb.append("    @Override\n");
@@ -2087,13 +2349,15 @@ final class MappingCodeGenerator {
      */
     private static void generateAppendJsonForPojo(StringBuilder sb, String classSimpleName,
                                                     List<JqMapperProcessor.PropertyInfo> properties,
-                                                    JqMapperProcessor.AnyInfo anyInfo) {
-        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "StringBuilder");
+                                                    JqMapperProcessor.AnyInfo anyInfo,
+                                                    java.util.function.Predicate<String> mappedTypeNames) {
+        generateAppendJsonForPojo(sb, classSimpleName, properties, anyInfo, "StringBuilder", mappedTypeNames);
     }
 
     private static void generateAppendJsonForPojo(StringBuilder sb, String classSimpleName,
                                                     List<JqMapperProcessor.PropertyInfo> properties,
-                                                    JqMapperProcessor.AnyInfo anyInfo, String outputType) {
+                                                    JqMapperProcessor.AnyInfo anyInfo, String outputType,
+                                                    java.util.function.Predicate<String> mappedTypeNames) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
         boolean fuse = !hasInclusion && properties.stream()
@@ -2120,7 +2384,7 @@ final class MappingCodeGenerator {
                 if (!first && !fuse) sb.append("        _sb.append(',');\n");
                 sb.append("        _sb.append(").append(fuse ? "KEYF_" : "KEY_")
                   .append(prop.name().toUpperCase()).append(");\n");
-                appendJsonValueForPojo(sb, prop, readExpr);
+                appendJsonValueForPojo(sb, prop, readExpr, mappedTypeNames);
                 first = false;
             }
         } else {
@@ -2132,9 +2396,9 @@ final class MappingCodeGenerator {
                 if ("ALWAYS".equals(prop.inclusion())) {
                     sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
                     sb.append("        _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
-                    appendJsonValueForPojo(sb, prop, readExpr);
+                    appendJsonValueForPojo(sb, prop, readExpr, mappedTypeNames);
                 } else {
-                    appendJsonFieldWithInclusionForPojo(sb, prop, readExpr);
+                    appendJsonFieldWithInclusionForPojo(sb, prop, readExpr, mappedTypeNames);
                 }
             }
         }
@@ -2148,7 +2412,8 @@ final class MappingCodeGenerator {
      */
     private static void generateAppendJsonBytesForPojo(StringBuilder sb, String classSimpleName,
                                                          List<JqMapperProcessor.PropertyInfo> properties,
-                                                         JqMapperProcessor.AnyInfo anyInfo) {
+                                                         JqMapperProcessor.AnyInfo anyInfo,
+                                                         java.util.function.Predicate<String> mappedTypeNames) {
         boolean hasInclusion = properties.stream()
                 .anyMatch(p -> !p.ignored() && !"ALWAYS".equals(p.inclusion()));
         boolean fuse = !hasInclusion && properties.stream()
@@ -2175,7 +2440,7 @@ final class MappingCodeGenerator {
                 if (!first && !fuse) sb.append("        _out.writeByte(',');\n");
                 sb.append("        _out.writeBytes(").append(fuse ? "KEYFB_" : "KEYB_")
                   .append(prop.name().toUpperCase()).append(");\n");
-                appendJsonBytesValueForPojo(sb, prop, readExpr);
+                appendJsonBytesValueForPojo(sb, prop, readExpr, mappedTypeNames);
                 first = false;
             }
         } else {
@@ -2187,9 +2452,9 @@ final class MappingCodeGenerator {
                 if ("ALWAYS".equals(prop.inclusion())) {
                     sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
                     sb.append("        _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
-                    appendJsonBytesValueForPojo(sb, prop, readExpr);
+                    appendJsonBytesValueForPojo(sb, prop, readExpr, mappedTypeNames);
                 } else {
-                    appendJsonBytesFieldWithInclusionForPojo(sb, prop, readExpr);
+                    appendJsonBytesFieldWithInclusionForPojo(sb, prop, readExpr, mappedTypeNames);
                 }
             }
         }
@@ -2200,7 +2465,8 @@ final class MappingCodeGenerator {
 
     /** Append JSON bytes for a POJO field value. */
     private static void appendJsonBytesValueForPojo(StringBuilder sb,
-                                                     JqMapperProcessor.PropertyInfo prop, String readExpr) {
+                                                     JqMapperProcessor.PropertyInfo prop, String readExpr,
+                                                     java.util.function.Predicate<String> mappedTypeNames) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (prop.converterClass() != null) {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
@@ -2256,7 +2522,11 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_out, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
-                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                if (isStreamedContainer(typeName)) {
+                    // List/Set/Map/Optional — stream elements directly instead of
+                    // building the container tree (issue #214).
+                    appendContainerBytesValue(sb, typeName, readExpr, mappedTypeNames);
+                } else if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_out, ").append(readExpr).append(");\n");
@@ -2276,27 +2546,29 @@ final class MappingCodeGenerator {
 
     /** Append a POJO field with inclusion check as bytes. */
     private static void appendJsonBytesFieldWithInclusionForPojo(StringBuilder sb,
-                                                                  JqMapperProcessor.PropertyInfo prop, String readExpr) {
+                                                                  JqMapperProcessor.PropertyInfo prop, String readExpr,
+                                                                  java.util.function.Predicate<String> mappedTypeNames) {
         String local = "_f_" + prop.name();
         sb.append("        var ").append(local).append(" = ").append(readExpr).append(";\n");
         String condition = inclusionCondition(prop.inclusion(), local, prop.typeName());
         if ("true".equals(condition)) {
             sb.append("        if (_sep) _out.writeByte(','); _sep = true;\n");
             sb.append("        _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
-            appendJsonBytesValueForPojo(sb, prop, local);
+            appendJsonBytesValueForPojo(sb, prop, local, mappedTypeNames);
             return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _out.writeByte(','); _sep = true;\n");
         sb.append("            _out.writeBytes(KEYB_").append(prop.name().toUpperCase()).append(");\n");
         sb.append("    ");
-        appendJsonBytesValueForPojo(sb, prop, local);
+        appendJsonBytesValueForPojo(sb, prop, local, mappedTypeNames);
         sb.append("        }\n");
     }
 
     /** Append JSON value for a POJO field. */
     private static void appendJsonValueForPojo(StringBuilder sb,
-                                                JqMapperProcessor.PropertyInfo prop, String readExpr) {
+                                                JqMapperProcessor.PropertyInfo prop, String readExpr,
+                                                java.util.function.Predicate<String> mappedTypeNames) {
         // Custom converter — must go through JqValue (null-safe via appendJqValue)
         if (prop.converterClass() != null) {
             sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ((io.hyperfoil.tools.jjq.mapper.ValueConverter) ")
@@ -2352,7 +2624,11 @@ final class MappingCodeGenerator {
                 sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJsonString(_sb, ").append(readExpr).append(" == null ? null : ").append(readExpr).append(".toString());\n");
             default -> {
                 String typeName = prop.typeName();
-                if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
+                if (isStreamedContainer(typeName)) {
+                    // List/Set/Map/Optional — stream elements directly instead of
+                    // building the container tree (issue #214).
+                    appendContainerValue(sb, typeName, readExpr, mappedTypeNames);
+                } else if (typeName.equals("io.hyperfoil.tools.jjq.value.JqValue")
                     || typeName.equals("JqValue")
                     || typeName.startsWith("io.hyperfoil.tools.jjq.value.Jq")) {
                     sb.append("        io.hyperfoil.tools.jjq.value.JqValues.appendJqValue(_sb, ").append(readExpr).append(");\n");
@@ -2372,21 +2648,22 @@ final class MappingCodeGenerator {
 
     /** Append a POJO field with inclusion check in appendJson. */
     private static void appendJsonFieldWithInclusionForPojo(StringBuilder sb,
-                                                             JqMapperProcessor.PropertyInfo prop, String readExpr) {
+                                                             JqMapperProcessor.PropertyInfo prop, String readExpr,
+                                                             java.util.function.Predicate<String> mappedTypeNames) {
         String local = "_f_" + prop.name();
         sb.append("        var ").append(local).append(" = ").append(readExpr).append(";\n");
         String condition = inclusionCondition(prop.inclusion(), local, prop.typeName());
         if ("true".equals(condition)) {
         sb.append("        if (_sep) _sb.append(','); _sep = true;\n");
         sb.append("        _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
-        appendJsonValueForPojo(sb, prop, local);
+        appendJsonValueForPojo(sb, prop, local, mappedTypeNames);
         return;
         }
         sb.append("        if (").append(condition).append(") {\n");
         sb.append("            if (_sep) _sb.append(','); _sep = true;\n");
         sb.append("            _sb.append(KEY_").append(prop.name().toUpperCase()).append(");\n");
         sb.append("    ");
-        appendJsonValueForPojo(sb, prop, local);
+        appendJsonValueForPojo(sb, prop, local, mappedTypeNames);
         sb.append("        }\n");
     }
 
