@@ -29,13 +29,15 @@ public interface JjqBuildTimeConfig {
 
     /**
      * Generate direct byte-to-record readers for eligible flat
-     * {@code @JqMapped} request records (issue #170). Disabled by default:
-     * when off, no reader classes are generated and request handling is
-     * exactly today's strict parse-plus-map path. When on, readers are
-     * generated and registered on the CDI mapper; inputs outside their
-     * canonical fast path fall back to the same path, so enabling the flag
-     * never changes accepted inputs or error behavior.
+     * {@code @JqMapped} request records (issue #170). Enabled by default:
+     * readers decode canonical request bodies without a {@code JqValue}
+     * tree (plus the #215 positional-dispatch hint and double/float
+     * support), and inputs outside their canonical fast path fall back to
+     * the strict parse-plus-map path, so enabling the flag never changes
+     * accepted inputs or error behavior. Set {@code false} to generate no
+     * reader classes at all and keep request handling exactly on the
+     * strict parse-plus-map path.
      */
-    @WithDefault("false")
+    @WithDefault("true")
     boolean directReaders();
 }

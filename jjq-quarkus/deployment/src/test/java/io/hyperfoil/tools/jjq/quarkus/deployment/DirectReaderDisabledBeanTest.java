@@ -17,8 +17,9 @@ import io.quarkus.test.QuarkusExtensionTest;
 import jakarta.inject.Inject;
 
 /**
- * Default behavior with direct readers disabled (issue #173): no reader
- * classes affect the application, and REST binding is exactly today's path.
+ * Direct readers explicitly disabled (issue #173): with
+ * {@code quarkus.jjq.direct-readers=false} no reader classes affect the
+ * application, and REST binding is exactly the strict parse-plus-map path.
  */
 class DirectReaderDisabledBeanTest {
 
@@ -28,7 +29,8 @@ class DirectReaderDisabledBeanTest {
                     DirectEligible_JqMapping.class,
                     DirectNested.class,
                     DirectNested_JqMapping.class,
-                    DirectReaderResource.class));
+                    DirectReaderResource.class))
+            .overrideConfigKey("quarkus.jjq.direct-readers", "false");
 
     @Inject
     JqMapper mapper;

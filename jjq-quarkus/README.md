@@ -35,14 +35,16 @@ dependency order.
 | Property | Default | Meaning |
 |---|---|---|
 | `quarkus.jjq.fail-on-unknown-properties` | `false` | Fail request binding on unrecognized JSON properties (Jackson `FAIL_ON_UNKNOWN_PROPERTIES` parity); otherwise unknown keys are ignored. |
-| `quarkus.jjq.direct-readers` | `false` | Generate direct byte-to-record readers for eligible flat request records (see below) and consult them before the tree path. |
+| `quarkus.jjq.direct-readers` | `true` | Generate direct byte-to-record readers for eligible flat request records (see below) and consult them before the tree path. Set `false` to keep request handling exactly on the strict parse-plus-map path. |
 
-## Direct readers (opt-in)
+## Direct readers (default on)
 
-With `quarkus.jjq.direct-readers=true`, augmentation compiles one reusable
+With `quarkus.jjq.direct-readers` enabled (the default), augmentation
+compiles one reusable
 reader per eligible request body type — flat `@JqMapped` records over
-`String`, `int`, `long`, `boolean` and nullable boxed equivalents with
-basic wire naming and required presence — from its immutable binding
+`String`, `int`, `long`, `double`, `float`, `boolean` and nullable boxed
+equivalents with basic wire naming and required presence — from its
+immutable binding
 schema, and registers it on the CDI mapper. Request types are the record
 types taken directly as `@POST`/`@PUT`/`@PATCH` parameters; one reader is
 shared across endpoints, and serialization-only models get none.
