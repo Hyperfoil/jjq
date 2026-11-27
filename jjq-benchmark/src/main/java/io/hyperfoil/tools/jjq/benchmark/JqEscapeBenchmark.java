@@ -76,11 +76,12 @@ public class JqEscapeBenchmark {
     /** Printable ASCII characters that don't need escaping. */
     private static final char[] CLEAN_CHARS;
     static {
-        // 0x20 (space) through 0x7E (~), excluding " and \
-        CLEAN_CHARS = new char[93]; // 0x7E - 0x20 + 1 - 2 (for " and \)
+        // 0x20 (space) through 0x7E (~), excluding " and \ (escape
+        // work) and ? (the byte route's verification trigger)
+        CLEAN_CHARS = new char[92]; // 0x7E - 0x20 + 1 - 3
         int idx = 0;
         for (char c = 0x20; c <= 0x7E; c++) {
-            if (c != '"' && c != '\\') {
+            if (c != '"' && c != '\\' && c != '?') {
                 CLEAN_CHARS[idx++] = c;
             }
         }
