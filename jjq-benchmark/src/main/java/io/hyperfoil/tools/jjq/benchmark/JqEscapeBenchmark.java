@@ -114,7 +114,7 @@ public class JqEscapeBenchmark {
     int escapePercentage;
 
     /** Length of each generated string, in chars. */
-    @Param({"5", "16", "100", "512"})
+    @Param({"5", "16", "100", "512", "2048", "8192"})
     int stringLength;
 
     /** Number of distinct inputs to cycle through. */
