@@ -18,6 +18,15 @@ public final class BytOutput {
     private static final byte[] TRUE_BYTES = {'t', 'r', 'u', 'e'};
     private static final byte[] FALSE_BYTES = {'f', 'a', 'l', 's', 'e'};
 
+    /** Two-digit ASCII pairs {@code "00".."99"} for paired long emission. */
+    private static final byte[] LONG_DIGIT_PAIRS = new byte[200];
+    static {
+        for (int i = 0; i < 100; i++) {
+            LONG_DIGIT_PAIRS[i * 2] = (byte) ('0' + i / 10);
+            LONG_DIGIT_PAIRS[i * 2 + 1] = (byte) ('0' + i % 10);
+        }
+    }
+
     /**
      * Retained scratch for getChars-based string encoding (issue #157):
      * 8K chars (16 KB) per buffer, so retention stays bounded no matter
@@ -136,17 +145,45 @@ public final class BytOutput {
             writeByte('-');
             v = -v;
         }
-        // Count digits
-        int digits = 0;
-        long tmp = v;
-        while (tmp > 0) { digits++; tmp /= 10; }
+        int digits = longDigitCount(v);
         ensureCapacity(digits);
         int end = pos + digits;
         pos = end;
-        while (v > 0) {
-            buf[--end] = (byte) ('0' + (v % 10));
-            v /= 10;
+        byte[] b = buf;
+        // Paired emission, backward: one division by 100 per two digits.
+        // Long arithmetic throughout — an int cast would overflow past
+        // ~2^31, and the pair remainder past ~10^11.
+        while (v >= 100) {
+            long q = v / 100;
+            int r = (int) (v - q * 100);
+            end -= 2;
+            b[end] = LONG_DIGIT_PAIRS[r * 2];
+            b[end + 1] = LONG_DIGIT_PAIRS[r * 2 + 1];
+            v = q;
         }
+        if (v >= 10) {
+            end -= 2;
+            int r = (int) v;
+            b[end] = LONG_DIGIT_PAIRS[r * 2];
+            b[end + 1] = LONG_DIGIT_PAIRS[r * 2 + 1];
+        } else {
+            b[--end] = (byte) ('0' + v);
+        }
+    }
+
+    /**
+     * Digit count for a positive long via binary descent: at most four
+     * constant divisions (multiply-shift after JIT), zero for values
+     * below 100. Does not modify the argument.
+     */
+    private static int longDigitCount(long v) {
+        int digits = 1;
+        if (v >= 100_000_000_000_000L) { v /= 100_000_000_000_000L; digits += 14; }
+        if (v >= 100_000_000L)         { v /= 100_000_000L;         digits += 8; }
+        if (v >= 10_000L)              { v /= 10_000L;              digits += 4; }
+        if (v >= 100L)                 { v /= 100L;                 digits += 2; }
+        if (v >= 10L)                  {                             digits += 1; }
+        return digits;
     }
 
     // --- UTF-8 encoding ---
@@ -231,7 +268,30 @@ public final class BytOutput {
         if (len <= CHAR_SCRATCH_SIZE) {
             char[] scratch = charScratch();
             s.getChars(0, len, scratch, 0);
-            return escapeWindow(scratch, 0, len);
+            // Fused clean-ASCII fast path: write the bytes while scanning
+            // and break to the segment scanner at the first character that
+            // needs it — control character, quote, backslash, or non-ASCII.
+            // Fully clean ASCII values — the dominant shape — encode in a
+            // single pass instead of scan-then-encode. The escape and
+            // UTF-8 arms stay out of this loop: merging them into the scan
+            // is what regressed escape-dense strings in the reverted #175
+            // fusion, and the break hands off at the offending index so an
+            // escape-heavy value never re-walks its prefix.
+            byte[] dst = buf; // capture after ensureCapacity, which may replace it
+            int p = pos;
+            int i = 0;
+            for (; i < len; i++) {
+                char c = scratch[i];
+                if (c < 0x20 || c >= 0x80 || c == '"' || c == '\\') {
+                    break;
+                }
+                dst[p++] = (byte) c;
+            }
+            pos = p;
+            if (i == len) {
+                return false;
+            }
+            return escapeWindow(scratch, i, len);
         }
         char[] scratch = charScratch();
         int off = 0;
@@ -259,6 +319,9 @@ public final class BytOutput {
     /**
      * Segment-based escape scan over a scratch window: scans for the next
      * escape character without writing, then bulk-flushes the clean segment.
+     * Called with a nonzero start after the fused clean-ASCII prefix in
+     * {@link #escapeJsonToBytes} breaks at the first character needing
+     * this path, and with zero for every window of a long string.
      *
      * @return true when any escape sequence was emitted in this window
      */
