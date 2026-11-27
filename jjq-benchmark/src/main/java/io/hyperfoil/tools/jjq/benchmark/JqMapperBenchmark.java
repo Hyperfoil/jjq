@@ -107,6 +107,40 @@ public class JqMapperBenchmark {
     private String collectionsJson;
     private byte[] collectionsJsonBytes;
 
+    // REST request-read fixtures (buffered InputStream, the Vertx shape)
+    private io.hyperfoil.tools.jjq.jakarta.JqMappedMessageBodyReader restReader;
+
+    /**
+     * Buffered stream whose {@code read(byte[],int,int)} stays out of
+     * inline budgets, so the JDK {@code readAllBytes} scratch cannot be
+     * escape-analyzed — the allocation shape of real request streams
+     * (VertxInputStream), which ByteArrayInputStream hides.
+     */
+    static final class OpaqueReadStream extends java.io.InputStream {
+        private final java.io.InputStream in;
+        OpaqueReadStream(java.io.InputStream in) { this.in = in; }
+
+        @Override
+        public int read() throws java.io.IOException {
+            return in.read();
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws java.io.IOException {
+            int s = 0;
+            for (int i = 0; i < 64; i++) {
+                s += (b.hashCode() >>> i) ^ off ^ len ^ (in.hashCode() >>> 1);
+            }
+            if (s == Integer.MIN_VALUE) throw new java.io.IOException("unreachable");
+            return in.read(b, off, len);
+        }
+
+        @Override
+        public int available() throws java.io.IOException {
+            return in.available();
+        }
+    }
+
     // Pre-parsed JqValue (for jjq pre-parsed path)
     private JqValue simpleJqValue;
     private JqValue nestedJqValue;
@@ -227,6 +261,10 @@ public class JqMapperBenchmark {
         jqMapper.toJson(genCollectionsRecord);
         jqMapper.toJsonBytes(genCollectionsRecord);
         jqMapper.toJson(collectionsRecord);
+        restReader = new io.hyperfoil.tools.jjq.jakarta.JqMappedMessageBodyReader(jqMapper);
+        restReader.readFrom((Class<Object>) (Class<?>) BenchmarkRecords.SimpleRecord.class,
+                BenchmarkRecords.SimpleRecord.class,
+                null, null, null, new java.io.ByteArrayInputStream(simpleJsonBytes));
 
         // Generated mapping record instances (for serialization benchmarks)
         genSimpleRecord = new BenchmarkRecords.SimpleRecord("Alice", 30, 98.5, true, "alice@example.com");
@@ -481,6 +519,36 @@ public class JqMapperBenchmark {
     @Benchmark
     public BenchmarkRecords.GenCollectionsRecord deser_collections_jjq_generated_fromBytes() {
         return jqMapper.fromJson(collectionsJsonBytes, BenchmarkRecords.GenCollectionsRecord.class);
+    }
+
+    // ========================================================================
+    //  REST request reads (buffered InputStream — the Vertx request shape)
+    // ========================================================================
+
+    /**
+     * Request-body read through the JAX-RS reader with a fully-buffered
+     * stream (content available upfront, as Vertx delivers it): measures
+     * the body-reading strategy plus strict bind for a small request DTO.
+     */
+    @Benchmark
+    public BenchmarkRecords.SimpleRecord rest_read_simple_fromStream() throws Exception {
+        return (BenchmarkRecords.SimpleRecord) restReader.readFrom(
+                (Class<Object>) (Class<?>) BenchmarkRecords.SimpleRecord.class,
+                BenchmarkRecords.SimpleRecord.class,
+                null, null, null, new java.io.ByteArrayInputStream(simpleJsonBytes));
+    }
+
+    /**
+     * Same read through a stream whose read method cannot be inlined —
+     * the real-request allocation shape: the JDK readAllBytes scratch
+     * escapes instead of being escape-analyzed away.
+     */
+    @Benchmark
+    public BenchmarkRecords.SimpleRecord rest_read_simple_opaqueStream() throws Exception {
+        return (BenchmarkRecords.SimpleRecord) restReader.readFrom(
+                (Class<Object>) (Class<?>) BenchmarkRecords.SimpleRecord.class,
+                BenchmarkRecords.SimpleRecord.class,
+                null, null, null, new OpaqueReadStream(new java.io.ByteArrayInputStream(simpleJsonBytes)));
     }
 
     // ========================================================================
