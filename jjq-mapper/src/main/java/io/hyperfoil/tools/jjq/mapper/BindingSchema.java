@@ -1,5 +1,8 @@
 package io.hyperfoil.tools.jjq.mapper;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -195,6 +198,93 @@ public final class BindingSchema {
     /** What happens to unrecognized input keys. */
     public UnknownPolicy unknownPolicy() { return unknownPolicy; }
 
+    /**
+     * How a generated reader writes one flat-POJO field: exactly one of
+     * the setter method or the reflect field is non-null. Resolution
+     * mirrors the tree path's write mechanism exactly — a public
+     * non-final field is written as a raw field store even when a
+     * public setter exists, and a public setter is used only when the
+     * field is non-public or final — so the direct route and the
+     * fallback can never disagree. Members a colocated generated class
+     * cannot invoke without accessibility workarounds (private
+     * anything, final fields without setters) stay on the reflective
+     * path.
+     *
+     * @param raw       the POJO class
+     * @param javaName  the field's Java name
+     * @param fieldType the field's erased type
+     * @return the write, or null when no accessible setter or field exists
+     */
+    public static PojoWrite resolvePojoWrite(Class<?> raw, String javaName, Class<?> fieldType) {
+        java.lang.reflect.Field f = null;
+        try {
+            java.lang.reflect.Field declared = raw.getDeclaredField(javaName);
+            if (declared.getType() == fieldType && !Modifier.isStatic(declared.getModifiers())) {
+                f = declared;
+            }
+        } catch (NoSuchFieldException ignored) {
+            // setter-only property: no backing field
+        }
+        boolean publicField = f != null && Modifier.isPublic(f.getModifiers());
+        boolean finalField = f != null && Modifier.isFinal(f.getModifiers());
+        if (finalField || !publicField) {
+            // The tree path binds through the public setter here (its
+            // findSetter is public-only), so the reader must too.
+            String setterName = "set" + Character.toUpperCase(javaName.charAt(0))
+                    + javaName.substring(1);
+            for (Method m : raw.getMethods()) {
+                if (m.getName().equals(setterName) && m.getParameterCount() == 1
+                        && m.getParameterTypes()[0] == fieldType
+                        && !Modifier.isStatic(m.getModifiers()) && !m.isBridge()) {
+                    return new PojoWrite(m, null);
+                }
+            }
+        }
+        if (f != null && !Modifier.isPrivate(f.getModifiers()) && !finalField) {
+            // Raw field store: same field the tree path's handle writes.
+            return new PojoWrite(null, f);
+        }
+        return null;
+    }
+
+    /** One flat-POJO field write: a setter invoke or a direct field store. */
+    public record PojoWrite(Method setter, java.lang.reflect.Field field) {
+
+        /** Sole non-null member check, asserted at generation time. */
+        public PojoWrite {
+            assert (setter == null) != (field == null) : "exactly one of setter or field";
+        }
+    }
+
+    /**
+     * Why a flat POJO cannot take a direct reader, or null when it can:
+     * the class and its no-arg constructor must be invocable from the
+     * colocated generated reader (public or package-visible, never
+     * private), and every deserialization field must resolve to an
+     * accessible {@link PojoWrite}.
+     */
+    private static String pojoDirectReaderBlocker(Class<?> raw, ClassMapping<?> mapping) {
+        if (Modifier.isPrivate(raw.getModifiers())) {
+            return "private class uses the reflective path";
+        }
+        Constructor<?> noArg;
+        try {
+            noArg = raw.getDeclaredConstructor();
+        } catch (NoSuchMethodException e) {
+            return "no no-arg constructor";
+        }
+        if (Modifier.isPrivate(noArg.getModifiers())) {
+            return "private no-arg constructor";
+        }
+        for (FieldMapping field : mapping.deserFields()) {
+            if (field.isIgnored() || field.skipDeserialize()) continue;
+            if (resolvePojoWrite(raw, field.name(), field.type()) == null) {
+                return "field '" + field.name() + "' has no package-visible setter or field";
+            }
+        }
+        return null;
+    }
+
     /** Whether the MVP direct byte-to-record reader may serve this type. */
     public boolean eligibleForDirectReader() { return eligibleForDirectReader; }
 
@@ -285,7 +375,14 @@ public final class BindingSchema {
         } else {
             construction = raw.isRecord() ? Construction.RECORD : Construction.POJO;
             if (!raw.isRecord()) {
-                reasons.add("POJO setter/field construction is not a direct-reader target");
+                // Flat POJOs (#4): a colocated reader constructs after
+                // full validation via the no-arg constructor and
+                // per-field writes; anything not cleanly writable keeps
+                // the reflective path.
+                String blocker = pojoDirectReaderBlocker(raw, mapping);
+                if (blocker != null) {
+                    reasons.add("POJO construction not direct-reader eligible: " + blocker);
+                }
             }
         }
 

@@ -221,16 +221,38 @@ class BindingSchemaTest {
 
     record Ignored(@JqIgnore String skip, String keep) {}
 
+    /** Getter-only property: nothing writable for a generated reader. */
+    static class GetterOnlyPojo {
+        private String name;
+
+        public String getName() { return name; }
+    }
+
     @Test
     void unsupportedMappingsFallBackWithReasons() {
         assertIneligibleWithReason(Nested.class, "point");
         assertIneligibleWithReason(WithProgram.class, "deep");
         assertIneligibleWithReason(Converted.class, "name");
-        assertIneligibleWithReason(Pojo.class, "POJO");
         assertIneligibleWithReason(Delegated.class, "creator");
         assertIneligibleWithReason(Identified.class, "identity");
         assertIneligibleWithReason(Extras.class, "any-setter");
         assertIneligibleWithReason(StringList.class, "tags");
+        assertIneligibleWithReason(GetterOnlyPojo.class, "no package-visible setter");
+    }
+
+    @Test
+    void flatPojoConstructionIsDirectReaderEligible() {
+        // Issue #4: JavaBean models with accessible no-arg construction and
+        // per-field writes (public fields here) take the direct reader.
+        BindingSchema schema = mapper.bindingSchemaFor(Pojo.class);
+        assertTrue(schema.eligibleForDirectReader(), schema.ineligibilityReasons().toString());
+        assertEquals(BindingSchema.Construction.POJO, schema.construction());
+    }
+
+    @Test
+    void unwritablePojoStaysIneligible() {
+        BindingSchema schema = mapper.bindingSchemaFor(GetterOnlyPojo.class);
+        assertFalse(schema.eligibleForDirectReader());
     }
 
     private void assertIneligibleWithReason(Class<?> type, String fragment) {

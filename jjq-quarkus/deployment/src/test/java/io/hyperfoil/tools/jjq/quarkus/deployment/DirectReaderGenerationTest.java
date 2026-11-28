@@ -465,7 +465,8 @@ class DirectReaderGenerationTest {
         assertSkip(WithAlias.class, "alias");
         assertSkip(WithProgram.class, "@JqField");
         assertSkip(Delegated.class, "creator");
-        assertSkip(Pojo.class, "records");
+        assertSkip(DirectReaderPojoTest.PrivateCtorPojo.class, "no-arg");
+        assertSkip(DirectReaderPojoTest.ReadOnlyPojo.class, "no package-visible setter");
         assertSkip(Hidden.class, "private");
         assertSkip(Wide65.class, "64");
     }

@@ -785,9 +785,10 @@ public class JjqProcessor {
      */
     public static void generateDirectReader(ClassOutput output, Class<?> type, BindingSchema schema) {
         String name = type.getName();
-        if (!type.isRecord()) {
+        boolean pojo = !type.isRecord();
+        if (pojo && schema.construction() != BindingSchema.Construction.POJO) {
             throw new IllegalArgumentException(
-                    "jjq: direct readers serve records: " + name);
+                    "jjq: direct readers serve flat records and POJOs: " + name);
         }
         if (!schema.eligibleForDirectReader()) {
             throw new IllegalArgumentException("jjq: " + name + " is not direct-reader eligible: "
@@ -795,7 +796,7 @@ public class JjqProcessor {
         }
         if (Modifier.isPrivate(type.getModifiers())) {
             throw new IllegalArgumentException(
-                    "jjq: private records use the reflective path: " + name);
+                    "jjq: private types use the reflective path: " + name);
         }
         List<BindingSchema.Field> fields = schema.fields();
         if (fields.size() > DIRECT_READER_MAX_FIELDS) {
@@ -813,23 +814,46 @@ public class JjqProcessor {
                         + "' of " + name + " has kind " + field.kind());
             }
         }
-        Class<?>[] ctorTypes = new Class<?>[fields.size()];
-        for (BindingSchema.Field field : fields) {
-            ctorTypes[field.constructorIndex()] = field.javaType();
-        }
+        // Per-field POJO writes, resolved once up front so a drifted
+        // schema fails generation before any bytecode is emitted.
+        BindingSchema.PojoWrite[] pojoWrites = pojo
+                ? new BindingSchema.PojoWrite[fields.size()]
+                : null;
         Constructor<?> ctor;
-        try {
-            ctor = type.getDeclaredConstructor(ctorTypes);
-        } catch (NoSuchMethodException e) {
-            throw new IllegalArgumentException(
-                    "jjq: no canonical constructor for " + name, e);
+        Class<?>[] ctorTypes = new Class<?>[pojo ? 0 : fields.size()];
+        if (pojo) {
+            try {
+                ctor = type.getDeclaredConstructor();
+            } catch (NoSuchMethodException e) {
+                throw new IllegalArgumentException(
+                        "jjq: no no-arg constructor for " + name, e);
+            }
+            for (int i = 0; i < fields.size(); i++) {
+                BindingSchema.Field field = fields.get(i);
+                pojoWrites[i] = BindingSchema.resolvePojoWrite(
+                        type, field.javaName(), field.javaType());
+                if (pojoWrites[i] == null) {
+                    throw new IllegalArgumentException("jjq: field '" + field.wireName()
+                            + "' of " + name + " has no package-visible setter or field");
+                }
+            }
+        } else {
+            for (BindingSchema.Field field : fields) {
+                ctorTypes[field.constructorIndex()] = field.javaType();
+            }
+            try {
+                ctor = type.getDeclaredConstructor(ctorTypes);
+            } catch (NoSuchMethodException e) {
+                throw new IllegalArgumentException(
+                        "jjq: no canonical constructor for " + name, e);
+            }
         }
         if (Modifier.isPrivate(ctor.getModifiers())) {
             throw new IllegalArgumentException(
-                    "jjq: private canonical constructor uses the reflective path: " + name);
+                    "jjq: private " + (pojo ? "no-arg" : "canonical") + " constructor uses the reflective path: "
+                            + name);
         }
 
-        ClassDesc recordDesc = ClassDesc.of(name);
         ClassDesc kindDesc = ClassDesc.of(JqValues.JqCursor.ValueKind.class.getName());
         MethodDesc mStrict = MethodDesc.of(JqValues.class, "strictCursor",
                 JqValues.JqCursor.class, byte[].class);
@@ -979,16 +1003,32 @@ public class JjqProcessor {
                         bc.if_(bc.eq(bc.and(seenBits, Const.of(mask)), Const.of(0L)),
                                 b -> emitMissingRequired(b, wire, type.getSimpleName()));
                     }
-                    // The user constructor runs last: never before complete
-                    // validation, never retried on fallback.
-                    List<Expr> args = new ArrayList<>(fields.size());
-                    List<BindingSchema.Field> byCtor = new ArrayList<>(fields);
-                    byCtor.sort(java.util.Comparator.comparingInt(BindingSchema.Field::constructorIndex));
-                    for (BindingSchema.Field field : byCtor) {
-                        args.add(values.get(fields.indexOf(field)));
+                    // The user construction code runs last: never before
+                    // complete validation, never retried on fallback.
+                    if (pojo) {
+                        // No-arg constructor, then one write per field in
+                        // schema order (setter invoke or direct field store).
+                        LocalVar obj = bc.localVar("pojo", bc.new_(ConstructorDesc.of(type)));
+                        for (int i = 0; i < fields.size(); i++) {
+                            BindingSchema.Field field = fields.get(i);
+                            BindingSchema.PojoWrite write = pojoWrites[i];
+                            if (write.setter() != null) {
+                                bc.invokeVirtual(MethodDesc.of(write.setter()), obj, values.get(i));
+                            } else {
+                                bc.set(obj.field(FieldDesc.of(write.field())), values.get(i));
+                            }
+                        }
+                        bc.return_(obj);
+                    } else {
+                        List<Expr> args = new ArrayList<>(fields.size());
+                        List<BindingSchema.Field> byCtor = new ArrayList<>(fields);
+                        byCtor.sort(java.util.Comparator.comparingInt(BindingSchema.Field::constructorIndex));
+                        for (BindingSchema.Field field : byCtor) {
+                            args.add(values.get(fields.indexOf(field)));
+                        }
+                        bc.return_(bc.new_(
+                                ConstructorDesc.of(type, ctorTypes), args));
                     }
-                    bc.return_(bc.new_(
-                            ConstructorDesc.of(recordDesc, ctorTypes), args));
                 });
             });
         });
