@@ -68,4 +68,39 @@ public interface JsonEscapeCopyKernel {
      *         range), or -1 on an unverified encode
      */
     int copyCleanUtf8(byte[] utf8, int start, int end, byte[] dst, int dstOff, boolean trusted);
+
+    /**
+     * Transcode UTF-16LE bytes into the JSON-escaped UTF-8 body, writing
+     * {@code dst} from {@code dstOff}.
+     *
+     * <p>Input is the UTF-16LE encoding of the string (two bytes per
+     * char, little-endian), which is lossless for every char including
+     * lone surrogates — no verification round-trip is needed, and lone
+     * surrogates emit the same CESU-8 3-byte form as the char-based
+     * route. Processing runs one vector of chars per iteration: vectors
+     * whose chars are all clean ASCII ([0x20, 0x7F) minus quote and
+     * backslash) compress-store their low bytes in one
+     * {@code Vector.compress}; dirty vectors transcode their chars
+     * scalar with escape emission, consuming surrogate pairs that span
+     * vector boundaries.</p>
+     *
+     * <p>Contract:</p>
+     * <ul>
+     *   <li>output is byte-identical to {@code BytOutput}'s char-based
+     *       escape path for the same character sequence</li>
+     *   <li>never fails and never reads past {@code end}</li>
+     *   <li>returns the number of bytes written when no escape sequence
+     *       was emitted, otherwise {@code -(bytes written) - 1}</li>
+     *   <li>the caller guarantees {@code dst} room for six bytes per
+     *       char (three times the input byte count)</li>
+     * </ul>
+     *
+     * @param utf16le the UTF-16LE encoding of the string
+     * @param start   first byte index (even, char-aligned)
+     * @param end     one past the last byte (even)
+     * @param dst     destination byte buffer
+     * @param dstOff  first destination index
+     * @return bytes written (negative-encoded when escapes were emitted)
+     */
+    int escapeUtf16(byte[] utf16le, int start, int end, byte[] dst, int dstOff);
 }

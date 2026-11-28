@@ -38,6 +38,13 @@ public final class VectorEscapeCopyKernel implements JsonEscapeCopyKernel {
     /** Prefix masks for k in [0..STEP]: exactly the first k lanes set. */
     private static final VectorMask<Byte>[] PREFIX = buildPrefixMasks();
 
+    /** Even lanes (UTF-16LE low bytes) and odd lanes (high bytes). */
+    private static final VectorMask<Byte> EVENS = VectorMask.fromLong(SPECIES, 0x5555555555555555L);
+    private static final VectorMask<Byte> ODDS = EVENS.not();
+    /** Compressed clean vectors store their first STEP/2 lanes. */
+    private static final VectorMask<Byte> FIRST_HALF = VectorMask.fromLong(SPECIES,
+            (1L << (STEP >> 1)) - 1);
+
     @SuppressWarnings("unchecked")
     private static VectorMask<Byte>[] buildPrefixMasks() {
         VectorMask<Byte>[] masks = (VectorMask<Byte>[]) new VectorMask[STEP + 1];
@@ -53,6 +60,144 @@ public final class VectorEscapeCopyKernel implements JsonEscapeCopyKernel {
         // Prefix bitmasks fit a long only up to 64 lanes; wider species
         // (none shipped today) stay on the scalar path.
         return VectorKernels.isSupported() && STEP <= 64;
+    }
+
+    @Override
+    public int escapeUtf16(byte[] a, int start, int end, byte[] dst, int dstOff) {
+        final int chars = STEP >> 1;
+        int ci = start >> 1;
+        int charEnd = end >> 1;
+        int p = dstOff;
+        boolean escaped = false;
+        while (ci + chars <= charEnd) {
+            ByteVector v = ByteVector.fromArray(SPECIES, a, ci << 1);
+            // Slow low bytes (control, quote, backslash) mean escapes.
+            VectorMask<Byte> slowLo = v.compare(VectorOperators.LT, (byte) 0x20)
+                    .or(v.compare(VectorOperators.EQ, (byte) '"'))
+                    .or(v.compare(VectorOperators.EQ, (byte) '\\'))
+                    .and(EVENS);
+            if (!slowLo.anyTrue()
+                    && !v.compare(VectorOperators.NE, (byte) 0).and(ODDS).anyTrue()) {
+                // All chars clean ASCII: compress low bytes and store.
+                v.compress(EVENS).intoArray(dst, p, FIRST_HALF);
+                p += chars;
+                ci += chars;
+            } else {
+                // Dirty vector: scalar transcode, exactly this vector's
+                // chars. A high surrogate whose low surrogate starts the
+                // next vector is deferred — the next (deliberately
+                // unaligned) load reprocesses the pair whole.
+                long r = transcodeScalar(a, ci, ci + chars, charEnd, dst, p);
+                p = (int) (r >> 32);
+                ci = (int) (r >> 1) & 0x7FFFFFFF;
+                escaped |= (r & 1L) != 0;
+            }
+        }
+        // Scalar tail: fewer than one vector of chars remains. Pair
+        // lookahead may run to the end of input here.
+        while (ci < charEnd) {
+            char c0 = charAt16(a, ci);
+            if (Character.isHighSurrogate(c0) && ci + 1 < charEnd) {
+                char c1 = charAt16(a, ci + 1);
+                if (Character.isLowSurrogate(c1)) {
+                    p = emitPair(c0, c1, dst, p);
+                    ci += 2;
+                    continue;
+                }
+            }
+            if (c0 < 0x20 || c0 == '"' || c0 == '\\') {
+                escaped = true;
+            }
+            p = emitScalar(c0, dst, p);
+            ci++;
+        }
+        int written = p - dstOff;
+        return escaped ? -written - 1 : written;
+    }
+
+    /**
+     * Scalar transcode of the chars [from, limit): escapes and 1/2/3-byte
+     * UTF-8 per char, pairs when both halves lie inside the range. A
+     * boundary-spanning pair (high surrogate at the last position, low
+     * beyond limit but inside charEnd) defers: the loop stops before it
+     * so the caller's next iteration reprocesses the pair whole. Returns
+     * the packed (position, next char index, escaped-any flag).
+     */
+    private static long transcodeScalar(byte[] a, int from, int limit, int charEnd,
+            byte[] dst, int p) {
+        int ci = from;
+        boolean escaped = false;
+        while (ci < limit) {
+            char c0 = charAt16(a, ci);
+            if (Character.isHighSurrogate(c0)) {
+                if (ci + 1 < limit) {
+                    char c1 = charAt16(a, ci + 1);
+                    if (Character.isLowSurrogate(c1)) {
+                        p = emitPair(c0, c1, dst, p);
+                        ci += 2;
+                        continue;
+                    }
+                } else if (ci + 1 < charEnd && Character.isLowSurrogate(charAt16(a, ci + 1))) {
+                    break; // defer the boundary pair to the next iteration
+                }
+            }
+            if (c0 < 0x20 || c0 == '"' || c0 == '\\') {
+                escaped = true;
+            }
+            p = emitScalar(c0, dst, p);
+            ci++;
+        }
+        return ((long) p << 32) | ((long) ci << 1) | (escaped ? 1L : 0L);
+    }
+
+    /** The UTF-16 char at char index ci of the little-endian bytes. */
+    private static char charAt16(byte[] a, int ci) {
+        int b = ci << 1;
+        return (char) ((a[b] & 0xFF) | ((a[b + 1] & 0xFF) << 8));
+    }
+
+    /** One char, pair handling done by the caller — mirrors BytOutput. */
+    private static int emitScalar(char c, byte[] dst, int p) {
+        switch (c) {
+            case '"' -> { dst[p++] = '\\'; dst[p++] = '"'; }
+            case '\\' -> { dst[p++] = '\\'; dst[p++] = '\\'; }
+            case '\b' -> { dst[p++] = '\\'; dst[p++] = 'b'; }
+            case '\f' -> { dst[p++] = '\\'; dst[p++] = 'f'; }
+            case '\n' -> { dst[p++] = '\\'; dst[p++] = 'n'; }
+            case '\r' -> { dst[p++] = '\\'; dst[p++] = 'r'; }
+            case '\t' -> { dst[p++] = '\\'; dst[p++] = 't'; }
+            default -> {
+                if (c < 0x20) {
+                    dst[p++] = '\\';
+                    dst[p++] = 'u';
+                    dst[p++] = '0';
+                    dst[p++] = '0';
+                    dst[p++] = (byte) Character.forDigit((c >> 4) & 0xF, 16);
+                    dst[p++] = (byte) Character.forDigit(c & 0xF, 16);
+                } else if (c < 0x80) {
+                    dst[p++] = (byte) c;
+                } else if (c < 0x800) {
+                    dst[p++] = (byte) (0xC0 | (c >> 6));
+                    dst[p++] = (byte) (0x80 | (c & 0x3F));
+                } else {
+                    // Includes lone surrogates: the CESU-8 3-byte form.
+                    dst[p++] = (byte) (0xE0 | (c >> 12));
+                    dst[p++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+                    dst[p++] = (byte) (0x80 | (c & 0x3F));
+                }
+            }
+        }
+        return p;
+    }
+
+    /** A valid surrogate pair: 4-byte UTF-8. */
+    private static int emitPair(char hi, char lo, byte[] dst, int p) {
+        int cp = Character.toCodePoint(hi, lo);
+        dst[p++] = (byte) (0xF0 | (cp >> 18));
+        dst[p++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+        dst[p++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+        dst[p++] = (byte) (0x80 | (cp & 0x3F));
+        return p;
     }
 
     @Override

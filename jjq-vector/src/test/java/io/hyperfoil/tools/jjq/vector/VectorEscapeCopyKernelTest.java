@@ -99,6 +99,52 @@ class VectorEscapeCopyKernelTest {
         assertTrue(kernel.isEnabled());
     }
 
+
+    /** escapeUtf16 result: (bytes written, escaped). */
+    record Utf16Outcome(int written, boolean escaped) {}
+
+    private void assertEscapeUtf16MatchesOracle(String s) {
+        // Build UTF-16LE manually: getBytes(UTF_16LE) replaces lone
+        // surrogates with U+FFFD, and the kernel's contract covers the
+        // faithful encoding (BytOutput gates surrogate strings away from
+        // this route in production).
+        byte[] utf16 = new byte[s.length() * 2];
+        for (int i = 0; i < s.length(); i++) {
+            utf16[2 * i] = (byte) s.charAt(i);
+            utf16[2 * i + 1] = (byte) (s.charAt(i) >> 8);
+        }
+        byte[] actual = new byte[utf16.length * 3 + 16];
+        java.util.Arrays.fill(actual, POISON);
+        int ret = kernel.escapeUtf16(utf16, 0, utf16.length, actual, 3);
+        int written = ret >= 0 ? ret : -ret - 1;
+        boolean escaped = ret < 0;
+        byte[] expected = oracleEscape(s.toCharArray(), 0, s.length());
+        assertEquals(expected.length, written, () -> "length mismatch for " + describe(s));
+        assertTrue(escaped == expectEscaped(s), () -> "escaped flag mismatch for " + describe(s));
+        for (int i = 0; i < written; i++) {
+            final int idx = i;
+            assertEquals(expected[i], actual[3 + idx], () -> "byte " + idx + " mismatch for " + describe(s));
+        }
+        for (int i = 3 + written; i < actual.length; i++) {
+            assertEquals(POISON, actual[i], () -> "over-write past result for " + describe(s));
+        }
+    }
+
+    private static boolean expectEscaped(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x20 || c == '"' || c == '\\') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String describe(String s) {
+        return "len=" + s.length() + " head=" + s.substring(0, Math.min(24, s.length()))
+                .replace("\\", "\\\\").replace("\n", "\\n");
+    }
+
     // ------------------------------------------------------------------
     // Differential: break positions and lane edges
     // ------------------------------------------------------------------
@@ -202,6 +248,80 @@ class VectorEscapeCopyKernelTest {
         }
     }
 
+
+    @Test
+    void escapeUtf16EveryCharValue() {
+        for (int cp = 0; cp <= 0xFFFF; cp++) {
+            StringBuilder sb = new StringBuilder("abcdefgh");
+            sb.append((char) cp);
+            sb.append("ijklmnop");
+            assertEscapeUtf16MatchesOracle(sb.toString());
+        }
+    }
+
+    @Test
+    void escapeUtf16BoundaryPairs() {
+        // Valid and lone surrogates at every position of a 96-char window
+        // crossing 32-char vector boundaries at every residue.
+        String[] pairShapes = {"\uD83D\uDE00", "\uD83D", "\uDC00", "\uD83D\u0041", "\u0041\uDC00"};
+        for (String shape : pairShapes) {
+            for (int at = 0; at < 96; at++) {
+                assertEscapeUtf16MatchesOracle("x".repeat(at) + shape + "y".repeat(96 - at));
+            }
+        }
+    }
+
+    @Test
+    void escapeUtf16DenseDirtyVectors() {
+        // Every vector dirty: CJK/escapes throughout, tails of every length.
+        for (int len = 64; len <= 160; len++) {
+            assertEscapeUtf16MatchesOracle("\u4e2d\u6587".repeat(len / 2 + 1).substring(0, len));
+            assertEscapeUtf16MatchesOracle("\n".repeat(len));
+            assertEscapeUtf16MatchesOracle(("\\" + "\n").repeat(len / 2));
+        }
+    }
+
+    @Test
+    void escapeUtf16CleanAsciiEveryLength() {
+        for (int len = 64; len <= 160; len++) {
+            assertEscapeUtf16MatchesOracle("a".repeat(len));
+        }
+    }
+
+    @Test
+    void escapeUtf16RandomFuzz() {
+        Random rnd = new Random(20721);
+        for (int i = 0; i < 20_000; i++) {
+            int len = 1 + rnd.nextInt(200);
+            StringBuilder sb = new StringBuilder(len);
+            while (sb.length() < len) {
+                int pick = rnd.nextInt(100);
+                if (pick < 55) {
+                    char c = (char) (' ' + rnd.nextInt(95));
+                    if (c == '"' || c == '\\' || c == '?') c = 'a';
+                    sb.append(c);
+                } else if (pick < 65) {
+                    sb.append((char) rnd.nextInt(0x20));
+                } else if (pick < 75) {
+                    sb.append((char) (0x80 + rnd.nextInt(0x80)));
+                } else if (pick < 90) {
+                    sb.append((char) (0x100 + rnd.nextInt(0xF000)));
+                } else if (pick < 95) {
+                    sb.append("\uD83D\uDE00");
+                } else {
+                    sb.append(rnd.nextBoolean() ? "\uD83D" : "\uDC00");
+                }
+            }
+            assertEscapeUtf16MatchesOracle(sb.substring(0, Math.min(len, sb.length())));
+        }
+    }
+
+    @Test
+    void escapeUtf16EmptyAndShort() {
+        assertEscapeUtf16MatchesOracle("");
+        assertEscapeUtf16MatchesOracle("a");
+        assertEscapeUtf16MatchesOracle("\uD83D\uDE00".repeat(40));
+    }
     // ------------------------------------------------------------------
     // End-to-end through BytOutput with the kernel on the classpath
     // ------------------------------------------------------------------
