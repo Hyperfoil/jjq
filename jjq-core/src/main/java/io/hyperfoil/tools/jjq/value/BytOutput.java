@@ -268,6 +268,12 @@ public final class BytOutput {
         if (len <= CHAR_SCRATCH_SIZE) {
             char[] scratch = charScratch();
             s.getChars(0, len, scratch, 0);
+            if (ESCAPE_KERNEL_PRESENT && len >= ESCAPE_KERNEL_MIN_LEN) {
+                int routed = escapeVectorRoute(s);
+                if (routed != 0) {
+                    return routed == ROUTED_ESCAPED;
+                }
+            }
             // Fused clean-ASCII fast path: write the bytes while scanning
             // and break to the segment scanner at the first character that
             // needs it — control character, quote, backslash, or non-ASCII.
@@ -307,6 +313,37 @@ public final class BytOutput {
         return escaped;
     }
 
+    /**
+     * Optional vector escape-copy kernel (jjq-vector), discovered once.
+     * Null when the module is absent — the fused scalar loop below then
+     * runs unchanged, keeping jjq-core dependency-free.
+     */
+    private static final JsonEscapeCopyKernel ESCAPE_KERNEL = loadEscapeKernel();
+
+    /**
+     * Compile-time constant when no implementation is present: C2 folds
+     * the whole dispatch block away, so the module-absent path compiles
+     * exactly like the pre-SPI code (a never-taken branch would still
+     * perturb the compilation of short-string-heavy workloads).
+     */
+    private static final boolean ESCAPE_KERNEL_PRESENT = ESCAPE_KERNEL != null;
+
+    private static JsonEscapeCopyKernel loadEscapeKernel() {
+        try {
+            var it = java.util.ServiceLoader.load(JsonEscapeCopyKernel.class).iterator();
+            return it.hasNext() ? it.next() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Shortest value routed to the escape-copy kernel: below two vector
+     * iterations the interface call and setup outweigh the width gain,
+     * so short values stay on the scalar loop.
+     */
+    private static final int ESCAPE_KERNEL_MIN_LEN = 64;
+
     /** Lazily-created bounded scratch (retained with the buffer). */
     private char[] charScratch() {
         char[] c = charScratch;
@@ -314,6 +351,104 @@ public final class BytOutput {
             charScratch = c = new char[CHAR_SCRATCH_SIZE];
         }
         return c;
+    }
+
+    /** Route outcomes from {@link #escapeVectorRoute(String)}. */
+    private static final int ROUTED_ESCAPED = 2;
+
+    /**
+     * Vector escape route (#1B), kept out of {@code escapeJsonToBytes}
+     * so that method stays under the inlining cutoff: UTF-8 encode, one
+     * vector call scans and copies the clean prefix — the bytes are
+     * already UTF-8, so multi-byte sequences are clean and copy
+     * verbatim. A '?' in the encode (getUTF8Bytes replaces lone
+     * surrogates with '?') is verified lossless by a UTF-8 round-trip
+     * and retried trusted; a failed verify — a real lone surrogate —
+     * returns 0 so the caller uses the char-based route, which
+     * preserves the CESU-8 form.
+     *
+     * @return 0 when not routed (fall back to the scalar loop), 1 when
+     *         routed and clean, {@link #ROUTED_ESCAPED} when routed with
+     *         escape sequences emitted
+     */
+    private int escapeVectorRoute(String s) {
+        JsonEscapeCopyKernel kernel = ESCAPE_KERNEL;
+        if (!kernel.isEnabled()) {
+            return 0;
+        }
+        byte[] utf8 = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int n = utf8.length;
+        int copied = kernel.copyCleanUtf8(utf8, 0, n, buf, pos, false);
+        if (copied < 0
+                && s.equals(new String(utf8, 0, n, java.nio.charset.StandardCharsets.UTF_8))) {
+            copied = kernel.copyCleanUtf8(utf8, 0, n, buf, pos, true);
+        }
+        if (copied < 0) {
+            return 0; // lone surrogate: char route preserves CESU-8
+        }
+        pos += copied;
+        if (copied == n) {
+            return 1;
+        }
+        return escapeWindowBytes(utf8, copied, n) ? ROUTED_ESCAPED : 1;
+    }
+
+    /**
+     * Byte-level escape scan over a UTF-8-encoded window: the same
+     * emission as {@link #escapeWindow}, but the source is already
+     * UTF-8, so clean runs — including multi-byte sequences — copy
+     * verbatim and only controls, quotes, and backslashes escape.
+     * Called for the window remainder after the vector kernel's clean
+     * prefix, which ends at {@code start}.
+     *
+     * @return true when any escape sequence was emitted in this window
+     */
+    private boolean escapeWindowBytes(byte[] a, int start, int end) {
+        int segStart = start;
+        boolean escaped = false;
+
+        for (int i = start; i < end; i++) {
+            int b = a[i] & 0xFF;
+            if (b >= 0x20 && b != '"' && b != '\\') continue; // scan — no writes
+
+            escaped = true;
+            // Found escape byte — flush clean segment before it
+            if (i > segStart) {
+                int n = i - segStart;
+                ensureCapacity(n);
+                System.arraycopy(a, segStart, buf, pos, n);
+                pos += n;
+            }
+            // Emit escape sequence
+            ensureCapacity(6);
+            switch (b) {
+                case '"'  -> { buf[pos++] = '\\'; buf[pos++] = '"'; }
+                case '\\' -> { buf[pos++] = '\\'; buf[pos++] = '\\'; }
+                case '\b' -> { buf[pos++] = '\\'; buf[pos++] = 'b'; }
+                case '\f' -> { buf[pos++] = '\\'; buf[pos++] = 'f'; }
+                case '\n' -> { buf[pos++] = '\\'; buf[pos++] = 'n'; }
+                case '\r' -> { buf[pos++] = '\\'; buf[pos++] = 'r'; }
+                case '\t' -> { buf[pos++] = '\\'; buf[pos++] = 't'; }
+                default -> {
+                    // Control character: \\u00XX
+                    buf[pos++] = '\\';
+                    buf[pos++] = 'u';
+                    buf[pos++] = '0';
+                    buf[pos++] = '0';
+                    buf[pos++] = (byte) Character.forDigit((b >> 4) & 0xF, 16);
+                    buf[pos++] = (byte) Character.forDigit(b & 0xF, 16);
+                }
+            }
+            segStart = i + 1;
+        }
+        // Flush remaining clean segment
+        if (segStart < end) {
+            int n = end - segStart;
+            ensureCapacity(n);
+            System.arraycopy(a, segStart, buf, pos, n);
+            pos += n;
+        }
+        return escaped;
     }
 
     /**
