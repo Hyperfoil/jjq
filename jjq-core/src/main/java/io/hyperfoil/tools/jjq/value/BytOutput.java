@@ -266,14 +266,20 @@ public final class BytOutput {
         ensureCapacity(len * 3 + 12); // worst case: all escaped + UTF-8 expansion
         boolean escaped = false;
         if (len <= CHAR_SCRATCH_SIZE) {
-            char[] scratch = charScratch();
-            s.getChars(0, len, scratch, 0);
+            // Vector route first: it encodes through getBytes(UTF_8) and
+            // never reads the char scratch, so routed values skip the
+            // getChars copy (and the scratch's lazy allocation) entirely.
+            // A zero return (lone surrogate, or the module disabled via
+            // property) falls through and pays getChars once — the same
+            // total work as before the reorder.
             if (ESCAPE_KERNEL_PRESENT && len >= ESCAPE_KERNEL_MIN_LEN) {
                 int routed = escapeVectorRoute(s);
                 if (routed != 0) {
                     return routed == ROUTED_ESCAPED;
                 }
             }
+            char[] scratch = charScratch();
+            s.getChars(0, len, scratch, 0);
             // Fused clean-ASCII fast path: write the bytes while scanning
             // and break to the segment scanner at the first character that
             // needs it — control character, quote, backslash, or non-ASCII.
