@@ -264,20 +264,22 @@ public final class BytOutput {
     public boolean escapeJsonToBytes(String s) {
         final int len = s.length();
         ensureCapacity(len * 3 + 12); // worst case: all escaped + UTF-8 expansion
+        // Vector route first, at any length: it encodes through
+        // getBytes(UTF_8) and never reads the char scratch, so routed
+        // values skip the getChars copies entirely — both the
+        // single-window copy and the per-window copies of long strings
+        // (the kernel and the byte-level remainder scanner have no
+        // scratch-window limit). A zero return (lone surrogate, or the
+        // module disabled via property) falls through and pays getChars
+        // once — the same total work as before the reorder.
+        if (ESCAPE_KERNEL_PRESENT && len >= ESCAPE_KERNEL_MIN_LEN) {
+            int routed = escapeVectorRoute(s);
+            if (routed != 0) {
+                return routed == ROUTED_ESCAPED;
+            }
+        }
         boolean escaped = false;
         if (len <= CHAR_SCRATCH_SIZE) {
-            // Vector route first: it encodes through getBytes(UTF_8) and
-            // never reads the char scratch, so routed values skip the
-            // getChars copy (and the scratch's lazy allocation) entirely.
-            // A zero return (lone surrogate, or the module disabled via
-            // property) falls through and pays getChars once — the same
-            // total work as before the reorder.
-            if (ESCAPE_KERNEL_PRESENT && len >= ESCAPE_KERNEL_MIN_LEN) {
-                int routed = escapeVectorRoute(s);
-                if (routed != 0) {
-                    return routed == ROUTED_ESCAPED;
-                }
-            }
             char[] scratch = charScratch();
             s.getChars(0, len, scratch, 0);
             // Fused clean-ASCII fast path: write the bytes while scanning
