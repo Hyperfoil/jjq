@@ -115,7 +115,7 @@ public class JqEscapeBenchmark {
     int escapePercentage;
 
     /** Length of each generated string, in chars. */
-    @Param({"5", "16", "100", "512", "2048", "8192"})
+    @Param({"5", "16", "100", "512", "2048", "8192", "16384", "32768"})
     int stringLength;
 
     /** Number of distinct inputs to cycle through. */
@@ -157,6 +157,8 @@ public class JqEscapeBenchmark {
     private byte[][] bytesDataSet;
     private JqValue[] jqValueDataSet;
     private int nextIdx;
+    /** Sample count actually built: long fixtures trade samples, not heap. */
+    private int cycle;
 
     // Reusable buffers
     private StringBuilder sb;
@@ -170,11 +172,17 @@ public class JqEscapeBenchmark {
         primeCharAtProfile();
         Random rnd = new Random(SEED);
 
-        stringDataSet = new String[samples];
-        bytesDataSet = new byte[samples][];
-        jqValueDataSet = new JqValue[samples];
+        // Bound retained string data near the 8192-char row's footprint
+        // (~160 MB of UTF-16 plus its byte twins): lengths up to 8192 keep
+        // every requested sample ((80<<20)/8192 = 10240 >= 10000), longer
+        // fixtures scale the count down so full-matrix runs keep today's
+        // memory shape. 128 samples is the floor for cycling variety.
+        cycle = Math.min(samples, Math.max(128, (80 << 20) / stringLength));
+        stringDataSet = new String[cycle];
+        bytesDataSet = new byte[cycle][];
+        jqValueDataSet = new JqValue[cycle];
 
-        for (int i = 0; i < samples; i++) {
+        for (int i = 0; i < cycle; i++) {
             stringDataSet[i] = generateString(rnd, stringLength, escapePercentage, script, escapePosition);
             // Build JSON string: "value" — for the parse benchmark
             String jsonStr = "\"" + JqString.escapeForBenchmark(stringDataSet[i]) + "\"";
@@ -188,7 +196,7 @@ public class JqEscapeBenchmark {
         jacksonOut = new ByteArrayOutputStream(stringLength * 2);
 
         // Warmup: ensure all code paths are compiled
-        for (int i = 0; i < Math.min(100, samples); i++) {
+        for (int i = 0; i < Math.min(100, cycle); i++) {
             sb.setLength(0);
             JqString.escapeJson(stringDataSet[i], sb);
         }
@@ -225,19 +233,19 @@ public class JqEscapeBenchmark {
 
     private String nextString() {
         int idx = nextIdx;
-        nextIdx = (idx + 1) % samples;
+        nextIdx = (idx + 1) % cycle;
         return stringDataSet[idx];
     }
 
     private byte[] nextBytes() {
         int idx = nextIdx;
-        nextIdx = (idx + 1) % samples;
+        nextIdx = (idx + 1) % cycle;
         return bytesDataSet[idx];
     }
 
     private JqValue nextJqValue() {
         int idx = nextIdx;
-        nextIdx = (idx + 1) % samples;
+        nextIdx = (idx + 1) % cycle;
         return jqValueDataSet[idx];
     }
 
